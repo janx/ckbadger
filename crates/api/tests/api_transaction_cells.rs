@@ -28,11 +28,7 @@ fn bytes(data: &[u8]) -> Vec<u8> {
     out
 }
 
-async fn display_fixture(
-    missing_object: bool,
-    malformed_file: bool,
-    missing_hash_type: bool,
-) -> (axum::Router, String) {
+async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::Router, String) {
     let store = test_store();
     seed_genesis_baseline(&store);
     let script = |hash: &str, args: &[u8]| {
@@ -203,16 +199,14 @@ async fn display_fixture(
         let t = output.type_().to_opt();
         let cell = LiveCellInfo {
             capacity: 100_000_000_000,
-            lock_script_hash: lock.calc_script_hash().as_slice().to_vec(),
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 2,
             lock_args: vec![0x22; 20],
-            type_script_hash: t.as_ref().map(|s| s.calc_script_hash().as_slice().to_vec()),
-            type_code_hash: t.as_ref().map(|s| s.code_hash().as_slice().to_vec()),
-            type_hash_type: t.as_ref().and_then(|_| (!missing_hash_type).then_some(2)),
+            type_code_hash: (t.as_ref().map(|s| s.code_hash().as_slice().to_vec()))
+                .map(|hash| hash.try_into().unwrap()),
+            type_hash_type: t.as_ref().map(|_| 2),
             type_args: t.as_ref().map(|s| s.args().raw_data().to_vec()),
             data_size: data[i].len() as i32,
-            occupied_capacity: 0,
             udt_amount: (i == 2).then_some(amount),
             data_hash: None,
         };
@@ -313,7 +307,7 @@ async fn display_fixture(
 
 #[tokio::test]
 async fn transaction_cells_expose_exact_spent_object_token_identity_and_file_evidence() {
-    let (app, url) = display_fixture(false, false, false).await;
+    let (app, url) = display_fixture(false, false).await;
     let (status, body) = get_json(&app, &url).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["inputs"][0]["type"]["hashType"], "data1");
@@ -354,7 +348,7 @@ async fn transaction_cells_expose_exact_spent_object_token_identity_and_file_evi
 }
 #[tokio::test]
 async fn transaction_cells_reject_missing_indexed_object_metadata() {
-    let (app, url) = display_fixture(true, false, false).await;
+    let (app, url) = display_fixture(true, false).await;
     let (status, body) = get_json(&app, &url).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     let message = body["message"].as_str().unwrap();
@@ -367,7 +361,7 @@ async fn transaction_cells_reject_missing_indexed_object_metadata() {
 }
 #[tokio::test]
 async fn transaction_cells_reject_malformed_registered_file_data() {
-    let (app, url) = display_fixture(false, true, false).await;
+    let (app, url) = display_fixture(false, true).await;
     let (status, body) = get_json(&app, &url).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(
@@ -376,14 +370,35 @@ async fn transaction_cells_reject_malformed_registered_file_data() {
     );
 }
 
+/// A v2 payload holds its whole type script or none: one without its
+/// hash_type is refused when it is written, with its outpoint, whatever label
+/// its code hash carries, so the transaction-cells view can never be handed one
+/// (the store refuses to read one too: `ckbadger-store` `types::tests`).
 #[tokio::test]
-async fn transaction_cells_reject_missing_immutable_type_hash_type_despite_label() {
-    let (app, url) = display_fixture(false, false, true).await;
-    let (status, body) = get_json(&app, &url).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-    let message = body["message"].as_str().unwrap();
+async fn transaction_cells_input_missing_its_type_hash_type_is_never_stored() {
+    let store = test_store();
+    let cell = LiveCellInfo {
+        capacity: 100_000_000_000,
+        lock_code_hash: [0x11; 32],
+        lock_hash_type: 2,
+        lock_args: vec![0x22; 20],
+        type_code_hash: Some([0x33; 32]),
+        type_hash_type: None,
+        type_args: Some(vec![0x44; 20]),
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    };
+    let mut batch = StoreBatch::new(&store);
+    let error = batch
+        .put_cell_payload_by_outpoint(&[0x4c; 32], 0, &cell)
+        .expect_err("a typed payload without its hash_type must not be stored")
+        .to_string();
     assert!(
-        message.contains("stored type hash_type") && message.contains("prev_outpoint"),
-        "{message}"
+        error.contains("type script is partial")
+            && error.contains("hash_type=None")
+            && error.contains(&hex::encode([0x4c; 32])),
+        "{error}"
     );
+    assert!(batch.is_empty(), "nothing staged");
 }

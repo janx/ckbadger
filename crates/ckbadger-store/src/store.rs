@@ -620,7 +620,7 @@ pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
 mod cf_table {
     use super::BufferTier::{High, Low, Mega};
     use super::CfCompaction::{Leveled, Universal};
-    use super::CfCompression::{Lz4, None};
+    use super::CfCompression::Lz4;
     use super::CfStore::{AppendOnly as AppendStore, Domain, Network};
     use super::CfWritePolicy::{AppendOnly, BulkDisabled, FinalSnapshot, SealedAggregate};
     use super::RollbackClass::{Journal, Never, RangeByBlock, Validated};
@@ -629,7 +629,7 @@ mod cf_table {
     #[rustfmt::skip]
     pub(super) const CF_SPECS: &[CfSpec] = &[
         //  name                                    store        write policy     tier  bulk  comp. compaction rollback
-        cf(CF_CELLS,                                  AppendStore, AppendOnly,      Mega, HOT,  None, Universal, Never),
+        cf(CF_CELLS,                                  AppendStore, AppendOnly,      Mega, HOT,  Lz4,  Universal, Never),
         cf(CF_LIVE_CELLS,                             Domain,      FinalSnapshot,   Mega, HOT,  Lz4,  Leveled,   Journal),
         cf(CF_CONSUMED_CELLS,                         Domain,      AppendOnly,      Mega, HOT,  Lz4,  Leveled,   Journal),
         cf(CF_REORG_UNDO_LOG_BY_BLOCK,                Domain,      BulkDisabled,    Mega, COLD, Lz4,  Leveled,   RangeByBlock),
@@ -1117,15 +1117,8 @@ impl CkbadgerStore {
             }
         }
 
-        let cf_descriptors: Vec<ColumnFamilyDescriptor> = allowed
-            .iter()
-            .map(|name| {
-                ColumnFamilyDescriptor::new(
-                    *name,
-                    Self::cf_options(name, &block_cache, &memory_profile, runtime_config),
-                )
-            })
-            .collect();
+        let cf_descriptors =
+            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
 
         Self::size_flush_pool(&memory_profile)?;
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
@@ -1217,8 +1210,17 @@ impl CkbadgerStore {
                 );
             }
         }
-        let cf_refs: Vec<&str> = allowed.to_vec();
-        let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_refs)?;
+        // The same per-CF options as the primary: opened by name, every CF
+        // got RocksDB's defaults instead (a private 32 MB block cache and no
+        // bloom filter), so a point get read a data block in every sorted run.
+        let cf_descriptors =
+            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
+        let db = DB::open_cf_descriptors_as_secondary(
+            &opts,
+            primary_path,
+            secondary_path,
+            cf_descriptors,
+        )?;
 
         Ok(Self {
             db,
@@ -1607,6 +1609,26 @@ impl CkbadgerStore {
         opts.set_write_buffer_manager(&write_buffer_manager);
 
         (opts, block_cache, write_buffer_manager)
+    }
+
+    /// The descriptors every open (primary or secondary) passes to RocksDB:
+    /// each allowed CF with its [`Self::cf_options`], so both read through the
+    /// process's shared block cache and the CF's bloom filter.
+    fn cf_descriptors(
+        allowed: &[&str],
+        block_cache: &rocksdb::Cache,
+        profile: &MemoryProfile,
+        runtime_config: StoreRuntimeConfig,
+    ) -> Vec<ColumnFamilyDescriptor> {
+        allowed
+            .iter()
+            .map(|name| {
+                ColumnFamilyDescriptor::new(
+                    *name,
+                    Self::cf_options(name, block_cache, profile, runtime_config),
+                )
+            })
+            .collect()
     }
 
     /// Per-CF options with 3 tiers:
@@ -3737,6 +3759,52 @@ mod tests {
         assert_eq!(val.as_deref(), Some(b"value".as_slice()));
     }
 
+    /// A secondary reads every CF through the primary's own per-CF options
+    /// (the process's shared block cache, the bloom filter), not RocksDB's
+    /// defaults. Opened by name, each CF of a secondary got a private 32 MB
+    /// LRU cache and no filter, so an API point get read a data block in
+    /// every sorted run of `cells`, and a list page cycled through more
+    /// blocks than 32 MB holds (A-5).
+    #[test]
+    fn secondary_reads_every_cf_through_the_primary_table_options() {
+        let block_cache_capacity = |store: &CkbadgerStore, cf: &ColumnFamily| {
+            store
+                .db
+                .property_int_value_cf(cf, "rocksdb.block-cache-capacity")
+                .unwrap()
+                .expect("a block-based CF reports its block cache capacity")
+        };
+        let rocksdb_default_capacity = 32 * MB;
+
+        let append_dir = TempDir::new().unwrap();
+        let append_secondary_dir = TempDir::new().unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let append_secondary = CkbadgerStore::open_append_only_secondary(
+            append_dir.path(),
+            append_secondary_dir.path(),
+        )
+        .unwrap();
+        let primary_cells = block_cache_capacity(&append, append.cf_cells());
+        assert_ne!(primary_cells, rocksdb_default_capacity);
+        assert_eq!(
+            block_cache_capacity(&append_secondary, append_secondary.cf_cells()),
+            primary_cells,
+            "the secondary's cells CF reads through the shared block cache"
+        );
+
+        let domain_dir = TempDir::new().unwrap();
+        let domain_secondary_dir = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let domain_secondary =
+            CkbadgerStore::open_domain_secondary(domain_dir.path(), domain_secondary_dir.path())
+                .unwrap();
+        assert_eq!(
+            block_cache_capacity(&domain_secondary, domain_secondary.cf_cell_by_lock()),
+            block_cache_capacity(&domain, domain.cf_cell_by_lock()),
+            "the secondary's index CFs read through the shared block cache"
+        );
+    }
+
     #[test]
     fn test_append_path_from_domain_uses_workdir_layout() {
         assert_eq!(
@@ -4096,6 +4164,66 @@ mod tests {
             live["max_write_buffer_number"],
             live_max_write_buffer_number.to_string()
         );
+    }
+
+    /// `cells` is lz4 on every option path the primary takes: open-time
+    /// `cf_options`, the bulk overrides and the live restore (neither setter
+    /// touches compression, so open-time lz4 must survive both), and a real
+    /// flush in bulk mode writes compressed SSTs. A 16 KB-block lz4 trial on
+    /// mainnet `cells` SSTs gave ratio 0.38; zstd-1 0.345 was not worth its
+    /// CPU on the flush thread (plan J3).
+    #[test]
+    fn cells_is_lz4_compressed_on_open_bulk_and_live_restore_paths() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let assert_lz4 = |step: &str| {
+            let options = persisted_cf_options(dir.path(), CF_CELLS);
+            assert_eq!(
+                options["compression"], "kLZ4Compression",
+                "cells compression after {step}"
+            );
+            // kDisableCompressionOption = the bottommost level uses `compression`.
+            assert_eq!(
+                options["bottommost_compression"], "kDisableCompressionOption",
+                "cells bottommost compression after {step}"
+            );
+            assert_eq!(
+                options["compaction_style"], "kCompactionStyleUniversal",
+                "cells compaction style after {step}"
+            );
+        };
+        assert_lz4("open");
+
+        store.set_bulk_sync_compaction_options();
+        assert_lz4("bulk options");
+
+        // Real bytes: 4 MiB of payload-shaped, compressible rows flushed in
+        // bulk mode must land in SSTs well under the raw size.
+        let cf = store.cf_cells();
+        let mut written = 0usize;
+        for i in 0u32..16_384 {
+            let mut tx_hash = [0u8; 32];
+            tx_hash[..4].copy_from_slice(&i.to_be_bytes());
+            let key = crate::keys::encode_outpoint(&tx_hash, 0);
+            let mut value = vec![0u8; 256];
+            value[..4].copy_from_slice(&i.to_le_bytes());
+            value[64..96].copy_from_slice(&[0x9b; 32]);
+            store.db.put_cf(cf, key, &value).unwrap();
+            written += key.len() + value.len();
+        }
+        store.flush_all_memtables().unwrap();
+        let sst_bytes = store
+            .db
+            .property_int_value_cf(cf, "rocksdb.live-sst-files-size")
+            .unwrap()
+            .expect("live-sst-files-size");
+        assert!(
+            (sst_bytes as usize) * 100 < written * 60,
+            "cells SST bytes {sst_bytes} not < 60 % of {written} bytes written"
+        );
+
+        store.restore_normal_compaction_options();
+        assert_lz4("live restore");
     }
 
     #[test]
@@ -4849,8 +4977,9 @@ mod tests {
 
     /// B-1 pin: the `CfSpec` table must reproduce, for every CF, exactly the
     /// options and write policy the hand-maintained tables produced before it
-    /// (main @8f8404da). Changing any value here is an option change, which
-    /// needs its own paired bulk run.
+    /// (main @8f8404da), plus Lane A's one measured change merged from main
+    /// @b2409d4c: `cells` is lz4 (store refactor plan J3). Changing any value
+    /// here is an option change, which needs its own paired bulk run.
     #[test]
     fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
         let actual = cf_option_snapshot();
@@ -4869,7 +4998,7 @@ mod tests {
 
     #[rustfmt::skip]
     const CF_OPTION_SNAPSHOT: &[&str] = &[
-    "cells AppendOnly live(mega,4) kNoCompression kCompactionStyleUniversal bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "cells AppendOnly live(mega,4) kLZ4Compression kCompactionStyleUniversal bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
     "live_cells FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
     "consumed_cells AppendOnly live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
     "reorg_undo_log_by_block BulkDisabled live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

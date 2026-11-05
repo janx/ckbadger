@@ -413,7 +413,7 @@ pub(crate) fn raw_transaction(
         "protocol capacity mismatch: {context}"
     );
     anyhow::ensure!(
-        output.lock().calc_script_hash().as_slice() == version.cell.lock_script_hash,
+        output.lock().calc_script_hash().as_slice() == version.cell.lock_script_hash(),
         "protocol lock mismatch: {context}"
     );
     let type_hash = output
@@ -421,7 +421,12 @@ pub(crate) fn raw_transaction(
         .to_opt()
         .map(|s| s.calc_script_hash().as_slice().to_vec());
     anyhow::ensure!(
-        type_hash == version.cell.type_script_hash,
+        type_hash.as_deref()
+            == version
+                .cell
+                .type_script_hash()
+                .as_ref()
+                .map(|hash| hash.as_slice()),
         "protocol type mismatch: {context}"
     );
     anyhow::ensure!(
@@ -481,7 +486,12 @@ pub(crate) fn current_type_id_binary(
         return Ok(None);
     };
     anyhow::ensure!(
-        version.cell.type_code_hash.as_deref() == Some(code.as_slice())
+        version
+            .cell
+            .type_code_hash
+            .as_ref()
+            .map(|hash| hash.as_slice())
+            == Some(code.as_slice())
             && version.cell.type_hash_type == Some(1)
             && version.cell.type_args.as_deref() == Some(args.as_slice()),
         "native Type ID script differs from requested decoder: args=0x{} outpoint={}:{}",
@@ -501,7 +511,8 @@ pub(crate) fn current_type_id_binary(
         version
             .cell
             .data_hash
-            .context("validated decoder data hash missing")?,
+            .context("validated decoder data hash missing")?
+            .to_vec(),
     ))
 }
 

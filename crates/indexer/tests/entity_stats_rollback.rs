@@ -197,25 +197,24 @@ fn seed_epoch_rows<I: IntoIterator<Item = (i64, i64)>>(store: &CkbadgerStore, bl
 fn seed_append_only_witness(append: &CkbadgerStore) -> (Vec<u8>, Vec<u8>) {
     let key = keys::encode_outpoint(&[0xAB; 32], 0).to_vec();
     let mut batch = StoreBatch::new(append);
-    batch.put_cell_payload_by_outpoint(
-        &[0xAB; 32],
-        0,
-        &LiveCellInfo {
-            capacity: 10_000_000_000,
-            lock_script_hash: vec![0xC1; 32],
-            lock_code_hash: CODE_A.to_vec(),
-            lock_hash_type: 1,
-            lock_args: vec![0xC3; 20],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 6_100_000_000,
-            udt_amount: None,
-            data_hash: None,
-        },
-    );
+    batch
+        .put_cell_payload_by_outpoint(
+            &[0xAB; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 10_000_000_000,
+                lock_code_hash: CODE_A,
+                lock_hash_type: 1,
+                lock_args: vec![0xC3; 20],
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 0,
+                udt_amount: None,
+                data_hash: None,
+            },
+        )
+        .unwrap();
     batch.commit().unwrap();
     let bytes = append.get_cf(append.cf_cells(), &key).unwrap().unwrap();
     (key, bytes)

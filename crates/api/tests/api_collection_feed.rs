@@ -52,16 +52,13 @@ struct FeedTx {
 
 /// A plain output payload owned by `lock` (no type script).
 fn plain_cell(lock: u8) -> LiveCellInfo {
-    let code = vec![0x41; 32];
+    let code = [0x41; 32];
     let args = vec![lock; 20];
     LiveCellInfo {
         capacity: 200_00000000,
-        occupied_capacity: 61_00000000,
-        lock_script_hash: compute_script_hash(&code, 1, &args),
         lock_code_hash: code,
         lock_hash_type: 1,
         lock_args: args,
-        type_script_hash: None,
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
@@ -76,7 +73,9 @@ fn plain_cell(lock: u8) -> LiveCellInfo {
 fn put_feed_tx(batch: &mut StoreBatch, tx: &FeedTx) {
     let timestamp = 1_700_000_000_000 + tx.block * 1_000;
     for output in 0..tx.outputs {
-        batch.put_cell_payload_by_outpoint(&tx.hash, output, &plain_cell(0x11));
+        batch
+            .put_cell_payload_by_outpoint(&tx.hash, output, &plain_cell(0x11))
+            .unwrap();
     }
     batch.put_tx_hash_map(&tx.hash, tx.block, tx.tx_idx);
     batch.put_tx_index(

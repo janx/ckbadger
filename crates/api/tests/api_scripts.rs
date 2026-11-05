@@ -42,8 +42,15 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
 
     let store = test_store();
     let family_id = "multisig-evidence";
-    let version = vec![0x91; 32];
-    let refs: Vec<Vec<u8>> = (1..=3).map(|n| vec![n; 32]).collect();
+    let version = [0x91; 32];
+    // Each reference is the derived hash of its code cell's type script
+    // (code 0x61.., `type`, args [n]), in ascending order as the response
+    // lists them, so `refs[0]` (the canonical one) comes first.
+    let mut refs: Vec<(u8, Vec<u8>)> = (1..=3u8)
+        .map(|n| (n, compute_script_hash(&[0x61; 32], 1, &[n])))
+        .collect();
+    refs.sort_by(|a, b| a.1.cmp(&b.1));
+    let (type_args, refs): (Vec<u8>, Vec<Vec<u8>>) = refs.into_iter().unzip();
     let multisig =
         hex::decode("5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8").unwrap();
     seed_block_headers_at(
@@ -73,7 +80,7 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
     batch.put_script_version(
         &version,
         &ScriptVersionInfo {
-            version_hash: version.clone(),
+            version_hash: version.to_vec(),
             family_id: Some(family_id.to_string()),
             registered_references: refs.iter().map(|r| (r.clone(), 1)).collect(),
             type_id_deployments: refs.iter().map(|r| (r.clone(), 10)).collect(),
@@ -88,7 +95,9 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
     for (i, reference) in refs.iter().enumerate() {
         let tx = vec![0x20 + i as u8; 32];
         put_canonical_script_tx(&mut batch, &tx, 10, i as i32, 1);
-        let lock_hash = vec![0x30 + i as u8; 32];
+        // Each code cell has its own multisig lock; its address is the derived hash.
+        let lock_args = vec![0x45 + i as u8; 20];
+        let lock_hash = compute_script_hash(&multisig, 1, &lock_args);
         batch.put_script_reference_info(
             1,
             reference,
@@ -107,18 +116,15 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
             0,
             &LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: lock_hash.clone(),
-                lock_code_hash: multisig.clone(),
+                lock_code_hash: multisig.clone().try_into().unwrap(),
                 lock_hash_type: 1,
-                lock_args: vec![0x45; 20],
-                type_script_hash: Some(reference.clone()),
-                type_code_hash: Some(vec![0x61; 32]),
+                lock_args,
+                type_code_hash: Some([0x61; 32]),
                 type_hash_type: Some(1),
-                type_args: Some(vec![]),
+                type_args: Some(vec![type_args[i]]),
                 data_size: 32,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
-                data_hash: Some(version.clone()),
+                data_hash: Some(version),
             },
             10,
         );
@@ -170,8 +176,9 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
 async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_different_binaries() {
     for different_binary in [false, true] {
         let store = test_store();
-        let version = vec![0x81; 32];
-        let reference = vec![0x82; 32];
+        let version = [0x81; 32];
+        // The type reference is the derived hash of the code cells' type script.
+        let reference = compute_script_hash(&[0x61; 32], 1, &[]);
         seed_block_headers_at(&store, &[(10, 1_700_000_000_000)]);
         set_script_fixture_block_tx_count(&store, 10, 2);
         let mut batch = StoreBatch::new(store.as_ref());
@@ -193,7 +200,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
         batch.put_script_version(
             &version,
             &ScriptVersionInfo {
-                version_hash: version.clone(),
+                version_hash: version.to_vec(),
                 family_id: Some("mixed-holders".to_string()),
                 registered_references: vec![(reference.clone(), 1)],
                 type_id_deployments: Vec::new(),
@@ -226,22 +233,21 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
                 0,
                 &LiveCellInfo {
                     capacity: 100_00000000,
-                    lock_script_hash: vec![0x31 + i; 32],
                     lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x"))
+                        .unwrap()
+                        .try_into()
                         .unwrap(),
                     lock_hash_type: 1,
                     lock_args: vec![0x51 + i; 20],
-                    type_script_hash: Some(reference.clone()),
-                    type_code_hash: Some(vec![0x61; 32]),
+                    type_code_hash: Some([0x61; 32]),
                     type_hash_type: Some(1),
                     type_args: Some(vec![]),
                     data_size: 32,
-                    occupied_capacity: 61_00000000,
                     udt_amount: None,
                     data_hash: Some(if different_binary && i == 1 {
-                        vec![0x83; 32]
+                        [0x83; 32]
                     } else {
-                        version.clone()
+                        version
                     }),
                 },
                 10,
@@ -304,7 +310,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
             assert_eq!(custody["class"], "mixed");
             assert_eq!(
                 detail["references"][0]["currentVersionHash"],
-                format!("0x{}", hex::encode(&version))
+                format!("0x{}", hex::encode(version))
             );
             assert_eq!(custody["owners"].as_array().unwrap().len(), 2);
             assert_eq!(
@@ -322,8 +328,9 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
 async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
     let store = test_store();
     let family_id = "class-evidence";
-    let version = vec![0x31; 32];
-    let type_ref = vec![0x42; 32];
+    let version = [0x31; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_ref = compute_script_hash(&[0x61; 32], 1, &[]);
     let outpoint = vec![0x53; 32];
     seed_block_headers_at(
         &store,
@@ -353,9 +360,9 @@ async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
     batch.put_script_version(
         &version,
         &ScriptVersionInfo {
-            version_hash: version.clone(),
+            version_hash: version.to_vec(),
             family_id: Some(family_id.to_string()),
-            registered_references: vec![(version.clone(), 2), (type_ref.clone(), 1)],
+            registered_references: vec![(version.to_vec(), 2), (type_ref.clone(), 1)],
             type_id_deployments: vec![(type_ref.clone(), 10)],
             canonical_reference_hash: Some(type_ref.clone()),
             canonical_hash_type: Some(1),
@@ -370,7 +377,7 @@ async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
         2,
         &version,
         &ScriptReferenceInfo {
-            reference_hash: version.clone(),
+            reference_hash: version.to_vec(),
             hash_type: 2,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
@@ -399,18 +406,18 @@ async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x19; 32],
-            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x"))
+                .unwrap()
+                .try_into()
+                .unwrap(),
             lock_hash_type: 1,
             lock_args: vec![0x00; 20],
-            type_script_hash: Some(type_ref.clone()),
-            type_code_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some([0x61; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version.clone()),
+            data_hash: Some(version),
         },
         10,
     );
@@ -454,8 +461,9 @@ async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
 async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_search() {
     let store = test_store();
     let family_id = "class-evidence";
-    let version = vec![0x31; 32];
-    let type_ref = vec![0x42; 32];
+    let version = [0x31; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_ref = compute_script_hash(&[0x61; 32], 1, &[]);
     let outpoint = vec![0x53; 32];
     seed_block_headers_at(
         &store,
@@ -485,9 +493,9 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
     batch.put_script_version(
         &version,
         &ScriptVersionInfo {
-            version_hash: version.clone(),
+            version_hash: version.to_vec(),
             family_id: Some(family_id.to_string()),
-            registered_references: vec![(version.clone(), 2), (type_ref.clone(), 1)],
+            registered_references: vec![(version.to_vec(), 2), (type_ref.clone(), 1)],
             type_id_deployments: vec![(type_ref.clone(), 10)],
             canonical_reference_hash: Some(type_ref.clone()),
             canonical_hash_type: Some(1),
@@ -502,7 +510,7 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
         2,
         &version,
         &ScriptReferenceInfo {
-            reference_hash: version.clone(),
+            reference_hash: version.to_vec(),
             hash_type: 2,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
@@ -531,18 +539,18 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x19; 32],
-            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x"))
+                .unwrap()
+                .try_into()
+                .unwrap(),
             lock_hash_type: 1,
             lock_args: vec![0x81; 20],
-            type_script_hash: Some(type_ref.clone()),
-            type_code_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some([0x61; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version.clone()),
+            data_hash: Some(version),
         },
         10,
     );
@@ -558,7 +566,7 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
     assert_eq!(
         list["data"][0]["firstDeployedAt"],
         serde_json::json!({ "blockNumber": 10, "timestampMs": utc_ms("2024-01-01T23:59:59Z"),
-            "versionHash": format!("0x{}", hex::encode(&version)) }),
+            "versionHash": format!("0x{}", hex::encode(version)) }),
         "{list}"
     );
     // SC-L3: each class says how many families it covers.
@@ -573,7 +581,8 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
     for (query, total) in [
         ("0x3131", 1),
         (&*format!("0x{}", hex::encode(&type_ref)), 1),
-        ("0x4242", 1),
+        // A prefix of the registered reference.
+        (&*format!("0x{}", hex::encode(&type_ref[..2])), 1),
         ("0xdead", 0),
         ("class", 1),
     ] {
@@ -587,8 +596,9 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
 async fn test_script_family_exposes_exact_reference_classes_and_chain_history() {
     let store = test_store();
     let family_id = "class-evidence";
-    let version = vec![0x31; 32];
-    let type_ref = vec![0x42; 32];
+    let version = [0x31; 32];
+    // The type reference is the derived hash of the code cell's type script.
+    let type_ref = compute_script_hash(&[0x61; 32], 1, &[]);
     let outpoint = vec![0x53; 32];
     seed_block_headers_at(
         &store,
@@ -618,9 +628,9 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
     batch.put_script_version(
         &version,
         &ScriptVersionInfo {
-            version_hash: version.clone(),
+            version_hash: version.to_vec(),
             family_id: Some(family_id.to_string()),
-            registered_references: vec![(version.clone(), 2), (type_ref.clone(), 1)],
+            registered_references: vec![(version.to_vec(), 2), (type_ref.clone(), 1)],
             type_id_deployments: vec![(type_ref.clone(), 10)],
             canonical_reference_hash: Some(type_ref.clone()),
             canonical_hash_type: Some(1),
@@ -635,7 +645,7 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
         2,
         &version,
         &ScriptReferenceInfo {
-            reference_hash: version.clone(),
+            reference_hash: version.to_vec(),
             hash_type: 2,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
@@ -664,18 +674,18 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x19; 32],
-            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x"))
+                .unwrap()
+                .try_into()
+                .unwrap(),
             lock_hash_type: 1,
             lock_args: vec![0x81; 20],
-            type_script_hash: Some(type_ref.clone()),
-            type_code_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some([0x61; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version.clone()),
+            data_hash: Some(version),
         },
         10,
     );
@@ -1117,7 +1127,7 @@ async fn test_scripts_list_ignores_unlabeled_references_without_family_metadata(
 async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     let store = test_store();
 
-    let version_hash = vec![0x70; 32];
+    let version_hash = [0x70; 32];
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
@@ -1125,7 +1135,7 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
         .put_script_info_direct(
             &version_hash,
             &ScriptInfo {
-                code_hash: version_hash.clone(),
+                code_hash: version_hash.to_vec(),
                 hash_type: 0,
                 name: Some("Default Lock".to_string()),
                 lock_cells_count: 10,
@@ -1143,7 +1153,7 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     batch.put_script_version(
         &version_hash,
         &ScriptVersionInfo {
-            version_hash: version_hash.clone(),
+            version_hash: version_hash.to_vec(),
             name: Some("Default Lock".to_string()),
             category: Some("lock".to_string()),
             lock_cells_count: 10,
@@ -1160,18 +1170,15 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
         code_cell_output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version_hash.clone()),
+            data_hash: Some(version_hash),
         },
         123,
     );
@@ -1186,7 +1193,7 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     let config = test_config(store);
     let app = create_router(config).await;
 
-    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(version_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     let request = Request::builder()
@@ -1233,8 +1240,9 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
 async fn test_script_code_cells_resolve_unique_type_reference() {
     let store = test_store();
 
-    let version_hash = vec![0x70; 32];
-    let type_hash = vec![0x9b; 32];
+    let version_hash = [0x70; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
@@ -1242,7 +1250,7 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
     batch.put_script_version(
         &version_hash,
         &ScriptVersionInfo {
-            version_hash: version_hash.clone(),
+            version_hash: version_hash.to_vec(),
             name: Some("Default Lock".to_string()),
             ..Default::default()
         },
@@ -1252,18 +1260,15 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
         code_cell_output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some([0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version_hash.clone()),
+            data_hash: Some(version_hash),
         },
         123,
     );
@@ -1279,7 +1284,7 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
     let config = test_config(store);
     let app = create_router(config).await;
 
-    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(version_hash));
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
@@ -1309,8 +1314,9 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
 async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_reference() {
     let store = test_store();
 
-    let version_hash = vec![0x51; 32];
-    let type_hash = vec![0x61; 32];
+    let version_hash = [0x51; 32];
+    // The type reference is the derived hash of the code cell's type script.
+    let type_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let code_cell_tx_hash = vec![0x71; 32];
     let code_cell_output_index = 2i16;
 
@@ -1321,7 +1327,7 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
                 code_hash: type_hash.clone(),
                 hash_type: 1,
                 dep_type_hash: Some(type_hash.clone()),
-                dep_data_hash: Some(version_hash.clone()),
+                dep_data_hash: Some(version_hash.to_vec()),
                 lock_cells_count: 4,
                 lock_live_cells_count: 2,
                 lock_capacity_sum: 900,
@@ -1339,18 +1345,15 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
         code_cell_output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some([0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version_hash.clone()),
+            data_hash: Some(version_hash),
         },
         234,
     );
@@ -1365,7 +1368,7 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
 
     let app = create_router(test_config(store)).await;
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
-    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(version_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     let request = Request::builder()
@@ -1427,8 +1430,9 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
     // resolve exactly that one form instead of the whole family.
     let store = test_store();
 
-    let version_hash = vec![0x70; 32];
-    let type_hash = vec![0x9b; 32];
+    let version_hash = [0x70; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
@@ -1444,7 +1448,7 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
     batch.put_script_version(
         &version_hash,
         &ScriptVersionInfo {
-            version_hash: version_hash.clone(),
+            version_hash: version_hash.to_vec(),
             name: Some("SECP256K1_BLAKE160".to_string()),
             ..Default::default()
         },
@@ -1454,18 +1458,15 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
         code_cell_output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some([0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version_hash.clone()),
+            data_hash: Some(version_hash),
         },
         123,
     );
@@ -1482,7 +1483,7 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
     let app = create_router(config).await;
 
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
-    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(version_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     // hash_type=type resolves through the persisted type mapping to the real
@@ -1586,7 +1587,7 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
 async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
     let store = test_store();
 
-    let data_hash = vec![0x70; 32];
+    let data_hash = [0x70; 32];
     let type_hash = vec![0x9b; 32];
     let family_id = "default-lock";
 
@@ -1611,7 +1612,7 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
                 hash_type: 1,
                 name: Some("Default Lock".to_string()),
                 dep_type_hash: Some(type_hash.clone()),
-                dep_data_hash: Some(data_hash.clone()),
+                dep_data_hash: Some(data_hash.to_vec()),
                 ..Default::default()
             },
         )
@@ -1620,7 +1621,7 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
         .put_script_info_direct(
             &data_hash,
             &ScriptInfo {
-                code_hash: data_hash.clone(),
+                code_hash: data_hash.to_vec(),
                 hash_type: 0,
                 name: None,
                 ..Default::default()
@@ -1683,18 +1684,15 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
         code_cell_output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: code_bytes.len() as i32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(data_hash.clone()),
+            data_hash: Some(data_hash.clone().try_into().unwrap()),
         },
         123,
     );
@@ -1749,14 +1747,14 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
 #[tokio::test]
 async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash_type() {
     let store = test_store();
-    let reference_hash = vec![0x77; 32];
+    let reference_hash = [0x77; 32];
     let code_cell_tx_hash = vec![0xce; 32];
 
     store
         .put_script_info_direct(
             &reference_hash,
             &ScriptInfo {
-                code_hash: reference_hash.clone(),
+                code_hash: reference_hash.to_vec(),
                 hash_type: 0,
                 lock_cells_count: 3,
                 lock_live_cells_count: 1,
@@ -1773,7 +1771,7 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     batch.put_script_version(
         &reference_hash,
         &ScriptVersionInfo {
-            version_hash: reference_hash.clone(),
+            version_hash: reference_hash.to_vec(),
             name: Some("UniqueScript".to_string()),
             category: Some("lock".to_string()),
             lock_cells_count: 3,
@@ -1790,18 +1788,15 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
         1,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(reference_hash.clone()),
+            data_hash: Some(reference_hash),
         },
         123,
     );
@@ -1809,7 +1804,7 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     batch.commit().unwrap();
 
     let app = create_router(test_config(store)).await;
-    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+    let reference_hash_hex = format!("0x{}", hex::encode(reference_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     let request = Request::builder()
@@ -1854,9 +1849,11 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
 #[tokio::test]
 async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
     let store = test_store();
-    let reference_hash = vec![0x88; 32];
-    let version_hash_a = vec![0xa1; 32];
-    let version_hash_b = vec![0xb2; 32];
+    // Two live code cells of one type script (so one type reference), with
+    // different binaries.
+    let reference_hash = compute_script_hash(&[0x33; 32], 1, &[]);
+    let version_hash_a = [0xa1; 32];
+    let version_hash_b = [0xb2; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(
@@ -1864,18 +1861,15 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(reference_hash.clone()),
-            type_code_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some([0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version_hash_a.clone()),
+            data_hash: Some(version_hash_a),
         },
         100,
     );
@@ -1885,18 +1879,15 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x44; 32],
-            lock_code_hash: vec![0x55; 32],
+            lock_code_hash: [0x55; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(reference_hash.clone()),
-            type_code_hash: Some(vec![0x66; 32]),
+            type_code_hash: Some([0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version_hash_b.clone()),
+            data_hash: Some(version_hash_b),
         },
         101,
     );
@@ -1905,8 +1896,8 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
 
     let app = create_router(test_config(store)).await;
     let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
-    let version_hash_a_hex = format!("0x{}", hex::encode(&version_hash_a));
-    let version_hash_b_hex = format!("0x{}", hex::encode(&version_hash_b));
+    let version_hash_a_hex = format!("0x{}", hex::encode(version_hash_a));
+    let version_hash_b_hex = format!("0x{}", hex::encode(version_hash_b));
 
     let request = Request::builder()
         .method("POST")
@@ -1953,17 +1944,17 @@ async fn test_cells_by_script_uses_exact_reference_form_without_alias() {
     seed_genesis_baseline(&store);
 
     let data_hash = vec![0x70; 32];
-    let type_hash = vec![0x9b; 32];
+    let type_hash = [0x9b; 32];
     let tx_hash = vec![0xab; 32];
 
     store
         .put_script_info_direct(
             &type_hash,
             &ScriptInfo {
-                code_hash: type_hash.clone(),
+                code_hash: type_hash.to_vec(),
                 hash_type: 1,
                 name: Some("Default Lock".to_string()),
-                dep_type_hash: Some(type_hash.clone()),
+                dep_type_hash: Some(type_hash.to_vec()),
                 dep_data_hash: Some(data_hash.clone()),
                 lock_live_cells_count: 1,
                 ..Default::default()
@@ -1988,7 +1979,7 @@ async fn test_cells_by_script_uses_exact_reference_form_without_alias() {
             1,
             &type_hash,
             &ScriptReferenceInfo {
-                reference_hash: type_hash.clone(),
+                reference_hash: type_hash.to_vec(),
                 hash_type: 1,
                 lock_cells_count: 1,
                 lock_live_cells_count: 1,
@@ -2007,16 +1998,13 @@ async fn test_cells_by_script_uses_exact_reference_form_without_alias() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: type_hash.clone(),
+            lock_code_hash: type_hash,
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -2049,7 +2037,7 @@ async fn test_cells_by_script_uses_exact_reference_form_without_alias() {
         &app,
         &format!(
             "/cells/by-script?code_hash=0x{}&hash_type=type&script_kind=lock&limit=20",
-            hex::encode(&type_hash)
+            hex::encode(type_hash)
         ),
     )
     .await;
@@ -2068,14 +2056,14 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
     // (fail-fast if absent) for burn-cell tagging.
     seed_genesis_baseline(&store);
 
-    let data_hash = vec![0x70; 32];
+    let data_hash = [0x70; 32];
     let tx_hash = vec![0xab; 32];
 
     store
         .put_script_info_direct(
             &data_hash,
             &ScriptInfo {
-                code_hash: data_hash.clone(),
+                code_hash: data_hash.to_vec(),
                 hash_type: 0,
                 lock_live_cells_count: 1,
                 ..Default::default()
@@ -2089,7 +2077,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
             0,
             &data_hash,
             &ScriptReferenceInfo {
-                reference_hash: data_hash.clone(),
+                reference_hash: data_hash.to_vec(),
                 hash_type: 0,
                 lock_cells_count: 1,
                 lock_live_cells_count: 1,
@@ -2108,16 +2096,13 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: data_hash.clone(),
+            lock_code_hash: data_hash,
             lock_hash_type: 0,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -2129,7 +2114,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
     let config = test_config(store);
     let app = create_router(config).await;
 
-    let data_hash_hex = format!("0x{}", hex::encode(&data_hash));
+    let data_hash_hex = format!("0x{}", hex::encode(data_hash));
 
     let request = Request::builder()
         .uri(format!(
@@ -2171,7 +2156,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
     let store = test_store();
     seed_genesis_baseline(&store);
 
-    let code_hash = vec![0x9b; 32];
+    let code_hash = [0x9b; 32];
     let tx_type_form = vec![0xa1; 32];
     let tx_data_form = vec![0xa2; 32];
 
@@ -2179,7 +2164,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
         .put_script_info_direct(
             &code_hash,
             &ScriptInfo {
-                code_hash: code_hash.clone(),
+                code_hash: code_hash.to_vec(),
                 hash_type: 1,
                 name: Some("Default Lock".to_string()),
                 lock_cells_count: 2,
@@ -2193,7 +2178,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
             1,
             &code_hash,
             &ScriptReferenceInfo {
-                reference_hash: code_hash.clone(),
+                reference_hash: code_hash.to_vec(),
                 hash_type: 1,
                 lock_cells_count: 1,
                 lock_live_cells_count: 1,
@@ -2210,7 +2195,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
             0,
             &code_hash,
             &ScriptReferenceInfo {
-                reference_hash: code_hash.clone(),
+                reference_hash: code_hash.to_vec(),
                 hash_type: 0,
                 lock_cells_count: 1,
                 lock_live_cells_count: 1,
@@ -2229,16 +2214,13 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: code_hash.clone(),
+            lock_code_hash: code_hash,
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -2250,16 +2232,13 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
         0,
         &LiveCellInfo {
             capacity: 61_00000000,
-            lock_script_hash: vec![0x22; 32],
-            lock_code_hash: code_hash.clone(),
+            lock_code_hash: code_hash,
             lock_hash_type: 0,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -2270,7 +2249,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
 
     let config = test_config(store);
     let app = create_router(config).await;
-    let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
 
     let request = Request::builder()
         .uri(format!(
@@ -2331,10 +2310,12 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     let name = "SECP256K1_BLAKE160".to_string();
     let family_id = "secp256k1-blake160";
 
-    let older_type_hash = vec![0x11; 32];
-    let newer_type_hash = vec![0x22; 32];
-    let older_version_hash = vec![0x33; 32];
-    let newer_version_hash = vec![0x44; 32];
+    // Type references are the derived hashes of the code cells' type scripts;
+    // both newer code cells carry the same one.
+    let older_type_hash = compute_script_hash(&[0x30; 32], 1, &[]);
+    let newer_type_hash = compute_script_hash(&[0x31; 32], 1, &[]);
+    let older_version_hash = [0x33; 32];
+    let newer_version_hash = [0x44; 32];
     let older_tx_hash = vec![0xaa; 32];
     let newer_earliest_tx_hash = vec![0xab; 32];
     let newer_tx_hash = vec![0xbb; 32];
@@ -2419,7 +2400,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     batch.put_script_version(
         &older_version_hash,
         &ScriptVersionInfo {
-            version_hash: older_version_hash.clone(),
+            version_hash: older_version_hash.to_vec(),
             family_id: Some(family_id.to_string()),
             name: Some(name.clone()),
             canonical_reference_hash: Some(older_type_hash.clone()),
@@ -2430,7 +2411,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     batch.put_script_version(
         &newer_version_hash,
         &ScriptVersionInfo {
-            version_hash: newer_version_hash.clone(),
+            version_hash: newer_version_hash.to_vec(),
             family_id: Some(family_id.to_string()),
             name: Some(name.clone()),
             canonical_reference_hash: Some(newer_type_hash.clone()),
@@ -2446,18 +2427,15 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x10; 32],
-            lock_code_hash: vec![0x20; 32],
+            lock_code_hash: [0x20; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(older_type_hash.clone()),
-            type_code_hash: Some(vec![0x30; 32]),
+            type_code_hash: Some([0x30; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(older_version_hash.clone()),
+            data_hash: Some(older_version_hash),
         },
         older_block,
     );
@@ -2468,18 +2446,15 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x12; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(newer_type_hash.clone()),
-            type_code_hash: Some(vec![0x32; 32]),
+            type_code_hash: Some([0x31; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(newer_version_hash.clone()),
+            data_hash: Some(newer_version_hash),
         },
         newer_earliest_block,
     );
@@ -2500,18 +2475,15 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         1,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x21; 32],
+            lock_code_hash: [0x21; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(newer_type_hash.clone()),
-            type_code_hash: Some(vec![0x31; 32]),
+            type_code_hash: Some([0x31; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(newer_version_hash.clone()),
+            data_hash: Some(newer_version_hash),
         },
         newer_block,
     );
@@ -2548,7 +2520,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     assert_eq!(json["name"], name);
     assert_eq!(
         items[0]["versionHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&newer_version_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(newer_version_hash)))
     );
     assert_eq!(
         items[0]["canonicalReferenceHash"],
@@ -2570,11 +2542,11 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     );
     assert_eq!(
         newer_deployments[0]["dataReferenceHash"],
-        format!("0x{}", hex::encode(&newer_version_hash))
+        format!("0x{}", hex::encode(newer_version_hash))
     );
     assert_eq!(
         items[1]["versionHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&older_version_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(older_version_hash)))
     );
     assert_eq!(
         items[1]["canonicalReferenceHash"],
@@ -2822,10 +2794,15 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     set_script_fixture_block_tx_count(&store, 30, 2);
     set_script_fixture_block_tx_count(&store, 40, 2);
-    let reference = vec![0x31; 32];
-    let binary = vec![0x41; 32];
+    // The type-id reference is the derived hash of the code cells' TYPE_ID script.
+    let reference = compute_script_hash(
+        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+        1,
+        &[0x13; 32],
+    );
+    let binary = [0x41; 32];
     let history = ScriptVersionInfo {
-        version_hash: binary.clone(),
+        version_hash: binary.to_vec(),
         family_id: Some("retired-family".to_string()),
         name: Some("Retired family".to_string()),
         canonical_reference_hash: Some(reference.clone()),
@@ -2873,17 +2850,17 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             &[0x61; 32],
             0,
             &LiveCellInfo {
-                type_script_hash: Some(reference.clone()),
-                data_hash: Some(vec![0x51; 32]),
+                data_hash: Some([0x51; 32]),
                 data_size: 31_560,
                 capacity: 3_200_000_000_000,
-                occupied_capacity: 3_164_000_000_000,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
                 type_code_hash: Some(
-                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
                 ),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x13; 32]),
@@ -2941,7 +2918,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         if json.get("versions").is_some() {
             assert_eq!(
                 json["versions"][0]["versionHash"],
-                format!("0x{}", hex::encode(&binary))
+                format!("0x{}", hex::encode(binary))
             );
             assert_eq!(json["versions"][0]["references"], serde_json::json!([]));
             assert_eq!(json["liveCellsCount"], 6);
@@ -2998,12 +2975,12 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
 
     // Reactivation adds a new observed binary and publishes its exact binding.
     // Historical provenance stays intact and only the new version owns usage.
-    let active_binary = vec![0x71; 32];
+    let active_binary = [0x71; 32];
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_version(
         &active_binary,
         &ScriptVersionInfo {
-            version_hash: active_binary.clone(),
+            version_hash: active_binary.to_vec(),
             type_id_deployments: vec![(reference.clone(), 30)],
             registered_references: Vec::new(),
             lock_live_cells_count: 6,
@@ -3026,19 +3003,19 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            occupied_capacity: 61_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x12; 32],
+            lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(reference.clone()),
             type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
             ),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
-            data_hash: Some(active_binary.clone()),
+            data_hash: Some(active_binary),
             udt_amount: None,
         },
         30,
@@ -3080,7 +3057,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     assert_eq!(versions.len(), 2);
     let active = versions
         .iter()
-        .find(|version| version["versionHash"] == format!("0x{}", hex::encode(&active_binary)))
+        .find(|version| version["versionHash"] == format!("0x{}", hex::encode(active_binary)))
         .unwrap();
     assert_eq!(
         active["references"][0]["referenceHash"],
@@ -3120,7 +3097,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
             json["resolvedVersionHash"],
-            format!("0x{}", hex::encode(&active_binary))
+            format!("0x{}", hex::encode(active_binary))
         );
     }
     assert_eq!(
@@ -3131,7 +3108,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     // Reusing an earlier binary updates a row already present in the warmup
     // cache. The family response must read its current counters, not that cache.
     let mut old_reactivated = store.get_script_version(&active_binary).unwrap().unwrap();
-    old_reactivated.version_hash = binary.clone();
+    old_reactivated.version_hash = binary.to_vec();
     old_reactivated.type_id_deployments = vec![(reference.clone(), 10), (reference.clone(), 40)];
     old_reactivated.registered_references = history.registered_references.clone();
     let mut batch = StoreBatch::new(store.as_ref());
@@ -3139,7 +3116,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     batch.put_script_version(
         &active_binary,
         &ScriptVersionInfo {
-            version_hash: active_binary.clone(),
+            version_hash: active_binary.to_vec(),
             type_id_deployments: vec![(reference.clone(), 30)],
             registered_references: Vec::new(),
             ..history
@@ -3157,19 +3134,19 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            occupied_capacity: 61_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x12; 32],
+            lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(reference.clone()),
             type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
             ),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
-            data_hash: Some(binary.clone()),
+            data_hash: Some(binary),
             udt_amount: None,
         },
         40,
@@ -3959,10 +3936,12 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
     let store = test_store();
 
     // Shared bytecode version (data hash of the code cells).
-    let version_hash = vec![0x7e; 32];
+    let version_hash = [0x7e; 32];
     // Two independent type-id deployments of the same binary.
-    let ref_signet = vec![0xd0; 32];
-    let ref_testnet3 = vec![0x61; 32];
+    // Each deployment's reference is the derived hash of its code cell's own
+    // type script (same code, distinct args).
+    let ref_signet = compute_script_hash(&[0x33; 32], 1, &[0xd0]);
+    let ref_testnet3 = compute_script_hash(&[0x33; 32], 1, &[0x61]);
     let signet_code_cell_tx = vec![0xaa; 32];
     let testnet3_code_cell_tx = vec![0xbb; 32];
 
@@ -3971,7 +3950,7 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
         .put_script_version(
             &version_hash,
             &ScriptVersionInfo {
-                version_hash: version_hash.clone(),
+                version_hash: version_hash.to_vec(),
                 name: Some("RGB++".to_string()),
                 description: Some("RGB++ Lock".to_string()),
                 canonical_reference_hash: Some(ref_signet.clone()),
@@ -4027,27 +4006,24 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
 
     // Each deployment's own code cell carries the same bytecode.
     let mut batch = StoreBatch::new(store.as_ref());
-    for (tx_hash, type_hash, block) in [
-        (&signet_code_cell_tx, &ref_signet, 100i64),
-        (&testnet3_code_cell_tx, &ref_testnet3, 200i64),
+    for (tx_hash, type_hash, type_args, block) in [
+        (&signet_code_cell_tx, &ref_signet, 0xd0u8, 100i64),
+        (&testnet3_code_cell_tx, &ref_testnet3, 0x61u8, 200i64),
     ] {
         batch.put_cell(
             tx_hash,
             0,
             &LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(type_hash.clone()),
-                type_code_hash: Some(vec![0x33; 32]),
+                type_code_hash: Some([0x33; 32]),
                 type_hash_type: Some(1),
-                type_args: Some(vec![]),
+                type_args: Some(vec![type_args]),
                 data_size: 64,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
-                data_hash: Some(version_hash.clone()),
+                data_hash: Some(version_hash),
             },
             block,
         );
@@ -4110,7 +4086,8 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
 async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
     let store = test_store();
 
-    let reference_hash = vec![0x66; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let reference_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let version_a = vec![0x67; 32];
     let version_b = vec![0x68; 32];
 
@@ -4143,18 +4120,15 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
             0,
             &LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x33; 32]),
+                type_code_hash: Some([0x33; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 64,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
-                data_hash: Some(data_hash.clone()),
+                data_hash: Some(data_hash.clone().try_into().unwrap()),
             },
             block,
         );
@@ -4217,9 +4191,11 @@ async fn post_script_lookup(app: axum::Router, code_hashes: &[&str]) -> serde_js
 async fn test_script_lookup_serves_the_references_description() {
     let store = test_store();
 
-    let version_hash = vec![0x7a; 32];
-    let described = vec![0x7b; 32];
-    let undescribed = vec![0x7c; 32];
+    let version_hash = [0x7a; 32];
+    // Each reference is the derived hash of its code cell's own type script
+    // (same code, distinct args).
+    let described = compute_script_hash(&[0x33; 32], 1, &[0x7b]);
+    let undescribed = compute_script_hash(&[0x33; 32], 1, &[0x7c]);
     const DESCRIPTION: &str = "Lock a .cell name sits under. Always-success by design: \
         authority is decided by the Cells Account type script from the owner and manager \
         hashes in the cell.";
@@ -4228,7 +4204,7 @@ async fn test_script_lookup_serves_the_references_description() {
         .put_script_version(
             &version_hash,
             &ScriptVersionInfo {
-                version_hash: version_hash.clone(),
+                version_hash: version_hash.to_vec(),
                 name: Some("Cells Account Lock".to_string()),
                 canonical_reference_hash: Some(described.clone()),
                 canonical_hash_type: Some(1),
@@ -4267,27 +4243,24 @@ async fn test_script_lookup_serves_the_references_description() {
         .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    for (tx_hash, type_hash, block) in [
-        (vec![0xb1; 32], &described, 100i64),
-        (vec![0xb2; 32], &undescribed, 200i64),
+    for (tx_hash, type_hash, type_args, block) in [
+        (vec![0xb1; 32], &described, 0x7bu8, 100i64),
+        (vec![0xb2; 32], &undescribed, 0x7cu8, 200i64),
     ] {
         batch.put_cell(
             &tx_hash,
             0,
             &LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(type_hash.clone()),
-                type_code_hash: Some(vec![0x33; 32]),
+                type_code_hash: Some([0x33; 32]),
                 type_hash_type: Some(1),
-                type_args: Some(vec![]),
+                type_args: Some(vec![type_args]),
                 data_size: 64,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
-                data_hash: Some(version_hash.clone()),
+                data_hash: Some(version_hash),
             },
             block,
         );
@@ -4318,7 +4291,8 @@ async fn test_script_lookup_serves_the_references_description() {
 async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
     let store = test_store();
 
-    let reference_hash = vec![0x6a; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let reference_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let version_a = vec![0x6b; 32];
     let version_b = vec![0x6c; 32];
 
@@ -4345,18 +4319,15 @@ async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
             0,
             &LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x33; 32]),
+                type_code_hash: Some([0x33; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 64,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
-                data_hash: Some(data_hash.clone()),
+                data_hash: Some(data_hash.clone().try_into().unwrap()),
             },
             block,
         );
@@ -4434,7 +4405,12 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
     );
     set_script_fixture_block_tx_count(&store, 10, 2);
     set_script_fixture_block_tx_count(&store, 11, 2);
-    let reference = vec![0x31; 32];
+    // The type-id reference is the derived hash of the code cells' TYPE_ID script.
+    let reference = compute_script_hash(
+        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+        1,
+        &[0x13; 32],
+    );
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
     let anchors = [vec![0x61; 32], vec![0x71; 32]];
     let families = ["First", "Second"];
@@ -4502,19 +4478,19 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                 0,
                 &LiveCellInfo {
                     capacity: 100_00000000,
-                    occupied_capacity: 61_00000000,
-                    lock_script_hash: vec![0x11; 32],
-                    lock_code_hash: vec![0x12; 32],
+                    lock_code_hash: [0x12; 32],
                     lock_hash_type: 1,
                     lock_args: vec![],
-                    type_script_hash: Some(reference.clone()),
                     type_code_hash: Some(
-                        hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                        hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                            .unwrap()
+                            .try_into()
+                            .unwrap(),
                     ),
                     type_hash_type: Some(1),
                     type_args: Some(vec![0x13; 32]),
                     data_size: 32,
-                    data_hash: Some(binaries[index].clone()),
+                    data_hash: Some(binaries[index].clone().try_into().unwrap()),
                     udt_amount: None,
                 },
                 10 + index as i64,
@@ -4692,16 +4668,16 @@ async fn test_script_versions_order_same_block_by_canonical_tx_index() {
     );
     batch.put_script_family_by_name("Same Block Order", "same-block-order");
     for (hash_byte, tx_byte, tx_index) in [(0xf1u8, 0x31u8, 0i32), (0x11, 0x32, 1)] {
-        let version = vec![hash_byte; 32];
+        let version = [hash_byte; 32];
         let tx = vec![tx_byte; 32];
         batch.put_script_version_by_family("same-block-order", &version);
         batch.put_script_version(
             &version,
             &ScriptVersionInfo {
-                version_hash: version.clone(),
+                version_hash: version.to_vec(),
                 family_id: Some("same-block-order".to_string()),
-                registered_references: vec![(version.clone(), 0)],
-                canonical_reference_hash: Some(version.clone()),
+                registered_references: vec![(version.to_vec(), 0)],
+                canonical_reference_hash: Some(version.to_vec()),
                 canonical_hash_type: Some(0),
                 ..Default::default()
             },
@@ -4710,7 +4686,7 @@ async fn test_script_versions_order_same_block_by_canonical_tx_index() {
             0,
             &version,
             &ScriptReferenceInfo {
-                reference_hash: version.clone(),
+                reference_hash: version.to_vec(),
                 hash_type: 0,
                 ..Default::default()
             },
@@ -4721,18 +4697,15 @@ async fn test_script_versions_order_same_block_by_canonical_tx_index() {
             0,
             &LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: vec![0x21; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: None,
                 type_code_hash: None,
                 type_hash_type: None,
                 type_args: None,
                 data_size: 32,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
-                data_hash: Some(version.clone()),
+                data_hash: Some(version),
             },
             10,
         );
@@ -4772,7 +4745,7 @@ async fn chronology_error_body_with_index(
     let store = test_store();
     seed_block_headers_at(&store, &[(10, 1_704_153_601_000), (11, 1_704_153_602_000)]);
     set_script_fixture_block_tx_count(&store, 10, 2);
-    let version = vec![0x71; 32];
+    let version = [0x71; 32];
     let tx = vec![0x72; 32];
     let consumer = vec![0x73; 32];
     let mut batch = StoreBatch::new(store.as_ref());
@@ -4790,10 +4763,10 @@ async fn chronology_error_body_with_index(
     batch.put_script_version(
         &version,
         &ScriptVersionInfo {
-            version_hash: version.clone(),
+            version_hash: version.to_vec(),
             family_id: Some("chronology-error".to_string()),
-            registered_references: vec![(version.clone(), 0)],
-            canonical_reference_hash: Some(version.clone()),
+            registered_references: vec![(version.to_vec(), 0)],
+            canonical_reference_hash: Some(version.to_vec()),
             canonical_hash_type: Some(0),
             ..Default::default()
         },
@@ -4802,7 +4775,7 @@ async fn chronology_error_body_with_index(
         0,
         &version,
         &ScriptReferenceInfo {
-            reference_hash: version.clone(),
+            reference_hash: version.to_vec(),
             hash_type: 0,
             ..Default::default()
         },
@@ -4813,18 +4786,15 @@ async fn chronology_error_body_with_index(
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x21; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(version.clone()),
+            data_hash: Some(version),
         },
         10,
         consumed_at_block,
@@ -4929,9 +4899,14 @@ async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound
 #[tokio::test]
 async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_code() {
     let store = test_store();
-    let reference = vec![0x31; 32];
+    // The type-id reference is the derived hash of the code cell's TYPE_ID script.
+    let reference = compute_script_hash(
+        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+        1,
+        &[0x13; 32],
+    );
     let mapped_binary = vec![0x41; 32];
-    let actual_binary = vec![0x42; 32];
+    let actual_binary = [0x42; 32];
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_family(
         "binding-conflict",
@@ -4971,14 +4946,14 @@ async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_cod
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            occupied_capacity: 61_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x12; 32],
+            lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(reference.clone()),
             type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
             ),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),

@@ -2195,7 +2195,7 @@ pub(crate) fn mnft_class_cell_of_tx(
         context()
     );
     let address = crate::utils::address::encode_lock_address(
-        &cell.lock_script_hash,
+        &cell.lock_script_hash(),
         &cell.lock_code_hash,
         cell.lock_hash_type,
         &cell.lock_args,
@@ -2203,7 +2203,7 @@ pub(crate) fn mnft_class_cell_of_tx(
     )?;
     Ok(Some(MnftClassCellRef {
         output_index,
-        lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
+        lock_hash: format!("0x{}", hex::encode(cell.lock_script_hash())),
         address,
     }))
 }
@@ -5047,9 +5047,10 @@ mod tests {
                 },
             );
             // The row's day count, as the indexer stages it beside the row.
-            let mut daily = ckbadger_store::CollectionActivityDailyDeltas::new();
+            let mut daily = ckbadger_store::types::CollectionActivityDailyBlockDeltas::new();
             daily
                 .add_row(
+                    number,
                     collection,
                     ckbadger_store::keys::stats_day_yyyymmdd(ms).unwrap(),
                     &[action],

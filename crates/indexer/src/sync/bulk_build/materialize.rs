@@ -128,18 +128,50 @@ impl EncodedHistoryChunk {
                 serialized_size
             )
         })?;
+        self.push_encoded(cf_name, key, value_len, |payload| {
+            bincode::serialize_into(payload, value).map_err(|error| {
+                anyhow!(
+                    "bincode history serialization failed: cf={} key_bytes={} value_bytes={} error={}",
+                    cf_name,
+                    key.len(),
+                    value_len,
+                    error
+                )
+            })
+        })
+    }
+
+    /// A `cells` row: the payload's own codec ([`LiveCellInfo::encode_into`])
+    /// writes straight into the chunk, like [`Self::push_serialized`] does
+    /// for bincode values. A payload the codec refuses is an error naming the
+    /// outpoint, and the chunk is left as it was.
+    pub(crate) fn push_cell_payload(&mut self, key: &[u8], cell: &LiveCellInfo) -> Result<()> {
+        self.push_encoded(CF_CELLS, key, cell.encoded_len(), |payload| {
+            cell.encode_into(payload).map_err(|e| {
+                anyhow!(
+                    "cells payload refused: outpoint=0x{}: {e}",
+                    hex::encode(key)
+                )
+            })
+        })
+    }
+
+    /// Appends `key` and the `value_len` bytes `write` appends after it as one
+    /// row, after reserving room for both; a failed write or a length other
+    /// than `value_len` leaves the chunk as it was and is an error.
+    fn push_encoded(
+        &mut self,
+        cf_name: &'static str,
+        key: &[u8],
+        value_len: usize,
+        write: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
         let (key_len_u32, value_len_u32) = self.reserve_row(cf_name, key.len(), value_len)?;
         let payload_start = self.payload.len();
         self.payload.extend_from_slice(key);
-        if let Err(error) = bincode::serialize_into(&mut self.payload, value) {
+        if let Err(error) = write(&mut self.payload) {
             self.payload.truncate(payload_start);
-            return Err(anyhow!(
-                "bincode history serialization failed: cf={} key_bytes={} value_bytes={} error={}",
-                cf_name,
-                key.len(),
-                value_len,
-                error
-            ));
+            return Err(error);
         }
         let actual_value_len = self
             .payload
@@ -150,7 +182,7 @@ impl EncodedHistoryChunk {
         if actual_value_len != value_len {
             self.payload.truncate(payload_start);
             bail!(
-                "bincode history size invariant violated: cf={} estimated_value_bytes={} actual_value_bytes={}",
+                "history value size invariant violated: cf={} estimated_value_bytes={} actual_value_bytes={}",
                 cf_name,
                 value_len,
                 actual_value_len
@@ -771,16 +803,13 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
         let outpoint_key = keys::encode_outpoint(&[0x11; 32], 0);
         let cell_info = LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x21; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x23; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -802,11 +831,7 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
         };
 
         materializer.stream_history_rows(&[
-            MaterializedRow::new(
-                CF_CELLS,
-                outpoint_key.to_vec(),
-                bincode::serialize(&cell_info)?,
-            ),
+            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode()?),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(42).to_vec(),
@@ -1379,16 +1404,13 @@ mod tests {
         let outpoint_key = keys::encode_outpoint(&[0xAA; 32], 1);
         let cell_info = LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x21; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x23; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1410,11 +1432,7 @@ mod tests {
         };
 
         let history_rows = vec![
-            MaterializedRow::new(
-                CF_CELLS,
-                outpoint_key.to_vec(),
-                bincode::serialize(&cell_info).unwrap(),
-            ),
+            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode().unwrap()),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(100).to_vec(),
@@ -1569,16 +1587,13 @@ mod tests {
 
             let cell_info = LiveCellInfo {
                 capacity: 100_00000000,
-                lock_script_hash: vec![0x21; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![0x23; 20],
-                type_script_hash: None,
                 type_code_hash: None,
                 type_hash_type: None,
                 type_args: None,
                 data_size: 0,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
                 data_hash: None,
             };
@@ -1604,7 +1619,7 @@ mod tests {
                     MaterializedRow::new(
                         CF_CELLS,
                         outpoint_key.to_vec(),
-                        bincode::serialize(&cell_info).unwrap(),
+                        cell_info.encode().unwrap(),
                     ),
                     MaterializedRow::new(
                         CF_BLOCK_HEADERS,
@@ -1727,20 +1742,17 @@ mod tests {
 
         let cell_info = LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x21; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x23; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
-        let cell_bytes = bincode::serialize(&cell_info).unwrap();
+        let cell_bytes = cell_info.encode().unwrap();
 
         for i in 0u8..10 {
             let outpoint_key = keys::encode_outpoint(&[i; 32], 0);
@@ -1833,16 +1845,13 @@ mod tests {
         let outpoint_key = keys::encode_outpoint(&[0xCC; 32], 2);
         let cell_info = LiveCellInfo {
             capacity: 300_00000000,
-            lock_script_hash: vec![0x21; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x23; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1864,11 +1873,7 @@ mod tests {
         };
 
         let history_rows = vec![
-            MaterializedRow::new(
-                CF_CELLS,
-                outpoint_key.to_vec(),
-                bincode::serialize(&cell_info).unwrap(),
-            ),
+            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode().unwrap()),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(200).to_vec(),

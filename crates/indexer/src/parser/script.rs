@@ -17,76 +17,19 @@ pub(crate) fn is_type_id(code_hash: &[u8], hash_type: i16) -> bool {
 pub struct ScriptParser;
 
 impl ScriptParser {
-    /// Compute script hash using Molecule serialization.
-    ///
-    /// Script structure (Molecule table):
-    /// ```text
-    /// table Script {
-    ///     code_hash: Byte32,  // 32 bytes fixed
-    ///     hash_type: byte,    // 1 byte
-    ///     args: Bytes,        // variable: 4-byte length prefix + data
-    /// }
-    /// ```
-    ///
-    /// Molecule table encoding:
-    /// - Header: 4 bytes (total size) + 4 bytes per field (offsets)
-    /// - Body: fields in declaration order
+    /// The CKB script hash of an RPC script (blake2b of its Molecule
+    /// encoding; see [`ckbadger_common::script_hash`]).
     pub fn compute_script_hash(script: &Script) -> Vec<u8> {
         let code_hash = parse_hex_to_bytes(&script.code_hash);
         let hash_type = Self::parse_hash_type(&script.hash_type);
         let args = parse_hex_to_bytes(&script.args);
-
-        let encoded = Self::molecule_encode_script(&code_hash, hash_type, &args);
-
-        let mut hasher = new_blake2b();
-        hasher.update(&encoded);
-
-        let mut hash = vec![0u8; 32];
-        hasher.finalize(&mut hash);
-        hash
+        Self::compute_script_hash_raw(&code_hash, hash_type, &args)
     }
 
-    fn molecule_encode_script(code_hash: &[u8], hash_type: u8, args: &[u8]) -> Vec<u8> {
-        const HEADER_SIZE: u32 = 4 + 3 * 4; // total_size + 3 field offsets
-        const CODE_HASH_SIZE: u32 = 32;
-        const HASH_TYPE_SIZE: u32 = 1;
-
-        let args_len_u32 = u32::try_from(args.len())
-            .unwrap_or_else(|_| panic!("script args length exceeds u32 range: {}", args.len()));
-        let args_size = 4 + args_len_u32; // Bytes = length prefix (4) + data
-        let total_size = HEADER_SIZE + CODE_HASH_SIZE + HASH_TYPE_SIZE + args_size;
-
-        let offset_code_hash = HEADER_SIZE;
-        let offset_hash_type = offset_code_hash + CODE_HASH_SIZE;
-        let offset_args = offset_hash_type + HASH_TYPE_SIZE;
-
-        let mut buf = Vec::with_capacity(total_size as usize);
-
-        // Header
-        buf.extend_from_slice(&total_size.to_le_bytes());
-        buf.extend_from_slice(&offset_code_hash.to_le_bytes());
-        buf.extend_from_slice(&offset_hash_type.to_le_bytes());
-        buf.extend_from_slice(&offset_args.to_le_bytes());
-
-        // Body
-        buf.extend_from_slice(code_hash); // Byte32
-        buf.push(hash_type); // byte
-        buf.extend_from_slice(&args_len_u32.to_le_bytes()); // Bytes length prefix
-        buf.extend_from_slice(args); // Bytes data
-
-        buf
-    }
-
-    /// Compute script hash from raw byte components (no hex parsing).
+    /// Compute script hash from raw byte components (no hex parsing), with
+    /// the workspace's one script-hash routine.
     pub fn compute_script_hash_raw(code_hash: &[u8], hash_type: u8, args: &[u8]) -> Vec<u8> {
-        let encoded = Self::molecule_encode_script(code_hash, hash_type, args);
-
-        let mut hasher = new_blake2b();
-        hasher.update(&encoded);
-
-        let mut hash = vec![0u8; 32];
-        hasher.finalize(&mut hash);
-        hash
+        ckbadger_common::script_hash(code_hash, hash_type, args).to_vec()
     }
 
     pub fn compute_data_hash(data: &[u8]) -> [u8; 32] {
@@ -148,18 +91,6 @@ mod tests {
             hash_hex, "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
             "SECP256K1/blake160 type script hash mismatch"
         );
-    }
-
-    #[test]
-    fn test_molecule_encoding_size() {
-        let code_hash = [0u8; 32];
-        let args = vec![0u8; 32];
-        let encoded = ScriptParser::molecule_encode_script(&code_hash, 1, &args);
-
-        // Header: 4 (total) + 4*3 (offsets) = 16 bytes
-        // Body: 32 (code_hash) + 1 (hash_type) + 4 (args len) + 32 (args) = 69 bytes
-        // Total: 85 bytes
-        assert_eq!(encoded.len(), 85);
     }
 
     #[test]

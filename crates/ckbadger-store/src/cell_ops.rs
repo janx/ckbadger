@@ -131,7 +131,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         match self.get_cf(self.cf_cells(), outpoint_key)? {
             Some(value) => {
-                let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                let info = LiveCellInfo::decode(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
                         bytes_to_hex(outpoint_key),
@@ -167,15 +167,13 @@ impl CkbadgerStore {
             .into_iter()
             .zip(&keys)
             .map(|(value, key)| match value {
-                Ok(Some(value)) => bincode::deserialize::<LiveCellInfo>(&value)
-                    .map(Some)
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
-                            bytes_to_hex(key),
-                            e
-                        )
-                    }),
+                Ok(Some(value)) => LiveCellInfo::decode(&value).map(Some).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
+                        bytes_to_hex(key),
+                        e
+                    )
+                }),
                 Ok(None) => Ok(None),
                 Err(e) => Err(anyhow::anyhow!(
                     "rocksdb multi_get failed for cell payload: outpoint=0x{}, error={}",
@@ -275,7 +273,7 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let info = LiveCellInfo::decode(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize canonical cell payload in get_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -407,7 +405,7 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let cell = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let cell = LiveCellInfo::decode(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize canonical cell payload in get_consumed_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -1015,7 +1013,8 @@ impl CkbadgerStore {
                             && cell.lock_hash_type == i16::from(hash_type)
                     }
                     CodeIndexSide::Type => {
-                        cell.type_code_hash.as_deref() == Some(&code_hash[..32])
+                        cell.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                            == Some(&code_hash[..32])
                             && cell.type_hash_type == Some(i16::from(hash_type))
                     }
                 };
@@ -1102,7 +1101,7 @@ impl CkbadgerStore {
         for cell in cells.values() {
             stats.cells_count += 1;
             stats.total_capacity += cell.capacity as i128;
-            stats.total_used_capacity += cell.occupied_capacity as i128;
+            stats.total_used_capacity += cell.occupied_capacity() as i128;
         }
         Ok(())
     }
@@ -1121,19 +1120,17 @@ mod tests {
         (dir, store)
     }
 
-    fn make_cell(capacity: i64, occupied: i64, type_hash: &[u8]) -> LiveCellInfo {
+    /// The type script's args tell fixtures apart: its hash is derived.
+    fn make_cell(capacity: i64, type_args: &[u8]) -> LiveCellInfo {
         LiveCellInfo {
             capacity,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0xBB; 32],
+            lock_code_hash: [0xBB; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.to_vec()),
-            type_code_hash: Some(vec![0xCC; 32]),
+            type_code_hash: Some([0xCC; 32]),
             type_hash_type: Some(1),
-            type_args: Some(vec![]),
+            type_args: Some(type_args.to_vec()),
             data_size: 0,
-            occupied_capacity: occupied,
             udt_amount: None,
             data_hash: None,
         }
@@ -1143,20 +1140,8 @@ mod tests {
     fn tx_output_payloads_are_one_batched_read_in_output_order() {
         let (_dir, store) = test_store();
         let tx = [0x42; 32];
-        insert_cell(
-            &store,
-            &tx,
-            0,
-            &[0x01; 32],
-            &make_cell(100, 61, &[0x01; 32]),
-        );
-        insert_cell(
-            &store,
-            &tx,
-            2,
-            &[0x01; 32],
-            &make_cell(300, 61, &[0x01; 32]),
-        );
+        insert_cell(&store, &tx, 0, &make_cell(100, &[0x01; 32]));
+        insert_cell(&store, &tx, 2, &make_cell(300, &[0x01; 32]));
         store.reset_read_call_counters();
         let payloads = store.get_tx_output_payloads(&tx, 3).unwrap();
         assert_eq!(store.read_call_counts(), (0, 1));
@@ -1168,16 +1153,12 @@ mod tests {
         assert!(store.get_tx_output_payloads(&tx, -1).is_err());
     }
 
-    fn insert_cell(
-        store: &CkbadgerStore,
-        tx_hash: &[u8],
-        output_index: i16,
-        type_hash: &[u8],
-        cell: &LiveCellInfo,
-    ) {
+    /// A live typed cell and its `cell_by_type` row, keyed by the cell's own
+    /// derived type script hash, as the indexer writes them.
+    fn insert_cell(store: &CkbadgerStore, tx_hash: &[u8], output_index: i16, cell: &LiveCellInfo) {
         // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(cell).unwrap();
+        let value = cell.encode().unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &value)
             .unwrap();
@@ -1190,7 +1171,10 @@ mod tests {
             .unwrap();
 
         // Write to cell_by_type index
-        let idx_key = keys::encode_cell_index_key(type_hash, 100, tx_hash, output_index);
+        let type_hash = cell
+            .type_script_hash()
+            .expect("insert_cell takes a typed cell");
+        let idx_key = keys::encode_cell_index_key(&type_hash, 100, tx_hash, output_index);
         store
             .put_cf(store.cf_cell_by_type(), &idx_key, &[])
             .unwrap();
@@ -1228,19 +1212,16 @@ mod tests {
         batch.commit().unwrap();
     }
 
-    fn code_form_cell(lock_code_hash: &[u8], lock_hash_type: i16) -> LiveCellInfo {
+    fn code_form_cell(lock_code_hash: &[u8; 32], lock_hash_type: i16) -> LiveCellInfo {
         LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: lock_code_hash.to_vec(),
+            lock_code_hash: *lock_code_hash,
             lock_hash_type,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         }
@@ -1359,7 +1340,7 @@ mod tests {
     /// same code hash: `data` (0, sorts before it) and `data1` (2, sorts after
     /// it). Several rows share a block and a tx, so the key's block, tx hash
     /// and output index all decide the order.
-    fn seed_three_lock_forms(store: &CkbadgerStore, code_hash: &[u8]) {
+    fn seed_three_lock_forms(store: &CkbadgerStore, code_hash: &[u8; 32]) {
         let rows: [(u8, i16, i64); 7] = [
             (0x20, 0, 300),
             (0x21, 0, 301),
@@ -1520,8 +1501,7 @@ mod tests {
         let type_code_hash = [0x77; 32];
         for (tx_byte, block) in [(0x31u8, 400i64), (0x32, 402), (0x33, 401)] {
             let mut typed = code_form_cell(&[0xBB; 32], 1);
-            typed.type_script_hash = Some(vec![0x55; 32]);
-            typed.type_code_hash = Some(type_code_hash.to_vec());
+            typed.type_code_hash = Some(type_code_hash);
             typed.type_hash_type = Some(1);
             typed.type_args = Some(vec![]);
             insert_code_indexed_cell(&store, &[tx_byte; 32], 0, block, &typed);
@@ -1572,8 +1552,7 @@ mod tests {
         let type_code_hash = [0x77; 32];
 
         let mut typed = code_form_cell(&[0xBB; 32], 1);
-        typed.type_script_hash = Some(vec![0x55; 32]);
-        typed.type_code_hash = Some(type_code_hash.to_vec());
+        typed.type_code_hash = Some(type_code_hash);
         typed.type_hash_type = Some(1);
         typed.type_args = Some(vec![]);
         insert_code_indexed_cell(&store, &[0x31; 32], 0, 400, &typed);
@@ -1641,57 +1620,60 @@ mod tests {
     #[test]
     fn test_aggregate_token_cell_stats_single_cell() {
         let (_dir, store) = test_store();
-        let type_hash = [0x01u8; 32];
         let tx_hash = [0x11u8; 32];
-        let cell = make_cell(200_00000000, 61_00000000, &type_hash);
-        insert_cell(&store, &tx_hash, 0, &type_hash, &cell);
+        let cell = make_cell(200_00000000, &[0x01; 32]);
+        let type_hash = cell.type_script_hash().unwrap();
+        insert_cell(&store, &tx_hash, 0, &cell);
 
         let stats = store
             .aggregate_token_cell_stats(&type_hash, &store)
             .unwrap();
         assert_eq!(stats.cells_count, 1);
         assert_eq!(stats.total_capacity, 200_00000000);
-        assert_eq!(stats.total_used_capacity, 61_00000000);
+        // Derived: 8 + 33 (empty lock args) + 33 + 32 (type args), no data.
+        assert_eq!(stats.total_used_capacity, 106_00000000);
     }
 
     #[test]
     fn test_aggregate_token_cell_stats_multiple_cells() {
         let (_dir, store) = test_store();
-        let type_hash = [0x01u8; 32];
+        let type_args = [0x01u8; 32];
 
         let tx1 = [0x11u8; 32];
-        let cell1 = make_cell(200_00000000, 61_00000000, &type_hash);
-        insert_cell(&store, &tx1, 0, &type_hash, &cell1);
+        let cell1 = make_cell(200_00000000, &type_args);
+        insert_cell(&store, &tx1, 0, &cell1);
 
         let tx2 = [0x22u8; 32];
-        let cell2 = make_cell(300_00000000, 80_00000000, &type_hash);
-        insert_cell(&store, &tx2, 0, &type_hash, &cell2);
+        let mut cell2 = make_cell(300_00000000, &type_args);
+        cell2.data_size = 19;
+        insert_cell(&store, &tx2, 0, &cell2);
 
         let tx3 = [0x33u8; 32];
-        let cell3 = make_cell(150_00000000, 61_00000000, &type_hash);
-        insert_cell(&store, &tx3, 1, &type_hash, &cell3);
+        let cell3 = make_cell(150_00000000, &type_args);
+        insert_cell(&store, &tx3, 1, &cell3);
+        let type_hash = cell1.type_script_hash().unwrap();
 
         let stats = store
             .aggregate_token_cell_stats(&type_hash, &store)
             .unwrap();
         assert_eq!(stats.cells_count, 3);
         assert_eq!(stats.total_capacity, 650_00000000);
-        assert_eq!(stats.total_used_capacity, 202_00000000);
+        // 106 CKB per cell, plus 19 data bytes on the second.
+        assert_eq!(stats.total_used_capacity, (3 * 106 + 19) * 100_000_000);
     }
 
     #[test]
     fn test_aggregate_token_cell_stats_different_types_isolated() {
         let (_dir, store) = test_store();
-        let type_a = [0x01u8; 32];
-        let type_b = [0x02u8; 32];
-
         let tx1 = [0x11u8; 32];
-        let cell1 = make_cell(200_00000000, 61_00000000, &type_a);
-        insert_cell(&store, &tx1, 0, &type_a, &cell1);
+        let cell1 = make_cell(200_00000000, &[0x01; 32]);
+        insert_cell(&store, &tx1, 0, &cell1);
 
         let tx2 = [0x22u8; 32];
-        let cell2 = make_cell(500_00000000, 100_00000000, &type_b);
-        insert_cell(&store, &tx2, 0, &type_b, &cell2);
+        let cell2 = make_cell(500_00000000, &[0x02; 32]);
+        insert_cell(&store, &tx2, 0, &cell2);
+        let type_a = cell1.type_script_hash().unwrap();
+        let type_b = cell2.type_script_hash().unwrap();
 
         let stats_a = store.aggregate_token_cell_stats(&type_a, &store).unwrap();
         assert_eq!(stats_a.cells_count, 1);
@@ -1706,7 +1688,7 @@ mod tests {
     fn test_get_consumed_cell_info_returns_consumer_metadata() {
         let (_dir, store) = test_store();
         let type_hash = [0x01u8; 32];
-        let consumed_cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        let consumed_cell = make_cell(200_00000000, &type_hash);
         let tx_hash = [0x11u8; 32];
         let consumed_by_tx = [0x22u8; 32];
 
@@ -1776,7 +1758,7 @@ mod tests {
     fn test_get_consumed_cells_batch_fails_when_marker_has_no_canonical_cell() {
         let (_dir, store) = test_store();
         let tx_hash = [0xDE; 32];
-        let cell = make_cell(123_00000000, 61_00000000, &[0x01; 32]);
+        let cell = make_cell(123_00000000, &[0x01; 32]);
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, 0, &cell, 100);
@@ -1798,7 +1780,7 @@ mod tests {
     fn test_get_consumed_cell_meta_batch_returns_consumer_metadata() {
         let (_dir, store) = test_store();
         let type_hash = [0x01u8; 32];
-        let consumed_cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        let consumed_cell = make_cell(200_00000000, &type_hash);
         let tx_hash = [0x11u8; 32];
         let consumed_by_tx = [0x22u8; 32];
 
@@ -1849,16 +1831,17 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_hash = [0xEF; 32];
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
-        let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
-        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&cell, 123, None, 100);
+        let cell = make_cell(200_00000000, &[0x01; 32]);
+        let legacy = crate::types::v1_layout::ConsumedCellInfoV1 {
+            cell: crate::types::v1_layout::LiveCellInfoV1::from_v2(&cell),
+            consumed_at_block: 123,
+            consumed_by_tx: None,
+            created_at_block: 100,
+        };
         let legacy_payload = bincode::serialize(&legacy).unwrap();
 
         store
-            .put_cf(
-                store.cf_cells(),
-                &outpoint_key,
-                &bincode::serialize(&cell).unwrap(),
-            )
+            .put_cf(store.cf_cells(), &outpoint_key, &cell.encode().unwrap())
             .unwrap();
         store
             .put_cf(store.cf_consumed_cells(), &outpoint_key, &legacy_payload)
@@ -1882,16 +1865,13 @@ mod tests {
         let tx2 = vec![0x02; 32];
         let cell = LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 50,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1899,13 +1879,13 @@ mod tests {
         // Cell 1: live at block 5
         let mut batch = StoreBatch::new(&store);
         batch.put_live_cell_marker_by_outpoint(&tx1, 0, 5);
-        batch.put_cell_payload_by_outpoint(&tx1, 0, &cell);
+        batch.put_cell_payload_by_outpoint(&tx1, 0, &cell).unwrap();
         batch.put_cell_by_data_hash(&data_hash, 5, &tx1, 0);
         batch.commit().unwrap();
 
         // Cell 2: consumed (created block 10, consumed block 20)
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell_payload_by_outpoint(&tx2, 0, &cell);
+        batch.put_cell_payload_by_outpoint(&tx2, 0, &cell).unwrap();
         batch.put_consumed_cell(&tx2, 0, &cell, 10, 20);
         batch.put_cell_by_data_hash(&data_hash, 10, &tx2, 0);
         batch.commit().unwrap();
@@ -1923,19 +1903,17 @@ mod tests {
 
     // ── J8: `list_cells_by_hash_cf` fails fast on a dangling or malformed row ──
 
-    fn plain_cell(type_hash: Option<&[u8]>) -> LiveCellInfo {
+    /// A plain cell, typed by code `[0x44; 32]` with these args when given.
+    fn plain_cell(type_args: Option<&[u8]>) -> LiveCellInfo {
         LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: type_hash.map(<[u8]>::to_vec),
-            type_code_hash: type_hash.map(|_| vec![0x44; 32]),
-            type_hash_type: type_hash.map(|_| 1),
-            type_args: type_hash.map(|_| vec![]),
+            type_code_hash: type_args.map(|_| [0x44; 32]),
+            type_hash_type: type_args.map(|_| 1),
+            type_args: type_args.map(<[u8]>::to_vec),
             data_size: 50,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         }
@@ -1947,16 +1925,11 @@ mod tests {
     #[test]
     fn test_list_cells_by_type_fails_on_a_row_without_a_live_cell() {
         let (_dir, store) = test_store();
-        let type_hash = [0x7a; 32];
+        let live_cell = plain_cell(Some(&[0x7a; 32]));
+        let type_hash = live_cell.type_script_hash().unwrap();
         let live_tx = [0x01; 32];
         let dangling_tx = [0x02; 32];
-        insert_cell(
-            &store,
-            &live_tx,
-            0,
-            &type_hash,
-            &plain_cell(Some(&type_hash)),
-        );
+        insert_cell(&store, &live_tx, 0, &live_cell);
         let dangling_key = keys::encode_cell_index_key(&type_hash, 123, &dangling_tx, 3);
         store
             .put_cf(store.cf_cell_by_type(), &dangling_key, &[])
@@ -2038,7 +2011,9 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&live_tx, 0, &cell, 5);
         batch.put_cell_by_data_hash(&data_hash, 5, &live_tx, 0);
-        batch.put_cell_payload_by_outpoint(&consumed_tx, 0, &cell);
+        batch
+            .put_cell_payload_by_outpoint(&consumed_tx, 0, &cell)
+            .unwrap();
         batch.put_consumed_cell(&consumed_tx, 0, &cell, 10, 20);
         batch.put_cell_by_data_hash(&data_hash, 10, &consumed_tx, 0);
         batch.commit().unwrap();

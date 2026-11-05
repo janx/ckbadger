@@ -151,6 +151,7 @@ pub async fn write_live_batch(
     }
 
     let LiveBatchPrecompute {
+        input_script_hashes,
         batch_cell_infos,
         address_balance_changes,
         script_usage_changes,
@@ -179,6 +180,7 @@ pub async fn write_live_batch(
             all_tx_data,
             input_cell_info,
             batch_cell_infos,
+            input_script_hashes,
             address_balance_changes,
             script_usage_changes,
             script_reference_usage_changes,

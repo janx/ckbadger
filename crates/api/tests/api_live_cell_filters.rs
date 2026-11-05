@@ -14,8 +14,6 @@ use crate::common::*;
 
 use ckbadger_store::{keys, LiveCellInfo, StoreBatch};
 
-const LOCK_HASH: [u8; 32] = [0xAA; 32];
-const TYPE_HASH: [u8; 32] = [0xBB; 32];
 const TYPE_CODE_HASH: [u8; 32] = [0xCC; 32];
 /// A code hash the seeded cell does *not* use.
 const OTHER_CODE_HASH: [u8; 32] = [0xDD; 32];
@@ -26,30 +24,41 @@ fn hex32(bytes: &[u8; 32]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 
-/// One live cell carrying both a type script hash and a type code hash, indexed
-/// by lock and by type exactly as the indexer write path does.
-fn seed_one_live_cell(store: &std::sync::Arc<CkbadgerStore>) {
-    let info = LiveCellInfo {
+/// The seeded cell: a lock script and a typed script with code hash
+/// `TYPE_CODE_HASH`. Its script hashes are derived ([`lock_hash`],
+/// [`type_hash`]).
+fn seeded_cell() -> LiveCellInfo {
+    LiveCellInfo {
         capacity: 100_00000000,
-        lock_script_hash: LOCK_HASH.to_vec(),
-        lock_code_hash: vec![0x01; 32],
+        lock_code_hash: [0x01; 32],
         lock_hash_type: 1,
         lock_args: vec![],
-        type_script_hash: Some(TYPE_HASH.to_vec()),
-        type_code_hash: Some(TYPE_CODE_HASH.to_vec()),
+        type_code_hash: Some(TYPE_CODE_HASH.to_vec().try_into().unwrap()),
         type_hash_type: Some(1),
         type_args: Some(vec![]),
         data_size: 0,
         // 8-byte capacity + two 33-byte scripts, with empty args and data.
-        occupied_capacity: 74_00000000,
         udt_amount: None,
         data_hash: None,
-    };
+    }
+}
 
+fn lock_hash() -> [u8; 32] {
+    seeded_cell().lock_script_hash()
+}
+
+fn type_hash() -> [u8; 32] {
+    seeded_cell().type_script_hash().unwrap()
+}
+
+/// One live cell carrying both a type script and a type code hash, indexed by
+/// lock and by type exactly as the indexer write path does.
+fn seed_one_live_cell(store: &std::sync::Arc<CkbadgerStore>) {
+    let info = seeded_cell();
     let mut batch = StoreBatch::new(store);
     batch.put_cell(&TX_HASH, 0, &info, BLOCK);
-    batch.put_cell_by_lock(&LOCK_HASH, BLOCK, &TX_HASH, 0);
-    batch.put_cell_by_type(&TYPE_HASH, BLOCK, &TX_HASH, 0);
+    batch.put_cell_by_lock(&lock_hash(), BLOCK, &TX_HASH, 0);
+    batch.put_cell_by_type(&type_hash(), BLOCK, &TX_HASH, 0);
     batch.commit().unwrap();
 }
 
@@ -78,7 +87,7 @@ async fn test_seeded_cell_is_listed_by_lock() {
     let app = seeded_app().await;
     let (status, body) = get_json(
         &app,
-        &format!("/cells/live?lock_script_hash={}", hex32(&LOCK_HASH)),
+        &format!("/cells/live?lock_script_hash={}", hex32(&lock_hash())),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
@@ -97,8 +106,8 @@ async fn test_lock_and_type_hash_scan_still_applies_type_code_hash() {
 
     let matching = format!(
         "/cells/live?lock_script_hash={}&type_script_hash={}&type_code_hash={}",
-        hex32(&LOCK_HASH),
-        hex32(&TYPE_HASH),
+        hex32(&lock_hash()),
+        hex32(&type_hash()),
         hex32(&TYPE_CODE_HASH)
     );
     let (status, body) = get_json(&app, &matching).await;
@@ -111,8 +120,8 @@ async fn test_lock_and_type_hash_scan_still_applies_type_code_hash() {
 
     let mismatched = format!(
         "/cells/live?lock_script_hash={}&type_script_hash={}&type_code_hash={}",
-        hex32(&LOCK_HASH),
-        hex32(&TYPE_HASH),
+        hex32(&lock_hash()),
+        hex32(&type_hash()),
         hex32(&OTHER_CODE_HASH)
     );
     let (status, body) = get_json(&app, &mismatched).await;
@@ -133,7 +142,7 @@ async fn test_type_hash_scan_still_applies_type_code_hash() {
 
     let matching = format!(
         "/cells/live?type_script_hash={}&type_code_hash={}",
-        hex32(&TYPE_HASH),
+        hex32(&type_hash()),
         hex32(&TYPE_CODE_HASH)
     );
     let (status, body) = get_json(&app, &matching).await;
@@ -146,7 +155,7 @@ async fn test_type_hash_scan_still_applies_type_code_hash() {
 
     let mismatched = format!(
         "/cells/live?type_script_hash={}&type_code_hash={}",
-        hex32(&TYPE_HASH),
+        hex32(&type_hash()),
         hex32(&OTHER_CODE_HASH)
     );
     let (status, body) = get_json(&app, &mismatched).await;
@@ -165,7 +174,7 @@ async fn test_lock_scan_applies_type_code_hash() {
     for (code_hash, expect_hit) in [(TYPE_CODE_HASH, true), (OTHER_CODE_HASH, false)] {
         let path = format!(
             "/cells/live?lock_script_hash={}&type_code_hash={}",
-            hex32(&LOCK_HASH),
+            hex32(&lock_hash()),
             hex32(&code_hash)
         );
         let (status, body) = get_json(&app, &path).await;
@@ -185,12 +194,12 @@ async fn corrupt_address_balance_does_not_become_an_uncounted_page() {
     seed_genesis_baseline(&store);
     seed_one_live_cell(&store);
     store
-        .put_cf(store.cf_addr_balance(), &LOCK_HASH, b"broken")
+        .put_cf(store.cf_addr_balance(), &lock_hash(), b"broken")
         .unwrap();
     let app = create_router(test_config(store)).await;
     let (status, _) = get_json(
         &app,
-        &format!("/cells/live?lock_script_hash={}", hex32(&LOCK_HASH)),
+        &format!("/cells/live?lock_script_hash={}", hex32(&lock_hash())),
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -232,10 +241,15 @@ async fn test_unindexable_filter_combinations_are_rejected_not_silently_empty() 
 #[tokio::test]
 async fn test_cursor_from_this_scan_is_accepted() {
     let app = seeded_app().await;
-    let cursor = hex::encode(keys::encode_cell_index_key(&LOCK_HASH, BLOCK, &TX_HASH, 0));
+    let cursor = hex::encode(keys::encode_cell_index_key(
+        &lock_hash(),
+        BLOCK,
+        &TX_HASH,
+        0,
+    ));
     let path = format!(
         "/cells/live?lock_script_hash={}&cursor=0x{cursor}",
-        hex32(&LOCK_HASH)
+        hex32(&lock_hash())
     );
     let (status, body) = get_json(&app, &path).await;
     assert_eq!(
@@ -260,18 +274,18 @@ async fn test_type_hash_scan_surfaces_a_dangling_index_row() {
     seed_one_live_cell(&store);
     let dangling_tx = [0x22; 32];
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell_by_type(&TYPE_HASH, BLOCK + 1, &dangling_tx, 4);
+    batch.put_cell_by_type(&type_hash(), BLOCK + 1, &dangling_tx, 4);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
 
     let (status, body) = get_json(
         &app,
-        &format!("/cells/live?type_script_hash={}", hex32(&TYPE_HASH)),
+        &format!("/cells/live?type_script_hash={}", hex32(&type_hash())),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body={body}");
-    let key = keys::encode_cell_index_key(&TYPE_HASH, BLOCK + 1, &dangling_tx, 4);
+    let key = keys::encode_cell_index_key(&type_hash(), BLOCK + 1, &dangling_tx, 4);
     let message = body.to_string();
     assert!(
         message.contains("cell_by_type")

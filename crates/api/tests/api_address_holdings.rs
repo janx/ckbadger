@@ -151,19 +151,17 @@ async fn fixture_with_cluster(has_cluster: bool) -> Fixture {
         occupied += i128::from(used);
         let cell = LiveCellInfo {
             capacity: 100_000_000_000,
-            lock_script_hash: owner.clone(),
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![0x22; 20],
-            type_script_hash: t.as_ref().map(|s| s.calc_script_hash().as_slice().to_vec()),
-            type_code_hash: t.as_ref().map(|s| s.code_hash().as_slice().to_vec()),
+            type_code_hash: (t.as_ref().map(|s| s.code_hash().as_slice().to_vec()))
+                .map(|hash| hash.try_into().unwrap()),
             type_hash_type: t.as_ref().map(|s| i16::from(s.hash_type().as_slice()[0])),
             type_args: t.as_ref().map(|s| s.args().raw_data().to_vec()),
             data_size: data.len() as i32,
-            occupied_capacity: used,
             udt_amount: matches!(i, 4 | 5)
                 .then(|| u128::from_le_bytes(data.as_slice().try_into().unwrap())),
-            data_hash: Some(ckb_hash::blake2b_256(data).to_vec()),
+            data_hash: Some(ckb_hash::blake2b_256(data).to_vec().try_into().unwrap()),
         };
         let actual_capacity: u64 = output.capacity().unpack();
         assert_eq!(actual_capacity, cell.capacity as u64);
@@ -524,7 +522,8 @@ async fn address_identity_held_since_follows_self_updates_but_not_transfer_or_re
         let current = f.store.get_cell(&f.hash, 8, &f.store).unwrap().unwrap();
         let mut previous = current.cell.clone();
         if !same_owner {
-            previous.lock_script_hash = vec![0x88; 32];
+            // A different lock: its args name another owner.
+            previous.lock_args = vec![0x88; 20];
         }
         let mut b = StoreBatch::new(&f.store);
         b.put_consumed_cell_with_consumer(
@@ -619,7 +618,6 @@ async fn zero_amount_token_cells_keep_capacity_but_do_not_create_positive_balanc
         .cell;
     let token = script(ProtocolScript::Sudt, &[0x31; 32]);
     zero.type_args = Some(vec![0x31; 32]);
-    zero.type_script_hash = Some(token.calc_script_hash().as_slice().to_vec());
     zero.udt_amount = Some(0);
     let mut metadata = f
         .store
@@ -628,7 +626,7 @@ async fn zero_amount_token_cells_keep_capacity_but_do_not_create_positive_balanc
                 .get_cell(&f.hash, 4, &f.store)
                 .unwrap()
                 .unwrap()
-                .type_script_hash
+                .type_script_hash()
                 .as_ref()
                 .unwrap(),
         )
@@ -638,7 +636,7 @@ async fn zero_amount_token_cells_keep_capacity_but_do_not_create_positive_balanc
     let owner = hex::decode(&f.owner[2..]).unwrap();
     let mut balance = f.store.get_addr_balance(&owner).unwrap().unwrap();
     balance.balance += i128::from(zero.capacity);
-    balance.used_capacity += i128::from(zero.occupied_capacity);
+    balance.used_capacity += i128::from(zero.occupied_capacity());
     balance.live_cells_count += 1;
     let mut b = StoreBatch::new(&f.store);
     b.put_cell(&[0xc1; 32], 0, &zero, 7);
@@ -676,7 +674,7 @@ async fn sparse_class_page_counts_full_owner_set_without_node_reads_for_summary(
         b.put_cell_by_lock(&owner, 1, &[0xa3; 32], n);
     }
     balance.balance += i128::from(plain.capacity) * 2048;
-    balance.used_capacity += i128::from(plain.occupied_capacity) * 2048;
+    balance.used_capacity += i128::from(plain.occupied_capacity()) * 2048;
     balance.live_cells_count += 2048;
     b.put_addr_balance(&owner, &balance);
     b.commit().unwrap();
@@ -793,6 +791,89 @@ async fn address_named_dotcell_rights_do_not_add_physical_identity_cells_or_capa
     assert_eq!(names["data"][0]["name"], "named.cell");
 }
 
+/// Every row of an address page names the cell's own lock and type script
+/// hashes, whichever class it falls in: the script hashes are derived from
+/// the payload's fields, and a row must show exactly the hash ckb-types
+/// computes for that script (plain, unknown typed, DAO, token, object and
+/// identity rows).
+#[tokio::test]
+async fn address_cell_rows_name_their_own_lock_and_type_script_hashes() {
+    let f = fixture().await;
+    let (s, j) = get(
+        &f.app,
+        &format!("/api/v1/addresses/{}/cells?limit=100", f.owner),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    let hex_hash = |script: &packed::Script| {
+        format!("0x{}", hex::encode(script.calc_script_hash().as_slice()))
+    };
+    let mut mnft_id = vec![0x45; 24];
+    mnft_id.extend_from_slice(&7u32.to_be_bytes());
+    let unknown = packed::Script::new_builder()
+        .code_hash([0x99; 32].pack())
+        .hash_type(2u8.into())
+        .build();
+    let expected: Vec<(i64, &str, Option<String>)> = vec![
+        (0, "plain", None),
+        (1, "script", Some(hex_hash(&unknown))),
+        (2, "dao", Some(hex_hash(&script(ProtocolScript::Dao, &[])))),
+        (3, "dao", Some(hex_hash(&script(ProtocolScript::Dao, &[])))),
+        (
+            4,
+            "token",
+            Some(hex_hash(&script(ProtocolScript::Sudt, &[0x30; 32]))),
+        ),
+        (
+            5,
+            "token",
+            Some(hex_hash(&script(ProtocolScript::Sudt, &[0x30; 32]))),
+        ),
+        (
+            6,
+            "object",
+            Some(hex_hash(&script(ProtocolScript::SporeNft, &[0x41; 32]))),
+        ),
+        (
+            7,
+            "object",
+            Some(hex_hash(&script(ProtocolScript::MnftToken, &mnft_id))),
+        ),
+        (
+            8,
+            "identity",
+            Some(hex_hash(&script(ProtocolScript::DidCkb, &[0x61; 20]))),
+        ),
+        (
+            9,
+            "identity",
+            Some(hex_hash(&script(ProtocolScript::BitCell, &[0x62; 32]))),
+        ),
+        (
+            10,
+            "identity",
+            Some(hex_hash(&script(
+                ProtocolScript::DotbitAccount,
+                &[0x63; 20],
+            ))),
+        ),
+    ];
+    let rows = j["data"].as_array().unwrap();
+    assert_eq!(rows.len(), expected.len(), "{j}");
+    for (index, class, type_hash) in expected {
+        let row = rows
+            .iter()
+            .find(|row| row["outputIndex"] == index)
+            .unwrap_or_else(|| panic!("row {index} missing: {j}"));
+        assert_eq!(row["class"], class, "row {index}: {row}");
+        assert_eq!(row["lockScriptHash"], f.owner, "row {index}: {row}");
+        match type_hash {
+            Some(hash) => assert_eq!(row["typeScriptHash"], hash, "row {index}: {row}"),
+            None => assert!(row["typeScriptHash"].is_null(), "row {index}: {row}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn address_producer_wire_contract_preserves_required_nullable_fields() {
     let f = fixture().await;
@@ -855,10 +936,13 @@ async fn address_holdings_does_not_include_completed_original_depositor_history(
     assert_eq!(j["daoUnclaimedCompensation"], "2694000000");
 }
 
+/// A type hash byte outside 0..=255 is never truncated to a byte: the store
+/// refuses to write such a payload, naming the outpoint, and stages nothing
+/// (it refuses to read one too: `ckbadger-store` `types::tests`), so holdings
+/// can never be handed one.
 #[tokio::test]
-async fn address_holdings_rejects_noncanonical_type_hash_byte_without_truncation() {
+async fn address_holdings_cell_with_noncanonical_type_hash_byte_is_never_stored() {
     let f = fixture().await;
-    let owner = hex::decode(&f.owner[2..]).unwrap();
     let mut invalid = f
         .store
         .get_cell(&f.hash, 1, &f.store)
@@ -867,12 +951,16 @@ async fn address_holdings_rejects_noncanonical_type_hash_byte_without_truncation
         .cell;
     invalid.type_hash_type = Some(257);
     let mut b = StoreBatch::new(&f.store);
-    b.put_cell(&[0xf3; 32], 0, &invalid, 7);
-    b.put_cell_by_lock(&owner, 7, &[0xf3; 32], 0);
-    b.commit().unwrap();
-    let (s, j) = get(&f.app, &format!("/api/v1/addresses/{}/holdings", f.owner)).await;
-    assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR, "{j}");
-    assert!(j.to_string().contains("hash type 257"), "{j}");
+    let error = b
+        .put_cell_payload_by_outpoint(&[0xf3; 32], 0, &invalid)
+        .expect_err("type hash_type 257 must not be stored")
+        .to_string();
+    assert!(
+        error.contains("type hash_type 257 is not a byte"),
+        "{error}"
+    );
+    assert!(error.contains(&hex::encode([0xf3; 32])), "{error}");
+    assert!(b.is_empty(), "nothing staged");
 }
 
 #[tokio::test]
@@ -886,15 +974,13 @@ async fn address_dotcell_ring_root_is_script_infrastructure_not_an_identity() {
         .unwrap()
         .unwrap()
         .cell;
-    root.type_script_hash = Some(t.calc_script_hash().as_slice().to_vec());
-    root.type_code_hash = Some(t.code_hash().as_slice().to_vec());
+    root.type_code_hash = Some(t.code_hash().as_slice().to_vec().try_into().unwrap());
     root.type_hash_type = Some(1);
     root.type_args = Some(vec![0x33; 20]);
     root.data_size = 144;
-    root.occupied_capacity = (8 + 33 + 20 + 33 + 20 + 144) * 100_000_000;
     let mut balance = f.store.get_addr_balance(&owner).unwrap().unwrap();
     balance.balance += i128::from(root.capacity);
-    balance.used_capacity += i128::from(root.occupied_capacity);
+    balance.used_capacity += i128::from(root.occupied_capacity());
     balance.live_cells_count += 1;
     let mut b = StoreBatch::new(&f.store);
     b.put_cell(&[0xf4; 32], 0, &root, 7);
@@ -1073,18 +1159,19 @@ fn put_dao_deposit_cell(
     let used = (8 + 33 + 20 + 33 + 8) as i64 * 100_000_000;
     let cell = LiveCellInfo {
         capacity: capacity as i64,
-        lock_script_hash: owner.to_vec(),
-        lock_code_hash: vec![0x11; 32],
+        lock_code_hash: [0x11; 32],
         lock_hash_type: 1,
         lock_args: vec![0x23; 20],
-        type_script_hash: Some(dao.calc_script_hash().as_slice().to_vec()),
-        type_code_hash: Some(dao.code_hash().as_slice().to_vec()),
+        type_code_hash: Some(dao.code_hash().as_slice().to_vec().try_into().unwrap()),
         type_hash_type: Some(1),
         type_args: Some(vec![]),
         data_size: 8,
-        occupied_capacity: used,
         udt_amount: None,
-        data_hash: Some(ckb_hash::blake2b_256([0u8; 8]).to_vec()),
+        data_hash: Some(
+            (ckb_hash::blake2b_256([0u8; 8]).to_vec())
+                .try_into()
+                .unwrap(),
+        ),
     };
     batch.put_cell(hash, index, &cell, 7);
     batch.put_cell_by_lock(owner, 7, hash, index);

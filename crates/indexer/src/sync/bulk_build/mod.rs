@@ -33,7 +33,7 @@ use ckbadger_store::types::{
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_ADDR_TXS_BY_PREFIX,
-    CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
+    CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
     CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS,
     CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
     CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
@@ -5275,8 +5275,8 @@ fn build_history_rows_for_block(
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
                 keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?);
-            let live_cell_info = cell_facts_to_live_cell_info(cell, interner);
-            rows.push_serialized(CF_CELLS, &outpoint_key, &live_cell_info)?;
+            let live_cell_info = cell_facts_to_live_cell_info(cell, interner)?;
+            rows.push_cell_payload(&outpoint_key, &live_cell_info)?;
 
             // Lock script mapping — dedup within block, cross-batch dedup in merge.
             if seen_lock_ids.insert(cell.lock_script_hash_id) {
@@ -6010,28 +6010,36 @@ fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts<'_>
 fn cell_facts_to_live_cell_info(
     cell: &facts::CellFacts,
     interner: &interner::FrozenIdentityView,
-) -> LiveCellInfo {
-    LiveCellInfo {
+) -> Result<LiveCellInfo> {
+    let code_hash = |id: crate::sync::types::InternId, script: &str| -> Result<[u8; 32]> {
+        let bytes = interner.resolve_bytes(id);
+        <[u8; 32]>::try_from(bytes).map_err(|_| {
+            anyhow!(
+                "bulk build cell {script} code hash is {} bytes, not 32: outpoint=0x{}:{}, block={}",
+                bytes.len(),
+                hex::encode(cell.outpoint.tx_hash),
+                cell.outpoint.index,
+                cell.created_at_block
+            )
+        })
+    };
+    Ok(LiveCellInfo {
         capacity: cell.capacity,
-        lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id).to_vec(),
-        lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id).to_vec(),
+        lock_code_hash: code_hash(cell.lock_code_hash_id, "lock")?,
         lock_hash_type: cell.lock_hash_type,
         lock_args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
-        type_script_hash: cell
-            .type_script_hash_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
         type_code_hash: cell
             .type_code_hash_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
+            .map(|id| code_hash(id, "type"))
+            .transpose()?,
         type_hash_type: cell.type_hash_type,
         type_args: cell
             .type_args_id
             .map(|id| interner.resolve_bytes(id).to_vec()),
         data_size: cell.data_size,
-        occupied_capacity: cell.occupied_capacity,
         udt_amount: cell.udt_amount,
-        data_hash: cell.data_hash.map(|hash| hash.to_vec()),
-    }
+        data_hash: cell.data_hash,
+    })
 }
 
 fn cell_outpoint_index_i16(cell: &facts::CellFacts) -> Result<i16> {
@@ -6304,7 +6312,7 @@ fn collect_cell_snapshot(
     let cell_iter = append_store.iterator_cf(append_store.cf_cells(), IteratorMode::Start);
     for item in cell_iter {
         let (key, value) = item?;
-        let cell: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+        let cell = LiveCellInfo::decode(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize LiveCellInfo in bulk artifact snapshot helper: outpoint=0x{} error={}",
                 hex::encode(&key),
@@ -6735,8 +6743,8 @@ mod tests {
         TokenTransferRecord, TxActions, BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
-        keys, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES,
-        CF_TX_ACTIONS,
+        keys, CF_ADDR_TXS, CF_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
+        CF_OBJECT_COLLECTION_ACTIVITIES, CF_TX_ACTIONS,
     };
 
     fn open_empty_domain_store(name: &str) -> (CkbadgerStore, std::path::PathBuf) {
@@ -6881,8 +6889,8 @@ mod tests {
         assert_eq!(single.cell_payloads.len(), split.cell_payloads.len());
         for (outpoint, payload) in &single.cell_payloads {
             assert_eq!(
-                bincode::serialize(payload).unwrap(),
-                bincode::serialize(&split.cell_payloads[outpoint]).unwrap(),
+                payload.encode().unwrap(),
+                split.cell_payloads[outpoint].encode().unwrap(),
                 "append-only payload differs at {}",
                 hex::encode(outpoint)
             );

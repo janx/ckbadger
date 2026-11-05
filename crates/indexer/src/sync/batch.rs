@@ -52,8 +52,8 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
     BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, EntityDailyChanges,
-    TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey, UnresolvedLocalProbeSummary,
-    UnresolvedRpcProbeSummary,
+    InputScriptHashes, TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey,
+    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
@@ -156,7 +156,8 @@ fn resolve_live_dotbit_account_id_for_consume(
         // in for it.
         Some(info) => info
             .type_code_hash
-            .as_deref()
+            .as_ref()
+            .map(|hash| hash.as_slice())
             .filter(|tc| DotbitParser::is_account_cell_type_script(tc))
             .and_then(|_| dotbit_map.get(key).cloned()),
         None => dotbit_map.get(key).cloned(),
@@ -191,7 +192,7 @@ fn resolve_consumed_stats(
                     )
                 })?;
             data_size_consumed += i64::from(info.data_size);
-            used_capacity_consumed += i128::from(info.occupied_capacity);
+            used_capacity_consumed += i128::from(info.occupied_capacity());
         }
     }
     Ok((data_size_consumed, used_capacity_consumed))
@@ -220,11 +221,15 @@ fn positioned_cell_summary_projection(
     cell: &PositionedCellInfo,
     context: CellSummaryContext<'_>,
 ) -> Result<LiveCellSummaryProjection> {
-    let has_type_script = cell.type_script_hash.is_some();
+    // The payload stores the type script's fields, not its hash: the script
+    // is present iff its hash type and args are, which must agree with the
+    // code hash.
+    let has_type_script = cell.type_hash_type.is_some() && cell.type_args.is_some();
     let has_type_code_hash = cell.type_code_hash.is_some();
     let is_dao = cell
         .type_code_hash
-        .as_deref()
+        .as_ref()
+        .map(|hash| hash.as_slice())
         .is_some_and(DaoParser::is_dao_code_hash);
     LiveCellSummaryProjection::from_parts(
         has_type_script,
@@ -477,6 +482,10 @@ fn prepare_live_cell_summary_snapshots(
 struct ActivityInputIndexes<'a> {
     cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     batch_cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    /// Lock / type script hashes of every input cell, derived once by the
+    /// parser's pass 3 (the `cells` payload does not store them); the activity
+    /// views borrow them from here.
+    script_hashes: &'a InputScriptHashes,
     dao_withdraw_outpoints: &'a HashSet<(Vec<u8>, i16)>,
     dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
     dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
@@ -575,6 +584,17 @@ fn build_activity_input_views<'a>(
                         previous_output_index
                     )
                 })?;
+            let (lock_script_hash, type_script_hash) =
+                indexes.script_hashes.get(&key).ok_or_else(|| {
+                    anyhow!(
+                        "input cell has info but no derived script hashes while building activities: block={}, tx_hash=0x{}, input_index={}, prev_outpoint=0x{}:{}",
+                        block_number,
+                        hex::encode(tx_data.hash),
+                        input_index,
+                        hex::encode(input.previous_tx_hash),
+                        previous_output_index
+                    )
+                })?;
             let is_dao_withdraw_request = indexes.dao_withdraw_outpoints.contains(&key);
             let dao_compensation = if is_dao_withdraw_request {
                 indexes.dao_compensations.get(&key).copied()
@@ -588,7 +608,7 @@ fn build_activity_input_views<'a>(
             // is a lost index row and stops the batch.
             let consumed_is_account_cell = info
                 .type_code_hash
-                .as_deref()
+                .as_ref().map(|hash| hash.as_slice())
                 .is_some_and(DotbitParser::is_account_cell_type_script);
             let data: &[u8] = match (consumed_is_account_cell, indexes.dotbit_ids.get(&key)) {
                 (true, Some(account_id)) => account_id.as_slice(),
@@ -628,15 +648,15 @@ fn build_activity_input_views<'a>(
                         )
                     },
                 )?,
-                lock_script_hash: &info.lock_script_hash,
+                lock_script_hash: lock_script_hash.as_slice(),
                 lock_code_hash: &info.lock_code_hash,
                 lock_hash_type: info.lock_hash_type,
                 lock_args: &info.lock_args,
                 capacity: info.capacity,
-                occupied_capacity: info.occupied_capacity,
-                type_code_hash: info.type_code_hash.as_deref(),
+                occupied_capacity: info.occupied_capacity(),
+                type_code_hash: info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
                 type_hash_type: info.type_hash_type,
-                type_script_hash: info.type_script_hash.as_deref(),
+                type_script_hash: type_script_hash.as_ref().map(|hash| hash.as_slice()),
                 type_args: info.type_args.as_deref(),
                 udt_amount: info.udt_amount,
                 bit_cell_identity_id: indexes
@@ -870,6 +890,7 @@ fn resolve_input_udt_info_from_live_cells(
     writer: &BatchWriter,
     udt_cache: &DashMap<([u8; 32], i16), CachedUdtCellInfo>,
     all_input_outpoints_udt: &[(Vec<u8>, i16)],
+    input_script_hashes: &InputScriptHashes,
 ) -> Result<HashMap<(Vec<u8>, i16), UdtInputInfo>> {
     if all_input_outpoints_udt.is_empty() {
         return Ok(HashMap::new());
@@ -912,7 +933,7 @@ fn resolve_input_udt_info_from_live_cells(
             .iter()
             .map(|(h, i)| (h.as_slice(), *i))
             .collect();
-        let db_results = writer.get_udt_cells_info_batch(&outpoint_refs)?;
+        let db_results = writer.get_udt_cells_info_batch(&outpoint_refs, input_script_hashes)?;
 
         for ((tx_hash, idx), info) in &db_results {
             let key = tx_hash_key32(
@@ -1581,6 +1602,7 @@ impl Indexer {
         mut all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        input_script_hashes: InputScriptHashes,
         address_balance_changes: super::types::AddressBalanceChanges,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
@@ -1970,6 +1992,7 @@ impl Indexer {
                 &all_consumptions,
                 &input_cell_info,
                 &batch_cell_infos,
+                &input_script_hashes,
                 &mut data_batch,
                 false,
             )?;
@@ -2237,6 +2260,7 @@ impl Indexer {
                     &self.writer,
                     &self.udt_cell_cache,
                     &all_input_outpoints_udt,
+                    &input_script_hashes,
                 )?;
             }
 
@@ -2268,17 +2292,28 @@ impl Indexer {
                 // `input_udt_info` here would be narrower than bulk: it drops
                 // owner-mode (amount-less) and not-yet-registered typed inputs,
                 // which must still veto a "mint" classification.
+                // The payload stores no type script hashes: each typed input's
+                // was derived once by pass 3.
                 let persisted_input_types: OutpointTypeHashes<'_> = input_cell_info
-                    .iter()
-                    .filter_map(|((tx_hash, output_index), info)| {
-                        info.type_script_hash.as_deref().map(|type_script_hash| {
-                            (
-                                (tx_hash.as_slice(), i32::from(*output_index)),
-                                type_script_hash,
+                    .keys()
+                    .map(|key| {
+                        let (_, type_script_hash) =
+                            input_script_hashes.get(key).ok_or_else(|| {
+                                anyhow!(
+                                "persisted input has no derived script hashes: outpoint=0x{}:{}",
+                                hex::encode(&key.0),
+                                key.1
                             )
-                        })
+                            })?;
+                        Ok(type_script_hash.as_ref().map(|type_script_hash| {
+                            (
+                                (key.0.as_slice(), i32::from(key.1)),
+                                type_script_hash.as_slice(),
+                            )
+                        }))
                     })
-                    .collect();
+                    .filter_map(Result::transpose)
+                    .collect::<Result<_>>()?;
                 let onchain_token_info =
                     collect_token_onchain_info(&all_tx_data, &persisted_input_types);
                 let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
@@ -2643,9 +2678,10 @@ impl Indexer {
                                 let consumed_type_code_hash = input_cell_info
                                     .get(&key)
                                     .or_else(|| batch_cell_infos.get(&key))
-                                    .and_then(|info| info.type_code_hash.clone());
+                                    .and_then(|info| info.type_code_hash);
                                 let consumed_is_dotcell = consumed_type_code_hash
-                                    .as_deref()
+                                    .as_ref()
+                                    .map(|hash| hash.as_slice())
                                     .is_some_and(DotCellParser::is_account_type_script);
 
                                 // `.cell` consumption. It shares the outpoint
@@ -2686,7 +2722,8 @@ impl Indexer {
                                 // Spore consumption
                                 else if let Some(spore_id) = spore_map.get(&key) {
                                     let identity_collection_id = consumed_type_code_hash
-                                        .as_deref()
+                                        .as_ref()
+                                        .map(|hash| hash.as_slice())
                                         .and_then(|type_code_hash| {
                                             if BitCellParser::is_type_script(type_code_hash) {
                                                 Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
@@ -2730,7 +2767,9 @@ impl Indexer {
                                             false,
                                         );
                                     }
-                                } else if let Some(tch) = consumed_type_code_hash.as_deref() {
+                                } else if let Some(tch) =
+                                    consumed_type_code_hash.as_ref().map(|hash| hash.as_slice())
+                                {
                                     if SporeParser::is_spore_nft_type_script(tch)
                                         || DidCkbParser::is_type_script(tch)
                                         || BitCellParser::is_type_script(tch)
@@ -2803,7 +2842,9 @@ impl Indexer {
                             } else if input_cell_info
                                 .get(&key)
                                 .or_else(|| batch_cell_infos.get(&key))
-                                .and_then(|info| info.type_code_hash.as_deref())
+                                .and_then(|info| {
+                                    info.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                                })
                                 .is_some_and(DotbitParser::is_account_cell_type_script)
                             {
                                 // An AccountCell without an indexed id must have been
@@ -3253,6 +3294,7 @@ impl Indexer {
                             ActivityInputIndexes {
                                 cell_info: &input_cell_info,
                                 batch_cell_info: &batch_cell_infos,
+                                script_hashes: &input_script_hashes,
                                 dao_withdraw_outpoints: &dao_withdraw_outpoints,
                                 dao_compensations: &dao_compensations,
                                 dotbit_ids: &resolved_dotbit_ids,
@@ -3562,16 +3604,25 @@ impl Indexer {
                             "sync_indexer",
                         )?,
                     );
-                    if let Some(info) = input_cell_info
+                    if input_cell_info
                         .get(&key)
                         .or_else(|| batch_cell_infos.get(&key))
-                        .filter(|info| {
+                        .is_some_and(|info| {
                             info.type_code_hash
-                                .as_deref()
+                                .as_ref()
+                                .map(|hash| hash.as_slice())
                                 .is_some_and(DaoParser::is_dao_code_hash)
                         })
                     {
-                        touched_lock_hashes.insert(info.lock_script_hash.clone());
+                        let (lock_script_hash, _) =
+                            input_script_hashes.get(&key).ok_or_else(|| {
+                                anyhow!(
+                                    "DAO input has no derived script hashes: outpoint=0x{}:{}",
+                                    hex::encode(&key.0),
+                                    key.1
+                                )
+                            })?;
+                        touched_lock_hashes.insert(lock_script_hash.to_vec());
                     }
                 }
             }
@@ -4158,6 +4209,7 @@ impl Indexer {
                     &all_tx_data,
                     &input_cell_info,
                     &batch_cell_infos,
+                    &input_script_hashes,
                     &batch_undo_seq,
                     &mut data_batch,
                 )
@@ -4758,16 +4810,13 @@ mod tests {
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 1,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 1,
             udt_amount: None,
             data_hash: None,
         }
@@ -4854,18 +4903,15 @@ mod tests {
         };
         let consumed_plain = LiveCellInfo {
             capacity: plain.capacity,
-            lock_script_hash: plain.lock_script_hash,
-            lock_code_hash: plain.lock_code_hash,
+            lock_code_hash: plain.lock_code_hash.as_slice().try_into().unwrap(),
             lock_hash_type: plain.lock_hash_type,
             lock_args: plain.lock_args,
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_000_000,
             udt_amount: None,
-            data_hash: Some(plain.data_hash.to_vec()),
+            data_hash: Some(plain.data_hash),
         };
         let batch_cells = HashMap::from([(
             (tx0_hash.to_vec(), 0i16),
@@ -4909,9 +4955,13 @@ mod tests {
     ) {
         let key = (vec![0x11; 32], 0i16);
         let mut live_info = dummy_live_cell_info();
-        live_info.type_code_hash = Some(crate::rpc::parse_hex_to_bytes(
-            crate::parser::dao::DAO_CODE_HASH,
-        ));
+        live_info.type_code_hash = Some(
+            crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH)
+                .try_into()
+                .unwrap(),
+        );
+        live_info.type_hash_type = Some(1);
+        live_info.type_args = Some(Vec::new());
         let info = PositionedCellInfo::new(live_info, 1);
 
         let mut input_cell_info = HashMap::new();
@@ -4989,12 +5039,18 @@ mod tests {
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &empty_cell_info,
+            &empty_batch_info,
+        );
         let err = match build_activity_input_views(
             &tx,
             99,
             ActivityInputIndexes {
                 cell_info: &empty_cell_info,
                 batch_cell_info: &empty_batch_info,
+                script_hashes: &script_hashes,
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
@@ -5030,9 +5086,8 @@ mod tests {
 
         let mut info = dummy_live_cell_info();
         info.capacity = 123;
-        info.occupied_capacity = 456;
         info.data_size = 16;
-        info.lock_script_hash = vec![0xAB; 32];
+        info.lock_args = vec![0xAB; 20];
 
         let mut batch_cell_infos = HashMap::new();
         batch_cell_infos.insert(
@@ -5046,12 +5101,18 @@ mod tests {
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
         let empty_dotbit_unindexed = HashSet::new();
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &empty_cell_info,
+            &batch_cell_infos,
+        );
         let inputs = build_activity_input_views(
             &tx,
             100,
             ActivityInputIndexes {
                 cell_info: &empty_cell_info,
                 batch_cell_info: &batch_cell_infos,
+                script_hashes: &script_hashes,
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
@@ -5064,8 +5125,8 @@ mod tests {
         .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].capacity, info.capacity);
-        assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity);
-        assert_eq!(inputs[0].lock_script_hash, info.lock_script_hash);
+        assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity());
+        assert_eq!(inputs[0].lock_script_hash, info.lock_script_hash());
     }
 
     #[test]
@@ -5084,9 +5145,13 @@ mod tests {
         );
 
         let mut info = dummy_live_cell_info();
-        info.type_code_hash = Some(crate::rpc::parse_hex_to_bytes(
-            crate::parser::dao::DAO_CODE_HASH,
-        ));
+        info.type_code_hash = Some(
+            crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH)
+                .try_into()
+                .unwrap(),
+        );
+        info.type_hash_type = Some(1);
+        info.type_args = Some(Vec::new());
         let mut input_cell_info = HashMap::new();
         input_cell_info.insert(
             (previous_tx_hash.to_vec(), 1),
@@ -5105,12 +5170,18 @@ mod tests {
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
         let empty_dotbit_unindexed = HashSet::new();
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &input_cell_info,
+            &empty_batch_info,
+        );
         let inputs = build_activity_input_views(
             &tx,
             200,
             ActivityInputIndexes {
                 cell_info: &input_cell_info,
                 batch_cell_info: &empty_batch_info,
+                script_hashes: &script_hashes,
                 dao_withdraw_outpoints: &dao_withdraw_outpoints,
                 dao_compensations: &dao_compensations,
                 dotbit_ids: &empty_dotbit,
@@ -5142,9 +5213,12 @@ mod tests {
             vec![],
         );
         let mut info = dummy_live_cell_info();
-        info.type_code_hash = Some(crate::rpc::parse_hex_to_bytes(
-            crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET,
-        ));
+        info.type_code_hash = Some(
+            crate::rpc::parse_hex_to_bytes(crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET)
+                .try_into()
+                .unwrap(),
+        );
+        info.type_hash_type = Some(1);
         info.type_args = Some(Vec::new());
         let mut input_cell_info = HashMap::new();
         input_cell_info.insert(outpoint.clone(), PositionedCellInfo::new(info, 1));
@@ -5157,12 +5231,18 @@ mod tests {
         let empty_dotcell = HashMap::new();
 
         let empty_dotbit_unindexed = HashSet::new();
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &input_cell_info,
+            &empty_batch_info,
+        );
         let inputs = build_activity_input_views(
             &tx,
             201,
             ActivityInputIndexes {
                 cell_info: &input_cell_info,
                 batch_cell_info: &empty_batch_info,
+                script_hashes: &script_hashes,
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_compensations,
                 dotbit_ids: &empty_dotbit_ids,
@@ -5194,10 +5274,24 @@ mod tests {
     const DOTBIT_PARITY_PREV_TX: [u8; 32] = [0x5A; 32];
     const DOTBIT_PARITY_TX: [u8; 32] = [0x5B; 32];
     const DOTBIT_PARITY_LOCK_CODE_HASH: [u8; 32] = [0x10; 32];
-    const DOTBIT_PARITY_TYPE_SCRIPT_HASH: [u8; 32] = [0x12; 32];
 
     fn dotbit_account_code_hash() -> Vec<u8> {
         crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID)
+    }
+
+    /// A parity cell's `owner` bytes are its lock args; its address is the
+    /// derived lock script hash, on both paths.
+    fn dotbit_parity_lock_hash(owner: &[u8; 32]) -> Vec<u8> {
+        crate::parser::ScriptParser::compute_script_hash_raw(
+            &DOTBIT_PARITY_LOCK_CODE_HASH,
+            1,
+            owner,
+        )
+    }
+
+    /// The AccountCell type script (`type`, empty args) hash, on both paths.
+    fn dotbit_parity_type_script_hash() -> Vec<u8> {
+        crate::parser::ScriptParser::compute_script_hash_raw(&dotbit_account_code_hash(), 1, &[])
     }
 
     /// The live activity builder over one tx consuming `input` and creating
@@ -5209,13 +5303,11 @@ mod tests {
         let key = (DOTBIT_PARITY_PREV_TX.to_vec(), 0i16);
         let mut info = dummy_live_cell_info();
         info.capacity = 300_00000000;
-        info.occupied_capacity = 200_00000000;
-        info.lock_script_hash = input.owner.to_vec();
-        info.lock_code_hash = DOTBIT_PARITY_LOCK_CODE_HASH.to_vec();
-        info.type_code_hash = Some(dotbit_account_code_hash());
+        info.lock_args = input.owner.to_vec();
+        info.lock_code_hash = DOTBIT_PARITY_LOCK_CODE_HASH;
+        info.type_code_hash = Some(dotbit_account_code_hash().try_into().unwrap());
         info.type_hash_type = Some(1);
         info.type_args = Some(Vec::new());
-        info.type_script_hash = Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec());
         info.data_size = i32::try_from(input.data.len()).unwrap();
         let cell_info = HashMap::from([(key.clone(), PositionedCellInfo::new(info, 1))]);
         let dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = input
@@ -5232,9 +5324,9 @@ mod tests {
             capacity: 300_00000000,
             lock_code_hash: DOTBIT_PARITY_LOCK_CODE_HASH.to_vec(),
             lock_hash_type: 1,
-            lock_args: Vec::new(),
-            lock_script_hash: output.owner.to_vec(),
-            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            lock_args: output.owner.to_vec(),
+            lock_script_hash: dotbit_parity_lock_hash(&output.owner),
+            type_script_hash: Some(dotbit_parity_type_script_hash()),
             type_code_hash: Some(dotbit_account_code_hash()),
             type_hash_type: Some(1),
             type_args: Some(Vec::new()),
@@ -5258,6 +5350,8 @@ mod tests {
         let empty_dao_comp = HashMap::new();
         let empty_bit_cell = HashMap::new();
         let empty_dotcell = HashMap::new();
+        let script_hashes =
+            crate::sync::types::derive_input_script_hashes([&tx], &cell_info, &empty_cell_info);
         let view = build_live_activity_tx_view(
             &tx,
             5_867_661,
@@ -5266,6 +5360,7 @@ mod tests {
             ActivityInputIndexes {
                 cell_info: &cell_info,
                 batch_cell_info: &empty_cell_info,
+                script_hashes: &script_hashes,
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &dotbit_ids,
@@ -5290,10 +5385,9 @@ mod tests {
         };
         let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
         let lock_code_hash = interner.intern_bytes(DOTBIT_PARITY_LOCK_CODE_HASH.to_vec());
-        let lock_args = interner.intern_bytes(Vec::new());
         let type_code_hash = interner.intern_bytes(dotbit_account_code_hash());
         let type_args = interner.intern_bytes(Vec::new());
-        let type_script_hash = interner.intern_bytes(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec());
+        let type_script_hash = interner.intern_bytes(dotbit_parity_type_script_hash());
         let facts = |account_id: Option<[u8; 20]>| {
             account_id.map(|account_id| {
                 CellProtocolFacts::Dotbit(DotbitProtocolFacts {
@@ -5313,10 +5407,10 @@ mod tests {
             capacity: 300_00000000,
             occupied_capacity: 200_00000000,
             udt_amount: None,
-            lock_script_hash_id: interner.intern_bytes(input.owner.to_vec()),
+            lock_script_hash_id: interner.intern_bytes(dotbit_parity_lock_hash(&input.owner)),
             lock_code_hash_id: lock_code_hash,
             lock_hash_type: 1,
-            lock_args_id: lock_args,
+            lock_args_id: interner.intern_bytes(input.owner.to_vec()),
             type_script_hash_id: Some(type_script_hash),
             type_code_hash_id: Some(type_code_hash),
             type_hash_type: Some(1),
@@ -5333,10 +5427,10 @@ mod tests {
             created_at_block: 5_867_661,
             created_by_block_dao_ar: 0,
             capacity: 300_00000000,
-            lock_script_hash_id: interner.intern_bytes(output.owner.to_vec()),
+            lock_script_hash_id: interner.intern_bytes(dotbit_parity_lock_hash(&output.owner)),
             lock_code_hash_id: lock_code_hash,
             lock_hash_type: 1,
-            lock_args_id: lock_args,
+            lock_args_id: interner.intern_bytes(output.owner.to_vec()),
             type_script_hash_id: Some(type_script_hash),
             type_code_hash_id: Some(type_code_hash),
             type_hash_type: Some(1),
@@ -5533,7 +5627,7 @@ mod tests {
             type_code_hash: Some(dotbit_account_code_hash()),
             type_hash_type: Some(1),
             type_args: Some(Vec::new()),
-            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            type_script_hash: Some(dotbit_parity_type_script_hash()),
             data_hash: [0x13; 32],
             data_size: i32::try_from(data.len()).unwrap(),
             data: data.to_vec(),
@@ -5634,7 +5728,7 @@ mod tests {
             type_code_hash: Some(dotbit_account_code_hash()),
             type_hash_type: Some(1),
             type_args: Some(Vec::new()),
-            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            type_script_hash: Some(dotbit_parity_type_script_hash()),
             data_hash: [0x13; 32],
             data_size: 94,
             data: crate::rpc::parse_hex_to_bytes(data_hex),
@@ -5694,7 +5788,8 @@ mod tests {
             vec![],
         );
         let mut info = dummy_live_cell_info();
-        info.type_code_hash = Some(dotbit_account_code_hash());
+        info.type_code_hash = Some(dotbit_account_code_hash().try_into().unwrap());
+        info.type_hash_type = Some(1);
         info.type_args = Some(Vec::new());
         let cell_info = HashMap::from([(
             (DOTBIT_PARITY_PREV_TX.to_vec(), 0i16),
@@ -5706,12 +5801,15 @@ mod tests {
         let empty_ids = HashMap::new();
         let empty_dotcell = HashMap::new();
 
+        let script_hashes =
+            crate::sync::types::derive_input_script_hashes([&tx], &cell_info, &empty_cell_info);
         let err = match build_activity_input_views(
             &tx,
             77,
             ActivityInputIndexes {
                 cell_info: &cell_info,
                 batch_cell_info: &empty_cell_info,
+                script_hashes: &script_hashes,
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_ids,
@@ -5921,6 +6019,7 @@ mod tests {
             &writer,
             &cache,
             &[(tx_hash.clone(), output_index)],
+            &InputScriptHashes::new(),
         )
         .unwrap();
 
@@ -5939,13 +6038,12 @@ mod tests {
         let writer = BatchWriter::new(store.clone(), store.clone());
         let cache = DashMap::new();
 
-        let type_hash = vec![0x11; 32];
-        let type_code_hash = vec![0x22; 32];
+        let type_code_hash = [0x22; 32];
         let tx_hash = vec![0x33; 32];
         let output_index = 0i16;
 
         let token = ckbadger_store::types::TokenInfo {
-            type_code_hash: type_code_hash.clone(),
+            type_code_hash: type_code_hash.to_vec(),
             hash_type: 1,
             type_args: vec![0x44; 32],
             standard: "xudt_compatible".to_string(),
@@ -5960,32 +6058,36 @@ mod tests {
             metadata_source: None,
             chain_metadata: None,
         };
-        store.put_token_direct(&type_hash, &token).unwrap();
-
         let live_cell = LiveCellInfo {
             capacity: 100_000_000,
-            lock_script_hash: vec![0x55; 32],
-            lock_code_hash: vec![0x66; 32],
+            lock_code_hash: [0x66; 32],
             lock_hash_type: 1,
             lock_args: vec![0x77; 20],
-            type_script_hash: Some(type_hash.clone()),
             type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
             data_size: 16,
-            occupied_capacity: 0,
             udt_amount: Some(145_203),
             data_hash: None,
         };
+        // The token is registered under the cell's own type script hash.
+        let type_hash = live_cell.type_script_hash().unwrap().to_vec();
+        store.put_token_direct(&type_hash, &token).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &live_cell, 1);
         batch.commit().unwrap();
 
+        // What pass 3 ships for this input.
+        let input_script_hashes = InputScriptHashes::from([(
+            (tx_hash.clone(), output_index),
+            (live_cell.lock_script_hash(), live_cell.type_script_hash()),
+        )]);
         let resolved = resolve_input_udt_info_from_live_cells(
             &writer,
             &cache,
             &[(tx_hash.clone(), output_index)],
+            &input_script_hashes,
         )
         .unwrap();
 
@@ -6435,7 +6537,6 @@ mod tests {
         };
         use crate::sync::pipeline::compute_parser_input_capacities_and_fees;
         use crate::sync::TEST_CELLBASE_WITNESS;
-        use ckbadger_store::types::LiveCellInfo;
 
         const SECP_CODE_HASH: &str =
             "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
@@ -6834,11 +6935,12 @@ mod tests {
                                     key.1
                                 )
                             })?;
-                        *balance.entry(info.lock_script_hash.clone()).or_default() -=
+                        let lock_script_hash = info.lock_script_hash().to_vec();
+                        *balance.entry(lock_script_hash.clone()).or_default() -=
                             i128::from(info.capacity);
-                        *consumed.entry(info.lock_script_hash.clone()).or_default() += 1;
-                        *used.entry(info.lock_script_hash.clone()).or_default() -=
-                            i128::from(info.occupied_capacity);
+                        *consumed.entry(lock_script_hash.clone()).or_default() += 1;
+                        *used.entry(lock_script_hash).or_default() -=
+                            i128::from(info.occupied_capacity());
                     }
                 }
                 for cell in &tx_data.cells {
@@ -6980,15 +7082,16 @@ mod tests {
                                     key.1
                                 )
                             })?;
+                        let type_script_hash = info.type_script_hash();
                         if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
-                            info.type_script_hash.as_deref(),
-                            info.type_code_hash.as_deref(),
+                            type_script_hash.as_ref().map(|hash| hash.as_slice()),
+                            info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
                             info.type_hash_type,
                         ) {
                             members.push(crate::sync::pipeline::token_daily_consumed(
                                 type_hash,
                                 info.capacity,
-                                info.occupied_capacity,
+                                info.occupied_capacity(),
                             ));
                         }
                     }
@@ -7076,7 +7179,7 @@ mod tests {
                                 tx.block_number,
                                 collection_id,
                                 -i128::from(info.capacity),
-                                -i128::from(info.occupied_capacity),
+                                -i128::from(info.occupied_capacity()),
                             )?;
                         }
                     }
@@ -7178,7 +7281,7 @@ mod tests {
                         info.lock_hash_type,
                         false,
                         info.capacity,
-                        info.occupied_capacity,
+                        info.occupied_capacity(),
                         false,
                     )?;
                     if let (Some(code_hash), Some(hash_type)) =
@@ -7189,7 +7292,7 @@ mod tests {
                             hash_type,
                             true,
                             info.capacity,
-                            info.occupied_capacity,
+                            info.occupied_capacity(),
                             false,
                         )?;
                     }
@@ -7211,11 +7314,6 @@ mod tests {
                 for (output_index, cell) in tx_data.cells.iter().enumerate() {
                     let output_index_i16 =
                         checked_usize_to_i16(output_index, "live fee test output index")?;
-                    let occupied_capacity = occupied_capacity_shannons_i64(
-                        cell.lock_args.len(),
-                        cell.type_args.as_ref().map(|args| args.len()),
-                        cell.data_size,
-                    );
                     // Mirror the parser's Pass 1 (`pipeline.rs`): UDT outputs
                     // carry their parsed amount into `batch_cell_infos`, which
                     // is what the write path persists as live cell state.
@@ -7224,21 +7322,7 @@ mod tests {
                     batch_cell_infos.insert(
                         (tx_data.hash.to_vec(), output_index_i16),
                         PositionedCellInfo::new(
-                            LiveCellInfo {
-                                capacity: cell.capacity,
-                                lock_script_hash: cell.lock_script_hash.clone(),
-                                lock_code_hash: cell.lock_code_hash.clone(),
-                                lock_hash_type: cell.lock_hash_type,
-                                lock_args: cell.lock_args.clone(),
-                                type_script_hash: cell.type_script_hash.clone(),
-                                type_code_hash: cell.type_code_hash.clone(),
-                                type_hash_type: cell.type_hash_type,
-                                type_args: cell.type_args.clone(),
-                                data_size: cell.data_size,
-                                occupied_capacity,
-                                udt_amount,
-                                data_hash: Some(cell.data_hash.to_vec()),
-                            },
+                            cell.to_live_cell_info(udt_amount)?,
                             tx_data.block_number,
                         ),
                     );
@@ -7279,6 +7363,12 @@ mod tests {
                 object_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?;
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
+            // What the parser's pass 3 ships with a live batch.
+            let input_script_hashes = crate::sync::types::derive_input_script_hashes(
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+            );
             let metrics = indexer
                 .write_parsed_batch(
                     &blocks,
@@ -7286,6 +7376,7 @@ mod tests {
                     all_tx_data,
                     input_cell_info,
                     batch_cell_infos,
+                    input_script_hashes,
                     address_balance_changes,
                     script_usage_changes,
                     script_reference_usage_changes,
@@ -11074,8 +11165,9 @@ mod tests {
                 .live_cells
                 .keys()
                 .filter(|outpoint| {
-                    bulk.cell_payloads[*outpoint].type_script_hash.as_deref()
-                        == Some(type_hash.as_slice())
+                    bulk.cell_payloads[*outpoint]
+                        .type_script_hash()
+                        .is_some_and(|hash| hash.as_slice() == type_hash.as_slice())
                 })
                 .count() as i64;
             assert_eq!(live_set_cells, 1, "only B's amount cell is live");
@@ -11182,9 +11274,12 @@ mod tests {
             let (mut current_capacity, mut current_occupied) = (0i128, 0i128);
             for outpoint in bulk.live_cells.keys() {
                 let cell = &bulk.cell_payloads[outpoint];
-                if cell.type_script_hash.as_deref() == Some(type_hash.as_slice()) {
+                if cell
+                    .type_script_hash()
+                    .is_some_and(|hash| hash.as_slice() == type_hash.as_slice())
+                {
                     current_capacity += i128::from(cell.capacity);
-                    current_occupied += i128::from(cell.occupied_capacity);
+                    current_occupied += i128::from(cell.occupied_capacity());
                 }
             }
             assert_eq!(current_capacity, 349_00000000, "both B cells are live");
@@ -14526,12 +14621,12 @@ mod tests {
             for (key, value) in &immutable_before {
                 assert_eq!(
                     value,
-                    &bincode::serialize(
-                        bulk.cell_payloads
-                            .get(key)
-                            .expect("bulk append-only cell payload")
-                    )
-                    .unwrap(),
+                    &bulk
+                        .cell_payloads
+                        .get(key)
+                        .expect("bulk append-only cell payload")
+                        .encode()
+                        .unwrap(),
                     "bulk and live append-only payload: outpoint=0x{}",
                     hex::encode(key),
                 );

@@ -158,52 +158,30 @@ pub(crate) fn canonical_version_at(
             consumer.1
         );
     }
+    // The payload stores no script hashes (they are derived from these
+    // fields), so there is no stored hash to cross-check here.
     let lock = script(&cell.lock_code_hash, cell.lock_hash_type, &cell.lock_args)
         .with_context(|| format!("owner address script invalid: {context}"))?;
-    ensure!(
-        crate::utils::address::compute_script_hash(
-            &cell.lock_code_hash,
-            u8::try_from(cell.lock_hash_type)?,
-            &cell.lock_args
-        ) == cell.lock_script_hash,
-        "lock script hash mismatch: {context}"
-    );
-    let type_script = match (
-        &cell.type_code_hash,
-        cell.type_hash_type,
-        &cell.type_args,
-        &cell.type_script_hash,
-    ) {
-        (Some(code), Some(ht), Some(args), Some(hash)) => {
-            let response = script(code, ht, args).with_context(|| context.clone())?;
-            ensure!(
-                crate::utils::address::compute_script_hash(code, u8::try_from(ht)?, args) == *hash,
-                "type script hash mismatch: {context}"
-            );
-            Some(response)
-        }
-        (None, None, None, None) => None,
-        _ => {
-            return Err(anyhow!(
-                "partial type script (missing or invalid hash_type): {context}"
-            ))
-        }
-    };
+    // A decoded payload holds its whole type script or none.
+    let type_script = cell
+        .type_script()
+        .map(|(code, hash_type, args)| script(code, hash_type, args))
+        .transpose()
+        .with_context(|| context.clone())?;
     let data_bytes = usize::try_from(cell.data_size)
         .with_context(|| format!("negative data length: {context}"))?;
     let lock_bytes = 33 + cell.lock_args.len();
     let type_bytes = cell.type_args.as_ref().map_or(0, |args| 33 + args.len());
-    let occupied = i64::try_from(8 + lock_bytes + type_bytes + data_bytes)?
-        .checked_mul(100_000_000)
-        .ok_or_else(|| anyhow!("occupied capacity overflow: {context}"))?;
+    // Derived from the fields above, never stored: only the stored capacity
+    // can disagree with it.
+    let occupied = cell.occupied_capacity();
     ensure!(
-        cell.occupied_capacity == occupied && cell.capacity >= occupied,
-        "cell occupied/capacity mismatch: {context}, stored={} actual={occupied} capacity={}",
-        cell.occupied_capacity,
+        cell.capacity >= occupied,
+        "cell capacity below its occupied capacity: {context}, occupied={occupied} capacity={}",
         cell.capacity
     );
     let owner_address = crate::utils::address::encode_lock_address(
-        &cell.lock_script_hash,
+        &cell.lock_script_hash(),
         &cell.lock_code_hash,
         cell.lock_hash_type,
         &cell.lock_args,
@@ -221,7 +199,7 @@ pub(crate) fn canonical_version_at(
                 .as_ref()
                 .map(|h| format!("0x{}", hex::encode(h))),
             consumed_at_block,
-            owner_lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
+            owner_lock_hash: format!("0x{}", hex::encode(cell.lock_script_hash())),
             owner_address,
             capacity: cell.capacity.to_string(),
             occupied_capacity: occupied.to_string(),
@@ -361,8 +339,8 @@ pub(crate) fn checked_versions(
         let actual = data
             .iter()
             .find(|v| v.response.is_live)
-            .map(|v| v.cell.lock_script_hash.as_slice());
-        if actual != expected_owner.as_deref() {
+            .map(|v| v.cell.lock_script_hash());
+        if actual.as_ref().map(|hash| hash.as_slice()) != expected_owner.as_deref() {
             return Err(ApiError::internal(format!(
                 "item current owner disagrees with canonical cell: 0x{}",
                 hex::encode(id)
@@ -513,7 +491,10 @@ pub(crate) fn canonical_live_type_version(
         ensure!(
             version.response.is_live
                 && version.response.block_number == block
-                && version.cell.type_script_hash.as_deref() == Some(type_hash),
+                && version
+                    .cell
+                    .type_script_hash()
+                    .is_some_and(|hash| hash.as_slice() == type_hash),
             "live type index disagrees with canonical cell: reference=0x{} outpoint=0x{}:{index}",
             hex::encode(type_hash),
             hex::encode(tx)

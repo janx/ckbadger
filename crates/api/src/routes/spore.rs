@@ -281,7 +281,7 @@ fn spore_cell_type_script_hash(
         )
     };
     let cell = &version.cell;
-    let (Some(args), Some(hash)) = (&cell.type_args, &cell.type_script_hash) else {
+    let (Some(args), Some(hash)) = (&cell.type_args, &cell.type_script_hash()) else {
         return Err(ApiError::internal(format!(
             "{} has no type script",
             context()
