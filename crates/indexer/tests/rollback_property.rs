@@ -2592,3 +2592,164 @@ async fn derived_aggregates_reset_while_running_derive_again_to_the_forks_rows()
     )
     .await;
 }
+
+// ---------------------------------------------------------------------------
+// B-5c · a crash around the rollback core
+// ---------------------------------------------------------------------------
+
+/// Stores synced along `plan` to `upto` by a run that imported the labels
+/// before its first batch, as every start does (`entry.rs`).
+async fn synced_with_labels(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    upto: usize,
+    derive: Option<Derive>,
+) -> Stores {
+    let stores = open_stores();
+    startup_label_import(&stores.domain, NETWORK)
+        .unwrap_or_else(|e| panic!("startup label import: {e:#}"));
+    sync_with_derive(&stores, chain, plan, upto, derive).await;
+    stores
+}
+
+/// The CFs of the rows in which two dumps differ.
+fn differing_cfs(actual: &Dump, expected: &Dump) -> Vec<&'static str> {
+    let mut cfs: Vec<&'static str> = actual
+        .iter()
+        .filter(|(key, value)| expected.get(*key) != Some(*value))
+        .map(|((cf, _), _)| *cf)
+        .chain(
+            expected
+                .keys()
+                .filter(|key| !actual.contains_key(*key))
+                .map(|(cf, _)| *cf),
+        )
+        .collect();
+    cfs.sort_unstable();
+    cfs.dedup();
+    cfs
+}
+
+/// The process dies right after the rollback core's one write
+/// (`rollback_to_block`), before the DAO tip summary the rollback runs after
+/// it. The store then holds the fork's chain state with the old tip's
+/// summary, and nothing else stale; the restart's startup steps
+/// (`live_test_support::restart`) bring the whole domain store to the store
+/// that synced only to the fork.
+async fn crash_after_the_core_property(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    fork: usize,
+) -> Result<(), String> {
+    let mut crashed = synced_with_labels(chain, plan, tip, None).await;
+    crashed
+        .domain
+        .rollback_to_block(fork as i64)
+        .map_err(|e| format!("rollback core {tip} -> {fork}: {e:#}"))?;
+    let reference = synced_with_labels(chain, plan, fork, None).await;
+    let expected = dump_domain(&reference.domain);
+
+    let stale = differing_cfs(&dump_domain(&crashed.domain), &expected);
+    if stale != [ckbadger_store::CF_STATS_DAO] {
+        return Err(format!(
+            "crash after the core {tip} -> {fork}: before the restart the store must differ \
+             from the fork's in the DAO tip summary (stats_dao) only, differs in {stale:?}"
+        ));
+    }
+
+    crashed.indexer = restart(crashed.domain.clone(), crashed._append.clone(), NETWORK)
+        .map_err(|e| format!("restart after the core {tip} -> {fork}: {e:#}"))?;
+    compare_dumps(
+        &dump_domain(&crashed.domain),
+        &expected,
+        &format!("crash after the core {tip} -> {fork}, then restart"),
+    )
+}
+
+/// The process dies after the steps the rollback commits before its core —
+/// the derived-aggregate reset (`derive::invalidate_for_rollback`; with no
+/// pending reorg reconciliation, `begin_rollback` writes nothing) — and the
+/// reorg is retried after the restart. The store must equal one whose reorg
+/// ran once without a crash, aggregates reset in both.
+async fn crash_before_the_core_property(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    fork: usize,
+    derive: Derive,
+) -> Result<(), String> {
+    let context = format!("crash before the core {tip} -> {fork}");
+    let mut crashed = synced_with_labels(chain, plan, tip, Some(derive)).await;
+    ckbadger_indexer::derive::invalidate_for_rollback(&crashed.domain, fork as i64)
+        .map_err(|e| format!("{context}: invalidate: {e:#}"))?;
+    assert_aggregates_reset(&crashed.domain)
+        .map_err(|e| format!("{context}: the pre-core step did not reset: {e}"))?;
+    let crashed_tip = crashed.domain.get_sync_status().unwrap().tip_block_number;
+    if crashed_tip != tip as i64 {
+        return Err(format!(
+            "{context}: the pre-core step moved the tip to {crashed_tip}"
+        ));
+    }
+
+    crashed.indexer = restart(crashed.domain.clone(), crashed._append.clone(), NETWORK)
+        .map_err(|e| format!("{context}: restart: {e:#}"))?;
+    reorg_to(&crashed.indexer, fork as i64)
+        .await
+        .map_err(|e| format!("{context}: the retried reorg: {e:#}"))?;
+
+    let once = synced_with_labels(chain, plan, tip, Some(derive)).await;
+    reorg_to(&once.indexer, fork as i64)
+        .await
+        .map_err(|e| format!("rollback {tip} -> {fork} without a crash: {e:#}"))?;
+    assert_aggregates_reset(&once.domain).map_err(|e| format!("{context}: {e}"))?;
+    assert_aggregates_reset(&crashed.domain).map_err(|e| format!("{context}: {e}"))?;
+    compare_dumps(
+        &dump_domain(&crashed.domain),
+        &dump_domain(&once.domain),
+        &format!("{context}, restart and retried reorg vs one reorg"),
+    )
+}
+
+#[tokio::test]
+async fn a_crash_after_the_rollback_core_is_completed_by_the_restart() {
+    let chain = protocol_chain(0);
+    let mut failures = Vec::new();
+    for fork in [14, 10, 6, 5, 2] {
+        if let Err(report) =
+            crash_after_the_core_property(&chain, &single_block_plan(chain.len()), 16, fork).await
+        {
+            failures.push(report);
+        }
+    }
+    let mut plan: Vec<RangeInclusive<usize>> = single_block_plan(1);
+    plan.extend(
+        chunked_plan(16, 4)
+            .into_iter()
+            .map(|r| r.start() + 1..=r.end() + 1),
+    );
+    for fork in [14, 10, 6, 2] {
+        if let Err(report) = crash_after_the_core_property(&chain, &plan, 16, fork).await {
+            failures.push(report);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[tokio::test]
+async fn a_crash_before_the_rollback_core_is_retried_after_the_restart() {
+    let chain = protocol_chain(0);
+    let mut failures = Vec::new();
+    for (plan, fork) in [
+        (chunked_plan(chain.len(), 3), 5),
+        (chunked_plan(chain.len(), 3), 2),
+        (single_block_plan(chain.len()), 8),
+    ] {
+        if let Err(report) =
+            crash_before_the_core_property(&chain, &plan, 16, fork, Derive::CompleteAt(9)).await
+        {
+            failures.push(report);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
