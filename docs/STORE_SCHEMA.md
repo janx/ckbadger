@@ -658,7 +658,7 @@ Cell distribution and address cohort snapshots are materialized by the indexer d
 
 ## Network Store
 
-The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 67 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
+The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 74 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
 
 - **Non-chain / non-deterministic** — contents are derived from live peer-to-peer observation
   (crawler Identify/Discovery probes and configured-node `local_node_info`/`get_peers` sessions),
@@ -868,7 +868,7 @@ Memory sizing is per network rather than a fixed host-wide peak:
 ### Live Write Buffers and Flush Frequency
 
 `atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
-**whole** database, so the smallest per-CF buffer decides how often all 64 CFs flush together.
+**whole** database, so the smallest per-CF buffer decides how often all 70 CFs flush together.
 
 - Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
   (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)
