@@ -213,7 +213,15 @@ struct Stores {
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
-fn open_stores() -> Stores {
+/// A domain + append-only store pair with the genesis constants an indexer
+/// persists at startup, and no indexer: a fixture store, written directly.
+struct FixtureStores {
+    domain: Arc<CkbadgerStore>,
+    _append: Arc<CkbadgerStore>,
+    _dirs: (tempfile::TempDir, tempfile::TempDir),
+}
+
+fn open_fixture_stores() -> FixtureStores {
     let domain_dir = tempfile::tempdir().unwrap();
     let append_dir = tempfile::tempdir().unwrap();
     let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
@@ -228,12 +236,31 @@ fn open_stores() -> Stores {
     domain
         .set_secondary_epoch_reward(SECONDARY_EPOCH_REWARD)
         .unwrap();
+    FixtureStores {
+        domain,
+        _append: append,
+        _dirs: (domain_dir, append_dir),
+    }
+}
+
+/// The stores the property runs on, driven by an indexer (under the journal
+/// discipline, as in production).
+fn open_stores() -> Stores {
+    let FixtureStores {
+        domain,
+        _append: append,
+        _dirs,
+    } = open_fixture_stores();
+    // As in production (entry.rs): from the indexer's first write on, an
+    // unjournaled commit may write a Journal-class key only where
+    // OUTSIDE_JOURNAL covers it, so every path this suite drives is checked.
+    domain.enforce_journal_discipline();
     let indexer = indexer_with_stores(domain.clone(), append.clone(), NETWORK, -1, None);
     Stores {
         domain,
         _append: append,
         indexer,
-        _dirs: (domain_dir, append_dir),
+        _dirs,
     }
 }
 
@@ -753,7 +780,9 @@ fn simulate_journal_rollback(
 /// rows — materialised in a fresh store, the summary computed there — and
 /// take that store's `stats_dao` rows.
 fn with_tip_summary(mut replayed: Dump) -> Dump {
-    let stores = open_stores();
+    // A fixture store (no indexer, so no journal discipline): the replayed
+    // rows are written directly.
+    let stores = open_fixture_stores();
     for ((cf, key), value) in &replayed {
         // The dump keys the undo log by `block ‖ rank`; the tip summary
         // does not read it.
@@ -2115,7 +2144,10 @@ async fn a_rollback_across_a_restart_keeps_the_running_processes_runtime_status(
     stores.indexer = restart(stores.domain.clone(), stores._append.clone(), NETWORK)
         .unwrap_or_else(|e| panic!("restart: {e:#}"));
     let restarted = stores.domain.get_sync_runtime().unwrap();
-    assert_eq!(restarted.sync_started_block, 8, "the restarted run starts at 8");
+    assert_eq!(
+        restarted.sync_started_block, 8,
+        "the restarted run starts at 8"
+    );
     sync_prefix(&stores, &chain, &plan, 9, 11).await;
 
     reorg_to(&stores.indexer, 7).await.unwrap();

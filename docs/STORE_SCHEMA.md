@@ -367,9 +367,15 @@ family attribution fails with reference, binary and block context instead of bei
 `sync_meta` belongs to the **domain store** and is written only by the indexer. Its fixed-key
 namespace includes:
 
-- canonical progress/state: `tip_block`, `sync_status`, `runtime_status`, `sync_progress`,
-  `memory_stats`, and `background_tasks`
-- rollback state: latest/history reorg records and `deep_fork`
+- canonical progress/state: `sync_status` (bincode `SyncChainStatus`: tip number / hash and the
+  running transaction / cell totals, journaled per block) and `sync_runtime` (bincode
+  `SyncRuntimeStatus`: last sync time, rate, run start, bulk completion, deep-fork state, written
+  outside the journal); both decode exactly, and `get_sync_status` composes them into `SyncStatus`.
+  Telemetry: `runtime_status`, `sync_progress`, `memory_stats`, and `background_tasks`
+- every `sync_meta` key written outside the block journal is listed, with its owner and reason,
+  in `OUTSIDE_JOURNAL` (`crates/ckbadger-store/src/store.rs`; `docs/prompts/REORG_HANDLING.md` →
+  Outside the journal)
+- rollback state: the reorg event records (`reorg:*`); the deep-fork state is in `sync_runtime`
 - bulk-build state: the session-in-progress marker
 - materialization tracker cursors: `hodl_cursor` (bincode `HodlTrackerCursor`: holder count,
   open snapshot day, last processed block) and `cell_dist_cursor` (bincode

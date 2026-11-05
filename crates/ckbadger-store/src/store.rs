@@ -733,6 +733,292 @@ pub fn cf_spec(name: &str) -> Option<&'static CfSpec> {
     CF_SPECS.iter().find(|spec| spec.name == name)
 }
 
+/// One range of `Journal`-class keys that is legitimately written outside
+/// the block journal (an unjournaled commit), with its owner and why a
+/// rollback need not restore it. [`OUTSIDE_JOURNAL`] lists every one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutsideJournal {
+    pub cf: &'static str,
+    /// Every key starting with this prefix (empty: the whole column family).
+    pub key_prefix: &'static [u8],
+    /// Who writes it outside the journal.
+    pub owner: &'static str,
+    /// Why a rollback need not restore it, and what that leaves.
+    pub reason: &'static str,
+    /// Never journaled, on any batch: a journaled batch stages it straight
+    /// into its commit and the block overlay refuses it. Otherwise live
+    /// batches journal it in their block's scope and only the owner writes it
+    /// unjournaled.
+    pub never_journaled: bool,
+}
+
+const fn outside(
+    cf: &'static str,
+    key_prefix: &'static [u8],
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix,
+        owner,
+        reason,
+        never_journaled,
+    }
+}
+
+const NEVER: bool = true;
+const ALSO_JOURNALED: bool = false;
+const LABEL_IMPORT: &str = "label import (indexer startup, `ckbadger label-import`)";
+const LABELS_REASON: &str =
+    "label metadata, not chain state; a rollback through a block journaled \
+    before a label change restores that block's pre-change rows until the next import";
+const DERIVE: &str = "background derivation (derive scheduler, rollback reset)";
+const DERIVE_REASON: &str =
+    "a derived aggregate is rebuilt from canonical rows; a rollback resets \
+    an aggregate whose rows the journal does not own (the reset rule)";
+const TELEMETRY: &str = "process telemetry, not chain state";
+
+/// Every `Journal`-class key range written outside the block journal. With
+/// journal discipline on (the indexer), an unjournaled commit outside bulk
+/// sync that writes a `Journal`-class key not covered here is an error.
+pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+        "live batch commit (prune), bulk completion",
+        "describes which journal rows exist; the prune that advances it deletes rows no rollback \
+         restores, so a rollback must never write an older floor back",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::SYNC_RUNTIME,
+        "indexer runtime: live batch, startup, deep-fork record, reorg, bulk completion",
+        "run telemetry, bulk completion and deep-fork state belong to the running process",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::RUNTIME_STATUS,
+        "indexer heartbeat and shutdown record",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::SYNC_PROGRESS,
+        "indexer progress loop",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::MEMORY_STATS,
+        "indexer memory sampler",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::BACKGROUND_TASKS,
+        "background task progress mirror",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+        "bulk build engine",
+        "marks an unfinished bulk session of a fresh store, which is rebuilt, never rolled back",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::NETWORK_IDENTITY,
+        "network guard (first start)",
+        "the network the store is built for; constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::GENESIS_BASELINE,
+        "indexer at block 0",
+        "derived from the genesis block; constant per network",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::SECONDARY_EPOCH_REWARD,
+        "indexer startup",
+        "a consensus constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::DERIVE_META_PREFIX,
+        DERIVE,
+        DERIVE_REASON,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::REORG_EVENT_KEY_PREFIX,
+        "reorg handling (event record, reconciliation links)",
+        "the history of reorgs, not undo state",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+        "reorg handling",
+        "names the reorg event awaiting canonical replay",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        "deep-fork record (withdraws it)",
+        "a deep fork withdraws the summary until an operator resolves the fork; live batches \
+         journal it per block",
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::HODL_TRACKER,
+        "B-4 tracker blob conversion (one-time, before the re-sync)",
+        "the legacy blob is deleted when its rows are written",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::CELL_DIST_TRACKER,
+        "B-4 tracker blob conversion (one-time, before the re-sync)",
+        "the legacy blob is deleted when its rows are written",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::HODL_CURSOR,
+        "B-4 tracker blob conversion (one-time, before the re-sync)",
+        "the conversion writes the cursor of the state the blob held at the tip; live batches \
+         journal it per block",
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::CELL_DIST_CURSOR,
+        "B-4 tracker blob conversion (one-time, before the re-sync)",
+        "the conversion writes the cursor of the state the blob held at the tip; live batches \
+         journal it per block",
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_HODL_CAPACITY_BY_DATE,
+        b"",
+        "B-4 tracker blob conversion (one-time, before the re-sync)",
+        "the conversion writes the rows of the state the blob held at the tip; live batches \
+         journal them per block",
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_CELL_DIST_COHORT_BY_MONTH,
+        b"",
+        "B-4 tracker blob conversion (one-time, before the re-sync)",
+        "the conversion writes the rows of the state the blob held at the tip; live batches \
+         journal them per block",
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_STATS_DAO,
+        &[keys::STATS_PREFIX_DAO_LATEST_STATS],
+        "DAO tip summary (refresh_latest_dao_statistics)",
+        "a function of the sync tip, recomputed after every tip change",
+        NEVER,
+    ),
+    outside(
+        CF_STATS_DAO,
+        &[keys::STATS_PREFIX_DAO_TOP_DEPOSITORS],
+        "DAO tip summary (refresh_latest_dao_statistics)",
+        "a function of the sync tip, recomputed after every tip change",
+        NEVER,
+    ),
+    outside(
+        CF_STATS_DAO,
+        &[keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT],
+        "DAO tip summary (refresh_latest_dao_statistics)",
+        "the open day's row is a function of the tip, recomputed after every tip change; a \
+         sealed day's row is journaled at its sealer block",
+        ALSO_JOURNALED,
+    ),
+    outside(CF_DAO_LIVE_AGG, b"", DERIVE, DERIVE_REASON, ALSO_JOURNALED),
+    outside(
+        CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+        b"",
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_BIT_CELL_BY_ACCOUNT,
+        b"",
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_VERSIONS,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_VERSIONS_BY_LABEL,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_VERSIONS_BY_FAMILY,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_FAMILIES,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_FAMILY_BY_NAME,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_INFO,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(CF_TOKENS, b"", LABEL_IMPORT, LABELS_REASON, ALSO_JOURNALED),
+];
+
+/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any.
+pub fn outside_journal_entry(cf: &str, key: &[u8]) -> Option<&'static OutsideJournal> {
+    OUTSIDE_JOURNAL
+        .iter()
+        .find(|entry| entry.cf == cf && key.starts_with(entry.key_prefix))
+}
+
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
     match cf_spec(cf_name) {
         Some(spec) => spec.write_policy,
@@ -933,6 +1219,9 @@ pub struct CkbadgerStore {
     /// exceeds the budget, giving the indexer predictable flush behavior.
     write_buffer_manager: WriteBufferManager,
     bulk_sync_mode: AtomicBool,
+    /// Set by the indexer: outside bulk sync, an unjournaled commit may write
+    /// a `Journal`-class key only where [`OUTSIDE_JOURNAL`] covers it.
+    journal_discipline: AtomicBool,
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
@@ -1157,6 +1446,7 @@ impl CkbadgerStore {
             domain_write_gate: Mutex::new(()),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
+            journal_discipline: AtomicBool::new(false),
             is_secondary: false,
             memory_profile,
             runtime_config,
@@ -1256,6 +1546,7 @@ impl CkbadgerStore {
             domain_write_gate: Mutex::new(()),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
+            journal_discipline: AtomicBool::new(false),
             is_secondary: true,
             memory_profile,
             runtime_config,
@@ -2068,6 +2359,8 @@ impl CkbadgerStore {
         if self.is_append_only_store() {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
+        } else if self.journal_discipline_applies() {
+            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
         }
         let _guard = self
             .domain_write_gate
@@ -2080,6 +2373,8 @@ impl CkbadgerStore {
         if self.is_append_only_store() {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
+        } else if self.journal_discipline_applies() {
+            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
         }
         let _guard = self
             .domain_write_gate
@@ -2227,11 +2522,20 @@ impl CkbadgerStore {
     }
 
     pub fn write_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_with_intent(batch, StoreWriteIntent::Normal)
     }
 
     pub fn write_batch_synced(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_with_intent_synced(batch, StoreWriteIntent::Normal)
+    }
+
+    /// The rollback core's one atomic write: the journal's previous values
+    /// written back and the rolled-back blocks' ranges deleted. It is the
+    /// rollback itself, so the journal discipline does not apply to it.
+    pub(crate) fn write_rollback_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.write_batch_with_intent(batch, StoreWriteIntent::Normal)
     }
 
     /// Write a batch with WAL disabled. Use during bulk sync where crash recovery
@@ -2256,6 +2560,7 @@ impl CkbadgerStore {
     /// - Keys must target CFs that belong to this store instance.
     /// - Caller must be in bulk-sync mode (no WAL, crash = rebuild).
     pub fn write_batch_no_wal_bulk(&self, batch: rocksdb::WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_no_wal_unchecked(batch)
     }
 
@@ -2280,6 +2585,7 @@ impl CkbadgerStore {
     }
 
     pub fn write_batch_no_wal(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_no_wal_with_intent(batch, StoreWriteIntent::Normal)
     }
 
@@ -2467,6 +2773,76 @@ impl CkbadgerStore {
 
     pub fn is_bulk_sync_mode(&self) -> bool {
         self.bulk_sync_mode.load(Ordering::Relaxed)
+    }
+
+    // ---- Journal discipline ----
+
+    /// Turn the journal discipline on for this store handle (the indexer does,
+    /// before its first write): from now on, outside bulk sync, an unjournaled
+    /// commit that writes a `Journal`-class key not covered by
+    /// [`OUTSIDE_JOURNAL`] fails, and so does a raw `WriteBatch` commit.
+    pub fn enforce_journal_discipline(&self) {
+        self.journal_discipline.store(true, Ordering::Relaxed);
+    }
+
+    fn journal_discipline_applies(&self) -> bool {
+        self.journal_discipline.load(Ordering::Relaxed) && !self.is_bulk_sync_mode()
+    }
+
+    /// Check one unjournaled write (a direct put / delete, or a write of an
+    /// unjournaled `StoreBatch`) against the journal discipline.
+    pub(crate) fn check_unjournaled_write(&self, cf: &str, key: &[u8]) -> anyhow::Result<()> {
+        if !self.journal_discipline_applies() {
+            return Ok(());
+        }
+        let journaled =
+            cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        if !journaled || outside_journal_entry(cf, key).is_some() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf}              key=0x{}; a live write goes through a journaled batch in its block's scope, and a              write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner              and reason",
+            crate::bytes_to_hex(key)
+        )
+    }
+
+    /// [`Self::check_unjournaled_write`] for a range delete `[start, end)`:
+    /// covered only when one entry's prefix holds both bounds (or the entry
+    /// is the whole column family).
+    pub(crate) fn check_unjournaled_range_delete(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> anyhow::Result<()> {
+        if !self.journal_discipline_applies() {
+            return Ok(());
+        }
+        let journaled =
+            cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        let covered = OUTSIDE_JOURNAL.iter().any(|entry| {
+            entry.cf == cf
+                && (entry.key_prefix.is_empty()
+                    || (start.starts_with(entry.key_prefix) && end.starts_with(entry.key_prefix)))
+        });
+        if !journaled || covered {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "unjournaled range delete on a Journal-class CF outside the OUTSIDE_JOURNAL table: \
+             cf={cf} start=0x{} end=0x{}",
+            crate::bytes_to_hex(start),
+            crate::bytes_to_hex(end)
+        )
+    }
+
+    fn check_raw_write_batch(&self) -> anyhow::Result<()> {
+        if self.journal_discipline_applies() {
+            anyhow::bail!(
+                "raw WriteBatch commit on a store under journal discipline outside bulk sync:                  its writes cannot be checked against OUTSIDE_JOURNAL; commit through a                  StoreBatch"
+            );
+        }
+        Ok(())
     }
 
     pub fn memory_profile(&self) -> &MemoryProfile {
@@ -4933,6 +5309,140 @@ mod tests {
             assert_eq!(cf_spec(spec.name), Some(spec));
         }
         assert_eq!(cf_spec("no_such_cf"), None);
+    }
+
+    /// Every OUTSIDE_JOURNAL entry names a `Journal`-class domain CF (the
+    /// table is about keys the journal would otherwise own), and no two
+    /// entries cover the same key.
+    #[test]
+    fn outside_journal_entries_name_journal_class_cfs_once() {
+        for entry in OUTSIDE_JOURNAL {
+            assert_eq!(
+                cf_spec(entry.cf).map(|spec| spec.rollback_class),
+                Some(RollbackClass::Journal),
+                "{} {:?}",
+                entry.cf,
+                entry.key_prefix
+            );
+            assert!(!entry.owner.is_empty() && !entry.reason.is_empty());
+            let overlapping = OUTSIDE_JOURNAL
+                .iter()
+                .filter(|other| {
+                    other.cf == entry.cf
+                        && (other.key_prefix.starts_with(entry.key_prefix)
+                            || entry.key_prefix.starts_with(other.key_prefix))
+                })
+                .count();
+            assert_eq!(
+                overlapping, 1,
+                "{} {:?} overlaps",
+                entry.cf, entry.key_prefix
+            );
+        }
+    }
+
+    /// Under the journal discipline an unjournaled commit may write a
+    /// `Journal`-class key only where OUTSIDE_JOURNAL covers it; the refusal
+    /// writes nothing. Non-Journal CFs, bulk mode and a store without the
+    /// discipline are not checked; raw `WriteBatch` commits are refused.
+    #[test]
+    fn journal_discipline_refuses_unlisted_unjournaled_writes() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        // Without the discipline: a fixture store, written freely.
+        store
+            .put_cf(store.cf_addr_balance(), b"fixture", b"1")
+            .unwrap();
+        store.enforce_journal_discipline();
+
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_sync_meta(keys::sync_meta_keys::RUNTIME_STATUS, b"listed");
+        batch
+            .put_raw_cf_by_name(CF_ADDR_BALANCE, b"unlisted", b"2")
+            .unwrap();
+        let error = batch.commit().unwrap_err().to_string();
+        assert!(error.contains("cf=addr_balance"), "{error}");
+        assert_eq!(
+            store
+                .get_cf(store.cf_sync_meta(), keys::sync_meta_keys::RUNTIME_STATUS)
+                .unwrap(),
+            None,
+            "a refused batch writes nothing"
+        );
+        let error = store
+            .put_cf(store.cf_addr_balance(), b"unlisted", b"2")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("OUTSIDE_JOURNAL"), "{error}");
+        assert!(store
+            .delete_cf(store.cf_addr_balance(), b"fixture")
+            .is_err());
+
+        // Listed keys, and a RangeByBlock CF, pass.
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_sync_meta(keys::sync_meta_keys::RUNTIME_STATUS, b"listed");
+        batch
+            .put_raw_cf_by_name(CF_TX_INDEX, b"tx", b"row")
+            .unwrap();
+        batch.commit().unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::SYNC_PROGRESS,
+                b"p",
+            )
+            .unwrap();
+
+        // A raw WriteBatch cannot be checked, so it is refused.
+        let error = store
+            .write_batch(WriteBatch::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("raw WriteBatch"), "{error}");
+
+        // Bulk sync is not checked.
+        store.set_bulk_sync_mode(true);
+        store
+            .put_cf(store.cf_addr_balance(), b"bulk", b"3")
+            .unwrap();
+        store
+            .write_batch_no_wal_bulk(WriteBatch::default())
+            .unwrap();
+        store.set_bulk_sync_mode(false);
+        assert!(store
+            .write_batch_no_wal_bulk(WriteBatch::default())
+            .is_err());
+    }
+
+    /// A never-journaled key written through a journaled batch goes straight
+    /// into the commit, with no journal entry; an also-journaled one is
+    /// journaled in its block.
+    #[test]
+    fn a_journaled_batch_writes_never_journaled_keys_outside_the_journal() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        crate::commit_journaled_block(&store, 3, |batch| {
+            batch.put_sync_meta(keys::sync_meta_keys::RUNTIME_STATUS, b"telemetry");
+            batch.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, b"summary");
+        })
+        .unwrap();
+        let journaled: Vec<Vec<u8>> = store
+            .journal_entries(3)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        assert_eq!(
+            journaled,
+            vec![keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT.to_vec()]
+        );
+        assert_eq!(
+            store
+                .get_cf(store.cf_sync_meta(), keys::sync_meta_keys::RUNTIME_STATUS)
+                .unwrap(),
+            Some(b"telemetry".to_vec())
+        );
     }
 
     /// `RangeByBlock` only where the key starts with the block number;

@@ -43,6 +43,10 @@ pub struct StoreBatch<'a> {
     /// A journaled batch routes every write to a `Journal`-class domain CF into
     /// the live batch's block overlay instead of its own `WriteBatch`.
     journal: Option<Journal>,
+    /// The first write of this unjournaled batch the journal discipline
+    /// refused (`CkbadgerStore::check_unjournaled_write`); `commit` returns
+    /// it and writes nothing.
+    discipline_error: Option<anyhow::Error>,
 }
 
 /// The journaled side of a [`StoreBatch`]: the shared overlay, which
@@ -94,6 +98,7 @@ impl<'a> StoreBatch<'a> {
             pending_fiber_channels: HashMap::new(),
             pending_fiber_channel_by_commitment: HashMap::new(),
             journal: None,
+            discipline_error: None,
         }
     }
 
@@ -249,7 +254,8 @@ impl<'a> StoreBatch<'a> {
         };
         let journaled =
             cf_spec(name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
-        if !journaled {
+        // A key that is never journaled goes straight into the commit.
+        if !journaled || crate::block_overlay::is_outside_journal(name, key) {
             return false;
         }
         let (block, origin) = (journal.block, journal.origin);
@@ -386,6 +392,9 @@ impl<'a> StoreBatch<'a> {
         self.pending_fiber_channel_by_commitment
             .extend(other.pending_fiber_channel_by_commitment);
 
+        if let Some(error) = other.discipline_error {
+            self.discipline_error.get_or_insert(error);
+        }
         if let Some(error) = other.journal.and_then(|journal| journal.error) {
             match self.journal.as_mut() {
                 Some(journal) => {
@@ -397,6 +406,9 @@ impl<'a> StoreBatch<'a> {
     }
 
     fn commit_inner(mut self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
+        if let Some(error) = self.discipline_error.take() {
+            return Err(error);
+        }
         if let Some(journal) = self.journal.as_mut() {
             if let Some(error) = journal.error.take() {
                 return Err(error);
@@ -519,11 +531,16 @@ impl<'a> StoreBatch<'a> {
                 self.store.write_batch_with_intent(filtered_batch, intent)
             }
         } else if no_wal {
-            self.store.write_batch_no_wal(self.batch)
+            self.store
+                .write_batch_no_wal_with_intent(self.batch, StoreWriteIntent::Normal)
         } else if sync {
-            self.store.write_batch_synced(self.batch)
+            self.store
+                .write_batch_with_intent_synced(self.batch, StoreWriteIntent::Normal)
         } else {
-            self.store.write_batch(self.batch)
+            // Every write of this batch passed the journal discipline when it
+            // was staged (or went through the journal).
+            self.store
+                .write_batch_with_intent(self.batch, StoreWriteIntent::Normal)
         }
     }
 
@@ -546,7 +563,24 @@ impl<'a> StoreBatch<'a> {
                 value: Some(value_ref.to_vec()),
             });
         } else if !self.route_to_journal(cf, key_ref, Some(value_ref)) {
+            self.check_discipline(cf, key_ref);
             self.batch.put_cf(cf, key_ref, value_ref);
+        }
+    }
+
+    /// An unjournaled batch's write to a domain CF under the journal
+    /// discipline: a refusal is kept and fails the commit. (A journaled
+    /// batch routes its `Journal`-class writes into the overlay instead.)
+    fn check_discipline(&mut self, cf: &ColumnFamily, key: &[u8]) {
+        if self.journal.is_some() || self.discipline_error.is_some() {
+            return;
+        }
+        let checked = self
+            .store
+            .cf_name_for_handle(cf)
+            .and_then(|name| self.store.check_unjournaled_write(name, key));
+        if let Err(error) = checked {
+            self.discipline_error = Some(error);
         }
     }
 
@@ -597,6 +631,10 @@ impl<'a> StoreBatch<'a> {
                 cf_name
             );
         }
+        if self.journal.is_none() {
+            self.store
+                .check_unjournaled_range_delete(cf_name, start, end)?;
+        }
         let cf = self.store.cf(cf_name);
         self.batch.delete_range_cf(cf, start, end);
         Ok(())
@@ -620,6 +658,7 @@ impl<'a> StoreBatch<'a> {
                 value: None,
             });
         } else if !self.route_to_journal(cf, key_ref, None) {
+            self.check_discipline(cf, key_ref);
             self.batch.delete_cf(cf, key_ref);
         }
     }

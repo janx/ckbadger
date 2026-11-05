@@ -123,8 +123,8 @@ pub fn startup_label_import(domain: &CkbadgerStore, network: &str) -> Result<()>
     Ok(())
 }
 
-/// The indexer a restart builds over `domain` and `append`: the startup
-/// label import, then a new `Indexer` (empty caches, trackers not loaded) at
+/// The indexer a restart builds over `domain` and `append`, under the
+/// journal discipline as in production: the startup label import, then a new `Indexer` (empty caches, trackers not loaded) at
 /// the store's tip after the store-side startup steps every run performs
 /// before its first batch (`Indexer::prepare_store_for_sync`, live mode, no
 /// forced cleanup).
@@ -133,6 +133,9 @@ pub fn restart(
     append: Arc<CkbadgerStore>,
     network: &str,
 ) -> Result<Indexer> {
+    // The production indexer's store runs under the journal discipline from
+    // its first write (entry.rs).
+    domain.enforce_journal_discipline();
     startup_label_import(&domain, network)?;
     let (tip, hash) = match domain.get_sync_tip_block()? {
         Some((number, header)) => (number, Some(header.hash)),

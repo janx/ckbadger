@@ -406,7 +406,7 @@ impl CkbadgerStore {
             }
             result.journal_entries += 1;
         }
-        self.write_batch(batch)?;
+        self.write_rollback_batch(batch)?;
         info!(
             target,
             tip,

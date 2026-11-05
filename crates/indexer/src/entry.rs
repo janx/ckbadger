@@ -173,6 +173,9 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         append_only_store,
         decision: startup_decision,
     } = opened;
+    // From the first write on, an unjournaled commit outside bulk sync may
+    // write a Journal-class key only where OUTSIDE_JOURNAL covers it.
+    store.enforce_journal_discipline();
     // Keep the config honest about what the stores were actually opened with.
     config.store_runtime_config.vector_memtable = startup_decision.memtable.vector_memtable();
     info!(

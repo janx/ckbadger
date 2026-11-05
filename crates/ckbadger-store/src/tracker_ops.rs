@@ -17,7 +17,7 @@
 
 use anyhow::{anyhow, ensure, Context, Result};
 use chrono::NaiveDate;
-use rocksdb::{IteratorMode, WriteBatch};
+use rocksdb::IteratorMode;
 
 use crate::bytes_to_hex;
 use crate::keys::sync_meta_keys;
@@ -264,7 +264,9 @@ impl CkbadgerStore {
     /// without writing; so does a blob without the scalars a cursor needs.
     /// Without a blob nothing is read or written.
     pub fn convert_tracker_blobs_to_rows(&self) -> Result<TrackerBlobConversion> {
-        let mut batch = WriteBatch::default();
+        // An unjournaled commit: OUTSIDE_JOURNAL covers the rows, the cursors
+        // and the blobs, so the journal discipline checks every write.
+        let mut batch = crate::StoreBatch::new(self);
         let mut result = TrackerBlobConversion::default();
 
         if let Some(blob) = self.get_cf(self.cf_sync_meta(), sync_meta_keys::HODL_TRACKER)? {
@@ -284,11 +286,11 @@ impl CkbadgerStore {
                     days.insert(day),
                     "legacy hodl_tracker: day {date} appears twice"
                 );
-                batch.put_cf(
-                    self.cf_hodl_capacity_by_date(),
-                    encode_hodl_day_key(day)?,
-                    encode_hodl_capacity(day, *capacity)?,
-                );
+                batch.put_raw_cf_by_name(
+                    crate::store::CF_HODL_CAPACITY_BY_DATE,
+                    &encode_hodl_day_key(day)?,
+                    &encode_hodl_capacity(day, *capacity)?,
+                )?;
             }
             let cursor = HodlTrackerCursor {
                 holder_count: state.holder_count,
@@ -299,12 +301,13 @@ impl CkbadgerStore {
                     anyhow!("legacy hodl_tracker blob has no last_processed_block")
                 })?,
             };
-            batch.put_cf(
-                self.cf_sync_meta(),
+            batch.put_raw_cf_by_name(
+                crate::store::CF_SYNC_META,
                 sync_meta_keys::HODL_CURSOR,
-                encode_hodl_cursor(&cursor)?,
-            );
-            batch.delete_cf(self.cf_sync_meta(), sync_meta_keys::HODL_TRACKER);
+                &encode_hodl_cursor(&cursor)?,
+            )?;
+            batch
+                .delete_raw_cf_by_name(crate::store::CF_SYNC_META, sync_meta_keys::HODL_TRACKER)?;
             result.hodl_rows = Some(days.len());
         }
 
@@ -326,11 +329,11 @@ impl CkbadgerStore {
                     months.insert(month.clone()),
                     "legacy cell_dist_tracker: cohort month {month} appears twice"
                 );
-                batch.put_cf(
-                    self.cf_cell_dist_cohort_by_month(),
+                batch.put_raw_cf_by_name(
+                    crate::store::CF_CELL_DIST_COHORT_BY_MONTH,
                     month.as_bytes(),
-                    encode_cohort(month, *used, *balance)?,
-                );
+                    &encode_cohort(month, *used, *balance)?,
+                )?;
             }
             let cursor = CellDistTrackerCursor {
                 count_by_bucket: state.count_by_bucket,
@@ -342,17 +345,20 @@ impl CkbadgerStore {
                     anyhow!("legacy cell_dist_tracker blob has no last_processed_block")
                 })?,
             };
-            batch.put_cf(
-                self.cf_sync_meta(),
+            batch.put_raw_cf_by_name(
+                crate::store::CF_SYNC_META,
                 sync_meta_keys::CELL_DIST_CURSOR,
-                encode_cell_dist_cursor(&cursor)?,
-            );
-            batch.delete_cf(self.cf_sync_meta(), sync_meta_keys::CELL_DIST_TRACKER);
+                &encode_cell_dist_cursor(&cursor)?,
+            )?;
+            batch.delete_raw_cf_by_name(
+                crate::store::CF_SYNC_META,
+                sync_meta_keys::CELL_DIST_TRACKER,
+            )?;
             result.cell_dist_rows = Some(months.len());
         }
 
         if !batch.is_empty() {
-            self.write_batch(batch)?;
+            batch.commit()?;
         }
         Ok(result)
     }

@@ -197,10 +197,12 @@ Fail fast — each of these is an error that fails the batch before anything is 
 - a key written from two sub-batches, whose merge order would decide the committed value;
 - a range delete on a `Journal`-class CF of a journaled batch (the journal needs every key);
 - a commit before `stage_journal`;
-- a write of the one key kept outside the journal, the coverage contract (below).
+- a write of a never-journaled key straight to the overlay (a journaled batch stages such a key —
+  see the outside-journal table below — straight into its commit instead).
 
-Bulk sync records no journal (`docs/prompts/BULK_SYNC.md` rule 12): an overlay opened on a store in
-bulk mode stages final values and journals nothing.
+Bulk sync records no journal and never builds an overlay (`docs/prompts/BULK_SYNC.md` rule 12): an
+overlay on a store in bulk mode is an error, never an overlay that silently stops journaling.
+`StoreBatch::into_write_batch` refuses a journaled batch (its writes live in the overlay).
 
 ### `rollback_to_block(target)`
 
@@ -208,10 +210,10 @@ bulk mode stages final values and journals nothing.
 back to the end of block `target` (`-1`: before genesis). For the blocks from the tip (the highest
 stored header) down to `target + 1` it stages, into **one** `WriteBatch`:
 
-1. the deletion of their `RangeByBlock` rows: one range delete per CF covering every rolled-back
-   block — `block_headers`, `tx_index` and `reorg_undo_log_by_block` from `target + 1` up, and
-   `activities`, whose keys open with the block number descending, from the tip's key through
-   `target + 1`'s;
+1. the deletion of their `RangeByBlock` rows: one range delete per `RangeByBlock` CF of
+   `CF_SPECS` covering every rolled-back block — `block_headers`, `tx_index`, `tx_group_cycles` and
+   `reorg_undo_log_by_block` from `target + 1` up, and `activities`, whose keys open with the block
+   number descending, from the tip's key through `target + 1`'s;
 2. their journal entries' previous values, written back block by block from the tip down, each
    block's entries in reverse sequence order (an absent previous value deletes the key).
 
@@ -221,10 +223,14 @@ reversed from deleted rows, rebuilt from surviving rows, or found by scanning a 
 Because the rollback is one atomic write it is either committed or absent; there is no
 in-progress marker and nothing to resume after a crash.
 
-Errors, with nothing written: a target below -1 or above the tip; an undo-log row of a scope other
+The core proves its own preconditions. Errors, with nothing written: a target below -1 or above the
+tip; a row of any `RangeByBlock` CF above the tip (checked first, even when `target` equals the tip,
+which is when startup cleanup runs); a target below the journal coverage floor (below); a block in
+`(target, tip]` with no journal row (every live block journals at least its `block_hash_index`
+creation, so a block without one was pruned or never journaled); an undo-log row of a scope other
 than `Journal`, or one that cannot be decoded; a journal row that names an unknown CF, a CF that is
-not `Journal` (`cells` included — the append-only invariant on this path) or the coverage
-contract; a `tx_index` row or journal row of a block above the tip. The result counts the headers
+not `Journal` (`cells` included — the append-only invariant on this path) or a never-journaled key
+such as the coverage contract. The result counts the headers
 and `tx_index` rows removed, the `live_cells` markers removed and restored, and the journal entries
 written back (`Rollback committed`, info).
 
@@ -258,11 +264,38 @@ live batch, every rollback, startup and bulk finalize. A sealed day's row (a lat
 exists) is the forward writer's, journaled at its sealer block, the first block of the next UTC+8
 day.
 
-`sync_status` (the tip number and hash, and the running totals `total_transactions`,
-`total_cells_created`, `total_cells_consumed`) and `live_cell_summary:current` (the tip and its four
-live-cell class counters) are **journaled per block** instead of recomputed at the new tip: their
-counters cannot be derived from headers. The live writer writes both at every block of a batch, and
-the rollback writes the target block's values back like any other row.
+`sync_status` (`SyncChainStatus`: the tip number and hash, and the running totals
+`total_transactions`, `total_cells_created`, `total_cells_consumed`) and `live_cell_summary:current`
+(the tip and its four live-cell class counters) are **journaled per block** instead of recomputed at
+the new tip: their counters cannot be derived from headers. The live writer writes both at every
+block of a batch, and the rollback writes the target block's values back like any other row. The
+sync status's runtime part (`sync_runtime`, `SyncRuntimeStatus`: last sync time, rate, run start,
+bulk completion, deep-fork state) is the running process's, written outside the journal, so a
+rollback never restores a previous run's values.
+
+### Outside the journal: one table, checked
+
+Some `Journal`-class keys are legitimately written outside the journal. Every one is listed, with
+its owner and why a rollback need not restore it, in `OUTSIDE_JOURNAL` beside `CF_SPECS`
+(`crates/ckbadger-store/src/store.rs`): the coverage contract; the sync status's runtime part;
+process telemetry (`runtime_status`, `sync_progress`, `memory_stats`, `background_tasks`); the bulk
+session marker; `network_identity`, `genesis_baseline`, `secondary_epoch_reward`; derive state
+(`derive:*`) and the three derived aggregates' rows (derive scheduler and reset); reorg events
+(`reorg:*`, `reorg_reconcile_pending`) and the deep-fork withdrawal of `live_cell_summary:current`;
+the DAO tip summary's rows; the B-4 tracker blob conversion; and label import's rows (`tokens`,
+`script_info`, `script_versions` with their label / family indexes, `script_families`,
+`script_family_by_name`). Label metadata is not chain state: a rollback through a block journaled
+before a label change restores that block's pre-change rows until the next import. An entry marked
+never-journaled is staged straight into the commit even by a journaled batch; the others are also
+journaled by live batches in their block's scope.
+
+The indexer turns on the **journal discipline** on its domain store before its first write
+(`CkbadgerStore::enforce_journal_discipline`, `entry.rs`): from then on, outside bulk sync, an
+unjournaled commit that writes a `Journal`-class key no entry covers fails with the CF and key, on
+every commit path — `StoreBatch` (each write is checked as it is staged; the refused batch writes
+nothing), the store's direct `put_cf` / `delete_cf`, and range deletes. A raw `WriteBatch` cannot be
+checked, so it is refused under the discipline; the rollback core's own write (the rollback itself)
+is the one raw write it allows. The rollback property suite drives every path under the discipline.
 
 ### Coverage floor (rebuild-required below it)
 
