@@ -153,21 +153,6 @@ fn overlay_script_metadata(
     base
 }
 
-fn clear_script_version_usage(info: &mut ScriptVersionInfo) {
-    info.lock_cells_count = 0;
-    info.lock_live_cells_count = 0;
-    info.lock_capacity_sum = 0;
-    info.lock_owned_capacity_sum = 0;
-    info.lock_used_capacity_sum = 0;
-    info.lock_owned_knowledge_sum = 0;
-    info.type_cells_count = 0;
-    info.type_live_cells_count = 0;
-    info.type_capacity_sum = 0;
-    info.type_owned_capacity_sum = 0;
-    info.type_used_capacity_sum = 0;
-    info.type_owned_knowledge_sum = 0;
-}
-
 fn clear_script_family_usage(info: &mut ScriptFamilyInfo) {
     info.deprecated = true;
     info.versions_count = 0;
@@ -343,15 +328,34 @@ pub(crate) fn family_versions_counts<'a>(
     Ok(counts)
 }
 
+/// A version row's family and name, the keys of its two index rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VersionLabels {
+    pub(crate) family_id: Option<String>,
+    pub(crate) name: Option<String>,
+}
+
+impl VersionLabels {
+    fn of(version: &ScriptVersionInfo) -> Self {
+        Self {
+            family_id: version.family_id.clone(),
+            name: version.name.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ScriptReferenceRollupState {
-    pub(crate) versions: Vec<(Vec<u8>, ScriptVersionInfo)>,
-    pub(crate) families: Vec<(String, ScriptFamilyInfo)>,
-    /// The committed rows this rollup was computed FROM, so a caller can stage
-    /// only the rows whose value actually changed. Read once here rather than
-    /// re-read per row at write time.
-    pub(crate) existing_versions: HashMap<Vec<u8>, ScriptVersionInfo>,
-    pub(crate) existing_families: HashMap<String, ScriptFamilyInfo>,
+    /// Every version row the rollup leaves.
+    pub(crate) versions: HashMap<Vec<u8>, ScriptVersionInfo>,
+    /// Every family row the rollup leaves.
+    pub(crate) families: HashMap<String, ScriptFamilyInfo>,
+    /// The version rows the rollup changed (usage, Type ID lineage metadata,
+    /// or a new row), sorted, each with the labels its row had before
+    /// (`None`: a new row).
+    pub(crate) changed_versions: Vec<(Vec<u8>, Option<VersionLabels>)>,
+    /// The family rows the rollup changed or created, sorted.
+    pub(crate) changed_families: Vec<String>,
 }
 
 pub(crate) fn build_script_reference_rollup_state_with_lineage(
@@ -360,54 +364,187 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
-    let existing_versions: HashMap<Vec<u8>, ScriptVersionInfo> =
+    let versions: HashMap<Vec<u8>, ScriptVersionInfo> =
         store.list_script_versions()?.into_iter().collect();
-    let existing_families: HashMap<String, ScriptFamilyInfo> =
+    let families: HashMap<String, ScriptFamilyInfo> =
         store.list_script_families()?.into_iter().collect();
+    let mappings: HashMap<(Vec<u8>, u8), Option<Vec<u8>>> =
+        reference_mappings.into_iter().collect();
     build_script_reference_rollup_state_over(
-        existing_versions,
-        existing_families,
-        reference_mappings,
+        versions,
+        families,
+        &mappings,
         &reference_info_map,
         lineage,
     )
 }
 
-/// The rollup of `reference_info_map` under `reference_mappings`, on top of
-/// the version and family rows `existing_versions` / `existing_families`
-/// (their metadata; usage is recomputed from the references). The one
-/// computation behind every rollup the indexer writes: the per-block live
-/// rollup passes the rows the previous block left.
+/// One version's usage: the sum of the usage of the references that resolve
+/// to it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct VersionUsage {
+    lock_cells_count: i64,
+    lock_live_cells_count: i64,
+    lock_capacity_sum: i128,
+    lock_owned_capacity_sum: i128,
+    lock_used_capacity_sum: i128,
+    lock_owned_knowledge_sum: i128,
+    type_cells_count: i64,
+    type_live_cells_count: i64,
+    type_capacity_sum: i128,
+    type_owned_capacity_sum: i128,
+    type_used_capacity_sum: i128,
+    type_owned_knowledge_sum: i128,
+}
+
+impl VersionUsage {
+    fn of(version: &ScriptVersionInfo) -> Self {
+        Self {
+            lock_cells_count: version.lock_cells_count,
+            lock_live_cells_count: version.lock_live_cells_count,
+            lock_capacity_sum: version.lock_capacity_sum,
+            lock_owned_capacity_sum: version.lock_owned_capacity_sum,
+            lock_used_capacity_sum: version.lock_used_capacity_sum,
+            lock_owned_knowledge_sum: version.lock_owned_knowledge_sum,
+            type_cells_count: version.type_cells_count,
+            type_live_cells_count: version.type_live_cells_count,
+            type_capacity_sum: version.type_capacity_sum,
+            type_owned_capacity_sum: version.type_owned_capacity_sum,
+            type_used_capacity_sum: version.type_used_capacity_sum,
+            type_owned_knowledge_sum: version.type_owned_knowledge_sum,
+        }
+    }
+
+    fn apply_to(self, version: &mut ScriptVersionInfo) {
+        version.lock_cells_count = self.lock_cells_count;
+        version.lock_live_cells_count = self.lock_live_cells_count;
+        version.lock_capacity_sum = self.lock_capacity_sum;
+        version.lock_owned_capacity_sum = self.lock_owned_capacity_sum;
+        version.lock_used_capacity_sum = self.lock_used_capacity_sum;
+        version.lock_owned_knowledge_sum = self.lock_owned_knowledge_sum;
+        version.type_cells_count = self.type_cells_count;
+        version.type_live_cells_count = self.type_live_cells_count;
+        version.type_capacity_sum = self.type_capacity_sum;
+        version.type_owned_capacity_sum = self.type_owned_capacity_sum;
+        version.type_used_capacity_sum = self.type_used_capacity_sum;
+        version.type_owned_knowledge_sum = self.type_owned_knowledge_sum;
+    }
+
+    fn add(&mut self, version_hash: &[u8], info: &ScriptReferenceInfo) -> Result<()> {
+        let i64s = [
+            (
+                "lock_cells_count",
+                &mut self.lock_cells_count,
+                info.lock_cells_count,
+            ),
+            (
+                "lock_live_cells_count",
+                &mut self.lock_live_cells_count,
+                info.lock_live_cells_count,
+            ),
+            (
+                "type_cells_count",
+                &mut self.type_cells_count,
+                info.type_cells_count,
+            ),
+            (
+                "type_live_cells_count",
+                &mut self.type_live_cells_count,
+                info.type_live_cells_count,
+            ),
+        ];
+        for (metric, current, delta) in i64s {
+            *current = checked_add_version_i64(version_hash, metric, *current, delta)?;
+        }
+        let i128s = [
+            (
+                "lock_capacity_sum",
+                &mut self.lock_capacity_sum,
+                info.lock_capacity_sum,
+            ),
+            (
+                "lock_owned_capacity_sum",
+                &mut self.lock_owned_capacity_sum,
+                info.lock_owned_capacity_sum,
+            ),
+            (
+                "lock_used_capacity_sum",
+                &mut self.lock_used_capacity_sum,
+                info.lock_used_capacity_sum,
+            ),
+            (
+                "lock_owned_knowledge_sum",
+                &mut self.lock_owned_knowledge_sum,
+                info.lock_owned_knowledge_sum,
+            ),
+            (
+                "type_capacity_sum",
+                &mut self.type_capacity_sum,
+                info.type_capacity_sum,
+            ),
+            (
+                "type_owned_capacity_sum",
+                &mut self.type_owned_capacity_sum,
+                info.type_owned_capacity_sum,
+            ),
+            (
+                "type_used_capacity_sum",
+                &mut self.type_used_capacity_sum,
+                info.type_used_capacity_sum,
+            ),
+            (
+                "type_owned_knowledge_sum",
+                &mut self.type_owned_knowledge_sum,
+                info.type_owned_knowledge_sum,
+            ),
+        ];
+        for (metric, current, delta) in i128s {
+            *current = checked_add_version_i128(version_hash, metric, *current, delta)?;
+        }
+        Ok(())
+    }
+}
+
+/// The rollup of `reference_info_map` under `mappings` (reference → binary,
+/// one entry per reference of `reference_info_map`), on top of the version
+/// and family rows `versions` / `families` (their metadata; usage is
+/// recomputed from the references). The one computation behind every rollup
+/// the indexer writes: bulk finalize passes the rows label import left, the
+/// per-block live rollup the rows the previous block left. The rows are
+/// updated in place (no copy of the version table per call) and the result
+/// names the rows that changed.
 pub(crate) fn build_script_reference_rollup_state_over(
-    existing_versions: HashMap<Vec<u8>, ScriptVersionInfo>,
-    existing_families: HashMap<String, ScriptFamilyInfo>,
-    reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    mut version_map: HashMap<Vec<u8>, ScriptVersionInfo>,
+    mut family_map: HashMap<String, ScriptFamilyInfo>,
+    mappings: &HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
     reference_info_map: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
-    let mut version_map: HashMap<Vec<u8>, ScriptVersionInfo> = existing_versions.clone();
-    let templates = type_id_family_templates(&existing_versions)?;
+    let templates = type_id_family_templates(&version_map)?;
+    // Type ID lineage changes the metadata of the binaries it observes (only
+    // blocks that deploy code): keep each one's row from before the rollup.
+    let mut lineage_before: HashMap<Vec<u8>, Option<ScriptVersionInfo>> = HashMap::new();
     for observation in lineage {
-        if observation.version_hash.is_some() {
+        if let Some(version_hash) = &observation.version_hash {
+            if !lineage_before.contains_key(version_hash) {
+                lineage_before.insert(version_hash.clone(), version_map.get(version_hash).cloned());
+            }
             apply_type_id_lineage(&mut version_map, &templates, observation)?;
         }
     }
 
-    for version in version_map.values_mut() {
-        clear_script_version_usage(version);
-    }
-
-    for ((reference_hash, hash_type), resolved_version) in &reference_mappings {
-        let Some(reference_info) = reference_info_map.get(&(reference_hash.clone(), *hash_type))
-        else {
+    // Each version's usage, summed over the references that resolve to it.
+    let mut usage: HashMap<&[u8], VersionUsage> = HashMap::new();
+    for (key, reference_info) in reference_info_map {
+        let (reference_hash, hash_type) = key;
+        let Some(resolved) = mappings.get(key) else {
             bail!(
-                "missing script reference info while building rollups: reference_hash=0x{}, hash_type={}",
+                "missing script reference mapping while building rollups: reference_hash=0x{}, hash_type={}",
                 hex::encode(reference_hash),
                 hash_type
             );
         };
-
-        let Some(version_hash) = resolved_version else {
+        let Some(version_hash) = resolved else {
             continue;
         };
         if *hash_type == 1 {
@@ -420,89 +557,50 @@ pub(crate) fn build_script_reference_rollup_state_over(
                 }
             }
         }
-        let version =
-            version_map
-                .entry(version_hash.clone())
-                .or_insert_with(|| ScriptVersionInfo {
-                    version_hash: version_hash.clone(),
-                    ..Default::default()
-                });
-        version.version_hash = version_hash.clone();
-        version.lock_cells_count = checked_add_version_i64(
-            version_hash,
-            "lock_cells_count",
-            version.lock_cells_count,
-            reference_info.lock_cells_count,
-        )?;
-        version.lock_live_cells_count = checked_add_version_i64(
-            version_hash,
-            "lock_live_cells_count",
-            version.lock_live_cells_count,
-            reference_info.lock_live_cells_count,
-        )?;
-        version.lock_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "lock_capacity_sum",
-            version.lock_capacity_sum,
-            reference_info.lock_capacity_sum,
-        )?;
-        version.lock_owned_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "lock_owned_capacity_sum",
-            version.lock_owned_capacity_sum,
-            reference_info.lock_owned_capacity_sum,
-        )?;
-        version.lock_used_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "lock_used_capacity_sum",
-            version.lock_used_capacity_sum,
-            reference_info.lock_used_capacity_sum,
-        )?;
-        version.lock_owned_knowledge_sum = checked_add_version_i128(
-            version_hash,
-            "lock_owned_knowledge_sum",
-            version.lock_owned_knowledge_sum,
-            reference_info.lock_owned_knowledge_sum,
-        )?;
-        version.type_cells_count = checked_add_version_i64(
-            version_hash,
-            "type_cells_count",
-            version.type_cells_count,
-            reference_info.type_cells_count,
-        )?;
-        version.type_live_cells_count = checked_add_version_i64(
-            version_hash,
-            "type_live_cells_count",
-            version.type_live_cells_count,
-            reference_info.type_live_cells_count,
-        )?;
-        version.type_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "type_capacity_sum",
-            version.type_capacity_sum,
-            reference_info.type_capacity_sum,
-        )?;
-        version.type_owned_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "type_owned_capacity_sum",
-            version.type_owned_capacity_sum,
-            reference_info.type_owned_capacity_sum,
-        )?;
-        version.type_used_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "type_used_capacity_sum",
-            version.type_used_capacity_sum,
-            reference_info.type_used_capacity_sum,
-        )?;
-        version.type_owned_knowledge_sum = checked_add_version_i128(
-            version_hash,
-            "type_owned_knowledge_sum",
-            version.type_owned_knowledge_sum,
-            reference_info.type_owned_knowledge_sum,
-        )?;
+        usage
+            .entry(version_hash.as_slice())
+            .or_default()
+            .add(version_hash, reference_info)?;
     }
 
-    let mut family_map: HashMap<String, ScriptFamilyInfo> = existing_families.clone();
+    let mut changed: std::collections::BTreeMap<Vec<u8>, Option<VersionLabels>> =
+        std::collections::BTreeMap::new();
+    for (version_hash, version) in version_map.iter_mut() {
+        // A version no reference resolves to has the empty sum (zero usage).
+        let next = usage.remove(version_hash.as_slice()).unwrap_or_default();
+        let usage_changed = VersionUsage::of(version) != next;
+        if usage_changed {
+            next.apply_to(version);
+        }
+        match lineage_before.get(version_hash) {
+            // Lineage observed this binary: compare its whole row.
+            Some(Some(before)) => {
+                if before != version {
+                    changed.insert(version_hash.clone(), Some(VersionLabels::of(before)));
+                }
+            }
+            // Lineage created it.
+            Some(None) => {
+                changed.insert(version_hash.clone(), None);
+            }
+            None => {
+                if usage_changed {
+                    changed.insert(version_hash.clone(), Some(VersionLabels::of(version)));
+                }
+            }
+        }
+    }
+    for (version_hash, next) in usage {
+        let mut version = ScriptVersionInfo {
+            version_hash: version_hash.to_vec(),
+            ..Default::default()
+        };
+        next.apply_to(&mut version);
+        version_map.insert(version_hash.to_vec(), version);
+        changed.insert(version_hash.to_vec(), None);
+    }
+
+    let families_before = family_map.clone();
     for family in family_map.values_mut() {
         clear_script_family_usage(family);
     }
@@ -555,20 +653,18 @@ pub(crate) fn build_script_reference_rollup_state_over(
     // of summing version counters, which describe current binary resolution.
     let membership = ckbadger_store::ScriptFamilyMembershipIndex::new(version_map.values())?;
     let mut family_usage: HashMap<String, ckbadger_store::ScriptFamilyUsage> = HashMap::new();
-    for ((reference, hash_type), current) in &reference_mappings {
+    for (key, info) in reference_info_map {
+        let (reference, hash_type) = key;
+        let current = mappings.get(key).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing script reference mapping while building family usage: reference=0x{} hash_type={}",
+                hex::encode(reference),
+                hash_type
+            )
+        })?;
         if let Some(family) =
             membership.resolve_family(reference, *hash_type, current.as_deref())?
         {
-            let info = reference_info_map
-                .get(&(reference.clone(), *hash_type))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing family reference info: family={} reference=0x{} hash_type={}",
-                        family,
-                        hex::encode(reference),
-                        hash_type
-                    )
-                })?;
             family_usage
                 .entry(family.to_owned())
                 .or_default()
@@ -582,17 +678,18 @@ pub(crate) fn build_script_reference_rollup_state_over(
         usage.apply_to(family);
     }
 
-    let mut versions = version_map.into_iter().collect::<Vec<_>>();
-    versions.sort_by(|left, right| left.0.cmp(&right.0));
-
-    let mut families = family_map.into_iter().collect::<Vec<_>>();
-    families.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut changed_families: Vec<String> = family_map
+        .iter()
+        .filter(|(family_id, family)| families_before.get(*family_id) != Some(family))
+        .map(|(family_id, _)| family_id.clone())
+        .collect();
+    changed_families.sort();
 
     Ok(ScriptReferenceRollupState {
-        versions,
-        families,
-        existing_versions,
-        existing_families,
+        versions: version_map,
+        families: family_map,
+        changed_versions: changed.into_iter().collect(),
+        changed_families,
     })
 }
 
@@ -1667,42 +1764,42 @@ impl BatchWriter {
                 None => batch.delete_script_reference_to_version(1, &change.reference_hash),
             }
         }
-        let reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)> = state
-            .reference_info_map
-            .keys()
-            .map(|key| {
-                let version_hash = match state.mappings.get(key) {
-                    Some(version_hash) => version_hash.clone(),
-                    None => {
-                        let version_hash = reference_binary(&key.0, key.1, || {
-                            self.store.get_script_reference_version_hash(key.1, &key.0)
-                        })?;
-                        state.mappings.insert(key.clone(), version_hash.clone());
-                        version_hash
-                    }
-                };
-                Ok((key.clone(), version_hash))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Every reference's binary, resolved once per batch (`state.mappings`
+        // carries it across the batch's blocks; lineage moves it).
+        let RollupSteps {
+            reference_info_map,
+            mappings,
+            ..
+        } = &mut *state;
+        for key in reference_info_map.keys() {
+            if !mappings.contains_key(key) {
+                let version_hash = reference_binary(&key.0, key.1, || {
+                    self.store.get_script_reference_version_hash(key.1, &key.0)
+                })?;
+                mappings.insert(key.clone(), version_hash);
+            }
+        }
 
         let rollups = build_script_reference_rollup_state_over(
-            state.versions.clone(),
-            state.families.clone(),
-            reference_mappings,
+            std::mem::take(&mut state.versions),
+            std::mem::take(&mut state.families),
+            &state.mappings,
             &state.reference_info_map,
             lineage,
         )?;
 
-        for (version_hash, info) in &rollups.versions {
-            if rollups.existing_versions.get(version_hash) == Some(info) {
-                continue;
-            }
+        for (version_hash, labels_before) in &rollups.changed_versions {
+            let info = rollups.versions.get(version_hash).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rollup names a changed version it does not hold: version=0x{}",
+                    hex::encode(version_hash)
+                )
+            })?;
             batch.put_script_version(version_hash, info);
-            let previous = rollups.existing_versions.get(version_hash);
             // Type ID lineage (or any family rebind) must drop the old
             // by-family / by-label index rows; leaving them makes the next
             // label-import preflight see a contradictory family index.
-            let prev_family = previous.and_then(|info| info.family_id.as_ref());
+            let prev_family = labels_before.as_ref().and_then(|l| l.family_id.as_ref());
             match (prev_family, info.family_id.as_ref()) {
                 (Some(old), Some(new)) if old != new => {
                     batch.delete_script_version_by_family(old, version_hash);
@@ -1716,7 +1813,7 @@ impl BatchWriter {
                 }
                 _ => {}
             }
-            let prev_name = previous.and_then(|info| info.name.as_ref());
+            let prev_name = labels_before.as_ref().and_then(|l| l.name.as_ref());
             match (prev_name, info.name.as_ref()) {
                 (Some(old), Some(new)) if old != new => {
                     batch.delete_script_version_by_label(old, version_hash);
@@ -1731,14 +1828,16 @@ impl BatchWriter {
                 _ => {}
             }
         }
-        for (family_id, info) in &rollups.families {
-            if rollups.existing_families.get(family_id) == Some(info) {
-                continue;
-            }
+        for family_id in &rollups.changed_families {
+            let info = rollups.families.get(family_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rollup names a changed family it does not hold: family={family_id}"
+                )
+            })?;
             batch.put_script_family(family_id, info);
         }
-        state.versions = rollups.versions.into_iter().collect();
-        state.families = rollups.families.into_iter().collect();
+        state.versions = rollups.versions;
+        state.families = rollups.families;
         Ok(())
     }
 
@@ -3879,11 +3978,7 @@ mod tests {
             &observed,
         )
         .unwrap();
-        let (_, unlabeled_info) = rollup
-            .versions
-            .iter()
-            .find(|(h, _)| h == &unlabeled)
-            .unwrap();
+        let unlabeled_info = rollup.versions.get(&unlabeled).unwrap();
         assert_eq!(unlabeled_info.name.as_deref(), Some("PW Lock"));
         assert!(unlabeled_info.registered_references.is_empty());
         assert!(!unlabeled_info.deprecated);

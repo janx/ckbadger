@@ -175,7 +175,7 @@ pub(crate) mod utxoswap_detector;
 pub use crate::sync::DaoConsumedRow;
 pub(crate) use addresses::{
     build_script_reference_rollup_state_with_lineage, family_versions_counts, reference_binary,
-    TypeIdCodeChange,
+    TypeIdCodeChange, VersionLabels,
 };
 pub(crate) use cells::is_cross_store_inconsistency;
 pub use dao::DaoTransition;
