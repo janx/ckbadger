@@ -25,6 +25,7 @@ use super::entity_stats::{apply_daily_pair, EntityStatsOverlay, SharedEntityStat
 use crate::sync::types::{EntityDailyChanges, EntityDateKey};
 
 use super::BatchWriter;
+use crate::sync::dob_decode_worker::{merge_media_sources, DobOutcome};
 
 /// How a collection's per-owner counter key encodes its owner.
 ///
@@ -566,6 +567,87 @@ impl BatchWriter {
         }
         *slot = next;
         Ok(())
+    }
+
+    /// Apply one DOB decode outcome in this batch, in the block scope `batch`
+    /// carries (B-5h). The worker decodes outside any block; the media
+    /// profile it produces lives in the spore's `spore_data` row, its tier in
+    /// the cluster's `cluster_agg` tier counts and the decode itself in the
+    /// spore's `dob_decoded` row, all `Journal` rows written only here, so a
+    /// rollback of the block restores all three together and the next worker
+    /// pass, which lists spores without a `dob_decoded` row, decodes the spore
+    /// again.
+    ///
+    /// A decoded outcome merges the media sources into the profile (an
+    /// empty list still clears `DecodePending`); a deterministic failure moves
+    /// the tier to `Unknown`. A live spore whose tier changes moves between its
+    /// cluster's tier counts. A spore that no longer exists (orphaned since it
+    /// was decoded) has nothing to update and gets no `dob_decoded` row.
+    /// Returns whether the outcome was applied.
+    pub(crate) fn apply_dob_outcome(
+        &self,
+        outcome: &DobOutcome,
+        state: &mut SporeBatchState,
+        batch: &mut StoreBatch,
+    ) -> Result<bool> {
+        let spore_id = outcome.spore_id();
+        let Some(mut entry) = state.get_spore(&self.store, spore_id)? else {
+            return Ok(false);
+        };
+        let ObjectExtra::Spore { media_profile, .. } = &mut entry.extra else {
+            bail!(
+                "DOB decode outcome for an object that is not a spore: spore_id=0x{}, standard={:?}",
+                hex::encode(spore_id),
+                entry.standard
+            );
+        };
+        let old_tier = media_profile.tier;
+        // A decode rewrites the profile (its sources may grow at an unchanged
+        // tier); a failure changes the tier only.
+        let rewrite = match outcome {
+            DobOutcome::Decoded { entry: decoded, .. } => {
+                merge_media_sources(media_profile, &decoded.media_sources);
+                true
+            }
+            DobOutcome::Failed { .. } => {
+                media_profile.tier = CompositionTier::Unknown;
+                old_tier != CompositionTier::Unknown
+            }
+        };
+        let new_tier = media_profile.tier;
+        if old_tier != new_tier && entry.is_live {
+            let cluster_id = entry.collection_id.clone().with_context(|| {
+                format!(
+                    "live spore has no collection_id while applying its DOB decode: spore_id=0x{}",
+                    hex::encode(spore_id)
+                )
+            })?;
+            let mut agg = state.get_cluster_aggregate(&self.store, &cluster_id)?;
+            self.adjust_cluster_tier_count(
+                &cluster_id,
+                &mut agg,
+                old_tier,
+                -1,
+                "dob decode outcome",
+            )?;
+            self.adjust_cluster_tier_count(
+                &cluster_id,
+                &mut agg,
+                new_tier,
+                1,
+                "dob decode outcome",
+            )?;
+            state.put_cluster_aggregate(&cluster_id, agg, batch);
+        }
+        if rewrite {
+            batch.put_spore(spore_id, &entry);
+            state.put_spore(spore_id, entry);
+        }
+        match outcome {
+            DobOutcome::Decoded { entry: decoded, .. } => batch.put_dob_decoded(spore_id, decoded),
+            DobOutcome::Failed { failure, .. } => batch.put_dob_decode_failure(spore_id, failure),
+        }
+        Ok(true)
     }
 
     pub(crate) fn insert_spore_cluster(

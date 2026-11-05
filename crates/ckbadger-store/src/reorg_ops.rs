@@ -6,7 +6,7 @@
 //!   rollback writes those values back;
 //! - `RangeByBlock`: the key opens with the block number (`activities`: the
 //!   block number descending); rollback deletes the blocks' key ranges;
-//! - `Never` / `Validated`: not rolled back.
+//! - `Never`: not rolled back.
 //!
 //! [`CkbadgerStore::rollback_to_block`] takes the blocks from the highest
 //! stored header down to `target + 1` and stages, into ONE atomic write, the

@@ -103,6 +103,7 @@ pub fn indexer_with_stores(
         hodl_tracker: std::sync::Mutex::new(HodlWaveTracker::new()),
         cell_dist_tracker: std::sync::Mutex::new(CellDistributionTracker::new()),
         hourly_retention_requested: Arc::new(AtomicBool::new(false)),
+        dob_outcomes: super::dob_decode_worker::DobOutcomeQueue::default(),
     }
 }
 

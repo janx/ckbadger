@@ -413,6 +413,11 @@ pub struct Indexer {
     /// thing allowed to delete hourly buckets. A background task deleting them
     /// directly could race an undo replay restoring the same key.
     pub(crate) hourly_retention_requested: Arc<AtomicBool>,
+    /// DOB decode outcomes the background worker produced; the writer
+    /// applies them in its next live batch, in that batch's last block's
+    /// scope (B-5h). A background task writing them directly would bypass
+    /// the block journal.
+    pub(crate) dob_outcomes: super::dob_decode_worker::DobOutcomeQueue,
 }
 
 impl Indexer {
@@ -507,6 +512,7 @@ impl Indexer {
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
             hourly_retention_requested: Arc::new(AtomicBool::new(false)),
+            dob_outcomes: super::dob_decode_worker::DobOutcomeQueue::default(),
         })
     }
 
@@ -1348,6 +1354,7 @@ impl Indexer {
             let dob_threshold = self.config.bulk_sync_threshold;
             let dob_cache_path = self.config.decoder_cache_path.clone();
             let dob_decode_dir = PathBuf::from(&self.config.dob_decode_dir);
+            let dob_outcomes = self.dob_outcomes.clone();
 
             // Initialize DOB task as Waiting before spawning the worker.
             let _ = dob_store.update_background_task("dob_decode", |entry| {
@@ -1387,6 +1394,7 @@ impl Indexer {
                     dob_decode_dir,
                     dob_rpc_url,
                     dob_shutdown,
+                    dob_outcomes,
                 );
 
                 if let Err(e) = worker.run().await {

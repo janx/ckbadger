@@ -585,11 +585,6 @@ pub enum RollbackClass {
     /// expiry sweep, so a proposal of an orphaned block stays until it is
     /// committed or expires).
     Never,
-    /// Not rolled back; readers validate each row against canonical state
-    /// before using it. `dob_decoded` (keyed by spore id) is read only after
-    /// the spore resolves canonically (`get_spore`): a decode cached for an
-    /// orphaned spore is never served.
-    Validated,
 }
 
 /// One row of the column-family table. Every CF list and every per-CF option
@@ -637,8 +632,8 @@ const fn cf(
 /// then the domain store in open order), then the network store.
 ///
 /// `RangeByBlock` is only for CFs whose key starts with the block number;
-/// `cells` and `pending_proposals` are `Never`, `dob_decoded` `Validated`,
-/// every other domain CF `Journal`. The network store is not chain data and
+/// `cells` and `pending_proposals` are `Never`, every other domain CF
+/// (`dob_decoded` included) `Journal`. The network store is not chain data and
 /// is never rolled back.
 pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
 
@@ -648,7 +643,7 @@ mod cf_table {
     use super::CfCompression::Lz4;
     use super::CfStore::{AppendOnly as AppendStore, Domain, Network};
     use super::CfWritePolicy::{AppendOnly, BulkDisabled, FinalSnapshot, SealedAggregate};
-    use super::RollbackClass::{Journal, Never, RangeByBlock, Validated};
+    use super::RollbackClass::{Journal, Never, RangeByBlock};
     use super::*;
 
     #[rustfmt::skip]
@@ -714,7 +709,7 @@ mod cf_table {
         cf(CF_FIBER_CHANNELS,                         Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_FIBER_CHANNEL_BY_COMMITMENT,            Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_ADDR_FIBER_CHANNELS,                    Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
-        cf(CF_DOB_DECODED,                            Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Validated),
+        cf(CF_DOB_DECODED,                            Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_LOCK_SCRIPTS,                           Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_ADDR_TXS_BY_PREFIX,                     Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_ADDR_PREFIX_STATS,                      Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
@@ -5418,8 +5413,9 @@ mod tests {
 
     /// `RangeByBlock` only where the key starts with the block number;
     /// `cells`, `pending_proposals` (written out of band by the proposal
-    /// cache) and the network store never roll back; `dob_decoded` is
-    /// validated by its readers; every other domain CF is journaled.
+    /// cache) and the network store never roll back; every other domain CF,
+    /// `dob_decoded` included (B-5h: the live writer applies a decode in a
+    /// block's scope), is journaled.
     #[test]
     fn rollback_classes_follow_the_key_layout_rule() {
         for spec in CF_SPECS {
@@ -5432,7 +5428,6 @@ mod tests {
                 CF_CELLS | CF_PENDING_PROPOSALS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => {
                     RollbackClass::Never
                 }
-                CF_DOB_DECODED => RollbackClass::Validated,
                 _ => RollbackClass::Journal,
             };
             assert_eq!(spec.rollback_class, expected, "{}", spec.name);

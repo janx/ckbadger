@@ -2379,6 +2379,8 @@ impl Indexer {
         // for the derived per-collection row count.
         let mut derive_collection_activity_rows: Vec<(Vec<u8>, i64)> = Vec::new();
         // `.bit Cell` identity transitions, for the derived account index.
+        // DOB decode outcomes this batch applies; served once it commits.
+        let mut dob_outcomes_applied = 0usize;
         let mut derive_identity_transitions: Vec<crate::db::writer::IdentityTransition> =
             Vec::new();
         let mut identity_activity_batch =
@@ -3402,6 +3404,19 @@ impl Indexer {
                 block_tx_idx += tx_count_for_block;
             }
 
+            // The DOB decode worker's outcomes since the last batch (B-5h):
+            // applied by the spore writer on top of this batch's spore state,
+            // in its last block's scope, so the block journal owns them.
+            if !bulk_sync_mode {
+                let outcomes = self.dob_outcomes.pending();
+                let mut scoped = data_batch.at(last_block);
+                for outcome in &outcomes {
+                    self.writer
+                        .apply_dob_outcome(outcome, &mut spore_state, &mut scoped)?;
+                }
+                dob_outcomes_applied = outcomes.len();
+            }
+
             derive_identity_transitions.extend(spore_state.take_bit_cell_transitions());
         }
 
@@ -4226,6 +4241,7 @@ impl Indexer {
                 )
             })?;
             retention_request.served();
+            self.dob_outcomes.served(dob_outcomes_applied);
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -11080,6 +11096,213 @@ mod tests {
             let cumulative_occupied: i128 = daily.iter().map(|d| d.owned_knowledge_delta).sum();
             assert_eq!(cumulative_capacity, current_capacity);
             assert_eq!(cumulative_occupied, current_occupied);
+        }
+    }
+
+    /// DOB decode outcomes reach the store only through a live batch (B-5h):
+    /// the spore writer applies them in the batch's last block's scope, under
+    /// the journal discipline the live indexer runs with, and the queue gives
+    /// them up only once the batch is committed.
+    mod dob_outcomes_live {
+        use super::live_dao_fee::{
+            cellbase_tx, header_with_epoch_length, indexer_for_live_write_test,
+            write_live_blocks_with_entity_changes, AR_DEPOSIT,
+        };
+        use super::*;
+        use crate::rpc::BlockView;
+        use crate::sync::dob_decode_worker::DobOutcome;
+        use ckbadger_store::store::CF_DOB_DECODED;
+        use ckbadger_store::types::{
+            ClusterAggregate, CompositionTier, DecodeOutcome, DobDecodedEntry, ObjectEntry,
+            ObjectExtra, ObjectStandard, SporeMediaProfile,
+        };
+        use ckbadger_store::{CF_CLUSTER_AGG, CF_SPORE_DATA};
+
+        const CLUSTER: [u8; 32] = [0x57; 32];
+        const SPORE: [u8; 32] = [0x58; 32];
+
+        fn cellbase_block(number: u64) -> BlockResponseWithCycles {
+            let hash_byte = (number % 251) as u8;
+            let mut cellbase = cellbase_tx(hash_byte, 100_00000000);
+            let mut hash = [hash_byte; 32];
+            hash[..8].copy_from_slice(&number.to_le_bytes());
+            cellbase.hash = format!("0x{}", hex::encode(hash));
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: header_with_epoch_length(number, AR_DEPOSIT, 4000),
+                    uncles: vec![],
+                    transactions: vec![cellbase],
+                    proposals: vec![],
+                },
+                cycles: None,
+            }
+        }
+
+        fn blocks(range: std::ops::RangeInclusive<u64>) -> Vec<BlockResponseWithCycles> {
+            range.map(cellbase_block).collect()
+        }
+
+        /// A live `dob/0` spore still `DecodePending`, counted under its
+        /// cluster's unknown tier.
+        fn seed_decode_pending_spore(store: &CkbadgerStore) {
+            store
+                .put_spore_direct(
+                    &SPORE,
+                    &ObjectEntry {
+                        standard: ObjectStandard::Spore,
+                        collection_id: Some(CLUSTER.to_vec()),
+                        token_id: None,
+                        owner_lock_hash: Some(vec![0x33; 32]),
+                        name: None,
+                        description: None,
+                        is_live: true,
+                        created_at_block: 50,
+                        created_at_tx: vec![0x44; 32],
+                        extra: ObjectExtra::Spore {
+                            content_type: "dob/0".to_string(),
+                            content_length: 8,
+                            media_profile: SporeMediaProfile {
+                                tier: CompositionTier::DecodePending,
+                                sources: vec![],
+                                issues: vec![],
+                            },
+                        },
+                    },
+                )
+                .unwrap();
+            let mut batch = StoreBatch::new(store);
+            batch.put_cluster_aggregate(
+                &CLUSTER,
+                &ClusterAggregate {
+                    total_count: 1,
+                    live_count: 1,
+                    owner_count: 1,
+                    unknown_count: 1,
+                    ..Default::default()
+                },
+            );
+            batch.commit().unwrap();
+        }
+
+        fn tier(store: &CkbadgerStore) -> CompositionTier {
+            match store.get_spore(&SPORE).unwrap().unwrap().extra {
+                ObjectExtra::Spore { media_profile, .. } => media_profile.tier,
+                other => panic!("expected spore extra, got {other:?}"),
+            }
+        }
+
+        fn tier_counts(store: &CkbadgerStore) -> (i64, i64) {
+            let agg = store.get_cluster_aggregate(&CLUSTER).unwrap().unwrap();
+            (agg.unknown_count, agg.pure_ckb_count)
+        }
+
+        #[tokio::test]
+        async fn a_queued_decode_is_applied_by_the_next_live_batch_in_its_last_block() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(100..=101),
+                TokenDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            seed_decode_pending_spore(store.as_ref());
+            store.enforce_journal_discipline();
+
+            // The worker decoded the spore (self-contained: no media sources).
+            indexer.dob_outcomes.push([DobOutcome::Decoded {
+                spore_id: SPORE.to_vec(),
+                entry: DobDecodedEntry {
+                    steps: vec![],
+                    media_sources: vec![],
+                    decoded_at: 1_700_000_000,
+                },
+            }]);
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(102..=103),
+                TokenDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            assert!(indexer.dob_outcomes.is_empty(), "served by the commit");
+            assert_eq!(tier(store.as_ref()), CompositionTier::PureCkb);
+            assert_eq!(tier_counts(store.as_ref()), (0, 1));
+            assert!(matches!(
+                store.get_dob_decode_outcome(&SPORE).unwrap(),
+                Some(DecodeOutcome::Decoded(_))
+            ));
+            // Journaled in the batch's last block, all three rows.
+            let journaled: Vec<(&str, Vec<u8>)> = store
+                .journal_entries(103)
+                .unwrap()
+                .into_iter()
+                .map(|entry| (entry.cf, entry.key))
+                .collect();
+            for cf in [CF_SPORE_DATA, CF_CLUSTER_AGG, CF_DOB_DECODED] {
+                assert!(
+                    journaled.iter().any(|(c, _)| *c == cf),
+                    "{cf} journaled in block 103: {journaled:?}"
+                );
+            }
+            assert!(
+                store
+                    .journal_entries(102)
+                    .unwrap()
+                    .iter()
+                    .all(|entry| entry.cf != CF_DOB_DECODED),
+                "the decode belongs to the batch's last block only"
+            );
+
+            // A rollback of that block restores all three together, and the
+            // spore is listed for the next worker pass again.
+            store.rollback_to_block(102).unwrap();
+            assert_eq!(tier(store.as_ref()), CompositionTier::DecodePending);
+            assert_eq!(tier_counts(store.as_ref()), (1, 0));
+            assert!(store.get_dob_decode_outcome(&SPORE).unwrap().is_none());
+            assert_eq!(
+                store
+                    .list_undecoded_dob_spores(10, None)
+                    .unwrap()
+                    .iter()
+                    .map(|(id, _, _)| id.clone())
+                    .collect::<Vec<_>>(),
+                vec![SPORE.to_vec()]
+            );
+        }
+
+        /// A batch that fails before its commit leaves the outcomes queued.
+        #[test]
+        fn the_queue_gives_outcomes_up_only_when_served() {
+            let queue = crate::sync::dob_decode_worker::DobOutcomeQueue::default();
+            let outcome = |byte: u8| DobOutcome::Failed {
+                spore_id: vec![byte; 32],
+                failure: ckbadger_store::types::DobDecodeFailure {
+                    category: ckbadger_store::types::DobDecodeFailureCategory::ClusterNotFound,
+                    message: "x".into(),
+                    failed_at: 1,
+                },
+            };
+            queue.push([outcome(1), outcome(2)]);
+            let applied = queue.pending();
+            queue.push([outcome(3)]);
+            // The batch that applied the first two failed: nothing is served.
+            assert_eq!(queue.len(), 3);
+            queue.served(applied.len());
+            let left: Vec<Vec<u8>> = queue
+                .pending()
+                .iter()
+                .map(|o| o.spore_id().to_vec())
+                .collect();
+            assert_eq!(left, vec![vec![3u8; 32]], "only the committed ones leave");
         }
     }
 

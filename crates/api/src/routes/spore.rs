@@ -1547,9 +1547,9 @@ async fn serve_media(
 
     let id = parse_hash32(&spore_id, "spore ID")?;
 
-    // 2. Resolve the canonical spore first: `dob_decoded` is `Validated`
-    //    (never rolled back), so its row is read only for a spore the chain
-    //    holds. The spore also gives the collection for the blob path.
+    // 2. Resolve the canonical spore first: its `dob_decoded` row is read
+    //    only for a spore the chain holds. The spore also gives the collection
+    //    for the blob path.
     let store = state.store.clone();
     let id_for_spore = id.clone();
     let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_for_spore))
@@ -1639,9 +1639,9 @@ async fn render_spore_svg(
 ) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
     let id = parse_hash32(&spore_id, "spore ID")?;
 
-    // Resolve the canonical spore first: `dob_decoded` is `Validated` (never
-    // rolled back), so its row is read only for a spore the chain holds. The
-    // spore also names the cluster for source 2.
+    // Resolve the canonical spore first: its `dob_decoded` row is read only
+    // for a spore the chain holds. The spore also names the cluster for
+    // source 2.
     let store = state.store.clone();
     let id_c = id.clone();
     let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
