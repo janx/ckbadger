@@ -1639,6 +1639,17 @@ async fn render_spore_svg(
 ) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
     let id = parse_hash32(&spore_id, "spore ID")?;
 
+    // Resolve the canonical spore first: `dob_decoded` is `Validated` (never
+    // rolled back), so its row is read only for a spore the chain holds. The
+    // spore also names the cluster for source 2.
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
+
     // Load decoded traits
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1658,14 +1669,6 @@ async fn render_spore_svg(
     }
 
     // Source 2: build SVG from DOB1 pattern templates + decoded trait values
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
-
     let cluster_id = spore_entry
         .collection_id
         .as_deref()
