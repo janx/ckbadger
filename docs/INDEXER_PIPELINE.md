@@ -32,7 +32,9 @@ afterwards, so the sync path is decided **once**, before the chain stores are op
    representation that is correct for every outcome except a fresh bulk build. The probe handle
    only reads: `fail_fast_if_bulk_build_session_incomplete()` rejects a partial bulk artifact, and
    `get_sync_tip_block()` reads the writer's resume tip from `block_headers` — the authoritative
-   source `Repository::get_sync_tip` uses, never `sync_status`, which is repaired later in startup.
+   source `Repository::get_sync_tip` uses. Startup then refuses a `sync_status` tip that differs
+   from it (rebuild required, both tips named): the two are committed in one atomic write per
+   block, so a drift is never repaired.
 2. **Decide.** `decide_startup_sync(chain_tip, sync_tip_block, sync_tip_hash, bulk_sync_threshold)`
    (`crates/indexer/src/sync/indexer.rs`) returns one
    `StartupSyncDecision { path, fresh, blocks_behind, memtable }`.
@@ -236,7 +238,8 @@ batch, shared by the five daily writers and the four hourly write points
   than a previous value from the future.
 - **One write per key.** Each dirty key is staged once with its final value (a daily row that
   nets to zero is deleted).
-- **Bulk journals nothing.** In bulk mode the overlay stages values without journal entries.
+- **Bulk journals nothing.** Bulk sync never builds an overlay; an overlay on a store in bulk mode
+  is an error.
 
 The live batch stages the block overlay — these stats keys among every other `Journal`-class key —
 with `stage_journal` right before the domain commit, so the stats rows, their journal entries and
