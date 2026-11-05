@@ -1089,7 +1089,7 @@ pub(crate) fn precompute_live_batch(
     // Entity daily deltas are accumulated PER BLOCK: a committed
     // batch spans many blocks, and a shallow fork can land in the
     // middle of one. Flattening them loses the block identity the
-    // undo log needs to restore a key's end-of-block-N value.
+    // block journal needs to restore a key's end-of-block-N value.
     let mut script_daily_changes = EntityDailyChanges::<UndatedScriptKey>::new();
     let mut token_daily_changes = TokenDailyChanges::<UndatedEntityKey>::new();
     let mut spore_type_index_changes: BlockIndexChanges<SporeTypeIndex> = BlockIndexChanges::new();

@@ -32,14 +32,14 @@ pub(crate) enum ContractRequirement {
 }
 
 impl BatchWriter {
-    /// Refuse any rollback that reaches below the entity-stats coverage floor.
+    /// Refuse any rollback that reaches below the journal coverage floor.
     ///
-    /// The eight entity daily/hourly families are restored ONLY by the undo
-    /// log, which is pruned behind that floor. Rolling back past it leaves
-    /// those rows in place while blocks, cells and indexes are removed, so the
-    /// re-sync adds the same deltas a second time — and nothing downstream can
-    /// see it, because `find_first_invalid_token_daily_delta` only catches
-    /// totals that go negative.
+    /// Every `Journal`-class row is restored only by the block journal, which
+    /// is pruned behind that floor. Rolling back past it would remove the
+    /// blocks' headers, transactions and activity rows while every journaled
+    /// row kept their effects, so the re-sync would apply them a second time.
+    /// (The rollback core refuses such a target too; this check raises the
+    /// rebuild-required error and requires the contract on a live reorg.)
     pub(crate) fn ensure_rollback_within_entity_stats_coverage(
         &self,
         rollback_target: i64,
@@ -62,10 +62,10 @@ impl BatchWriter {
         if rollback_target < contract.coverage_floor_block {
             return Err(anyhow::Error::new(
                 crate::lifecycle::RebuildRequiredError::new(format!(
-                    "entity stats undo coverage floor {} is above {context} {}; the eight entity \
-                     daily/hourly families cannot be restored that far back, and continuing would \
-                     leave them counted twice after re-sync (contract version {}, floor last \
-                     advanced at block {})",
+                    "journal coverage floor {} is above {context} {}; the block journal cannot \
+                     restore the store that far back, and continuing would leave journaled rows \
+                     counted twice after re-sync (contract version {}, floor last advanced at \
+                     block {})",
                     contract.coverage_floor_block,
                     rollback_target,
                     contract.version,

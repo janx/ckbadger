@@ -330,7 +330,7 @@ pub(crate) fn persist_bulk_sync_completion_status(
             i64::MAX
         )
     })?;
-    // Bulk build never records undo entries (`BULK_SYNC.md`: bulk is empty-store
+    // Bulk build never records journal entries (`BULK_SYNC.md`: bulk is empty-store
     // only and never rolls back), so the last block it WROTE is the coverage
     // floor the live process starts from. It must be the handoff tip, not the
     // chain tip: those differ by up to `bulk_sync_threshold`, and a floor above
@@ -1323,7 +1323,7 @@ impl Indexer {
 
         // Periodic hourly-retention REQUEST. The task no longer deletes
         // anything itself: expired hourly buckets are removed by the same
-        // writer that commits blocks and replays undo entries, inside the
+        // writer that commits blocks and replays journal entries, inside the
         // block batch, so a deletion can never race a rollback restoring the
         // same key.
         let progress_for_task = Arc::clone(&self.progress);

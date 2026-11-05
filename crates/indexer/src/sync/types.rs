@@ -324,7 +324,7 @@ pub type UndatedEntityKey = Vec<u8>;
 /// Fail fast on out-of-order blocks: the parser walks `all_tx_data`, which is
 /// built block by block in ascending order. A block going backwards means that
 /// invariant broke upstream, and silently re-opening an earlier block's map
-/// would attribute its deltas to the wrong undo entry.
+/// would attribute its deltas to the wrong journal entry.
 /// One block's contributions: entity key → `(capacity_delta, knowledge_delta)`.
 pub type EntityDailyBlockMap<K> = std::collections::HashMap<K, (i128, i128)>;
 
@@ -469,7 +469,7 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
     }
 
     /// Reassign every per-block contribution to its canonical stats key.
-    /// Preserve block boundaries so the entity-stats undo log can restore
+    /// Preserve block boundaries so the block journal can restore
     /// exact pre-images across a mid-batch reorg.
     pub fn remap_keys<M: Eq + std::hash::Hash + Clone>(
         self,
@@ -633,7 +633,7 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
     }
 
     /// Reassign every per-block contribution to its canonical stats key,
-    /// keeping block boundaries for the entity-stats undo log.
+    /// keeping block boundaries for the block journal.
     pub fn remap_keys<M: Eq + std::hash::Hash + Clone>(
         self,
         mut map_key: impl FnMut(i64, K) -> anyhow::Result<M>,
