@@ -291,16 +291,13 @@ pub(crate) mod journal_test_support {
             if !ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) {
                 continue;
             }
-            if let ckbadger_store::types::UndoLogEntry::KeyMutation {
-                cf_name,
-                key,
-                previous_value,
-                ..
-            } = bincode::deserialize(&value).expect("decode a journal row")
-            {
-                if cf_name == cf {
-                    out.push((block, key, previous_value));
-                }
+            let entry = ckbadger_store::decode_journal_value(&value).expect("decode a journal row");
+            if entry.cf == cf {
+                out.push((
+                    block,
+                    entry.key.to_vec(),
+                    entry.previous.map(<[u8]>::to_vec),
+                ));
             }
         }
         out.sort();

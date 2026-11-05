@@ -24,12 +24,12 @@ use rocksdb::{Direction, IteratorMode, WriteBatch};
 use tracing::info;
 
 use crate::batch::StoreBatch;
+use crate::block_overlay::decode_journal_value;
 use crate::bytes_to_hex;
 use crate::keys::{self, UndoSeqScope};
 use crate::store::{
     cf_spec, CkbadgerStore, RollbackClass, CF_LIVE_CELLS, CF_REORG_UNDO_LOG_BY_BLOCK,
 };
-use crate::types::{UndoLogEntry, UndoLogStoreTarget};
 
 /// What one rollback removed and restored.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -76,29 +76,21 @@ fn decode_undo_row(key: &[u8], value: &[u8]) -> anyhow::Result<(i64, Option<Jour
     if !UndoSeqScope::Journal.owns(seq) {
         return Ok((block, None));
     }
-    let entry: UndoLogEntry = bincode::deserialize(value).map_err(|e| {
+    let entry = decode_journal_value(value).map_err(|e| {
         anyhow::anyhow!("journal: undecodable entry at block {block} seq {seq:#x}: {e}")
     })?;
-    let UndoLogEntry::KeyMutation {
-        target_store: UndoLogStoreTarget::Domain,
-        cf_name,
-        key,
-        previous_value,
-    } = entry
-    else {
-        anyhow::bail!("journal: entry at block {block} seq {seq:#x} is not a domain key mutation");
-    };
-    let spec = cf_spec(&cf_name).ok_or_else(|| {
+    let cf_name = entry.cf;
+    let spec = cf_spec(cf_name).ok_or_else(|| {
         anyhow::anyhow!(
             "journal: entry at block {block} seq {seq:#x} names unknown CF {cf_name} (key 0x{})",
-            bytes_to_hex(&key)
+            bytes_to_hex(entry.key)
         )
     })?;
     if spec.rollback_class != RollbackClass::Journal {
         anyhow::bail!(
             "journal: entry at block {block} seq {seq:#x} names CF {cf_name}, which is {:?}, not Journal (key 0x{})",
             spec.rollback_class,
-            bytes_to_hex(&key)
+            bytes_to_hex(entry.key)
         );
     }
     Ok((
@@ -107,8 +99,8 @@ fn decode_undo_row(key: &[u8], value: &[u8]) -> anyhow::Result<(i64, Option<Jour
             block,
             seq,
             cf: spec.name,
-            key,
-            previous: previous_value,
+            key: entry.key.to_vec(),
+            previous: entry.previous.map(<[u8]>::to_vec),
         }),
     ))
 }
@@ -376,7 +368,26 @@ mod tests {
     use super::*;
     use crate::block_overlay::{journal_seq, SharedBlockOverlay};
     use crate::store::{CF_BLOCK_HEADERS, CF_SYNC_META, CF_TX_ACTIONS, CF_TX_INDEX};
+    use crate::types::{UndoLogEntry, UndoLogStoreTarget};
     use crate::DOMAIN_CFS;
+
+    /// A hand-written journal row (`UndoSeqScope::Journal`, local `seq`).
+    fn put_journal_row(
+        batch: &mut StoreBatch,
+        block: i64,
+        seq: u64,
+        cf: &str,
+        key: &[u8],
+        previous: Option<&[u8]>,
+    ) {
+        batch
+            .put_raw_cf_by_name(
+                CF_REORG_UNDO_LOG_BY_BLOCK,
+                &keys::encode_reorg_undo_log_key(block, UndoSeqScope::Journal.seq_base() | seq),
+                &crate::block_overlay::encode_journal_value(cf, key, previous).unwrap(),
+            )
+            .unwrap();
+    }
 
     fn open() -> (CkbadgerStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -544,16 +555,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         block_rows(&mut batch, 6);
         for (seq, previous) in [(0u64, &b"a4"[..]), (1, &b"stale"[..])] {
-            batch.put_reorg_undo_log_by_block(
-                6,
-                UndoSeqScope::Journal.seq_base() | seq,
-                &UndoLogEntry::KeyMutation {
-                    target_store: UndoLogStoreTarget::Domain,
-                    cf_name: CF_SYNC_META.to_string(),
-                    key: b"a".to_vec(),
-                    previous_value: Some(previous.to_vec()),
-                },
-            );
+            put_journal_row(&mut batch, 6, seq, CF_SYNC_META, b"a", Some(previous));
         }
         batch.put_raw_cf_by_name(CF_SYNC_META, b"a", b"a6").unwrap();
         batch.commit().unwrap();
@@ -684,16 +686,7 @@ mod tests {
                 "non-Journal CF",
                 Box::new(|store| {
                     let mut batch = StoreBatch::new(store);
-                    batch.put_reorg_undo_log_by_block(
-                        4,
-                        UndoSeqScope::Journal.seq_base() | 99,
-                        &UndoLogEntry::KeyMutation {
-                            target_store: UndoLogStoreTarget::Domain,
-                            cf_name: CF_TX_INDEX.to_string(),
-                            key: b"k".to_vec(),
-                            previous_value: None,
-                        },
-                    );
+                    put_journal_row(&mut batch, 4, 99, CF_TX_INDEX, b"k", None);
                     batch.commit().unwrap();
                 }),
                 "which is RangeByBlock, not Journal",
@@ -703,16 +696,7 @@ mod tests {
                 Box::new(|store| {
                     // The append-only `cells` payloads are never rolled back.
                     let mut batch = StoreBatch::new(store);
-                    batch.put_reorg_undo_log_by_block(
-                        4,
-                        UndoSeqScope::Journal.seq_base() | 98,
-                        &UndoLogEntry::KeyMutation {
-                            target_store: UndoLogStoreTarget::Domain,
-                            cf_name: crate::store::CF_CELLS.to_string(),
-                            key: b"k".to_vec(),
-                            previous_value: None,
-                        },
-                    );
+                    put_journal_row(&mut batch, 4, 98, crate::store::CF_CELLS, b"k", None);
                     batch.commit().unwrap();
                 }),
                 "names CF cells, which is Never, not Journal",
@@ -721,16 +705,7 @@ mod tests {
                 "unknown CF",
                 Box::new(|store| {
                     let mut batch = StoreBatch::new(store);
-                    batch.put_reorg_undo_log_by_block(
-                        5,
-                        UndoSeqScope::Journal.seq_base() | 99,
-                        &UndoLogEntry::KeyMutation {
-                            target_store: UndoLogStoreTarget::Domain,
-                            cf_name: "no_such_cf".to_string(),
-                            key: b"k".to_vec(),
-                            previous_value: None,
-                        },
-                    );
+                    put_journal_row(&mut batch, 5, 99, "no_such_cf", b"k", None);
                     batch.commit().unwrap();
                 }),
                 "names unknown CF no_such_cf",
@@ -739,16 +714,7 @@ mod tests {
                 "journal above the tip",
                 Box::new(|store| {
                     let mut batch = StoreBatch::new(store);
-                    batch.put_reorg_undo_log_by_block(
-                        9,
-                        UndoSeqScope::Journal.seq_base(),
-                        &UndoLogEntry::KeyMutation {
-                            target_store: UndoLogStoreTarget::Domain,
-                            cf_name: CF_SYNC_META.to_string(),
-                            key: b"k".to_vec(),
-                            previous_value: None,
-                        },
-                    );
+                    put_journal_row(&mut batch, 9, 0, CF_SYNC_META, b"k", None);
                     batch.commit().unwrap();
                 }),
                 "journal entry of block 9 above the tip 5",

@@ -8988,8 +8988,17 @@ mod tests {
                 if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) != journal {
                     continue;
                 }
-                let entry: ckbadger_store::types::UndoLogEntry =
-                    bincode::deserialize(&value).unwrap();
+                let entry: ckbadger_store::types::UndoLogEntry = if journal {
+                    let row = ckbadger_store::decode_journal_value(&value).unwrap();
+                    ckbadger_store::types::UndoLogEntry::KeyMutation {
+                        target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
+                        cf_name: row.cf.to_string(),
+                        key: row.key.to_vec(),
+                        previous_value: row.previous.map(<[u8]>::to_vec),
+                    }
+                } else {
+                    bincode::deserialize(&value).unwrap()
+                };
                 if let ckbadger_store::types::UndoLogEntry::KeyMutation {
                     cf_name,
                     key: mutated_key,
@@ -13509,11 +13518,22 @@ mod tests {
                 if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) != journal {
                     continue;
                 }
+                let entry: ckbadger_store::types::UndoLogEntry = if journal {
+                    let row = ckbadger_store::decode_journal_value(&value).unwrap();
+                    ckbadger_store::types::UndoLogEntry::KeyMutation {
+                        target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
+                        cf_name: row.cf.to_string(),
+                        key: row.key.to_vec(),
+                        previous_value: row.previous.map(<[u8]>::to_vec),
+                    }
+                } else {
+                    bincode::deserialize(&value).unwrap()
+                };
                 if let ckbadger_store::types::UndoLogEntry::KeyMutation {
                     cf_name,
                     previous_value,
                     ..
-                } = bincode::deserialize(&value).unwrap()
+                } = entry
                 {
                     if cf_name == ckbadger_store::CF_TOKENS {
                         pre_images.push(previous_value);

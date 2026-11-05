@@ -756,7 +756,7 @@ mod tests {
     /// of the previous block for each of them.
     #[test]
     fn test_stage_collection_activity_daily_journals_each_block() {
-        use crate::types::{AssetAction::*, CollectionActivityDailyCounts, UndoLogEntry};
+        use crate::types::{AssetAction::*, CollectionActivityDailyCounts};
         let (_dir, store) = test_domain_store();
         let collection = [0x5au8; 32];
         let committed = CollectionActivityDailyCounts {
@@ -791,17 +791,9 @@ mod tests {
             .map(|row| {
                 let (row_key, value) = row.unwrap();
                 let (block, _) = keys::decode_reorg_undo_log_key(&row_key);
-                match bincode::deserialize::<UndoLogEntry>(&value).unwrap() {
-                    UndoLogEntry::KeyMutation {
-                        key: journaled,
-                        previous_value,
-                        ..
-                    } => {
-                        assert_eq!(journaled, key);
-                        (block, previous_value)
-                    }
-                    other => panic!("unexpected journal row {other:?}"),
-                }
+                let entry = crate::block_overlay::decode_journal_value(&value).unwrap();
+                assert_eq!(entry.key, key.as_slice());
+                (block, entry.previous.map(<[u8]>::to_vec))
             })
             .collect();
         let after_20 = CollectionActivityDailyCounts {

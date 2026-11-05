@@ -673,7 +673,6 @@ mod prefix_participation_tests {
     /// end of the previous block for each), and a later batch adds on top.
     #[test]
     fn stage_addr_prefix_tx_counts_writes_each_block_in_its_scope() {
-        use crate::types::{UndoLogEntry, UndoLogStoreTarget};
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let (a, b) = ([0x0au8; 20], [0x0bu8; 20]);
@@ -705,17 +704,13 @@ mod prefix_participation_tests {
             .map(|row| {
                 let (key, value) = row.unwrap();
                 let (block, _) = crate::keys::decode_reorg_undo_log_key(&key);
-                match bincode::deserialize(&value).unwrap() {
-                    UndoLogEntry::KeyMutation {
-                        target_store: UndoLogStoreTarget::Domain,
-                        cf_name,
-                        key,
-                        previous_value,
-                    } if cf_name == crate::store::CF_ADDR_PREFIX_STATS => {
-                        (block, key, previous_value)
-                    }
-                    other => panic!("unexpected journal row {other:?}"),
-                }
+                let entry = crate::block_overlay::decode_journal_value(&value).unwrap();
+                assert_eq!(entry.cf, crate::store::CF_ADDR_PREFIX_STATS);
+                (
+                    block,
+                    entry.key.to_vec(),
+                    entry.previous.map(<[u8]>::to_vec),
+                )
             })
             .collect();
         journal.sort();

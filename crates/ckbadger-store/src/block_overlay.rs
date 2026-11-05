@@ -5,7 +5,7 @@
 //! so rolling back to block N must restore every key to its value at the end
 //! of block N. The overlay keeps, for every key the batch touches, its value
 //! as of the end of the last block that wrote it, and records a journal entry
-//! `KeyMutation { cf, key, previous }` the first time a block writes the key:
+//! `(cf, key, previous)` the first time a block writes the key:
 //! the value at the end of the previous block (`None` when the key did not
 //! exist). Three properties, each pinned by a test below (they are the ones
 //! `EntityStatsOverlay` established for the entity stats buckets):
@@ -42,7 +42,6 @@ use rocksdb::WriteBatch;
 
 use crate::keys::{self, UndoSeqScope, UNDO_SEQ_LOCAL_MAX};
 use crate::store::{cf_spec, CkbadgerStore, RollbackClass};
-use crate::types::{UndoLogEntry, UndoLogStoreTarget};
 
 type CfKey = (&'static str, Vec<u8>);
 
@@ -414,12 +413,7 @@ impl BlockOverlay {
             };
             let seq = next_seq(entry.block)?;
             let row_key = keys::encode_reorg_undo_log_key(entry.block, seq);
-            let row_value = bincode::serialize(&UndoLogEntry::KeyMutation {
-                target_store: UndoLogStoreTarget::Domain,
-                cf_name: entry.cf.to_string(),
-                key: entry.key.clone(),
-                previous_value,
-            })?;
+            let row_value = encode_journal_value(entry.cf, &entry.key, previous_value.as_deref())?;
             stats.entries += 1;
             stats.bytes += (row_key.len() + row_value.len()) as u64;
             batch.put_cf(undo_cf, row_key, &row_value);
@@ -427,6 +421,108 @@ impl BlockOverlay {
         self.finished = true;
         Ok(stats)
     }
+}
+
+/// The value of one block journal row (`reorg_undo_log_by_block`, sequence
+/// scope `Journal`): `[cf name length u8][cf name][key length u16 BE][key]
+/// [tag u8: 0 = absent, 1 = present]` and, when present, `[value length u32
+/// BE][value]`. One encode, one decode ([`decode_journal_value`]), shared by
+/// the overlay that writes the rows and the rollback that reads them.
+pub fn encode_journal_value(cf: &str, key: &[u8], previous: Option<&[u8]>) -> Result<Vec<u8>> {
+    let cf_len = u8::try_from(cf.len())
+        .map_err(|_| anyhow!("journal value: CF name of {} bytes: {cf}", cf.len()))?;
+    let key_len = u16::try_from(key.len()).map_err(|_| {
+        anyhow!(
+            "journal value: key of {} bytes in cf={cf}: 0x{}",
+            key.len(),
+            hex::encode(key)
+        )
+    })?;
+    let mut value = Vec::with_capacity(
+        1 + cf.len() + 2 + key.len() + 1 + previous.map_or(0, |previous| 4 + previous.len()),
+    );
+    value.push(cf_len);
+    value.extend_from_slice(cf.as_bytes());
+    value.extend_from_slice(&key_len.to_be_bytes());
+    value.extend_from_slice(key);
+    match previous {
+        None => value.push(0),
+        Some(previous) => {
+            let previous_len = u32::try_from(previous.len()).map_err(|_| {
+                anyhow!(
+                    "journal value: previous value of {} bytes in cf={cf} key=0x{}",
+                    previous.len(),
+                    hex::encode(key)
+                )
+            })?;
+            value.push(1);
+            value.extend_from_slice(&previous_len.to_be_bytes());
+            value.extend_from_slice(previous);
+        }
+    }
+    Ok(value)
+}
+
+/// One decoded block journal row: the CF name, the key and its previous
+/// value, borrowed from the encoded row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JournalValue<'a> {
+    pub cf: &'a str,
+    pub key: &'a [u8],
+    pub previous: Option<&'a [u8]>,
+}
+
+/// Decode a block journal row written by [`encode_journal_value`]; a short
+/// row, trailing bytes, an unknown presence tag or a CF name that is not
+/// UTF-8 is an error naming the offset.
+pub fn decode_journal_value(value: &[u8]) -> Result<JournalValue<'_>> {
+    fn take<'a>(value: &'a [u8], at: &mut usize, len: usize, what: &str) -> Result<&'a [u8]> {
+        let end = at
+            .checked_add(len)
+            .filter(|end| *end <= value.len())
+            .ok_or_else(|| {
+                anyhow!(
+                    "journal value: short row reading {what} ({len} bytes at offset {at} of {})",
+                    value.len()
+                )
+            })?;
+        let bytes = &value[*at..end];
+        *at = end;
+        Ok(bytes)
+    }
+    let mut at = 0;
+    let cf_len = take(value, &mut at, 1, "the CF name length")?[0] as usize;
+    let cf = std::str::from_utf8(take(value, &mut at, cf_len, "the CF name")?)
+        .map_err(|e| anyhow!("journal value: CF name is not UTF-8: {e}"))?;
+    let key_len = u16::from_be_bytes(
+        take(value, &mut at, 2, "the key length")?
+            .try_into()
+            .expect("two bytes"),
+    ) as usize;
+    let key = take(value, &mut at, key_len, "the key")?;
+    let previous = match take(value, &mut at, 1, "the presence tag")?[0] {
+        0 => None,
+        1 => {
+            let len = u32::from_be_bytes(
+                take(value, &mut at, 4, "the value length")?
+                    .try_into()
+                    .expect("four bytes"),
+            ) as usize;
+            Some(take(value, &mut at, len, "the value")?)
+        }
+        tag => bail!(
+            "journal value: unknown presence tag {tag} at offset {} (cf={cf})",
+            at - 1
+        ),
+    };
+    if at != value.len() {
+        bail!(
+            "journal value: {} trailing bytes after the entry (cf={cf} key=0x{})",
+            value.len() - at,
+            hex::encode(key)
+        );
+    }
+    Ok(JournalValue { cf, key, previous })
 }
 
 /// The one [`BlockOverlay`] of a live batch, shared by every sub-batch and
@@ -525,17 +621,67 @@ mod tests {
                 let (key, value) = row.unwrap();
                 let (block, seq) = decode_reorg_undo_log_key(&key);
                 assert!(UndoSeqScope::Journal.owns(seq));
-                match bincode::deserialize::<UndoLogEntry>(&value).unwrap() {
-                    UndoLogEntry::KeyMutation {
-                        cf_name,
-                        key,
-                        previous_value,
-                        ..
-                    } => (block, cf_name, key, previous_value),
-                    other => panic!("unexpected journal row {other:?}"),
-                }
+                let entry = decode_journal_value(&value).unwrap();
+                (
+                    block,
+                    entry.cf.to_string(),
+                    entry.key.to_vec(),
+                    entry.previous.map(<[u8]>::to_vec),
+                )
             })
             .collect()
+    }
+
+    #[test]
+    fn the_journal_value_codec_round_trips_and_is_exact() {
+        for (cf, key, previous) in [
+            ("addr_txs", &[0xAB; 76][..], None),
+            ("sync_meta", &b"sync_status"[..], Some(&b"previous"[..])),
+            ("live_cells", &b""[..], Some(&b""[..])),
+        ] {
+            let value = encode_journal_value(cf, key, previous).unwrap();
+            assert_eq!(
+                value.len(),
+                1 + cf.len() + 2 + key.len() + 1 + previous.map_or(0, |p| 4 + p.len())
+            );
+            assert_eq!(
+                decode_journal_value(&value).unwrap(),
+                JournalValue { cf, key, previous }
+            );
+        }
+        // The layout, byte by byte.
+        assert_eq!(
+            encode_journal_value("ab", b"k", Some(b"vv")).unwrap(),
+            [&[2u8][..], b"ab", &[0, 1], b"k", &[1], &[0, 0, 0, 2], b"vv"].concat()
+        );
+        assert_eq!(
+            encode_journal_value("ab", b"k", None).unwrap(),
+            [&[2u8][..], b"ab", &[0, 1], b"k", &[0]].concat()
+        );
+    }
+
+    #[test]
+    fn the_journal_value_codec_rejects_malformed_rows() {
+        let value = encode_journal_value("sync_meta", b"key", Some(b"value")).unwrap();
+        for len in 0..value.len() {
+            let error = decode_journal_value(&value[..len]).unwrap_err().to_string();
+            assert!(error.contains("short row"), "truncated to {len}: {error}");
+        }
+        let trailing = [value.clone(), vec![0]].concat();
+        let error = decode_journal_value(&trailing).unwrap_err().to_string();
+        assert!(error.contains("1 trailing bytes"), "{error}");
+
+        let mut unknown_tag = encode_journal_value("sync_meta", b"key", None).unwrap();
+        *unknown_tag.last_mut().unwrap() = 7;
+        let error = decode_journal_value(&unknown_tag).unwrap_err().to_string();
+        assert!(error.contains("unknown presence tag 7"), "{error}");
+
+        let not_utf8 = [&[1u8, 0xFF][..], &[0, 0], &[0]].concat();
+        let error = decode_journal_value(&not_utf8).unwrap_err().to_string();
+        assert!(error.contains("not UTF-8"), "{error}");
+
+        assert!(encode_journal_value(&"x".repeat(256), b"k", None).is_err());
+        assert!(encode_journal_value("sync_meta", &vec![0; 65_536], None).is_err());
     }
 
     fn commit(store: &CkbadgerStore, overlay: &SharedBlockOverlay) -> JournalStats {

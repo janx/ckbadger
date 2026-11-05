@@ -72,7 +72,8 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 
 pub use batch::{merge_write_batches, BlockScope, StoreBatch};
 pub use block_overlay::{
-    commit_journaled, commit_journaled_block, BlockOverlay, JournalStats, SharedBlockOverlay,
+    commit_journaled, commit_journaled_block, decode_journal_value, encode_journal_value,
+    BlockOverlay, JournalStats, JournalValue, SharedBlockOverlay,
 };
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
