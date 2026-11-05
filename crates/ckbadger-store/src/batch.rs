@@ -307,20 +307,30 @@ impl<'a> StoreBatch<'a> {
 
     /// Extract the inner domain `WriteBatch`, consuming the `StoreBatch`.
     ///
-    /// # Panics
-    /// Panics if this `StoreBatch` has any pending append-only operations,
-    /// because those cannot be represented in a plain `WriteBatch`. Only
-    /// use this method when the batch contains only domain-store writes.
-    pub fn into_write_batch(self) -> WriteBatch {
-        assert!(
+    /// Refused, with an error, for a batch whose writes a plain `WriteBatch`
+    /// cannot carry: a journaled batch (its `Journal`-class writes and
+    /// journal entries live in the block overlay), a batch the journal
+    /// discipline refused, and a batch with append-only operations or
+    /// pending DAO deposits.
+    pub fn into_write_batch(self) -> anyhow::Result<WriteBatch> {
+        if self.journal.is_some() {
+            anyhow::bail!(
+                "StoreBatch::into_write_batch on a journaled batch: its Journal-class writes and \
+                 journal entries live in the block overlay, which a plain WriteBatch would drop"
+            );
+        }
+        if let Some(error) = self.discipline_error {
+            return Err(error);
+        }
+        anyhow::ensure!(
             self.append_ops.is_empty(),
             "StoreBatch::into_write_batch: cannot extract WriteBatch when append_ops is non-empty"
         );
-        assert!(
+        anyhow::ensure!(
             self.pending_dao_deposits.is_empty(),
             "StoreBatch::into_write_batch: cannot extract WriteBatch when pending_dao_deposits is non-empty"
         );
-        self.batch
+        Ok(self.batch)
     }
 
     /// Merge another `StoreBatch` into this one.
@@ -2162,6 +2172,26 @@ mod tests {
     use super::*;
     use crate::CF_CELLS;
     use tempfile::TempDir;
+
+    /// A journaled batch's `Journal`-class writes live in its block overlay:
+    /// extracting a plain `WriteBatch` would drop them and their journal
+    /// entries, so it is refused.
+    #[test]
+    fn into_write_batch_refuses_a_journaled_batch() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        batch.at(4).put_sync_meta(b"key", b"value");
+        let Err(error) = batch.into_write_batch() else {
+            panic!("a journaled batch must not become a plain WriteBatch");
+        };
+        assert!(error.to_string().contains("journaled batch"), "{error}");
+
+        let mut plain = StoreBatch::new(&store);
+        plain.put_sync_meta(b"key", b"value");
+        assert_eq!(plain.into_write_batch().unwrap().len(), 1);
+    }
 
     #[test]
     fn test_batch_commit() {
