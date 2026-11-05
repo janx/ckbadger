@@ -771,7 +771,7 @@ mod tests {
         let mut deltas = CollectionActivityDailyBlockDeltas::new();
         deltas.add_row(20, &collection, 20261006, &[Mint]).unwrap();
         deltas.add_row(21, &collection, 20261006, &[Burn]).unwrap();
-        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store);
+        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         store
             .stage_collection_activity_daily(&deltas, &mut batch)

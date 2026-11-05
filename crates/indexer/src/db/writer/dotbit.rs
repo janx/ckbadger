@@ -1700,7 +1700,7 @@ mod tests {
 
         // Each marker in its block's journaled scope, as the object loop
         // writes it.
-        crate::db::writer::journal_test_support::journaled_headers(&domain, 200..=200);
+        crate::db::writer::journal_test_support::journaled_headers(&domain, 150..=200);
         ckbadger_store::commit_journaled_block(domain.as_ref(), 100, |batch| {
             writer
                 .insert_dotbit_unindexed_outpoint(&survivor_tx, 0, batch)
@@ -1783,14 +1783,18 @@ mod tests {
             );
         };
 
-        // Contiguous headers across the fork point and the rolled-back range.
-        let mut headers = StoreBatch::new(domain.as_ref());
-        for block in 150..=200i64 {
-            headers.put_block_header(block, &make_header(block));
-        }
-        // Tx position 1: position 0 of every block is its cellbase.
-        headers.put_tx_index(200, 1, &make_tx_entry(1));
-        headers.commit().unwrap();
+        // Contiguous headers across the fork point and the rolled-back range,
+        // each in its block's journaled scope as the live writer commits them.
+        ckbadger_store::commit_journaled(domain.as_ref(), |headers| {
+            for block in 150..=200i64 {
+                headers
+                    .at(block)
+                    .put_block_header(block, &make_header(block));
+            }
+            // Tx position 1: position 0 of every block is its cellbase.
+            headers.put_tx_index(200, 1, &make_tx_entry(1));
+        })
+        .unwrap();
 
         // Each block's rows in its journaled scope, as the live writer
         // commits them.

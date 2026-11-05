@@ -12,6 +12,17 @@ use ckbadger_store::{
 };
 use std::sync::Arc;
 
+/// Headers `blocks`, each in its block's journaled scope, as the live writer
+/// commits them (every live block journals at least its `block_hash_index`).
+fn journaled_headers(store: &CkbadgerStore, blocks: std::ops::RangeInclusive<i64>) {
+    ckbadger_store::commit_journaled(store, |batch| {
+        for block in blocks {
+            batch.at(block).put_block_header(block, &make_header(block));
+        }
+    })
+    .unwrap();
+}
+
 /// The production rollback (the block journal) to `fork_point`.
 fn rollback_fixture(
     domain: &CkbadgerStore,
@@ -531,10 +542,8 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
     // block's inter-block gap from its immediate predecessor's header, so a
     // sparse header range is a chain the store can never hold (the indexer
     // fails startup on any internal header gap) and rollback now says so.
-    for block in 1..=500i64 {
-        domain_batch.put_block_header(block, &make_header(block));
-    }
     domain_batch.commit().unwrap();
+    journaled_headers(&domain, 1..=500);
     seed_epoch_rows(&domain, 1..=500i64);
 
     // Verify all 5 exist
@@ -872,10 +881,7 @@ fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
     let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
 
     // Write block headers 1..6 so rollback knows the chain height
-    let mut batch = StoreBatch::new(&domain);
-    for b in 1..=6i64 {
-        batch.put_block_header(b, &make_header(b));
-    }
+    journaled_headers(&domain, 1..=6);
     seed_epoch_rows(&domain, 1..=6i64);
 
     let participant_a = vec![0xA0; 32];
@@ -907,7 +913,6 @@ fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
         vec![0xFB; 20],
     );
 
-    batch.commit().unwrap();
     // Each channel opens in its block's journaled scope.
     commit_journaled_block(&domain, 3, |batch| {
         batch.put_fiber_channel(&channel_id_a, &channel_a);
@@ -967,13 +972,8 @@ fn test_rollback_resets_fiber_channel_closed_after_fork_point_to_open() {
     let participant = vec![0xA0; 32];
 
     // Write block headers so rollback knows chain height
-    let mut batch = StoreBatch::new(&domain);
-    for b in 1..=6i64 {
-        batch.put_block_header(b, &make_header(b));
-    }
+    journaled_headers(&domain, 1..=6);
     seed_epoch_rows(&domain, 1..=6i64);
-
-    batch.commit().unwrap();
 
     // Channel opened at block 2, cooperatively closed at block 5, each state
     // in its block's journaled scope.
@@ -1152,11 +1152,7 @@ fn test_rollback_deletes_multi_participant_activities() {
     let lock_b = vec![0xB0; 32];
 
     // Write block headers and activities directly (no cells needed for this test)
-    let mut batch = StoreBatch::new(&domain);
-    for b in 1..=5i64 {
-        batch.put_block_header(b, &make_header(b));
-    }
-    batch.commit().unwrap();
+    journaled_headers(&domain, 1..=5);
     seed_epoch_rows(&domain, 1..=5i64);
 
     // Create activities: block 2 has single-participant, blocks 3 and 4 have
@@ -1464,11 +1460,7 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
         h
     };
 
-    let mut batch = StoreBatch::new(&domain);
-    for b in 1..=3i64 {
-        batch.put_block_header(b, &make_header(b));
-    }
-    batch.commit().unwrap();
+    journaled_headers(&domain, 1..=3);
     seed_epoch_rows(&domain, 1..=3i64);
 
     // Both transactions sit at tx position 1: position 0 of a block is its

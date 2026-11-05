@@ -4224,7 +4224,7 @@ mod activity_stats_tests {
 
         // 1. A new bucket: blocks 10 and 11 of one batch; 11 repeats an
         //    address of 10 (seen through the overlay, not the store).
-        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store);
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         let mut frozen = FrozenActivityAddrSets::default();
         let row = write_block_bucket(&writer, &mut batch, &mut frozen, 10, &[addr(1), addr(2)]);
@@ -4240,7 +4240,7 @@ mod activity_stats_tests {
         assert_eq!(rows(&store), 3);
 
         // 2. Rows present (a later batch): only addresses without a row count.
-        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store);
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         let mut frozen = FrozenActivityAddrSets::default();
         let row = write_block_bucket(&writer, &mut batch, &mut frozen, 12, &[addr(3), addr(4)]);
@@ -4268,7 +4268,7 @@ mod activity_stats_tests {
                 &bincode::serialize(&bulk_row).unwrap(),
             )
             .unwrap();
-        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&bulk_store);
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&bulk_store).unwrap();
         let mut batch = StoreBatch::journaled(&bulk_store, &overlay, 0);
         let mut frozen = FrozenActivityAddrSets::default();
         let row = write_block_bucket(&bulk_writer, &mut batch, &mut frozen, 20, &[addr(2)]);

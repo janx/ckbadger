@@ -1367,7 +1367,7 @@ mod tests {
             (102, 1)
         );
 
-        let overlay = SharedBlockOverlay::new(&fx.store);
+        let overlay = SharedBlockOverlay::new(&fx.store).unwrap();
         let mut batch = StoreBatch::journaled(&fx.store, &overlay, 0);
         resolved.stage(&mut batch).unwrap();
         let mut counters = std::collections::HashMap::new();

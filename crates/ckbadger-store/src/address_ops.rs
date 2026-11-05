@@ -684,7 +684,7 @@ mod prefix_participation_tests {
             (40, BTreeMap::from([(a, 1)])),
             (41, BTreeMap::from([(a, 2), (b, 1)])),
         ]);
-        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store);
+        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         store
             .stage_addr_prefix_tx_counts(&counts, &mut batch)

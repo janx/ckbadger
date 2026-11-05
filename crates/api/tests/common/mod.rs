@@ -113,7 +113,6 @@ pub fn seed_tip_block_on_utc8_day(store: &CkbadgerStore, number: i64, utc8_date:
 /// Seed explicit block headers `(number, raw timestamp_ms)` and calculate each
 /// header's monotone chain time from the immediately preceding canonical row.
 pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
-    let mut batch = StoreBatch::new(store);
     let mut sorted = blocks.to_vec();
     sorted.sort_by_key(|&(number, _)| number);
     let mut previous_chain_time_ms = sorted.first().and_then(|&(number, _)| {
@@ -127,30 +126,35 @@ pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
                     .map(|header| header.chain_time_ms)
             })
     });
-    for (number, timestamp) in sorted {
-        let chain_time_ms = previous_chain_time_ms.map_or(timestamp, |prior| prior.max(timestamp));
-        previous_chain_time_ms = Some(chain_time_ms);
-        batch.put_block_header(
-            number,
-            &CachedBlockHeader {
-                hash: vec![(number % 251) as u8; 32],
-                parent_hash: vec![0u8; 32],
-                timestamp,
-                epoch_number: 1,
-                epoch_index: 0,
-                epoch_length: 1800,
-                dao: vec![0; 32],
-                transactions_count: 1,
-                uncles_count: 0,
-                proposals_count: 0,
-                compact_target: 0x1a08a97e,
-                miner_lock_hash: None,
-                cycles: None,
-                chain_time_ms,
-            },
-        );
-    }
-    batch.commit().unwrap();
+    // Each header in its block's journaled scope, as the live writer
+    // commits it, so a test can roll the blocks back.
+    ckbadger_store::commit_journaled(store, |batch| {
+        for (number, timestamp) in sorted {
+            let chain_time_ms =
+                previous_chain_time_ms.map_or(timestamp, |prior| prior.max(timestamp));
+            previous_chain_time_ms = Some(chain_time_ms);
+            batch.at(number).put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![(number % 251) as u8; 32],
+                    parent_hash: vec![0u8; 32],
+                    timestamp,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0x1a08a97e,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms,
+                },
+            );
+        }
+    })
+    .unwrap();
 }
 
 /// Milliseconds of an RFC 3339 instant (`2026-10-23T15:59:58Z`).
@@ -1886,7 +1890,7 @@ pub fn commit_token_daily_blocks(
 ) {
     // The live batch's shape: one journaled block overlay, the entity stats
     // overlay its stats side.
-    let block_overlay = ckbadger_store::SharedBlockOverlay::new(store);
+    let block_overlay = ckbadger_store::SharedBlockOverlay::new(store).unwrap();
     let mut batch = StoreBatch::journaled(store, &block_overlay, 0);
     let mut overlay = EntityStatsOverlay::sharing(&block_overlay);
     let mut journal_seqs: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();

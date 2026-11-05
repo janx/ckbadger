@@ -220,6 +220,11 @@ impl<'a> StoreBatch<'a> {
     }
 
     /// Stage `overlay`'s final values and journal entries into this batch.
+    /// The store this batch commits to.
+    pub fn store(&self) -> &'a CkbadgerStore {
+        self.store
+    }
+
     pub fn stage_overlay(
         &mut self,
         overlay: &SharedBlockOverlay,

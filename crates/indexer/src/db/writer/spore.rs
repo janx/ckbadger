@@ -1485,11 +1485,14 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
             let writer = BatchWriter::new(store.clone(), store.clone());
-            let mut batch = StoreBatch::new(writer.store());
-            for number in 198..=202i64 {
-                batch.put_block_header(number, &header(number));
-            }
-            batch.commit().unwrap();
+            // Each header in its block's journaled scope, as the live writer
+            // commits it.
+            ckbadger_store::commit_journaled(writer.store(), |batch| {
+                for number in 198..=202i64 {
+                    batch.at(number).put_block_header(number, &header(number));
+                }
+            })
+            .unwrap();
             (store, writer, dir)
         }
 
@@ -1618,7 +1621,7 @@ mod tests {
             write: impl FnOnce(&mut StoreBatch, &mut SporeBatchState) -> Result<()>,
         ) {
             // One live block: every write in the block's journaled scope.
-            let overlay = ckbadger_store::SharedBlockOverlay::new(store.as_ref());
+            let overlay = ckbadger_store::SharedBlockOverlay::new(store.as_ref()).unwrap();
             let mut journaled = StoreBatch::journaled(writer.store(), &overlay, 0);
             let mut batch = journaled.at(block);
             let mut state = new_state(writer);
@@ -3141,7 +3144,7 @@ mod tests {
             "the seeded outpoint row must live in an SST for the read to fail"
         );
 
-        let block_overlay = ckbadger_store::SharedBlockOverlay::new(writer.store());
+        let block_overlay = ckbadger_store::SharedBlockOverlay::new(writer.store()).unwrap();
         let mut batch = StoreBatch::journaled(writer.store(), &block_overlay, 0);
         let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer

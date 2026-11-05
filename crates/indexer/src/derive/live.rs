@@ -279,7 +279,7 @@ pub(crate) mod tests {
         // Epoch 3 (blocks 9..=11) gains block 11; epoch 4 (12..=14) is
         // created by block 12 and moved by block 13.
         let points = blocks(11..=13);
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         for number in 11..=13 {
             batch

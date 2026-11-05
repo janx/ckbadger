@@ -265,6 +265,51 @@ impl CkbadgerStore {
         Ok(deleted)
     }
 
+    /// Refuse a `RangeByBlock` row of a block above `tip` (the highest
+    /// header): no rollback deletes it, and no live write puts it there.
+    fn ensure_no_range_rows_above(&self, target: i64, tip: i64) -> anyhow::Result<()> {
+        for spec in CF_SPECS
+            .iter()
+            .filter(|spec| spec.rollback_class == RollbackClass::RangeByBlock)
+        {
+            let cf = self.cf(spec.name);
+            let row = if spec.name == CF_TX_ACTIONS {
+                // Block-descending keys: the first row is the highest block.
+                self.iterator_cf(cf, IteratorMode::Start).next()
+            } else {
+                let above = keys::encode_block_num(tip + 1);
+                self.iterator_cf(cf, IteratorMode::From(&above, Direction::Forward))
+                    .next()
+            };
+            let Some(row) = row else {
+                continue;
+            };
+            let (key, _) = row
+                .map_err(|e| anyhow::anyhow!("rollback to {target}: reading {}: {e}", spec.name))?;
+            if key.len() < keys::BLOCK_NUM_KEY_SIZE {
+                anyhow::bail!(
+                    "rollback to {target}: {} key of {} bytes: 0x{}",
+                    spec.name,
+                    key.len(),
+                    bytes_to_hex(&key)
+                );
+            }
+            let block = if spec.name == CF_TX_ACTIONS {
+                i64::MAX - keys::decode_block_num(&key)
+            } else {
+                keys::decode_block_num(&key)
+            };
+            if block > tip {
+                anyhow::bail!(
+                    "rollback to {target}: {} row of block {block} above the tip {tip}: 0x{}",
+                    spec.name,
+                    bytes_to_hex(&key)
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Roll the domain store back to the end of block `target` (`-1`: before
     /// genesis), in one atomic write: the `RangeByBlock` rows of blocks
     /// `target + 1 ..= tip` (tip = the highest stored header) are range
@@ -272,10 +317,14 @@ impl CkbadgerStore {
     /// down, each block's entries in reverse sequence order, so the last write
     /// of a key is its value at the end of `target`.
     ///
-    /// Errors, with nothing written: a target below -1 or above the tip, an
-    /// undo-log row of a scope other than `Journal`, a journal row that cannot
-    /// be decoded or names a CF that is not `Journal`, a `tx_index` or undo-log
-    /// row above the tip.
+    /// The core proves its own preconditions, and on any failure writes
+    /// nothing: a target in `-1 ..= tip`; no `RangeByBlock` row above the tip
+    /// (checked even when `target == tip`, which is when startup cleanup
+    /// runs); a target not below the journal coverage floor; and at least one
+    /// journal row for every block it removes (each live block journals at
+    /// least its `block_hash_index` creation, so a block without one was
+    /// pruned or never journaled). Every journal row must be a decodable
+    /// `Journal`-scope row naming a `Journal`-class CF.
     pub fn rollback_to_block(&self, target: i64) -> anyhow::Result<RollbackResult> {
         if target < -1 {
             anyhow::bail!("rollback: invalid target {target} (expected >= -1)");
@@ -284,9 +333,20 @@ impl CkbadgerStore {
         if target > tip {
             anyhow::bail!("rollback: target {target} is above the tip {tip} (highest header)");
         }
+        self.ensure_no_range_rows_above(target, tip)?;
         let mut result = RollbackResult::default();
         if target == tip {
             return Ok(result);
+        }
+        if let Some(contract) = self.get_entity_stats_undo_contract()? {
+            if target < contract.coverage_floor_block {
+                anyhow::bail!(
+                    "rollback to {target}: below the journal coverage floor {} (journal rows at or \
+                     below it are pruned; floor last advanced at block {})",
+                    contract.coverage_floor_block,
+                    contract.updated_at_block
+                );
+            }
         }
         let first = target + 1;
         let first_key = keys::encode_block_num(first);
@@ -303,32 +363,16 @@ impl CkbadgerStore {
             self.cf_tx_index(),
             IteratorMode::From(&first_key, Direction::Forward),
         ) {
-            let (key, _) =
-                item.map_err(|e| anyhow::anyhow!("rollback to {target}: reading tx_index: {e}"))?;
-            if key.len() < keys::BLOCK_NUM_KEY_SIZE {
-                anyhow::bail!(
-                    "rollback to {target}: tx_index key of {} bytes: 0x{}",
-                    key.len(),
-                    bytes_to_hex(&key)
-                );
-            }
-            let block = keys::decode_block_num(&key);
-            if block > tip {
-                anyhow::bail!(
-                    "rollback to {target}: tx_index row of block {block} above the tip {tip}: 0x{}",
-                    bytes_to_hex(&key)
-                );
-            }
+            item.map_err(|e| anyhow::anyhow!("rollback to {target}: reading tx_index: {e}"))?;
             result.txs_removed += 1;
         }
         let entries = self.journal_entries_from(first)?;
-        if let Some(entry) = entries.iter().find(|entry| entry.block > tip) {
+        let journaled: std::collections::BTreeSet<i64> =
+            entries.iter().map(|entry| entry.block).collect();
+        if let Some(missing) = (first..=tip).find(|block| !journaled.contains(block)) {
             anyhow::bail!(
-                "rollback to {target}: journal entry of block {} above the tip {tip} (seq {:#x}, cf {}, key 0x{})",
-                entry.block,
-                entry.seq,
-                entry.cf,
-                bytes_to_hex(&entry.key)
+                "rollback to {target}: block {missing} has no journal row (pruned or never \
+                 journaled), so nothing restores what it wrote; tip {tip}"
             );
         }
 
@@ -456,7 +500,7 @@ mod tests {
     /// One live batch over `blocks`: each block's rows and `writes` (cf, key,
     /// value or delete) in its scope, journaled, committed.
     fn live_batch(store: &CkbadgerStore, blocks: &[BlockWrites<'_>]) {
-        let overlay = SharedBlockOverlay::new(store);
+        let overlay = SharedBlockOverlay::new(store).unwrap();
         let mut batch = StoreBatch::journaled(store, &overlay, 0);
         for (block, writes) in blocks {
             let mut at = batch.at(*block);
@@ -774,7 +818,55 @@ mod tests {
                     put_journal_row(&mut batch, 9, 0, CF_SYNC_META, b"k", None);
                     batch.commit().unwrap();
                 }),
-                "journal entry of block 9 above the tip 5",
+                "reorg_undo_log_by_block row of block 9 above the tip 5",
+            ),
+            (
+                "target below the coverage floor",
+                Box::new(|store| {
+                    store
+                        .put_entity_stats_undo_contract(&crate::types::EntityStatsUndoContract {
+                            version: crate::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+                            coverage_floor_block: 3,
+                            updated_at_block: 5,
+                        })
+                        .unwrap()
+                }),
+                "below the journal coverage floor 3",
+            ),
+            (
+                "a block with no journal row",
+                Box::new(|store| {
+                    // Block 4's journal rows gone (pruned or never written).
+                    let first = keys::encode_block_num(4);
+                    let block_4: Vec<Vec<u8>> = store
+                        .iterator_cf(
+                            store.cf_reorg_undo_log_by_block(),
+                            IteratorMode::From(&first, Direction::Forward),
+                        )
+                        .map(|item| item.unwrap().0.to_vec())
+                        .take_while(|key| key.starts_with(&first))
+                        .collect();
+                    assert!(!block_4.is_empty());
+                    for key in block_4 {
+                        store
+                            .delete_cf(store.cf_reorg_undo_log_by_block(), &key)
+                            .unwrap();
+                    }
+                }),
+                "block 4 has no journal row",
+            ),
+            (
+                "a lazy cycles record above the tip",
+                Box::new(|store| {
+                    store
+                        .put_cf(
+                            store.cf(CF_TX_GROUP_CYCLES),
+                            &keys::encode_tx_slot_key(7, 1),
+                            b"cycles",
+                        )
+                        .unwrap()
+                }),
+                "tx_group_cycles row of block 7 above the tip 5",
             ),
         ];
         for (name, corrupt, expected) in corruptions {
@@ -789,6 +881,37 @@ mod tests {
                 before,
                 "{name}: a failed rollback wrote nothing"
             );
+        }
+    }
+
+    /// Rows above the tip are refused even when there is nothing to roll
+    /// back (target = tip): startup cleanup runs exactly then.
+    #[test]
+    fn rows_above_the_tip_are_refused_when_the_target_is_the_tip() {
+        for (cf, key, block) in [
+            (CF_TX_INDEX, keys::encode_tx_slot_key(8, 0), 8),
+            (CF_TX_GROUP_CYCLES, keys::encode_tx_slot_key(8, 1), 8),
+            (
+                CF_REORG_UNDO_LOG_BY_BLOCK,
+                keys::encode_reorg_undo_log_key(9, UndoSeqScope::Journal.seq_base()).to_vec(),
+                9,
+            ),
+            (
+                CF_TX_ACTIONS,
+                keys::encode_tx_actions_key(7, 0, &[7; 32]).to_vec(),
+                7,
+            ),
+        ] {
+            let (store, _dir) = open();
+            chain(&store);
+            store.put_cf(store.cf(cf), &key, b"row").unwrap();
+            let before = rows(&store);
+            let error = store.rollback_to_block(5).unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("{cf} row of block {block} above the tip 5")),
+                "{cf}: {error}"
+            );
+            assert_eq!(rows(&store), before, "{cf}: nothing written");
         }
     }
 

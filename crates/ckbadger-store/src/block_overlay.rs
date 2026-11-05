@@ -98,7 +98,6 @@ pub struct JournalStats {
 /// One live batch's overlay over the `Journal`-class domain CFs.
 #[derive(Debug, Default)]
 pub struct BlockOverlay {
-    journaling: bool,
     keys: HashMap<CfKey, KeyState>,
     /// Committed values read so far (pre-batch), by `current` or `prefetch`.
     committed: HashMap<CfKey, Option<Vec<u8>>>,
@@ -110,17 +109,17 @@ pub struct BlockOverlay {
 }
 
 impl BlockOverlay {
-    /// An overlay for one batch on `store`. On a store in bulk-sync mode it
-    /// records no journal (bulk never rolls back).
-    pub fn new(store: &CkbadgerStore) -> Self {
-        Self {
-            journaling: !store.is_bulk_sync_mode(),
-            ..Self::default()
+    /// An overlay for one live batch on `store`. Bulk sync writes no journal
+    /// and never builds an overlay: a store in bulk-sync mode is an error,
+    /// never an overlay that silently stops journaling.
+    pub fn new(store: &CkbadgerStore) -> Result<Self> {
+        if store.is_bulk_sync_mode() {
+            bail!(
+                "block overlay on a store in bulk-sync mode: a journaled batch is live-only, and \
+                 bulk writes no journal"
+            );
         }
-    }
-
-    pub fn is_journaling(&self) -> bool {
-        self.journaling
+        Ok(Self::default())
     }
 
     /// The column family's spec must be `Journal`; anything else reaching the
@@ -246,18 +245,16 @@ impl BlockOverlay {
         }
         match self.keys.get_mut(&cf_key) {
             None => {
-                if self.journaling {
-                    let previous = match self.committed.get(&cf_key) {
-                        Some(committed) => Previous::Known(committed.clone()),
-                        None => Previous::Committed,
-                    };
-                    self.entries.push(PendingEntry {
-                        block,
-                        cf,
-                        key: key.to_vec(),
-                        previous,
-                    });
-                }
+                let previous = match self.committed.get(&cf_key) {
+                    Some(committed) => Previous::Known(committed.clone()),
+                    None => Previous::Committed,
+                };
+                self.entries.push(PendingEntry {
+                    block,
+                    cf,
+                    key: key.to_vec(),
+                    previous,
+                });
                 self.keys.insert(
                     cf_key,
                     KeyState {
@@ -276,14 +273,12 @@ impl BlockOverlay {
                     );
                 }
                 if block > last {
-                    if self.journaling {
-                        self.entries.push(PendingEntry {
-                            block,
-                            cf,
-                            key: key.to_vec(),
-                            previous: Previous::Known(state.value.clone()),
-                        });
-                    }
+                    self.entries.push(PendingEntry {
+                        block,
+                        cf,
+                        key: key.to_vec(),
+                        previous: Previous::Known(state.value.clone()),
+                    });
                     state.last_block = block;
                 }
                 state.value = value;
@@ -513,8 +508,9 @@ pub fn decode_journal_value(value: &[u8]) -> Result<JournalValue<'_>> {
 pub struct SharedBlockOverlay(Arc<Mutex<BlockOverlay>>);
 
 impl SharedBlockOverlay {
-    pub fn new(store: &CkbadgerStore) -> Self {
-        Self(Arc::new(Mutex::new(BlockOverlay::new(store))))
+    /// See [`BlockOverlay::new`]: an error on a store in bulk-sync mode.
+    pub fn new(store: &CkbadgerStore) -> Result<Self> {
+        Ok(Self(Arc::new(Mutex::new(BlockOverlay::new(store)?))))
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&mut BlockOverlay) -> R) -> R {
@@ -547,11 +543,21 @@ pub fn commit_journaled(
     store: &CkbadgerStore,
     write: impl FnOnce(&mut crate::StoreBatch),
 ) -> Result<JournalStats> {
-    let overlay = SharedBlockOverlay::new(store);
+    let overlay = SharedBlockOverlay::new(store)?;
     let mut batch = crate::StoreBatch::journaled(store, &overlay, 0);
     write(&mut batch);
+    let stats = batch.stage_journal(&mut continuing_journal_seq(store))?;
+    batch.commit()?;
+    Ok(stats)
+}
+
+/// Fixture support: a sequence allocator whose numbers for a block continue
+/// after the journal rows `store` already holds for it, for a block that more
+/// than one batch writes (a live batch owns its blocks and starts at 0).
+#[doc(hidden)]
+pub fn continuing_journal_seq(store: &CkbadgerStore) -> impl FnMut(i64) -> Result<u64> + '_ {
     let mut counters: HashMap<i64, u64> = HashMap::new();
-    let stats = batch.stage_journal(&mut |block| {
+    move |block| {
         if let std::collections::hash_map::Entry::Vacant(slot) = counters.entry(block) {
             slot.insert(match store.journal_entries(block)?.last() {
                 Some(entry) => (entry.seq & UNDO_SEQ_LOCAL_MAX) + 1,
@@ -559,9 +565,7 @@ pub fn commit_journaled(
             });
         }
         journal_seq(&mut counters, block)
-    })?;
-    batch.commit()?;
-    Ok(stats)
+    }
 }
 
 /// [`commit_journaled`] with every write in `block`'s scope.
@@ -689,7 +693,7 @@ mod tests {
     fn pre_images_are_per_block_and_once_per_block_key() {
         let (store, _dir) = store();
         store.put_cf(store.cf_addr_balance(), b"k", b"v0").unwrap();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         put(&overlay, 10, b"k", b"v10a");
         put(&overlay, 10, b"k", b"v10b");
         put(&overlay, 12, b"k", b"v12");
@@ -738,7 +742,7 @@ mod tests {
     fn a_block_that_leaves_a_key_unchanged_journals_nothing() {
         let (store, _dir) = store();
         store.put_cf(store.cf_addr_balance(), b"k", b"v0").unwrap();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         put(&overlay, 5, b"k", b"v0");
         put(&overlay, 6, b"k", b"v1");
         put(&overlay, 7, b"k", b"tmp");
@@ -782,7 +786,7 @@ mod tests {
     #[test]
     fn a_descending_block_for_a_key_is_an_error() {
         let (store, _dir) = store();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         put(&overlay, 12, b"k", b"a");
         let err = overlay
             .with(|o| o.write(Some(11), CF_ADDR_BALANCE, b"k", Some(b"b".to_vec()), 0))
@@ -796,7 +800,7 @@ mod tests {
     fn deletes_and_creations_journal_their_previous_values() {
         let (store, _dir) = store();
         store.put_cf(store.cf_live_cells(), b"old", b"m").unwrap();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         overlay
             .with(|o| o.write(Some(5), CF_LIVE_CELLS, b"old", None, 0))
             .unwrap();
@@ -833,33 +837,11 @@ mod tests {
     #[test]
     fn a_non_journal_cf_is_refused() {
         let (store, _dir) = store();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let err = overlay
             .with(|o| o.write(Some(1), CF_BLOCK_HEADERS, b"k", Some(vec![1]), 0))
             .unwrap_err();
         assert!(err.to_string().contains("RangeByBlock"), "{err:#}");
-    }
-
-    /// Bulk sync records no journal (BULK_SYNC.md rule 12): a bulk-mode
-    /// write stages its values and zero journal rows.
-    #[test]
-    fn a_bulk_mode_write_produces_zero_journal_rows() {
-        let (store, _dir) = store();
-        store.set_bulk_sync_mode(true);
-        let overlay = SharedBlockOverlay::new(&store);
-        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
-        batch.at(3).put_sync_meta(b"key", b"value");
-        let mut counters = HashMap::new();
-        let stats = batch
-            .stage_journal(&mut |block| journal_seq(&mut counters, block))
-            .unwrap();
-        batch.commit().unwrap();
-        assert_eq!(stats.entries, 0);
-        assert!(journal_rows(&store).is_empty());
-        assert_eq!(
-            store.get_cf(store.cf_sync_meta(), b"key").unwrap(),
-            Some(b"value".to_vec())
-        );
     }
 
     /// A journaled StoreBatch sends Journal-class writes through the overlay
@@ -868,7 +850,7 @@ mod tests {
     #[test]
     fn a_journaled_batch_routes_by_rollback_class_and_must_be_staged() {
         let (store, _dir) = store();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         batch.at(4).put_sync_meta(b"meta", b"x");
         batch.at(4).put_block_header(
@@ -918,7 +900,7 @@ mod tests {
     #[test]
     fn a_key_written_from_two_sub_batches_fails_the_commit() {
         let (store, _dir) = store();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut first = StoreBatch::journaled(&store, &overlay, 1);
         let mut second = StoreBatch::journaled(&store, &overlay, 2);
         first.at(1).put_sync_meta(b"k", b"a");
@@ -939,7 +921,7 @@ mod tests {
         let (store, _dir) = store();
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260210");
         store.put_stats_key(&key, b"committed").unwrap();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut writer = StoreBatch::journaled(&store, &overlay, 1);
         let reader = StoreBatch::journaled(&store, &overlay, 2);
         assert_eq!(reader.get_stats(&key).unwrap(), Some(b"committed".to_vec()));
@@ -973,7 +955,7 @@ mod tests {
         store
             .put_cf(store.cf_sync_meta(), b"b", b"committed b")
             .unwrap();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut writer = StoreBatch::journaled(&store, &overlay, 1);
         let reader = StoreBatch::journaled(&store, &overlay, 2);
         writer.at(7).put_sync_meta(b"a", b"after block 7");
@@ -1016,7 +998,7 @@ mod tests {
     #[test]
     fn an_unscoped_journal_write_fails_the_batch() {
         let (store, _dir) = store();
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         batch.at(3).put_sync_meta(b"scoped", b"v");
         batch.put_sync_meta(b"unscoped", b"v");
@@ -1038,14 +1020,25 @@ mod tests {
         assert_eq!(store.get_cf(store.cf_sync_meta(), b"scoped").unwrap(), None);
         assert!(journal_rows(&store).is_empty());
 
-        // The bare overlay refuses it too, in bulk mode as well.
-        store.set_bulk_sync_mode(true);
-        let bulk = SharedBlockOverlay::new(&store);
-        let error = bulk
+        // The bare overlay refuses it too.
+        let bare = SharedBlockOverlay::new(&store).unwrap();
+        let error = bare
             .with(|o| o.write(None, CF_ADDR_BALANCE, b"k", Some(vec![1]), 0))
             .unwrap_err()
             .to_string();
         assert!(error.contains("without a block scope"), "{error}");
+    }
+
+    /// A store in bulk-sync mode journals nothing, so a journaled batch on it
+    /// is an error, never an overlay that silently stops journaling.
+    #[test]
+    fn a_journaled_batch_on_a_bulk_mode_store_is_an_error() {
+        let (store, _dir) = store();
+        store.set_bulk_sync_mode(true);
+        let error = SharedBlockOverlay::new(&store).unwrap_err().to_string();
+        assert!(error.contains("bulk-sync mode"), "{error}");
+        store.set_bulk_sync_mode(false);
+        assert!(SharedBlockOverlay::new(&store).is_ok());
     }
 
     /// The coverage contract is written outside the journal: through a
@@ -1059,7 +1052,7 @@ mod tests {
             coverage_floor_block: 7,
             updated_at_block: 1_007,
         };
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         batch.at(9).put_sync_meta(b"other", b"x");
         batch.at(9).put_entity_stats_undo_contract(&contract);
@@ -1078,7 +1071,7 @@ mod tests {
             Some(contract)
         );
 
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let error = overlay
             .with(|o| {
                 o.write(

@@ -1943,7 +1943,7 @@ impl Indexer {
         // domain CF, from any of the batch's sub-batches, goes through it, is
         // journaled per block (`UndoSeqScope::Journal`) and staged once, just
         // before the commit (store refactor lane B).
-        let block_overlay = SharedBlockOverlay::new(self.writer.store());
+        let block_overlay = SharedBlockOverlay::new(self.writer.store())?;
         let mut data_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 0);
         // Live sync: serial writes in a single batch.
         if !txs_for_batch.is_empty() {

@@ -311,7 +311,7 @@ fn blk(n: i64) -> BlockChanges {
 fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockChanges]) {
     // The live batch's shape: one block overlay journals every block's
     // pre-images, the entity stats overlay is its stats side.
-    let block_overlay = SharedBlockOverlay::new(domain);
+    let block_overlay = SharedBlockOverlay::new(domain).unwrap();
     let mut batch = StoreBatch::journaled(domain, &block_overlay, 0);
     let mut overlay = EntityStatsOverlay::sharing(&block_overlay);
     let mut journal_seqs: HashMap<i64, u64> = HashMap::new();

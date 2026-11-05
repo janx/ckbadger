@@ -983,10 +983,13 @@ mod tests {
             )
             .unwrap();
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(0, &make_header(0x10, 1_700_000_000_000));
-        batch.put_block_header(1, &make_header(0x11, 1_700_000_010_000));
-        batch.commit().unwrap();
+        // Blocks 0 and 1 as the live writer commits them (journaled).
+        for (block, tag, time) in [(0, 0x10, 1_700_000_000_000), (1, 0x11, 1_700_000_010_000)] {
+            ckbadger_store::commit_journaled_block(&store, block, |batch| {
+                batch.put_block_header(block, &make_header(tag, time))
+            })
+            .unwrap();
+        }
         seed_ten_second_histogram(&store);
 
         writer.init_sync_start(0, false).unwrap();
@@ -1097,11 +1100,14 @@ mod tests {
     fn test_init_sync_start_forces_cleanup_with_partial_data() {
         let (_dir, store, _append_store, writer) = setup();
 
-        // Write block headers at 0 and 1, then init from block 0 with force_cleanup
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(0, &make_header(0x60, 1_700_000_000_000));
-        batch.put_block_header(1, &make_header(0x61, 1_700_000_010_000));
-        batch.commit().unwrap();
+        // Write block headers at 0 and 1 (journaled, as the live writer
+        // does), then init from block 0 with force_cleanup
+        for (block, tag, time) in [(0, 0x60, 1_700_000_000_000), (1, 0x61, 1_700_000_010_000)] {
+            ckbadger_store::commit_journaled_block(&store, block, |batch| {
+                batch.put_block_header(block, &make_header(tag, time))
+            })
+            .unwrap();
+        }
         seed_ten_second_histogram(&store);
 
         // force_cleanup=true AND partial data (block 1 beyond start_block 0) → cleanup runs

@@ -1410,7 +1410,7 @@ mod tests {
         let block_times: HashMap<i64, i64> =
             HashMap::from([(101, 1_700_000_000_000), (102, 1_700_000_010_000)]);
 
-        let overlay = SharedBlockOverlay::new(&store);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
         let mut state = writer.new_udt_batch_state(SharedEntityStatsOverlay::sharing(&overlay));
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         writer

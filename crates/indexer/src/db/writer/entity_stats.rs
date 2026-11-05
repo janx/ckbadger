@@ -53,8 +53,8 @@ impl Default for EntityStatsOverlay {
 }
 
 impl EntityStatsOverlay {
-    /// A standalone overlay: it keeps its own values and writes them in
-    /// [`Self::stage_final`].
+    /// A standalone overlay: it keeps its own values and stages them, with
+    /// their journal entries, in [`Self::stage_final`].
     pub fn new() -> Self {
         Self {
             overlay: SharedBlockOverlay::default(),
@@ -113,15 +113,18 @@ impl EntityStatsOverlay {
             .with(|overlay| overlay.write(Some(block), cf, key, next, ENTITY_STATS_ORIGIN))
     }
 
-    /// Write the final value of every mutated key — once each — when this
-    /// overlay owns its values; a shared overlay is staged by its batch.
+    /// Write the final value of every mutated key — once each — and its
+    /// journal entries when this overlay owns its values; a shared overlay is
+    /// staged by its batch.
     pub fn stage_final(&mut self, batch: &mut StoreBatch) -> Result<()> {
         if !self.owns_overlay {
             return Ok(());
         }
-        batch.stage_overlay(&self.overlay, &mut |block| {
-            bail!("a standalone entity stats overlay journals nothing: block={block}")
-        })?;
+        let store = batch.store();
+        batch.stage_overlay(
+            &self.overlay,
+            &mut ckbadger_store::block_overlay::continuing_journal_seq(store),
+        )?;
         Ok(())
     }
 
@@ -376,7 +379,7 @@ mod tests {
     /// The stats side of a live batch over `store`: a journaled batch and
     /// an entity stats overlay sharing its block overlay.
     fn live_batch(store: &CkbadgerStore) -> (StoreBatch<'_>, EntityStatsOverlay) {
-        let block_overlay = SharedBlockOverlay::new(store);
+        let block_overlay = SharedBlockOverlay::new(store).unwrap();
         (
             StoreBatch::journaled(store, &block_overlay, 0),
             EntityStatsOverlay::sharing(&block_overlay),
@@ -501,12 +504,17 @@ mod tests {
         overlay.stage_final(&mut batch).unwrap();
         assert_eq!(
             batch.len() - after_mutations,
-            1,
-            "the key is written exactly once, with its final value"
+            1 + 3,
+            "the key is written exactly once, with its final value, beside one journal \
+             entry per block"
         );
 
         batch.commit().unwrap();
         assert_eq!(store.get_stats_key(&key).unwrap(), Some(daily(30, 3)));
+        let journaled: Vec<i64> = (1..=3)
+            .filter(|block| !store.journal_entries(*block).unwrap().is_empty())
+            .collect();
+        assert_eq!(journaled, vec![1, 2, 3]);
     }
 
     #[test]
@@ -704,29 +712,14 @@ mod tests {
         assert!(err.to_string().contains("overflow"), "got: {err}");
     }
 
-    /// Bulk build never rolls back: the stats side of a batch on a bulk-mode
-    /// store writes its rows and journals nothing.
+    /// Bulk build never rolls back and never builds a live batch: a bulk-mode
+    /// store refuses the overlay the stats side of a live batch shares.
     #[test]
-    fn bulk_mode_journals_nothing() {
+    fn a_bulk_mode_store_refuses_the_live_batch_overlay() {
         let (_dir, store) = open_store();
         store.set_bulk_sync_mode(true);
-        let key = keys::encode_cluster_daily_key(&[0x33; 32], 20_260_922).to_vec();
-
-        let (batch, mut overlay) = live_batch(&store);
-        overlay.mutate(7, &key, Some(daily(5, 1))).unwrap();
-        commit_live(batch);
-
-        assert_eq!(
-            store
-                .iterator_cf(
-                    store.cf_reorg_undo_log_by_block(),
-                    rocksdb::IteratorMode::Start
-                )
-                .count(),
-            0,
-            "bulk build never rolls back, so it must not pay for journal entries"
-        );
-        assert_eq!(store.get_stats_key(&key).unwrap(), Some(daily(5, 1)));
+        let error = SharedBlockOverlay::new(&store).unwrap_err().to_string();
+        assert!(error.contains("bulk-sync mode"), "{error}");
     }
 
     #[test]
