@@ -1107,9 +1107,9 @@ impl BulkBuildSyncTotals {
 
         let mut batch = ckbadger_store::batch::StoreBatch::new(store);
         batch.put_live_cell_summary_snapshots(std::slice::from_ref(summary))?;
-        let status_bytes = bincode::serialize(&status)
-            .with_context(|| "failed to serialize bulk-build sync status")?;
-        batch.put_sync_meta(keys::sync_meta_keys::SYNC_STATUS, &status_bytes);
+        batch
+            .put_sync_status(&status)
+            .with_context(|| "failed to stage bulk-build sync status")?;
         batch.commit()?;
         Ok(status)
     }

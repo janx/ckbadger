@@ -2187,7 +2187,107 @@ impl LiveCellSummary {
     }
 }
 
+/// The chain part of [`SyncStatus`]: the store's tip and its running totals,
+/// journaled per block under `sync_meta` `sync_status`, so a rollback
+/// restores it with the blocks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncChainStatus {
+    pub tip_block_number: i64,
+    pub tip_block_hash: Vec<u8>,
+    pub total_transactions: i64,
+    pub total_cells_created: i64,
+    pub total_cells_consumed: i64,
+}
+
+/// The runtime part of [`SyncStatus`]: the running process's telemetry, the
+/// bulk-completion record and the deep-fork state, written outside the
+/// journal under `sync_meta` `sync_runtime`. None of it is chain state, so a
+/// rollback never restores it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncRuntimeStatus {
+    pub last_synced_at: i64,
+    pub sync_started_at: Option<i64>,
+    pub sync_started_block: i64,
+    pub sync_ema_rate: Option<f64>,
+    pub bulk_sync_completed_at: Option<i64>,
+    pub bulk_sync_completed_block: Option<i64>,
+    pub deep_fork_detected: bool,
+    pub deep_fork_info: Option<DeepForkInfo>,
+}
+
+impl SyncRuntimeStatus {
+    pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
+        if is_bulk_sync {
+            let should_start_new_bulk_session = self.sync_started_at.is_none()
+                || self.bulk_sync_completed_at.is_some()
+                || start_block < self.sync_started_block;
+
+            if should_start_new_bulk_session {
+                self.sync_started_at = Some(chrono::Utc::now().timestamp());
+                self.sync_started_block = start_block;
+                self.bulk_sync_completed_at = None;
+                self.bulk_sync_completed_block = None;
+            }
+        } else {
+            if self.sync_started_at.is_none() || start_block < self.sync_started_block {
+                self.sync_started_at = Some(chrono::Utc::now().timestamp());
+            }
+            self.sync_started_block = start_block;
+        }
+    }
+
+    pub fn mark_bulk_sync_completed(&mut self, chain_tip: i64) {
+        if self.bulk_sync_completed_at.is_none() {
+            self.bulk_sync_completed_at = Some(chrono::Utc::now().timestamp());
+            self.bulk_sync_completed_block = Some(chain_tip);
+        }
+    }
+}
+
 impl SyncStatus {
+    /// The journaled chain part.
+    pub fn chain(&self) -> SyncChainStatus {
+        SyncChainStatus {
+            tip_block_number: self.tip_block_number,
+            tip_block_hash: self.tip_block_hash.clone(),
+            total_transactions: self.total_transactions,
+            total_cells_created: self.total_cells_created,
+            total_cells_consumed: self.total_cells_consumed,
+        }
+    }
+
+    /// The unjournaled runtime part.
+    pub fn runtime(&self) -> SyncRuntimeStatus {
+        SyncRuntimeStatus {
+            last_synced_at: self.last_synced_at,
+            sync_started_at: self.sync_started_at,
+            sync_started_block: self.sync_started_block,
+            sync_ema_rate: self.sync_ema_rate,
+            bulk_sync_completed_at: self.bulk_sync_completed_at,
+            bulk_sync_completed_block: self.bulk_sync_completed_block,
+            deep_fork_detected: self.deep_fork_detected,
+            deep_fork_info: self.deep_fork_info.clone(),
+        }
+    }
+
+    pub fn from_parts(chain: SyncChainStatus, runtime: SyncRuntimeStatus) -> Self {
+        Self {
+            tip_block_number: chain.tip_block_number,
+            tip_block_hash: chain.tip_block_hash,
+            total_transactions: chain.total_transactions,
+            total_cells_created: chain.total_cells_created,
+            total_cells_consumed: chain.total_cells_consumed,
+            last_synced_at: runtime.last_synced_at,
+            sync_started_at: runtime.sync_started_at,
+            sync_started_block: runtime.sync_started_block,
+            sync_ema_rate: runtime.sync_ema_rate,
+            bulk_sync_completed_at: runtime.bulk_sync_completed_at,
+            bulk_sync_completed_block: runtime.bulk_sync_completed_block,
+            deep_fork_detected: runtime.deep_fork_detected,
+            deep_fork_info: runtime.deep_fork_info,
+        }
+    }
+
     pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
         if is_bulk_sync {
             let should_start_new_bulk_session = self.sync_started_at.is_none()

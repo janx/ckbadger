@@ -349,8 +349,8 @@ pub(crate) fn persist_bulk_sync_completion_status(
         coverage_floor_block: handoff_tip,
         updated_at_block: handoff_tip,
     })?;
-    store.update_sync_status(|status| {
-        status.mark_bulk_sync_completed(chain_tip_i64);
+    store.update_sync_runtime(|runtime| {
+        runtime.mark_bulk_sync_completed(chain_tip_i64);
     })
 }
 
@@ -429,7 +429,7 @@ impl Indexer {
         let reader = CkbChainReader::open(&config.ckb_db_path)?;
         info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
         let ckb_store = Some(Arc::new(reader));
-        let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
+        let repo = Repository::new(store.clone());
         let writer = BatchWriter::with_cache(
             store.clone(),
             append_only_store.clone(),

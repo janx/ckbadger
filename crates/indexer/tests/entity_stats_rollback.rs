@@ -1177,15 +1177,13 @@ async fn startup_fails_on_nonfresh_store_without_contract() {
     // Give it a tip and nothing else.
     let mut batch = StoreBatch::new(&domain);
     batch.put_block_header(500, &make_header(500, TS_DAY));
-    batch.put_sync_meta(
-        keys::sync_meta_keys::SYNC_STATUS,
-        &bincode::serialize(&ckbadger_store::types::SyncStatus {
+    batch
+        .put_sync_status(&ckbadger_store::types::SyncStatus {
             tip_block_number: 500,
             tip_block_hash: make_header(500, TS_DAY).hash,
             ..Default::default()
         })
-        .unwrap(),
-    );
+        .unwrap();
     batch.commit().unwrap();
 
     let err = ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain)

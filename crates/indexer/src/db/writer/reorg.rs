@@ -296,11 +296,9 @@ impl BatchWriter {
             depth: depth_i32,
             fork_point,
         });
-        let status_bytes = bincode::serialize(&status)?;
-
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
-        batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        batch.put_sync_runtime(&status.runtime())?;
         // The local node has already reported that this tip is no longer
         // canonical. Keep the API unavailable until an operator resolves the
         // deep fork instead of serving a stale summary under a canonical label.
@@ -408,14 +406,15 @@ impl BatchWriter {
         let mut status = self.store.get_sync_status()?;
         status.deep_fork_detected = false;
         status.deep_fork_info = None;
-        let status_bytes = bincode::serialize(&status)?;
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
         batch.put_sync_meta(
             sync_meta_keys::REORG_RECONCILE_PENDING,
             event_key.as_bytes(),
         );
-        batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        // Only the runtime part: the rollback restored the chain part with
+        // the blocks.
+        batch.put_sync_runtime(&status.runtime())?;
         batch.commit()?;
 
         // Update cache

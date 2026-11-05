@@ -3949,16 +3949,15 @@ impl Indexer {
                         status.total_cells_created,
                         status.total_cells_consumed,
                     )?;
-                    let status_bytes = bincode::serialize(&status).with_context(|| {
-                        format!(
-                            "failed to serialize sync_status of block {} for atomic batch commit",
-                            counts.number
-                        )
-                    })?;
-                    stats_batch.at(counts.number).put_sync_meta(
-                        ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
-                        &status_bytes,
-                    );
+                    stats_batch
+                        .at(counts.number)
+                        .put_sync_status(&status)
+                        .with_context(|| {
+                            format!(
+                                "failed to stage sync_status of block {} for atomic batch commit",
+                                counts.number
+                            )
+                        })?;
                 }
 
                 let summary = live_cell_summary_snapshots.last().ok_or_else(|| {
@@ -6771,10 +6770,9 @@ mod tests {
                     tip_block_hash: parent_hash.to_vec(),
                     ..Default::default()
                 };
-                batch.put_sync_meta(
-                    ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
-                    &bincode::serialize(&status).expect("serialize seeded sync status"),
-                );
+                batch
+                    .put_sync_status(&status)
+                    .expect("stage seeded sync status");
                 batch.commit().expect("seed parent block header");
             }
             // Block 99 opens its UTC+8 day (2023-11-15): that open day's row

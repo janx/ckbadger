@@ -8,7 +8,7 @@ use crate::keys::{self, sync_meta_keys};
 use crate::store::CkbadgerStore;
 use crate::types::{
     BulkBuildSessionMarker, DeepForkInfo, GenesisBaseline, LiveCellSummary, ReorgEvent,
-    ReorgEventRecord, RuntimeStatus, SyncStatus,
+    ReorgEventRecord, RuntimeStatus, SyncChainStatus, SyncRuntimeStatus, SyncStatus,
 };
 
 /// Everything one indexer progress-loop tick persists.
@@ -106,16 +106,42 @@ impl CkbadgerStore {
         )
     }
 
+    /// The sync status: the journaled chain part (`sync_status`) and the
+    /// unjournaled runtime part (`sync_runtime`), each the default when the
+    /// store has none yet.
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
-        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
-            Some(value) => Ok(bincode::deserialize(&value)?),
-            None => Ok(SyncStatus::default()),
+        let chain = match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
+            Some(value) => decode_exact::<SyncChainStatus>(&value, "sync_status")?,
+            None => SyncChainStatus::default(),
+        };
+        Ok(SyncStatus::from_parts(chain, self.get_sync_runtime()?))
+    }
+
+    pub fn get_sync_runtime(&self) -> anyhow::Result<SyncRuntimeStatus> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_RUNTIME)? {
+            Some(value) => decode_exact::<SyncRuntimeStatus>(&value, "sync_runtime"),
+            None => Ok(SyncRuntimeStatus::default()),
         }
     }
 
+    /// Write both parts directly (fixtures and bulk; a live batch writes the
+    /// chain part in its block's scope with `StoreBatch::put_sync_status`).
     pub fn set_sync_status(&self, status: &SyncStatus) -> anyhow::Result<()> {
-        let value = bincode::serialize(status)?;
-        self.put_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS, &value)
+        let mut batch = crate::StoreBatch::new(self);
+        batch.put_sync_status(status)?;
+        batch.commit()
+    }
+
+    /// Update the runtime part only, outside the journal.
+    pub fn update_sync_runtime<F>(&self, update_fn: F) -> anyhow::Result<()>
+    where
+        F: FnOnce(&mut SyncRuntimeStatus),
+    {
+        let mut runtime = self.get_sync_runtime()?;
+        update_fn(&mut runtime);
+        let mut batch = crate::StoreBatch::new(self);
+        batch.put_sync_runtime(&runtime)?;
+        batch.commit()
     }
 
     /// Read the one API-visible live-cell summary. This is a single RocksDB
@@ -417,17 +443,17 @@ impl CkbadgerStore {
 
     /// Set deep fork detected.
     pub fn set_deep_fork(&self, info: DeepForkInfo) -> anyhow::Result<()> {
-        self.update_sync_status(|status| {
-            status.deep_fork_detected = true;
-            status.deep_fork_info = Some(info);
+        self.update_sync_runtime(|runtime| {
+            runtime.deep_fork_detected = true;
+            runtime.deep_fork_info = Some(info);
         })
     }
 
     /// Clear deep fork.
     pub fn clear_deep_fork(&self) -> anyhow::Result<()> {
-        self.update_sync_status(|status| {
-            status.deep_fork_detected = false;
-            status.deep_fork_info = None;
+        self.update_sync_runtime(|runtime| {
+            runtime.deep_fork_detected = false;
+            runtime.deep_fork_info = None;
         })
     }
 
@@ -673,9 +699,53 @@ fn decode_live_cell_summary(value: &[u8]) -> anyhow::Result<LiveCellSummary> {
     Ok(summary)
 }
 
+/// Decode a bincode record that must use every byte (a record of another
+/// shape, e.g. a pre-split `SyncStatus`, is an error, not a prefix match).
+fn decode_exact<T: serde::de::DeserializeOwned>(value: &[u8], what: &str) -> anyhow::Result<T> {
+    use bincode::Options;
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize(value)
+        .map_err(|e| anyhow!("undecodable {what} record ({} bytes): {e}", value.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The chain part and the runtime part are two records; a record of the
+    /// pre-split shape (the whole `SyncStatus` under `sync_status`) is an
+    /// error, not decoded as a prefix.
+    #[test]
+    fn sync_status_is_two_records_and_refuses_the_pre_split_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let status = SyncStatus {
+            tip_block_number: 9,
+            tip_block_hash: vec![0x99; 32],
+            total_transactions: 3,
+            sync_started_block: 4,
+            deep_fork_detected: true,
+            ..Default::default()
+        };
+        store.set_sync_status(&status).unwrap();
+        let read = store.get_sync_status().unwrap();
+        assert_eq!(read.chain(), status.chain());
+        assert_eq!(read.sync_started_block, 4);
+        assert!(read.deep_fork_detected);
+        assert_eq!(store.get_sync_runtime().unwrap().sync_started_block, 4);
+
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::SYNC_STATUS,
+                &bincode::serialize(&status).unwrap(),
+            )
+            .unwrap();
+        let error = store.get_sync_status().unwrap_err().to_string();
+        assert!(error.contains("undecodable sync_status record"), "{error}");
+    }
     use crate::batch::StoreBatch;
     use crate::keys::sync_meta_keys;
 

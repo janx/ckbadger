@@ -23,7 +23,6 @@ use ckbadger_indexer::sync::live_test_support::{
 use ckbadger_indexer::sync::Indexer;
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState};
 use ckbadger_store::keys::{self, sync_meta_keys};
-use ckbadger_store::types::SyncStatus;
 use ckbadger_store::{CkbadgerStore, DOMAIN_CFS};
 
 // ---------------------------------------------------------------------------
@@ -38,6 +37,11 @@ const VOLATILE_SYNC_META: &[(&[u8], &str)] = &[
     (
         sync_meta_keys::RUNTIME_STATUS,
         "process runtime telemetry (phase, pid, timestamps), rewritten by the running indexer",
+    ),
+    (
+        sync_meta_keys::SYNC_RUNTIME,
+        "the sync status's runtime part (run start, last sync time, rate, deep-fork state), \
+         written outside the journal",
     ),
     (
         sync_meta_keys::MEMORY_STATS,
@@ -61,17 +65,6 @@ const VOLATILE_SYNC_META: &[(&[u8], &str)] = &[
 /// rollback itself, never chain state.
 const REORG_EVENT_PREFIX: &[u8] = b"reorg:";
 
-/// `SyncStatus` fields that are wall-clock telemetry, zeroed before
-/// comparison; every chain field (tip, totals, bulk completion, deep fork)
-/// is compared byte for byte.
-fn normalize_sync_status(value: &[u8]) -> Vec<u8> {
-    let mut status: SyncStatus = bincode::deserialize(value).expect("decode sync_status");
-    status.last_synced_at = 0;
-    status.sync_started_at = None;
-    status.sync_ema_rate = None;
-    bincode::serialize(&status).expect("encode sync_status")
-}
-
 /// A derivation's start / finish wall-clock times are telemetry; its state,
 /// version and run counter are compared.
 fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
@@ -85,9 +78,7 @@ fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
 /// applied alike to rows read from a store and to values the journal oracle
 /// writes back.
 fn normalize_sync_meta(key: &[u8], value: &[u8]) -> Vec<u8> {
-    if key == sync_meta_keys::SYNC_STATUS {
-        normalize_sync_status(value)
-    } else if key.starts_with(sync_meta_keys::DERIVE_META_PREFIX) {
+    if key.starts_with(sync_meta_keys::DERIVE_META_PREFIX) {
         normalize_derive_meta(value)
     } else {
         value.to_vec()
@@ -1851,47 +1842,6 @@ fn script_reference_rows(dump: &Dump) -> Dump {
         .collect()
 }
 
-/// `SyncStatus::sync_started_block` is the block the running process started
-/// syncing at (`init_sync_start`, telemetry of the run like
-/// `sync_started_at`): a restart sets it by definition. Zero it in the
-/// `sync_status` row and in every journal entry's previous value of it; every
-/// other byte of the two stores is compared.
-fn without_run_start_block(dump: Dump) -> Dump {
-    let zero = |value: &[u8]| {
-        let mut status: SyncStatus = bincode::deserialize(value).expect("decode sync_status");
-        status.sync_started_block = 0;
-        bincode::serialize(&status).expect("encode sync_status")
-    };
-    dump.into_iter()
-        .map(|((cf, key), value)| {
-            let value = if cf == ckbadger_store::CF_SYNC_META && key == sync_meta_keys::SYNC_STATUS
-            {
-                zero(&value)
-            } else if cf == ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK {
-                let entry =
-                    ckbadger_store::decode_journal_value(&value).expect("decode a journal row");
-                match entry.previous {
-                    Some(previous)
-                        if entry.cf == ckbadger_store::CF_SYNC_META
-                            && entry.key == sync_meta_keys::SYNC_STATUS =>
-                    {
-                        ckbadger_store::encode_journal_value(
-                            entry.cf,
-                            entry.key,
-                            Some(&zero(previous)),
-                        )
-                        .expect("encode a journal row")
-                    }
-                    _ => value,
-                }
-            } else {
-                value
-            };
-            ((cf, key), value)
-        })
-        .collect()
-}
-
 /// Sync `chain` along `plan` restarting the indexer (the startup label import
 /// and a new `Indexer` through the production startup steps,
 /// `live_test_support::restart`) after each block of `restart_after`; the
@@ -1927,8 +1877,8 @@ async fn restart_property(
         &format!("script-reference CFs after restarts at {restart_after:?}"),
     )?;
     compare_dumps(
-        &without_run_start_block(actual),
-        &without_run_start_block(expected),
+        &actual,
+        &expected,
         &format!("domain store after restarts at {restart_after:?}"),
     )
 }
@@ -2145,4 +2095,41 @@ async fn a_transaction_re_included_after_a_reorg_has_no_cycles_record_until_reco
         }
         other => panic!("recomputed record: {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// B-5c · the sync status's runtime part is not rolled back
+// ---------------------------------------------------------------------------
+
+/// The runtime part of the sync status (run start, last sync time, rate,
+/// deep-fork state) belongs to the running process and is written outside
+/// the journal: a rollback across a restart keeps what the restarted run
+/// wrote, where the journal used to restore the previous run's fields with
+/// the chain part. The chain part is the fork point's.
+#[tokio::test]
+async fn a_rollback_across_a_restart_keeps_the_running_processes_runtime_status() {
+    let chain = transfer_chain(12);
+    let plan = single_block_plan(chain.len());
+    let mut stores = open_stores();
+    sync_prefix(&stores, &chain, &plan, 0, 8).await;
+    stores.indexer = restart(stores.domain.clone(), stores._append.clone(), NETWORK)
+        .unwrap_or_else(|e| panic!("restart: {e:#}"));
+    let restarted = stores.domain.get_sync_runtime().unwrap();
+    assert_eq!(restarted.sync_started_block, 8, "the restarted run starts at 8");
+    sync_prefix(&stores, &chain, &plan, 9, 11).await;
+
+    reorg_to(&stores.indexer, 7).await.unwrap();
+
+    let runtime = stores.domain.get_sync_runtime().unwrap();
+    assert_eq!(
+        runtime.sync_started_block, 8,
+        "the rollback must not restore the previous run's start block"
+    );
+    assert_eq!(runtime.sync_started_at, restarted.sync_started_at);
+    let status = stores.domain.get_sync_status().unwrap();
+    assert_eq!(status.tip_block_number, 7);
+    assert_eq!(
+        status.tip_block_hash,
+        stores.domain.get_block_header(7).unwrap().unwrap().hash
+    );
 }

@@ -1116,6 +1116,31 @@ impl<'a> StoreBatch<'a> {
     /// block overlay, so no journal entry records it and no rollback restores
     /// an older floor over journal rows the prune already deleted (the
     /// overlay refuses the key, see `block_overlay::is_outside_journal`).
+    /// Write a sync status: the chain part (`sync_status`) through this
+    /// batch's routing — in the current block's scope on a journaled batch —
+    /// and the runtime part (`sync_runtime`) outside the journal.
+    pub fn put_sync_status(&mut self, status: &crate::types::SyncStatus) -> anyhow::Result<()> {
+        let chain = bincode::serialize(&status.chain())?;
+        self.put_sync_meta(keys::sync_meta_keys::SYNC_STATUS, &chain);
+        self.put_sync_runtime(&status.runtime())
+    }
+
+    /// Write the runtime part of the sync status straight into the commit,
+    /// outside the journal, on any batch: it is not chain state, so a
+    /// rollback must not restore an older one.
+    pub fn put_sync_runtime(
+        &mut self,
+        runtime: &crate::types::SyncRuntimeStatus,
+    ) -> anyhow::Result<()> {
+        let value = bincode::serialize(runtime)?;
+        self.batch.put_cf(
+            self.store.cf_sync_meta(),
+            keys::sync_meta_keys::SYNC_RUNTIME,
+            &value,
+        );
+        Ok(())
+    }
+
     pub fn put_entity_stats_undo_contract(
         &mut self,
         contract: &crate::types::EntityStatsUndoContract,

@@ -249,21 +249,10 @@ impl BatchWriter {
         // commit and its tip summary leaves no stale row.  Idempotent.
         self.refresh_latest_dao_statistics()?;
 
-        // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
-        let (tip_number, tip_hash) = if let Some((num, header)) = self.store.get_sync_tip_block()? {
-            (num, Some(header.hash))
-        } else {
-            (0, None)
-        };
-        self.store.update_sync_status(|status| {
-            status.tip_block_number = tip_number;
-            match &tip_hash {
-                Some(hash) => status.tip_block_hash = hash.clone(),
-                None if tip_number == 0 => status.tip_block_hash.clear(),
-                None => {}
-            }
-            status.init_sync_start(start_block, is_bulk_sync);
-        })?;
+        // The run's start: runtime fields only, outside the journal (the
+        // chain part is the blocks', restored with them by any rollback).
+        self.store
+            .update_sync_runtime(|runtime| runtime.init_sync_start(start_block, is_bulk_sync))?;
 
         if let Some(cache) = &self.cache_invalidator {
             let cache = cache.clone();
@@ -494,10 +483,7 @@ mod tests {
         status(&mut sync_status);
         ckbadger_store::commit_journaled_block(store, height, |batch| {
             batch.put_block_header(height, header);
-            batch.put_sync_meta(
-                sync_meta_keys::SYNC_STATUS,
-                &bincode::serialize(&sync_status).unwrap(),
-            );
+            batch.put_sync_status(&sync_status).unwrap();
         })
         .unwrap();
     }

@@ -2192,7 +2192,11 @@ pub fn encode_tx_slot_key(block_number: i64, tx_idx: i32) -> Vec<u8> {
 /// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
+    /// `SyncChainStatus`: tip and totals, journaled per block.
     pub const SYNC_STATUS: &[u8] = b"sync_status";
+    /// `SyncRuntimeStatus`: run telemetry, bulk completion and deep-fork
+    /// state, written outside the journal.
+    pub const SYNC_RUNTIME: &[u8] = b"sync_runtime";
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";

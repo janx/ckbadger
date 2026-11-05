@@ -52,13 +52,17 @@ use crate::store::{cf_spec, CkbadgerStore, RollbackClass, CF_SYNC_META};
 type CfKey = (&'static str, Vec<u8>);
 
 /// Whether `(cf, key)` is a `Journal`-class key written outside the block
-/// journal. Only the coverage contract is: it describes which journal rows
-/// exist (the prune that advances it deletes rows no rollback can restore), so
-/// a rollback must never write an older floor back. It is staged straight
-/// into the commit (`StoreBatch::put_entity_stats_undo_contract`); the overlay
-/// refuses it and the rollback refuses a journal row that names it.
+/// journal by every batch: the coverage contract (it describes which journal
+/// rows exist; the prune that advances it deletes rows no rollback can
+/// restore, so a rollback must never write an older floor back) and the sync
+/// status's runtime part (run telemetry and deep-fork state, not chain
+/// state). They are staged straight into the commit
+/// (`StoreBatch::put_entity_stats_undo_contract`, `put_sync_runtime`); the
+/// overlay refuses them and the rollback refuses a journal row naming them.
 pub fn is_outside_journal(cf: &str, key: &[u8]) -> bool {
-    cf == CF_SYNC_META && key == keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT
+    cf == CF_SYNC_META
+        && (key == keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT
+            || key == keys::sync_meta_keys::SYNC_RUNTIME)
 }
 
 /// A key's state inside the batch.
