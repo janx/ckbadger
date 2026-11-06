@@ -1233,41 +1233,135 @@ pub(crate) fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -
 
 // ── Parser → writer reorg-check request ─────────────────────────────────
 
-/// The empty request slot. Pipeline epochs count resets up from 0.
-pub(crate) const NO_REORG_CHECK_REQUEST: u64 = u64::MAX;
+/// What a parser batch stuck on an orphaned tip tells the writer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrphanedTipReport {
+    /// The pipeline epoch the batch belongs to.
+    pub(crate) batch_epoch: u64,
+    pub(crate) start_block: u64,
+    /// The parent hash of the batch's first block.
+    pub(crate) first_parent_hash: Vec<u8>,
+}
 
 /// What the writer finds in the reorg-check request slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReorgCheckRequest {
     Empty,
     /// Made for a batch of the current pipeline epoch: run the check.
-    Current,
+    Current(OrphanedTipReport),
     /// Made for a batch of an earlier epoch. The reset that ended that epoch
     /// discarded the batch, so the request means nothing any more.
-    Stale {
-        requested_epoch: u64,
-    },
+    Stale(OrphanedTipReport),
 }
 
-/// Parser side: ask the writer to run its reorg check because the batch of
-/// `batch_epoch` found an orphaned tip. Idempotent; the slot holds the epoch
-/// so a request can never act in an epoch other than its own.
-pub(crate) fn request_reorg_check(slot: &AtomicU64, batch_epoch: u64) -> anyhow::Result<()> {
-    if batch_epoch == NO_REORG_CHECK_REQUEST {
-        anyhow::bail!(
-            "pipeline epoch {batch_epoch} collides with the empty reorg-check request slot"
-        );
+/// The parser's request for a writer reorg check: at most one report, the
+/// latest. The report carries its batch's epoch, so a request can never act
+/// in an epoch other than its own.
+#[derive(Debug, Default)]
+pub(crate) struct ReorgCheckRequestSlot(std::sync::Mutex<Option<OrphanedTipReport>>);
+
+impl ReorgCheckRequestSlot {
+    /// Parser side. The parser repeats the request on every attempt; each
+    /// repeat replaces the pending report with an identical one.
+    pub(crate) fn request(&self, report: OrphanedTipReport) {
+        *self.lock() = Some(report);
     }
-    slot.store(batch_epoch, Ordering::SeqCst);
-    Ok(())
+
+    /// Writer side: take the pending request, emptying the slot.
+    pub(crate) fn take(&self, current_epoch: u64) -> ReorgCheckRequest {
+        match self.lock().take() {
+            None => ReorgCheckRequest::Empty,
+            Some(report) if report.batch_epoch == current_epoch => {
+                ReorgCheckRequest::Current(report)
+            }
+            Some(report) => ReorgCheckRequest::Stale(report),
+        }
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.lock() = None;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<OrphanedTipReport>> {
+        // Every critical section is a single `Option` store or take, which
+        // cannot panic, so a poisoned lock still guards a whole value.
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
-/// Writer side: take the pending request, emptying the slot.
-pub(crate) fn take_reorg_check_request(slot: &AtomicU64, current_epoch: u64) -> ReorgCheckRequest {
-    match slot.swap(NO_REORG_CHECK_REQUEST, Ordering::SeqCst) {
-        NO_REORG_CHECK_REQUEST => ReorgCheckRequest::Empty,
-        requested_epoch if requested_epoch == current_epoch => ReorgCheckRequest::Current,
-        requested_epoch => ReorgCheckRequest::Stale { requested_epoch },
+// ── Writer reorg checks that find no divergence ─────────────────────────
+
+/// How many reorg checks in a row may find the node's block at `db_tip`
+/// equal to the stored one while a batch at `db_tip + 1` names another
+/// parent. One is a race that the following pipeline reset settles: the node
+/// switched forks between the fetch and the check. Ten in a row on the same
+/// tip mean the node's block at `db_tip + 1` does not extend its own block at
+/// `db_tip`, or the batch's parent hash is read wrongly: a broken invariant
+/// that no number of resets can repair.
+pub(crate) const MAX_CONSECUTIVE_NO_DIVERGENCE: u32 = 10;
+
+/// The batch behind one no-divergence result.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NoDivergenceEvidence<'a> {
+    /// Which writer check saw the parent mismatch.
+    pub(crate) source: &'static str,
+    pub(crate) pipeline_epoch: u64,
+    pub(crate) start_block: u64,
+    pub(crate) first_parent_hash: &'a [u8],
+}
+
+/// Consecutive no-divergence results for one store tip. The stale-fork
+/// branch and the parser-requested check share one streak.
+#[derive(Debug, Default)]
+pub(crate) struct NoDivergenceStreak {
+    tip: Option<(i64, Vec<u8>)>,
+    count: u32,
+}
+
+impl NoDivergenceStreak {
+    /// Record one check that found the node's block at `db_tip` to be
+    /// `stored_hash`. Returns the streak length for this tip, or the error
+    /// that stops the pipeline once it reaches `MAX_CONSECUTIVE_NO_DIVERGENCE`.
+    pub(crate) fn record(
+        &mut self,
+        db_tip: i64,
+        stored_hash: &[u8],
+        evidence: &NoDivergenceEvidence<'_>,
+    ) -> anyhow::Result<u32> {
+        let same_tip = matches!(
+            &self.tip,
+            Some((tip, hash)) if *tip == db_tip && hash.as_slice() == stored_hash
+        );
+        if same_tip {
+            self.count += 1;
+        } else {
+            self.tip = Some((db_tip, stored_hash.to_vec()));
+            self.count = 1;
+        }
+        if self.count >= MAX_CONSECUTIVE_NO_DIVERGENCE {
+            anyhow::bail!(
+                "pipeline stopped: {count} consecutive reorg checks found no divergence for the \
+                 same store tip (db_tip={db_tip}, stored_hash=0x{stored_hash}), while the \
+                 {source} batch starting at block {start_block} names parent 0x{parent} \
+                 (pipeline_epoch={epoch}). A consistent node cannot keep serving a block at \
+                 db_tip + 1 that does not extend its own block at db_tip: inspect the node's \
+                 chain store and the block parser's parent-hash extraction before restarting",
+                count = self.count,
+                stored_hash = hex::encode(stored_hash),
+                source = evidence.source,
+                start_block = evidence.start_block,
+                parent = hex::encode(evidence.first_parent_hash),
+                epoch = evidence.pipeline_epoch,
+            );
+        }
+        Ok(self.count)
+    }
+
+    /// A divergence was handled or a batch was written: the streak is over.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -1725,44 +1819,128 @@ mod tests {
         }
     }
 
+    fn report(batch_epoch: u64) -> OrphanedTipReport {
+        OrphanedTipReport {
+            batch_epoch,
+            start_block: 102,
+            first_parent_hash: OTHER_HASH.to_vec(),
+        }
+    }
+
     #[test]
     fn test_take_reorg_check_request_when_none_was_made() {
-        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
-        assert_eq!(take_reorg_check_request(&slot, 0), ReorgCheckRequest::Empty);
+        let slot = ReorgCheckRequestSlot::default();
+        assert_eq!(slot.take(0), ReorgCheckRequest::Empty);
     }
 
     #[test]
     fn test_reorg_check_request_is_served_once_in_its_own_epoch() {
-        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
-        request_reorg_check(&slot, 3).unwrap();
+        let slot = ReorgCheckRequestSlot::default();
+        slot.request(report(3));
         // The parser repeats the request every attempt; it stays one request.
-        request_reorg_check(&slot, 3).unwrap();
-        assert_eq!(
-            take_reorg_check_request(&slot, 3),
-            ReorgCheckRequest::Current
-        );
-        assert_eq!(take_reorg_check_request(&slot, 3), ReorgCheckRequest::Empty);
+        slot.request(report(3));
+        assert_eq!(slot.take(3), ReorgCheckRequest::Current(report(3)));
+        assert_eq!(slot.take(3), ReorgCheckRequest::Empty);
     }
 
     /// A pipeline reset discards the batch that asked. Its request must not
     /// reach the next epoch, even when the parser stores it after the reset.
     #[test]
     fn test_reorg_check_request_from_an_earlier_epoch_is_stale() {
-        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
-        request_reorg_check(&slot, 3).unwrap();
-        assert_eq!(
-            take_reorg_check_request(&slot, 4),
-            ReorgCheckRequest::Stale { requested_epoch: 3 }
-        );
-        assert_eq!(take_reorg_check_request(&slot, 4), ReorgCheckRequest::Empty);
+        let slot = ReorgCheckRequestSlot::default();
+        slot.request(report(3));
+        assert_eq!(slot.take(4), ReorgCheckRequest::Stale(report(3)));
+        assert_eq!(slot.take(4), ReorgCheckRequest::Empty);
     }
 
+    /// `run_pipeline` clears the slot when it starts.
     #[test]
-    fn test_request_reorg_check_rejects_the_empty_slot_sentinel() {
-        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
-        let err = request_reorg_check(&slot, NO_REORG_CHECK_REQUEST).unwrap_err();
-        assert!(err.to_string().contains("pipeline epoch"), "{err}");
-        assert_eq!(take_reorg_check_request(&slot, 0), ReorgCheckRequest::Empty);
+    fn test_reorg_check_request_clear_drops_a_pending_request() {
+        let slot = ReorgCheckRequestSlot::default();
+        slot.request(report(0));
+        slot.clear();
+        assert_eq!(slot.take(0), ReorgCheckRequest::Empty);
+    }
+
+    fn evidence(source: &'static str) -> NoDivergenceEvidence<'static> {
+        NoDivergenceEvidence {
+            source,
+            pipeline_epoch: 9,
+            start_block: 102,
+            first_parent_hash: &OTHER_HASH,
+        }
+    }
+
+    /// Ten checks in a row on one tip stop the pipeline with everything an
+    /// operator needs to find the broken side.
+    #[test]
+    fn test_no_divergence_streak_stops_at_the_bound_with_full_context() {
+        let mut streak = NoDivergenceStreak::default();
+        for expected in 1..MAX_CONSECUTIVE_NO_DIVERGENCE {
+            assert_eq!(
+                streak
+                    .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+                    .unwrap(),
+                expected
+            );
+        }
+        let message = streak
+            .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+            .unwrap_err()
+            .to_string();
+        for expected in [
+            format!("{MAX_CONSECUTIVE_NO_DIVERGENCE} consecutive reorg checks found no divergence"),
+            format!("db_tip=101, stored_hash=0x{}", hex::encode(STORED_TIP_HASH)),
+            format!(
+                "the stale-fork batch starting at block 102 names parent 0x{}",
+                hex::encode(OTHER_HASH)
+            ),
+            "pipeline_epoch=9".to_string(),
+        ] {
+            assert!(
+                message.contains(&expected),
+                "missing `{expected}` in: {message}"
+            );
+        }
+    }
+
+    /// Progress (a written batch) or a handled divergence ends the streak,
+    /// and so does a different store tip.
+    #[test]
+    fn test_no_divergence_streak_restarts_on_reset_and_on_a_new_tip() {
+        let mut streak = NoDivergenceStreak::default();
+        let checks = MAX_CONSECUTIVE_NO_DIVERGENCE - 1;
+        for _ in 0..checks {
+            streak
+                .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+                .unwrap();
+        }
+        streak.reset();
+        for expected in 1..=checks {
+            assert_eq!(
+                streak
+                    .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+                    .unwrap(),
+                expected
+            );
+        }
+        // Another tip height, then the same height with another hash.
+        assert_eq!(
+            streak
+                .record(
+                    102,
+                    &STORED_TIP_HASH,
+                    &evidence("parser-reported orphaned tip")
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            streak
+                .record(102, &OTHER_HASH, &evidence("parser-reported orphaned tip"))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

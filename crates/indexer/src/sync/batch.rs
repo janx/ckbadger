@@ -6342,9 +6342,9 @@ mod tests {
                 .expect("live-write fixture startup decision"),
                 rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
-                reorg_check_request: Arc::new(AtomicU64::new(
-                    crate::sync::diagnostics::NO_REORG_CHECK_REQUEST,
-                )),
+                reorg_check_request: Arc::new(
+                    crate::sync::diagnostics::ReorgCheckRequestSlot::default(),
+                ),
                 pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),
                 startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
                 pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
@@ -10765,9 +10765,21 @@ mod tests {
             let (stale_batch_tx, mut parse_rx) = tokio::sync::mpsc::channel::<u64>(4);
             stale_batch_tx.send(NEXT_BLOCK).await.unwrap();
             let pending_txs = AtomicU64::new(7);
+            let report = crate::sync::diagnostics::OrphanedTipReport {
+                batch_epoch: 0,
+                start_block: NEXT_BLOCK,
+                first_parent_hash: hash_b().to_vec(),
+            };
+            let mut streak = crate::sync::diagnostics::NoDivergenceStreak::default();
 
             indexer
-                .run_parser_requested_reorg_check(&committed_tip, &mut parse_rx, &pending_txs)
+                .run_parser_requested_reorg_check(
+                    &report,
+                    &committed_tip,
+                    &mut parse_rx,
+                    &pending_txs,
+                    &mut streak,
+                )
                 .await
                 .expect("a check that finds no divergence succeeds");
 
@@ -10796,6 +10808,107 @@ mod tests {
                 i64::try_from(FORK_POINT).unwrap(),
                 "nothing was rolled back, so the parser cache keeps its committed tip"
             );
+        }
+
+        /// A node whose block 102 does not extend its own block 101: the
+        /// store holds A at 101 and so does the node, but 102 names B as its
+        /// parent. No reorg check can find a divergence, so before the fix
+        /// the writer reset the pipeline every couple of seconds, forever.
+        async fn inconsistent_node(
+            next: NextBlock,
+        ) -> (StoreWithTipA, AttachedNode, tempfile::TempDir) {
+            let mut seeded = store_with_tip_a().await;
+            let mut c_transactions = vec![node_cellbase(NEXT_BLOCK, CELLBASE_CAPACITY)];
+            match next {
+                NextBlock::SpendsReplacementOutput => {
+                    // An input no store and no batch holds, like B's output.
+                    c_transactions.push(node_tx(transfer_tx(
+                        0,
+                        0xee,
+                        FUNDING_CAPACITY - FEE,
+                        lock_script_b(),
+                    )));
+                }
+                NextBlock::CellbaseOnly => {}
+            }
+            let block_c = node_block(NEXT_BLOCK, hash_c(), hash_b(), c_transactions);
+            let node_dir = tempfile::tempdir().unwrap();
+            let node = NodeChain::create(node_dir.path());
+            node.put_canonical_hash(FLOOR_BLOCK, block_hash(FLOOR_BLOCK));
+            node.put_canonical_hash(FORK_POINT, block_hash(FORK_POINT));
+            node.put_canonical_hash(ORPHAN_TIP, seeded.hash_a);
+            node.put_block(&block_c);
+            node.set_tip(hash_c());
+            node.close();
+            let attached = attach_node(&mut seeded.indexer, node_dir.path()).await;
+            (seeded, attached, node_dir)
+        }
+
+        /// Run the pipeline until it stops on its own and return its error.
+        async fn run_pipeline_until_it_stops(indexer: &Indexer) -> anyhow::Error {
+            let deadline = Duration::from_secs(60);
+            let pipeline = indexer.run_pipeline();
+            match tokio::time::timeout(deadline, pipeline).await {
+                Ok(Ok(())) => panic!("the pipeline returned Ok without a shutdown request"),
+                Ok(Err(error)) => error,
+                Err(_) => panic!(
+                    "the pipeline was still running after {deadline:?}: {} pipeline resets and \
+                     counting, the store tip still {:?}",
+                    indexer.pipeline_reset_epoch.load(Ordering::SeqCst),
+                    store_tip(indexer.writer.store()).map(|(n, h)| (n, hex::encode(h)))
+                ),
+            }
+        }
+
+        fn assert_no_divergence_bail(error: &anyhow::Error, seeded: &StoreWithTipA, source: &str) {
+            let message = format!("{error:#}");
+            for expected in [
+                "10 consecutive reorg checks found no divergence".to_string(),
+                format!(
+                    "db_tip={ORPHAN_TIP}, stored_hash=0x{}",
+                    hex::encode(seeded.hash_a)
+                ),
+                format!(
+                    "the {source} batch starting at block {NEXT_BLOCK} names parent 0x{}",
+                    hex::encode(hash_b())
+                ),
+            ] {
+                assert!(
+                    message.contains(&expected),
+                    "missing `{expected}` in: {message}"
+                );
+            }
+            assert_eq!(
+                store_tip(&seeded.store),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), seeded.hash_a.to_vec())),
+                "nothing was rolled back"
+            );
+            assert!(seeded.store.get_latest_reorg_event().unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn inconsistent_node_stops_the_pipeline_through_the_parser_requested_check() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let _log = scoped_test_log();
+            let (seeded, _node, _node_dir) =
+                inconsistent_node(NextBlock::SpendsReplacementOutput).await;
+
+            let error = run_pipeline_until_it_stops(&seeded.indexer).await;
+
+            assert_no_divergence_bail(&error, &seeded, "parser-reported orphaned tip");
+        }
+
+        #[tokio::test]
+        async fn inconsistent_node_stops_the_pipeline_through_the_stale_fork_check() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let _log = scoped_test_log();
+            let (seeded, _node, _node_dir) = inconsistent_node(NextBlock::CellbaseOnly).await;
+
+            let error = run_pipeline_until_it_stops(&seeded.indexer).await;
+
+            assert_no_divergence_bail(&error, &seeded, "stale-fork");
         }
     }
 }
