@@ -20,6 +20,12 @@ pub(crate) const PIPELINE_RESET_REASON_BATCH_MISMATCH: u8 = 1;
 pub(crate) const PIPELINE_RESET_REASON_REORG_HANDLED: u8 = 2;
 pub(crate) const PIPELINE_RESET_REASON_DEEP_FORK_PAUSED: u8 = 3;
 pub(crate) const PIPELINE_RESET_REASON_BATCH_WRITE_FAILED: u8 = 4;
+pub(crate) const PIPELINE_RESET_REASON_STALE_FORK_REORG_HANDLED: u8 = 5;
+pub(crate) const PIPELINE_RESET_REASON_STALE_FORK_DEEP_FORK_PAUSED: u8 = 6;
+pub(crate) const PIPELINE_RESET_REASON_STALE_FORK_BATCH: u8 = 7;
+pub(crate) const PIPELINE_RESET_REASON_ORPHANED_TIP_REORG_HANDLED: u8 = 8;
+pub(crate) const PIPELINE_RESET_REASON_ORPHANED_TIP_DEEP_FORK_PAUSED: u8 = 9;
+pub(crate) const PIPELINE_RESET_REASON_ORPHANED_TIP_NO_DIVERGENCE: u8 = 10;
 
 // ---------------------------------------------------------------------------
 // Startup phase codec
@@ -42,6 +48,14 @@ pub(crate) fn encode_pipeline_reset_reason(reason: &'static str) -> u8 {
         "reorg handled" => PIPELINE_RESET_REASON_REORG_HANDLED,
         "deep fork paused" => PIPELINE_RESET_REASON_DEEP_FORK_PAUSED,
         "batch write failed" => PIPELINE_RESET_REASON_BATCH_WRITE_FAILED,
+        "stale fork reorg handled" => PIPELINE_RESET_REASON_STALE_FORK_REORG_HANDLED,
+        "stale fork deep fork paused" => PIPELINE_RESET_REASON_STALE_FORK_DEEP_FORK_PAUSED,
+        "stale fork batch (parent_hash mismatch)" => PIPELINE_RESET_REASON_STALE_FORK_BATCH,
+        "orphaned tip reorg handled" => PIPELINE_RESET_REASON_ORPHANED_TIP_REORG_HANDLED,
+        "orphaned tip deep fork paused" => PIPELINE_RESET_REASON_ORPHANED_TIP_DEEP_FORK_PAUSED,
+        "orphaned tip check found no divergence" => {
+            PIPELINE_RESET_REASON_ORPHANED_TIP_NO_DIVERGENCE
+        }
         _ => PIPELINE_RESET_REASON_UNKNOWN,
     }
 }
@@ -52,6 +66,14 @@ pub(crate) fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
         PIPELINE_RESET_REASON_REORG_HANDLED => "reorg handled",
         PIPELINE_RESET_REASON_DEEP_FORK_PAUSED => "deep fork paused",
         PIPELINE_RESET_REASON_BATCH_WRITE_FAILED => "batch write failed",
+        PIPELINE_RESET_REASON_STALE_FORK_REORG_HANDLED => "stale fork reorg handled",
+        PIPELINE_RESET_REASON_STALE_FORK_DEEP_FORK_PAUSED => "stale fork deep fork paused",
+        PIPELINE_RESET_REASON_STALE_FORK_BATCH => "stale fork batch (parent_hash mismatch)",
+        PIPELINE_RESET_REASON_ORPHANED_TIP_REORG_HANDLED => "orphaned tip reorg handled",
+        PIPELINE_RESET_REASON_ORPHANED_TIP_DEEP_FORK_PAUSED => "orphaned tip deep fork paused",
+        PIPELINE_RESET_REASON_ORPHANED_TIP_NO_DIVERGENCE => {
+            "orphaned tip check found no divergence"
+        }
         _ => "unknown",
     }
 }
@@ -413,6 +435,33 @@ mod tests {
         for reason in reasons {
             let code = encode_pipeline_reset_reason(reason);
             assert_ne!(code, PIPELINE_RESET_REASON_UNKNOWN);
+            assert_eq!(decode_pipeline_reset_reason(code), reason);
+        }
+    }
+
+    /// Every reason the writer resets the pipeline with reaches the fetcher's
+    /// log as itself, not as "unknown". Scans the call sites, so a new reason
+    /// without a code fails here.
+    #[test]
+    fn test_every_pipeline_reset_reason_in_the_pipeline_has_a_code() {
+        let source: &'static str = include_str!("pipeline.rs");
+        let call = "request_pipeline_reset(";
+        let reasons: Vec<&'static str> = source
+            .match_indices(call)
+            .map(|(at, _)| {
+                let args = &source[at + call.len()..];
+                let open = args.find('"').expect("reason literal") + 1;
+                let close = open + args[open..].find('"').expect("closing quote");
+                &args[open..close]
+            })
+            .collect();
+        assert_eq!(reasons.len(), 10, "call sites found: {reasons:?}");
+        for reason in reasons {
+            let code = encode_pipeline_reset_reason(reason);
+            assert_ne!(
+                code, PIPELINE_RESET_REASON_UNKNOWN,
+                "no code for {reason:?}"
+            );
             assert_eq!(decode_pipeline_reset_reason(code), reason);
         }
     }
