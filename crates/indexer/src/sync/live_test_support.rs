@@ -89,6 +89,7 @@ pub fn indexer_with_stores(
             .expect("live-test startup decision"),
         rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
         pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
+        reorg_check_request: Arc::new(AtomicU64::new(super::diagnostics::NO_REORG_CHECK_REQUEST)),
         pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),
         startup_phase: AtomicU8::new(super::helpers::STARTUP_PHASE_NONE),
         pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),

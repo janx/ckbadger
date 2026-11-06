@@ -15197,4 +15197,676 @@ mod tests {
             );
         }
     }
+
+    /// v0.8.2 testnet crash loop (2026-11-06): the store's tip block was
+    /// orphaned, and the node's next block spends an output that only the
+    /// replacement block creates. Reorg detection lived only in the writer and
+    /// ran only once a parsed batch arrived, but the parser could not resolve
+    /// those inputs, so it retried until its budget ran out and the pipeline
+    /// died — on every restart.
+    ///
+    /// These tests drive the real three-stage pipeline (`run_pipeline`)
+    /// against a node-format CKB RocksDB written in a tempdir and read through
+    /// the same `CkbChainReader` production uses.
+    mod orphan_tip_reorg {
+        use super::live_dao_fee::{
+            block, block_hash, cellbase_tx, indexer_for_live_write_test, lock_script_b,
+            lock_script_c, seed_pre_parent_header, seed_secp_script_info, transfer_tx,
+            write_live_block, AR_DEPOSIT, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::rpc::TransactionView;
+        use crate::sync::adaptive::PARSER_UNRESOLVED_RETRY_DELAY_MS;
+        use crate::sync::diagnostics::PARSER_UNRESOLVED_MAX_RETRIES;
+        use ckb_store_reader::CkbChainReader;
+        use ckb_types::packed;
+        use ckb_types::prelude::*;
+        use std::sync::atomic::{AtomicI64, AtomicU64};
+        use std::time::{Duration, Instant};
+
+        /// CKB's column families, numbered as in ckb-db-schema.
+        const CKB_COLUMN_COUNT: usize = 19;
+        const CKB_COLUMN_INDEX: &str = "0";
+        const CKB_COLUMN_BLOCK_HEADER: &str = "1";
+        const CKB_COLUMN_BLOCK_BODY: &str = "2";
+        const CKB_COLUMN_BLOCK_UNCLE: &str = "3";
+        const CKB_COLUMN_META: &str = "4";
+        const CKB_COLUMN_BLOCK_PROPOSAL_IDS: &str = "7";
+        const CKB_META_TIP_HEADER_KEY: &[u8] = b"TIP_HEADER";
+
+        /// Fork point, orphaned tip and the node's next block.
+        const FORK_POINT: u64 = 100;
+        const ORPHAN_TIP: u64 = 101;
+        const NEXT_BLOCK: u64 = 102;
+        /// `check_and_handle_reorg` first compares the store and the node
+        /// `DEEP_FORK_DEPTH` blocks below the tip.
+        const FLOOR_BLOCK: u64 = ORPHAN_TIP - crate::config::DEEP_FORK_DEPTH;
+        /// Every output must cover its own occupied capacity (61 CKB for a
+        /// secp cell), as on chain: the real parser's script deltas would
+        /// otherwise drive `owned_knowledge_sum` above `owned_capacity_sum`.
+        const CELLBASE_CAPACITY: u64 = 1000_00000000;
+        const FEE: u64 = 1_00000000;
+
+        fn hash_b() -> [u8; 32] {
+            let mut hash = [0xbbu8; 32];
+            hash[0..8].copy_from_slice(&ORPHAN_TIP.to_le_bytes());
+            hash
+        }
+
+        fn hash_c() -> [u8; 32] {
+            let mut hash = [0xccu8; 32];
+            hash[0..8].copy_from_slice(&NEXT_BLOCK.to_le_bytes());
+            hash
+        }
+
+        fn hex32(value: &str) -> [u8; 32] {
+            hex::decode(value.trim_start_matches("0x"))
+                .expect("fixture hash is hex")
+                .try_into()
+                .expect("fixture hash is 32 bytes")
+        }
+
+        /// The fixture transaction in the node's own molecule encoding.
+        fn packed_tx(tx: &TransactionView) -> packed::Transaction {
+            let json = serde_json::to_value(tx).expect("serialize fixture tx");
+            let view: ckb_jsonrpc_types::TransactionView =
+                serde_json::from_value(json).expect("fixture tx is a valid JSON-RPC tx");
+            view.inner.into()
+        }
+
+        /// The hash the node, and therefore the fetcher, gives this
+        /// transaction: computed from its content, not the fixture's label.
+        fn node_tx_hash(tx: &TransactionView) -> [u8; 32] {
+            packed_tx(tx).calc_tx_hash().unpack()
+        }
+
+        /// A node-side transaction: its `hash` field carries the real hash so
+        /// the fixture reads the same as what the pipeline will see.
+        fn node_tx(mut tx: TransactionView) -> TransactionView {
+            tx.hash = format!("0x{}", hex::encode(node_tx_hash(&tx)));
+            tx
+        }
+
+        /// Cellbases differ only by `since` (the block number) on chain;
+        /// without it two cellbases of equal capacity share one tx hash.
+        fn node_cellbase(number: u64, capacity: u64) -> TransactionView {
+            let mut tx = cellbase_tx(0, capacity);
+            tx.inputs[0].since = format!("0x{number:x}");
+            node_tx(tx)
+        }
+
+        fn node_block(
+            number: u64,
+            hash: [u8; 32],
+            parent_hash: [u8; 32],
+            transactions: Vec<TransactionView>,
+        ) -> BlockResponseWithCycles {
+            let mut node_block = block(number, AR_DEPOSIT, transactions);
+            node_block.block.header.hash = format!("0x{}", hex::encode(hash));
+            node_block.block.header.parent_hash = format!("0x{}", hex::encode(parent_hash));
+            node_block
+        }
+
+        /// A CKB node's chain store, written in the node's own layout.
+        struct NodeChain {
+            db: rocksdb::DB,
+        }
+
+        impl NodeChain {
+            fn create(path: &std::path::Path) -> Self {
+                let mut opts = rocksdb::Options::default();
+                opts.create_if_missing(true);
+                opts.create_missing_column_families(true);
+                let cfs = (0..CKB_COLUMN_COUNT).map(|cf| {
+                    rocksdb::ColumnFamilyDescriptor::new(
+                        cf.to_string(),
+                        rocksdb::Options::default(),
+                    )
+                });
+                let db = rocksdb::DB::open_cf_descriptors(&opts, path, cfs)
+                    .expect("create node chain store");
+                Self { db }
+            }
+
+            fn put(&self, column: &str, key: &[u8], value: &[u8]) {
+                let cf = self.db.cf_handle(column).expect("node column exists");
+                self.db
+                    .put_cf(&cf, key, value)
+                    .expect("write node chain store");
+            }
+
+            /// `number -> hash` and `hash -> number`: the main-chain index.
+            fn put_canonical_hash(&self, number: u64, hash: [u8; 32]) {
+                self.put(CKB_COLUMN_INDEX, &number.to_le_bytes(), &hash);
+                self.put(CKB_COLUMN_INDEX, &hash, &number.to_le_bytes());
+            }
+
+            fn put_block(&self, fixture: &BlockResponseWithCycles) {
+                let header = &fixture.block.header;
+                let hash = hex32(&header.hash);
+                let number = u64::from_str_radix(header.number.trim_start_matches("0x"), 16)
+                    .expect("fixture block number is hex");
+                let raw_header: ckb_jsonrpc_types::Header =
+                    serde_json::from_value(serde_json::json!({
+                        "version": header.version,
+                        "compact_target": header.compact_target,
+                        "timestamp": header.timestamp,
+                        "number": header.number,
+                        "epoch": header.epoch,
+                        "parent_hash": header.parent_hash,
+                        "transactions_root": header.transactions_root,
+                        "proposals_hash": header.proposals_hash,
+                        "extra_hash": header.extra_hash,
+                        "dao": header.dao,
+                        "nonce": header.nonce,
+                    }))
+                    .expect("fixture header is a valid JSON-RPC header");
+                let header_view = packed::HeaderView::new_builder()
+                    .hash(hash.pack())
+                    .data(packed::Header::from(raw_header))
+                    .build();
+                self.put(CKB_COLUMN_BLOCK_HEADER, &hash, header_view.as_slice());
+                self.put(
+                    CKB_COLUMN_BLOCK_UNCLE,
+                    &hash,
+                    packed::UncleBlockVecView::default().as_slice(),
+                );
+                self.put(
+                    CKB_COLUMN_BLOCK_PROPOSAL_IDS,
+                    &hash,
+                    packed::ProposalShortIdVec::default().as_slice(),
+                );
+                for (index, tx) in fixture.block.transactions.iter().enumerate() {
+                    let view = packed_tx(tx).into_view();
+                    let stored = packed::TransactionView::new_builder()
+                        .hash(view.hash())
+                        .witness_hash(view.witness_hash())
+                        .data(view.data())
+                        .build();
+                    let mut key = hash.to_vec();
+                    key.extend_from_slice(
+                        &u32::try_from(index)
+                            .expect("fixture tx index fits u32")
+                            .to_be_bytes(),
+                    );
+                    self.put(CKB_COLUMN_BLOCK_BODY, &key, stored.as_slice());
+                }
+                self.put_canonical_hash(number, hash);
+            }
+
+            fn set_tip(&self, hash: [u8; 32]) {
+                self.put(CKB_COLUMN_META, CKB_META_TIP_HEADER_KEY, &hash);
+            }
+
+            /// Persist everything and close, so the indexer's secondary reader
+            /// sees it on open.
+            fn close(self) {
+                for cf in 0..CKB_COLUMN_COUNT {
+                    let handle = self
+                        .db
+                        .cf_handle(&cf.to_string())
+                        .expect("node column exists");
+                    self.db.flush_cf(&handle).expect("flush node chain store");
+                }
+            }
+        }
+
+        /// `check_and_handle_reorg` reads the store-side header at its
+        /// bounded-search floor; the fixture's seeded canonical prefix holds
+        /// it, with the hash the node holds there.
+        fn assert_floor_header_seeded(store: &CkbadgerStore) {
+            assert_eq!(
+                store
+                    .get_block_header(i64::try_from(FLOOR_BLOCK).unwrap())
+                    .unwrap()
+                    .map(|header| header.hash),
+                Some(block_hash(FLOOR_BLOCK).to_vec()),
+                "fixture: the store holds the floor block the node holds"
+            );
+        }
+
+        #[derive(Debug, PartialEq, Eq)]
+        enum CellState {
+            Live,
+            Consumed { at_block: i64, by_tx: [u8; 32] },
+            Absent,
+        }
+
+        /// Exactly one of: a live marker, a consumed record, or nothing.
+        fn cell_state(store: &CkbadgerStore, tx_hash: [u8; 32], index: i16) -> CellState {
+            let key = ckbadger_store::keys::encode_outpoint(&tx_hash, index);
+            let live = store
+                .get_live_cell_by_outpoint_key(&key, store)
+                .expect("read live marker");
+            let consumed = store
+                .get_consumed_cell_info(&tx_hash, index, store)
+                .expect("read consumed record");
+            match (live, consumed) {
+                (Some(_), None) => CellState::Live,
+                // The consumed record points at the consuming transaction's
+                // canonical position; its identity is the tx_index row there.
+                (None, Some(consumed)) => CellState::Consumed {
+                    at_block: consumed.consumed_at_block,
+                    by_tx: store
+                        .get_tx_index(consumed.consumed_at_block, consumed.consumed_tx_idx)
+                        .expect("read the consuming tx's index row")
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "outpoint 0x{}:{index} is consumed at ({}, {}), where no \
+                                 transaction is indexed",
+                                hex::encode(tx_hash),
+                                consumed.consumed_at_block,
+                                consumed.consumed_tx_idx
+                            )
+                        })
+                        .tx_hash,
+                },
+                (None, None) => CellState::Absent,
+                (Some(_), Some(_)) => panic!(
+                    "outpoint 0x{}:{index} is both live and consumed",
+                    hex::encode(tx_hash)
+                ),
+            }
+        }
+
+        /// What block C (the node's child of B) carries besides its cellbase.
+        enum NextBlock {
+            /// A transaction spending B's transfer output — a cell the store
+            /// can only learn about by indexing B (the production incident).
+            SpendsReplacementOutput,
+            /// Nothing that needs B: the batch resolves, reaches the writer,
+            /// and the writer's own stale-fork check handles the reorg.
+            CellbaseOnly,
+        }
+
+        /// A store holding P (100) and A (101), where A spends P's cellbase.
+        struct StoreWithTipA {
+            store: Arc<CkbadgerStore>,
+            indexer: Indexer,
+            hash_a: [u8; 32],
+            orphan_spend: [u8; 32],
+            dir: tempfile::TempDir,
+        }
+
+        async fn store_with_tip_a() -> StoreWithTipA {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            assert_floor_header_seeded(store.as_ref());
+
+            // A is canonical when it is written.
+            write_live_block(
+                &indexer,
+                block(
+                    FORK_POINT,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc0, FUNDING_CAPACITY)],
+                ),
+            )
+            .await
+            .unwrap();
+            let orphan_spend = [0xa2u8; 32];
+            write_live_block(
+                &indexer,
+                block(
+                    ORPHAN_TIP,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xa1, CELLBASE_CAPACITY),
+                        transfer_tx(0xa2, 0xc0, FUNDING_CAPACITY - FEE, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+            let hash_a = block_hash(ORPHAN_TIP);
+            assert_eq!(
+                store_tip(&store),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), hash_a.to_vec())),
+                "fixture: the store's tip is A"
+            );
+            StoreWithTipA {
+                store,
+                indexer,
+                hash_a,
+                orphan_spend,
+                dir,
+            }
+        }
+
+        fn store_tip(store: &CkbadgerStore) -> Option<(i64, Vec<u8>)> {
+            store
+                .get_sync_tip_block()
+                .unwrap()
+                .map(|(number, header)| (number, header.hash))
+        }
+
+        /// Point the indexer at the node chain store, as `Indexer::new` does,
+        /// with a short poll so the writer's idle branch runs every 100 ms.
+        fn attach_node(indexer: &mut Indexer, node_dir: &std::path::Path) -> tempfile::TempDir {
+            indexer.ckb_store = Some(Arc::new(
+                CkbChainReader::open(node_dir.to_str().unwrap())
+                    .expect("open the node chain store as the indexer does"),
+            ));
+            indexer.config.poll_interval_ms = 50;
+            let incident_dir = tempfile::tempdir().unwrap();
+            indexer.incident_dir = incident_dir.path().to_path_buf();
+            incident_dir
+        }
+
+        struct OrphanTipScenario {
+            store: Arc<CkbadgerStore>,
+            indexer: Indexer,
+            hash_a: [u8; 32],
+            orphan_spend: [u8; 32],
+            b_spend_hash: [u8; 32],
+            c_spend_hash: Option<[u8; 32]>,
+            _dirs: Vec<tempfile::TempDir>,
+        }
+
+        /// Store: P and A. Node: P, then B (101, also spending P's cellbase)
+        /// and C (102, child of B).
+        async fn orphan_tip_scenario(next: NextBlock) -> OrphanTipScenario {
+            let StoreWithTipA {
+                store,
+                mut indexer,
+                hash_a,
+                orphan_spend,
+                dir,
+            } = store_with_tip_a().await;
+
+            // The node replaced A with B and built C on B.
+            let b_spend = node_tx(transfer_tx(
+                0,
+                0xc0,
+                FUNDING_CAPACITY - FEE,
+                lock_script_c(),
+            ));
+            let b_spend_hash = hex32(&b_spend.hash);
+            let mut c_transactions = vec![node_cellbase(NEXT_BLOCK, CELLBASE_CAPACITY)];
+            let c_spend_hash = match next {
+                NextBlock::SpendsReplacementOutput => {
+                    let mut c_spend =
+                        transfer_tx(0, 0, FUNDING_CAPACITY - 2 * FEE, lock_script_b());
+                    c_spend.inputs[0].previous_output.tx_hash = b_spend.hash.clone();
+                    let c_spend = node_tx(c_spend);
+                    let hash = hex32(&c_spend.hash);
+                    c_transactions.push(c_spend);
+                    Some(hash)
+                }
+                NextBlock::CellbaseOnly => None,
+            };
+            let block_b = node_block(
+                ORPHAN_TIP,
+                hash_b(),
+                block_hash(FORK_POINT),
+                vec![node_cellbase(ORPHAN_TIP, CELLBASE_CAPACITY), b_spend],
+            );
+            let block_c = node_block(NEXT_BLOCK, hash_c(), hash_b(), c_transactions);
+            let node_dir = tempfile::tempdir().unwrap();
+            let node = NodeChain::create(node_dir.path());
+            node.put_canonical_hash(FLOOR_BLOCK, block_hash(FLOOR_BLOCK));
+            node.put_canonical_hash(FORK_POINT, block_hash(FORK_POINT));
+            node.put_block(&block_b);
+            node.put_block(&block_c);
+            node.set_tip(hash_c());
+            node.close();
+            let incident_dir = attach_node(&mut indexer, node_dir.path());
+
+            OrphanTipScenario {
+                store,
+                indexer,
+                hash_a,
+                orphan_spend,
+                b_spend_hash,
+                c_spend_hash,
+                _dirs: vec![dir, node_dir, incident_dir],
+            }
+        }
+
+        /// The parser's whole unresolved-input budget, in wall-clock time.
+        fn parser_budget() -> Duration {
+            Duration::from_millis(
+                u64::try_from(PARSER_UNRESOLVED_MAX_RETRIES).unwrap()
+                    * PARSER_UNRESOLVED_RETRY_DELAY_MS,
+            )
+        }
+
+        /// Run the real pipeline until the store's tip is the node's C, then
+        /// shut it down. The deadline outlasts the parser's budget, so a
+        /// parser that gives up surfaces as the pipeline's own error.
+        async fn run_pipeline_until_store_follows_node(scenario: &OrphanTipScenario) -> Duration {
+            let store = &scenario.store;
+            let indexer = &scenario.indexer;
+            let deadline = parser_budget() + Duration::from_secs(60);
+            let started = Instant::now();
+            let pipeline = indexer.run_pipeline();
+            tokio::pin!(pipeline);
+            let outcome: std::result::Result<(), String> = loop {
+                tokio::select! {
+                    result = &mut pipeline => {
+                        break Err(format!(
+                            "the pipeline exited after {:?} while the store still held block {:?} \
+                             instead of reorganizing onto the node's chain: {:?}",
+                            started.elapsed(),
+                            store_tip(store).map(|(n, h)| (n, hex::encode(h))),
+                            result
+                        ));
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                        let tip = store_tip(store);
+                        if tip == Some((i64::try_from(NEXT_BLOCK).unwrap(), hash_c().to_vec())) {
+                            break Ok(());
+                        }
+                        if started.elapsed() > deadline {
+                            break Err(format!(
+                                "no reorg after {:?}: store tip {:?}",
+                                started.elapsed(),
+                                tip.map(|(n, h)| (n, hex::encode(h)))
+                            ));
+                        }
+                    }
+                }
+            };
+            let elapsed = started.elapsed();
+            if let Err(failure) = outcome {
+                panic!("{failure}");
+            }
+            indexer.shutdown.request();
+            pipeline
+                .await
+                .expect("the pipeline stops cleanly on shutdown");
+            elapsed
+        }
+
+        /// The store now holds the node's chain: A rolled back to the fork
+        /// point, B and C written, and the fetcher was reset to refetch.
+        fn assert_store_follows_node(scenario: &OrphanTipScenario) {
+            let store = &scenario.store;
+            assert!(
+                scenario.indexer.pipeline_reset_epoch.load(Ordering::SeqCst) >= 1,
+                "the fetcher was reset to refetch from the fork point"
+            );
+            let event = store
+                .get_latest_reorg_event()
+                .unwrap()
+                .expect("the writer recorded the reorg")
+                .event;
+            assert_eq!(
+                (
+                    event.fork_point,
+                    event.old_tip,
+                    event.old_tip_hash.as_slice()
+                ),
+                (
+                    i64::try_from(FORK_POINT).unwrap(),
+                    i64::try_from(ORPHAN_TIP).unwrap(),
+                    scenario.hash_a.as_slice()
+                ),
+                "rolled back from orphan A to the fork point"
+            );
+            assert_eq!(
+                store
+                    .get_block_header(i64::try_from(ORPHAN_TIP).unwrap())
+                    .unwrap()
+                    .map(|h| h.hash),
+                Some(hash_b().to_vec()),
+                "block 101 is now the node's B"
+            );
+            assert_eq!(store.get_tx_location(&scenario.orphan_spend).unwrap(), None);
+            assert_eq!(
+                store.get_tx_location(&scenario.b_spend_hash).unwrap(),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), 1))
+            );
+            let block = |n: u64| i64::try_from(n).unwrap();
+            assert_eq!(
+                cell_state(store, [0xc0u8; 32], 0),
+                CellState::Consumed {
+                    at_block: block(ORPHAN_TIP),
+                    by_tx: scenario.b_spend_hash
+                },
+                "P's cellbase output is spent by B's transfer, not A's"
+            );
+            assert_eq!(
+                cell_state(store, scenario.orphan_spend, 0),
+                CellState::Absent,
+                "A's output is gone with A"
+            );
+            match scenario.c_spend_hash {
+                Some(c_spend_hash) => {
+                    assert_eq!(
+                        store.get_tx_location(&c_spend_hash).unwrap(),
+                        Some((block(NEXT_BLOCK), 1))
+                    );
+                    assert_eq!(
+                        cell_state(store, scenario.b_spend_hash, 0),
+                        CellState::Consumed {
+                            at_block: block(NEXT_BLOCK),
+                            by_tx: c_spend_hash
+                        },
+                        "B's output is spent by C"
+                    );
+                    assert_eq!(cell_state(store, c_spend_hash, 0), CellState::Live);
+                }
+                None => assert_eq!(cell_state(store, scenario.b_spend_hash, 0), CellState::Live),
+            }
+        }
+
+        fn scoped_test_log() -> tracing::subscriber::DefaultGuard {
+            tracing::subscriber::set_default(
+                tracing_subscriber::fmt()
+                    .with_test_writer()
+                    .with_ansi(false)
+                    .with_max_level(tracing::Level::INFO)
+                    .finish(),
+            )
+        }
+
+        /// The production failure, end to end. The fetcher starts at 102;
+        /// C's input exists only in B, which the store never saw.
+        ///
+        /// Before the fix the parser waited for "writer progress" that could
+        /// never come, gave up after its 240-retry budget, and the pipeline
+        /// terminated with `parser_reason=unresolved input cells after max
+        /// retries`, while the writer, which never received a batch, never
+        /// compared the store's tip with the node.
+        #[tokio::test]
+        async fn parser_hands_an_orphaned_tip_to_the_writer_instead_of_exhausting_its_budget() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let _log = scoped_test_log();
+            let scenario = orphan_tip_scenario(NextBlock::SpendsReplacementOutput).await;
+
+            let elapsed = run_pipeline_until_store_follows_node(&scenario).await;
+
+            assert!(
+                elapsed < parser_budget(),
+                "the reorg must land before the parser could have spent its budget: {elapsed:?}"
+            );
+            assert_store_follows_node(&scenario);
+        }
+
+        /// The same orphaned tip when the node's next block needs nothing from
+        /// B: the parser resolves the batch, and the writer's stale-fork check
+        /// (first block's parent is not the stored tip) runs the reorg. This
+        /// path predates the fix and shares its post-reorg sequence.
+        #[tokio::test]
+        async fn writer_stale_fork_check_reorganizes_when_the_next_batch_resolves() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let _log = scoped_test_log();
+            let scenario = orphan_tip_scenario(NextBlock::CellbaseOnly).await;
+
+            run_pipeline_until_store_follows_node(&scenario).await;
+
+            assert_store_follows_node(&scenario);
+        }
+
+        /// The node still holds A at 101: it switched back after the parser's
+        /// batch was fetched, so it is the batch, not the store, that is
+        /// stale. The writer's check finds no divergence, leaves the store
+        /// alone, and resets the pipeline so the fetcher reads the node again.
+        #[tokio::test]
+        async fn requested_reorg_check_without_divergence_only_resets_the_pipeline() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let _log = scoped_test_log();
+            let StoreWithTipA {
+                store,
+                mut indexer,
+                hash_a,
+                orphan_spend,
+                dir: _dir,
+            } = store_with_tip_a().await;
+            let node_dir = tempfile::tempdir().unwrap();
+            let node = NodeChain::create(node_dir.path());
+            node.put_canonical_hash(FLOOR_BLOCK, block_hash(FLOOR_BLOCK));
+            node.put_canonical_hash(FORK_POINT, block_hash(FORK_POINT));
+            node.put_canonical_hash(ORPHAN_TIP, hash_a);
+            node.set_tip(hash_a);
+            node.close();
+            let _incident_dir = attach_node(&mut indexer, node_dir.path());
+
+            let committed_tip = AtomicI64::new(i64::try_from(FORK_POINT).unwrap());
+            let (stale_batch_tx, mut parse_rx) = tokio::sync::mpsc::channel::<u64>(4);
+            stale_batch_tx.send(NEXT_BLOCK).await.unwrap();
+            let pending_txs = AtomicU64::new(7);
+
+            indexer
+                .run_parser_requested_reorg_check(&committed_tip, &mut parse_rx, &pending_txs)
+                .await
+                .expect("a check that finds no divergence succeeds");
+
+            assert_eq!(
+                indexer.pipeline_reset_epoch.load(Ordering::SeqCst),
+                1,
+                "the pipeline was reset so the stale batch is dropped and refetched"
+            );
+            assert!(
+                parse_rx.try_recv().is_err(),
+                "queued parsed batches drained"
+            );
+            assert_eq!(pending_txs.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                store_tip(&store),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), hash_a.to_vec())),
+                "the store keeps A"
+            );
+            assert!(store.get_latest_reorg_event().unwrap().is_none());
+            assert_eq!(
+                store.get_tx_location(&orphan_spend).unwrap(),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), 1))
+            );
+            assert_eq!(
+                committed_tip.load(Ordering::SeqCst),
+                i64::try_from(FORK_POINT).unwrap(),
+                "nothing was rolled back, so the parser cache keeps its committed tip"
+            );
+        }
+    }
 }

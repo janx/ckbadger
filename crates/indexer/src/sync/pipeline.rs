@@ -1674,6 +1674,10 @@ impl Indexer {
         ));
         self.pipeline_perf
             .set_queue_capacities(PIPELINE_CHANNEL_CAPACITY, PIPELINE_CHANNEL_CAPACITY);
+        // A reorg-check request is made by one batch of one run; none may
+        // carry over into this run.
+        self.reorg_check_request
+            .store(NO_REORG_CHECK_REQUEST, Ordering::SeqCst);
 
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
@@ -1867,6 +1871,9 @@ impl Indexer {
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
         let parser_unrecoverable_for_parser = self.unrecoverable_exit_flag();
+        let repo_for_parser = self.repo.clone();
+        let reorg_check_request_for_parser = Arc::clone(&self.reorg_check_request);
+        let run_id_for_parser = self.run_id.clone();
         let cell_lookup_stats_for_parser = Arc::clone(&self.parser_cell_lookup_stats);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -1963,6 +1970,7 @@ impl Indexer {
                 // keep advancing even when the budget does not).
                 let mut unresolved_retry_count: usize = 0;
                 let mut unresolved_attempts: usize = 0;
+                let mut orphaned_tip_reported = false;
                 let resolved_input_cells: Option<(
                     HashMap<(Vec<u8>, i16), PositionedCellInfo>,
                     usize,
@@ -2153,8 +2161,92 @@ impl Indexer {
                         break Some((attempt_input_cell_info, attempt_cache_hits, db_lookups));
                     }
 
+                    // Judge the batch against the store's tip through the
+                    // writer's own read path. When the batch is the writer's
+                    // next one but not the stored tip's child, the tip has
+                    // been orphaned and no writer progress can supply these
+                    // inputs: hand the reorg check to the writer, which owns
+                    // reorg handling, and wait for its pipeline reset to make
+                    // this batch stale.
+                    let (db_tip, db_tip_hash) = match repo_for_parser.get_sync_tip().await {
+                        Ok(tip) => tip,
+                        Err(e) => {
+                            error!(
+                                start_block,
+                                end_block,
+                                error = %e,
+                                "Parser: cannot read the store tip while resolving inputs; stopping parser task"
+                            );
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "failed to read the store tip while resolving inputs for range {start_block}-{end_block}: {e}"
+                                ),
+                            );
+                            return;
+                        }
+                    };
+                    let first_parent_hash = &all_parsed_blocks[0].parent_hash;
+                    let cause = match classify_unresolved_inputs(
+                        db_tip,
+                        &db_tip_hash,
+                        start_block,
+                        first_parent_hash,
+                    ) {
+                        Ok(cause) => cause,
+                        Err(e) => {
+                            error!(
+                                start_block,
+                                end_block,
+                                db_tip,
+                                error = %e,
+                                "Parser: cannot classify unresolved inputs; stopping parser task"
+                            );
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "failed to classify unresolved inputs for range {start_block}-{end_block} against db_tip={db_tip}: {e}"
+                                ),
+                            );
+                            return;
+                        }
+                    };
+                    if cause == UnresolvedInputCause::OrphanedTip {
+                        if let Err(e) =
+                            request_reorg_check(&reorg_check_request_for_parser, batch_epoch)
+                        {
+                            error!(
+                                start_block,
+                                end_block,
+                                batch_epoch,
+                                error = %e,
+                                "Parser: cannot request a writer reorg check; stopping parser task"
+                            );
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "failed to request a writer reorg check for range {start_block}-{end_block}: {e}"
+                                ),
+                            );
+                            return;
+                        }
+                        if !orphaned_tip_reported {
+                            orphaned_tip_reported = true;
+                            warn!(
+                                run_id = %run_id_for_parser,
+                                pipeline_epoch = batch_epoch,
+                                start_block,
+                                end_block,
+                                db_tip,
+                                stored_tip_hash = ?db_tip_hash.as_deref().map(hex::encode),
+                                first_parent_hash = %hex::encode(first_parent_hash),
+                                unresolved_count = unresolved_outpoints.len(),
+                                "Parser: the store's tip is not the parent of the next batch (orphaned tip); requested a writer reorg check, retry budget frozen until it lands"
+                            );
+                        }
+                    }
                     let retry_decision =
-                        advance_unresolved_retry_budget(&mut unresolved_retry_count);
+                        advance_unresolved_retry_budget(&mut unresolved_retry_count, cause);
                     unresolved_attempts += 1;
                     if should_log_unresolved_retry(unresolved_attempts) {
                         let unresolved_local_probe = classify_unresolved_local_probe(
@@ -2184,6 +2276,7 @@ impl Indexer {
                             end_block,
                             attempt = unresolved_attempts,
                             retry = unresolved_retry_count,
+                            cause = ?cause,
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,
@@ -2220,6 +2313,7 @@ impl Indexer {
                             start_block,
                             end_block,
                             retries = unresolved_retry_count,
+                            cause = ?cause,
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,
@@ -3224,6 +3318,28 @@ impl Indexer {
                             )
                         ));
                     }
+                    // A parser stuck on an orphaned tip produces nothing, so
+                    // its request reaches this branch within one recv timeout.
+                    let pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                    match take_reorg_check_request(&self.reorg_check_request, pipeline_epoch) {
+                        ReorgCheckRequest::Empty => {}
+                        ReorgCheckRequest::Stale { requested_epoch } => {
+                            debug!(
+                                run_id = %self.run_id,
+                                pipeline_epoch,
+                                requested_epoch,
+                                "Dropping a parser reorg-check request from an earlier pipeline epoch"
+                            );
+                        }
+                        ReorgCheckRequest::Current => {
+                            self.run_parser_requested_reorg_check(
+                                &committed_tip_for_cache_for_writer,
+                                &mut parse_rx,
+                                &parse_tx_pending_txs_for_writer,
+                            )
+                            .await?;
+                        }
+                    }
                 }
             }
         }
@@ -3248,6 +3364,117 @@ impl Indexer {
         self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
         self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
         Ok(reorg_tip)
+    }
+
+    /// The writer's half of the orphaned-tip hand-off.
+    ///
+    /// The parser found that the batch it is stuck on is the writer's next
+    /// one but does not extend the stored tip, so its missing inputs come from
+    /// a block the store never indexed and no writer progress can supply them.
+    /// Reorg handling belongs to the writer, so the writer runs the check its
+    /// stale-fork branch runs, against the store's own tip. Like that branch it
+    /// skips the blocks-behind lag gate, because a parent mismatch is direct
+    /// evidence. Unlike it, it also checks a genesis tip: genesis cannot be
+    /// orphaned, so a mismatch there fails fast as a genesis mismatch instead
+    /// of resetting forever.
+    ///
+    /// Every outcome resets the pipeline, which makes the parser's batch stale
+    /// (`should_abort_unresolved_retry_on_epoch_change`) and refetches from the
+    /// store's tip; an error propagates and stops the pipeline.
+    pub(super) async fn run_parser_requested_reorg_check<T>(
+        &self,
+        committed_tip_for_cache: &AtomicI64,
+        parse_rx: &mut tokio::sync::mpsc::Receiver<T>,
+        parse_tx_pending_txs: &AtomicU64,
+    ) -> Result<()> {
+        let pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
+        let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
+        let stored_hash = db_tip_hash.ok_or_else(|| {
+            anyhow!(
+                "parser requested a reorg check, but the store has no tip block to check: \
+                 db_tip={db_tip}, pipeline_epoch={pipeline_epoch}"
+            )
+        })?;
+        let db_tip_u64 =
+            require_non_negative_block_number(db_tip, "parser-requested reorg check tip")?;
+        warn!(
+            run_id = %self.run_id,
+            pipeline_epoch,
+            db_tip,
+            stored_hash = %hex::encode(&stored_hash),
+            "Parser reported that the store's tip is not the parent of the next batch; running the reorg check"
+        );
+        match self
+            .check_and_handle_reorg(db_tip_u64, &stored_hash)
+            .await?
+        {
+            Some(ReorgAction::Handled) => {
+                let reorg_tip = self
+                    .reset_caches_and_trackers_after_reorg(committed_tip_for_cache)
+                    .await?;
+                info!(
+                    run_id = %self.run_id,
+                    pipeline_epoch,
+                    db_tip,
+                    reorg_tip,
+                    "Orphaned-tip reorg handled, caches cleared, trackers reconciled, draining stale parsed batches"
+                );
+                self.request_pipeline_reset("orphaned tip reorg handled", None, None, None);
+                let drained = Self::drain_channel(parse_rx).await;
+                parse_tx_pending_txs.store(0, Ordering::Relaxed);
+                info!(
+                    run_id = %self.run_id,
+                    pipeline_epoch,
+                    drained,
+                    "Orphaned-tip reorg drain completed"
+                );
+            }
+            Some(ReorgAction::DeepForkPaused) => {
+                warn!(
+                    run_id = %self.run_id,
+                    pipeline_epoch,
+                    db_tip,
+                    "Orphaned-tip check triggered deep fork detection, sync paused"
+                );
+                self.request_pipeline_reset("orphaned tip deep fork paused", None, None, None);
+                let drained = Self::drain_channel(parse_rx).await;
+                parse_tx_pending_txs.store(0, Ordering::Relaxed);
+                info!(
+                    run_id = %self.run_id,
+                    pipeline_epoch,
+                    drained,
+                    "Orphaned-tip deep fork pause drain completed"
+                );
+                sleep(Duration::from_secs(30)).await;
+            }
+            None => {
+                // The node's block at db_tip is the stored one, so the
+                // parser's batch was fetched from a fork the node has since
+                // left. Refetching from db_tip + 1 reads the node as it is now.
+                warn!(
+                    run_id = %self.run_id,
+                    pipeline_epoch,
+                    db_tip,
+                    stored_hash = %hex::encode(&stored_hash),
+                    "Parser reported an orphaned tip, but the node's block at db_tip matches the store; the parser's batch is stale, resetting the pipeline to refetch from db_tip + 1"
+                );
+                self.request_pipeline_reset(
+                    "orphaned tip check found no divergence",
+                    None,
+                    None,
+                    None,
+                );
+                let drained = Self::drain_channel(parse_rx).await;
+                parse_tx_pending_txs.store(0, Ordering::Relaxed);
+                info!(
+                    run_id = %self.run_id,
+                    pipeline_epoch,
+                    drained,
+                    "Orphaned-tip no-divergence drain completed"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Fetch blocks from CKB RocksDB using scoped threads for parallel I/O.
