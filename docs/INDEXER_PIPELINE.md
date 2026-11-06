@@ -360,6 +360,9 @@ Before processing each batch (only when close to chain tip):
 2. Compare with chain's block at that height
 3. If mismatch: handle reorg, drain stale batches
 
+A parser stuck on a batch that does not extend an orphaned store tip asks the writer for the same
+check: see Orphaned Tip: Parser to Writer Hand-off in `docs/prompts/REORG_HANDLING.md`.
+
 **Bulk Sync Optimization**: During bulk sync (blocks_remaining > bulk_sync_threshold), reorg checks are skipped since historical blocks are already finalized (CKB finalizes after 24 blocks).
 
 ### Deep Fork

@@ -45,7 +45,8 @@ For reorgs up to 36 blocks deep, the indexer:
 5. Rebuilds `addr_balance` and collection activity counts from remaining canonical state
 6. Clears deep-fork flag if it was set
 7. Updates sync cache status and continues syncing
-8. Notifies pipeline fetcher via `reorg_notify_flag` and drains stale batches
+8. Resets the pipeline (`request_pipeline_reset`, see Pipeline Coordination) and drains stale
+   batches
 
 ### Pipeline Coordination
 
@@ -88,14 +89,20 @@ read through the writer's own source (`Repository::get_sync_tip`), with
 | `WriterBehind`       | `start_block > db_tip + 1`: an earlier batch is in flight    | counts                                    |
 | `OrphanedTip`        | `start_block == db_tip + 1`, first parent != stored tip hash | frozen; requests a writer reorg check     |
 | `MissingInputs`      | `start_block == db_tip + 1`, first parent == stored tip hash | counts; fails fast when spent (real hole) |
-| `WriterPastBatch`    | `start_block <= db_tip`: a pipeline reset is pending         | counts                                    |
+| `WriterPastBatch`    | `start_block <= db_tip`: the writer already holds the start  | counts (a reset normally discards it)     |
 
-On `OrphanedTip` the parser stores its batch's pipeline epoch in `reorg_check_request` and keeps
-retrying. The writer takes the request on its idle branch (it times out on the parse channel after
-`2 × poll_interval_ms` whenever the parser produces nothing) and acts only if that epoch is still
-current. A request from an earlier epoch is dropped, so a reset is never followed by a check for a
-batch it already discarded. Like the stale-fork check it bypasses the lag gate, because a parent
-mismatch is direct evidence:
+While the budget is frozen the parser warns at most once per 120 s and never probes the node over
+RPC; counting causes warn on the first attempt and every 10th, and only `MissingInputs` probes the
+node.
+
+On `OrphanedTip` the parser puts a report (its batch's pipeline epoch, start block and first parent
+hash) in `reorg_check_request` and keeps retrying. The writer takes the request on its idle branch
+(it times out on the parse channel after `2 × poll_interval_ms` whenever the parser produces
+nothing) and acts only if that epoch is still current. A request from an earlier epoch is dropped,
+so a reset is never followed by a check for a batch it already discarded. The pick-up bound does
+not hold while a deep fork is unresolved: the writer then stays in its pause loop and never reaches
+the idle branch, and the parser waits with its budget frozen. Like the stale-fork check, this check
+bypasses the lag gate, because a parent mismatch is direct evidence:
 
 - **Reorg handled**: the same post-reorg sequence as the other two checks, pipeline reset, drain.
 - **Deep fork**: pipeline reset, sync paused (see Deep Fork below).
@@ -104,6 +111,12 @@ mismatch is direct evidence:
 
 Every outcome resets the pipeline, so the parser's stuck batch aborts on the epoch change; an
 error stops the pipeline. `run_pipeline` clears the request slot when it starts.
+
+No divergence is a race that the reset settles. The stale-fork check and this one count such
+results in one streak per store tip, ended by a handled divergence or a written batch. Ten in a row
+on the same tip mean the node's block at `db_tip + 1` does not extend its own block at `db_tip`, or
+the batch's parent hash is read wrongly, so the pipeline stops with the tip, the batch's start block
+and parent hash, the count and the epoch instead of resetting forever.
 
 ### Deep Fork (depth > 36)
 
