@@ -25,6 +25,11 @@ repository = "https://github.com/nervosnetwork/ckbadger"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1.42", features = ["full"] }
+# tentacle-secio 0.6.2 (pulled in by ckbadger-crawler) stops compiling once tokio-util
+# 0.7.20 adds `impl Encoder<&[u8]> for LengthDelimitedCodec`: its Sink item type can no
+# longer be inferred (E0283, 8 sites). Hold tokio-util at 0.7.18 until tentacle fixes it;
+# every tokio-util user in the graph unifies onto this version.
+tokio-util = "=0.7.18"
 
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
