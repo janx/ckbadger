@@ -2526,15 +2526,11 @@ impl Indexer {
                                         .await?
                                     {
                                         Some(ReorgAction::Handled) => {
-                                            self.cell_cache.clear();
-                                            self.udt_cell_cache.clear();
-                                            let (reorg_tip, _) = self.repo.get_sync_tip().await?;
-                                            committed_tip_for_cache_for_writer.store(
-                                                parser_cache_committed_tip_from_sync_tip(reorg_tip),
-                                                Ordering::SeqCst,
-                                            );
-                                            self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
-                                            self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
+                                            let reorg_tip = self
+                                                .reset_caches_and_trackers_after_reorg(
+                                                    &committed_tip_for_cache_for_writer,
+                                                )
+                                                .await?;
                                             let current_epoch =
                                                 self.pipeline_reset_epoch.load(Ordering::SeqCst);
                                             info!(
@@ -2634,15 +2630,11 @@ impl Indexer {
                                 )?;
                                 match self.check_and_handle_reorg(db_tip_u64, stored_hash).await? {
                                     Some(ReorgAction::Handled) => {
-                                        self.cell_cache.clear();
-                                        self.udt_cell_cache.clear();
-                                        let (reorg_tip, _) = self.repo.get_sync_tip().await?;
-                                        committed_tip_for_cache_for_writer.store(
-                                            parser_cache_committed_tip_from_sync_tip(reorg_tip),
-                                            Ordering::SeqCst,
-                                        );
-                                        self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
-                                        self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
+                                        let reorg_tip = self
+                                            .reset_caches_and_trackers_after_reorg(
+                                                &committed_tip_for_cache_for_writer,
+                                            )
+                                            .await?;
                                         let current_epoch =
                                             self.pipeline_reset_epoch.load(Ordering::SeqCst);
                                         info!(
@@ -3118,6 +3110,27 @@ impl Indexer {
                 }
             }
         }
+    }
+
+    /// The writer's one sequence after `check_and_handle_reorg` rolled the
+    /// store back: drop every cached cell (the rolled-back blocks' outputs are
+    /// gone from the store, and the inputs they spent are live again), point
+    /// the parser cache's committed tip at the new store tip, and reconcile
+    /// both trackers with it. Returns that tip.
+    async fn reset_caches_and_trackers_after_reorg(
+        &self,
+        committed_tip_for_cache: &AtomicI64,
+    ) -> Result<i64> {
+        self.cell_cache.clear();
+        self.udt_cell_cache.clear();
+        let (reorg_tip, _) = self.repo.get_sync_tip().await?;
+        committed_tip_for_cache.store(
+            parser_cache_committed_tip_from_sync_tip(reorg_tip),
+            Ordering::SeqCst,
+        );
+        self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
+        self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
+        Ok(reorg_tip)
     }
 
     /// Fetch blocks from CKB RocksDB using scoped threads for parallel I/O.
