@@ -49,13 +49,61 @@ For reorgs up to 36 blocks deep, the indexer:
 
 ### Pipeline Coordination
 
-The indexer uses a three-stage pipeline (Fetcher -> Parser -> Writer). On reorg:
+The indexer uses a three-stage pipeline (Fetcher -> Parser -> Writer). The writer is the only
+stage that runs reorg handling. It runs `check_and_handle_reorg` on the stored tip in three
+places:
+
+- **Stale-fork batch**: a received batch's first block is not the child of the stored tip.
+- **Tip check**: before writing a batch near the tip (lag-gated), the stored tip's hash is
+  compared with the node's.
+- **Orphaned tip reported by the parser**: see below. The parser has no batch it can hand over
+  in this case, so neither batch-time check can run.
+
+On reorg:
 
 1. Writer performs rollback
-2. Writer sets `reorg_notify_flag = true`
-3. Writer drains stale parser/output batches
+2. Writer clears the cell caches, reconciles the HODL and cell-distribution trackers, and calls
+   `request_pipeline_reset`, which bumps `pipeline_reset_epoch` and sets
+   `pipeline_reset_notify_flag`
+3. Writer drains stale parsed batches; the parser drops fetched batches of an older epoch and
+   aborts an input-resolution retry whose batch belongs to one
 4. Fetcher sees the flag and resets local `next_block`
 5. Fetcher re-reads DB tip and resumes from correct height
+
+#### Orphaned Tip: Parser to Writer Hand-off
+
+The fetcher does not compare hashes. When the node replaces the stored tip block (A at height N)
+with B and builds N+1 on B, the fetcher fetches N+1, and the parser cannot resolve inputs that
+spend outputs only B created: the store never indexed B. No writer progress can supply them, and
+the writer, which receives no batch, runs neither batch-time check. In v0.8.2 the parser spent its
+240-retry budget, the pipeline terminated, and every restart replayed the same state.
+
+When a batch's inputs stay unresolved, the parser classifies the attempt against the store tip,
+read through the writer's own source (`Repository::get_sync_tip`), with
+`classify_unresolved_inputs` (`crates/indexer/src/sync/diagnostics.rs`):
+
+| Cause                | Condition                                                    | Retry budget                              |
+| -------------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `RollbackInProgress` | rollback-cleanup marker set                                  | frozen                                    |
+| `WriterBehind`       | `start_block > db_tip + 1`: an earlier batch is in flight    | counts                                    |
+| `OrphanedTip`        | `start_block == db_tip + 1`, first parent != stored tip hash | frozen; requests a writer reorg check     |
+| `MissingInputs`      | `start_block == db_tip + 1`, first parent == stored tip hash | counts; fails fast when spent (real hole) |
+| `WriterPastBatch`    | `start_block <= db_tip`: a pipeline reset is pending         | counts                                    |
+
+On `OrphanedTip` the parser stores its batch's pipeline epoch in `reorg_check_request` and keeps
+retrying. The writer takes the request on its idle branch (it times out on the parse channel after
+`2 × poll_interval_ms` whenever the parser produces nothing) and acts only if that epoch is still
+current. A request from an earlier epoch is dropped, so a reset is never followed by a check for a
+batch it already discarded. Like the stale-fork check it bypasses the lag gate, because a parent
+mismatch is direct evidence:
+
+- **Reorg handled**: the same post-reorg sequence as the other two checks, pipeline reset, drain.
+- **Deep fork**: pipeline reset, sync paused (see Deep Fork below).
+- **No divergence**: the node's block at `db_tip` is the stored one, so the parser's batch came
+  from a fork the node has since left. Pipeline reset, so the fetcher refetches from `db_tip + 1`.
+
+Every outcome resets the pipeline, so the parser's stuck batch aborts on the epoch change; an
+error stops the pipeline. `run_pipeline` clears the request slot when it starts.
 
 ### Deep Fork (depth > 36)
 

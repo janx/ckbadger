@@ -11,6 +11,7 @@ use tracing::info;
 use crate::runtime_diag::{CgroupMemorySnapshot, FlightEvent};
 
 use super::helpers::duration_from_millis;
+use super::indexer::next_start_block_from_db_tip;
 use super::types::CachedCellInfo;
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -1033,8 +1034,13 @@ pub(crate) fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> b
     blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
 }
 
+/// Log the first unresolved attempt and every 10th; the give-up attempt logs
+/// its own error. The cadence follows attempts, not the budget: attempts keep
+/// counting while the budget is frozen, which can last indefinitely (an
+/// orphaned tip whose reorg check paused sync on a deep fork), so a clause
+/// keyed on the budget limit would log every attempt from then on.
 pub(crate) fn should_log_unresolved_retry(attempt: usize) -> bool {
-    attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
+    attempt == 1 || attempt.is_multiple_of(10)
 }
 
 /// What the parser should do after one unresolved-input attempt.
@@ -1044,22 +1050,87 @@ pub(crate) enum UnresolvedRetryDecision {
     GiveUp,
 }
 
+/// Why a parser batch still has inputs that neither the batch, the parser
+/// cache nor the store can resolve, judged against the store's committed tip
+/// exactly as the writer judges a batch it receives (position, then parent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnresolvedInputCause {
+    /// A reorg rollback is running. It republishes the very cells the parser
+    /// is waiting on, and its writes stay invisible until it commits.
+    RollbackInProgress,
+    /// The store's tip is below the block before this batch: an earlier batch
+    /// is still on its way through the writer.
+    WriterBehind,
+    /// The batch is the next one the writer expects, but its first block is
+    /// not the stored tip's child: the node has replaced the tip. Inputs
+    /// created only by the replacement block can never come from writer
+    /// progress; only the writer's reorg handling can resolve them.
+    OrphanedTip,
+    /// The batch extends the stored tip and nothing is in flight, yet inputs
+    /// are missing: a real hole, which the retry budget exists to catch.
+    MissingInputs,
+    /// The store already holds this batch's first block: the batch is stale
+    /// and the pipeline reset that discards it is pending.
+    WriterPastBatch,
+}
+
+/// Classify one failed resolution attempt of the batch starting at
+/// `start_block`, whose first block's parent is `first_parent_hash`, against
+/// the store tip `(db_tip, db_tip_hash)` read through the writer's own source
+/// (`Repository::get_sync_tip`).
+pub(crate) fn classify_unresolved_inputs(
+    db_tip: i64,
+    db_tip_hash: &Option<Vec<u8>>,
+    start_block: u64,
+    first_parent_hash: &[u8],
+    rollback_in_progress: bool,
+) -> anyhow::Result<UnresolvedInputCause> {
+    if rollback_in_progress {
+        return Ok(UnresolvedInputCause::RollbackInProgress);
+    }
+    let expected_start = next_start_block_from_db_tip(
+        db_tip,
+        db_tip_hash,
+        "parser unresolved-input classification",
+    )?;
+    Ok(match start_block.cmp(&expected_start) {
+        std::cmp::Ordering::Greater => UnresolvedInputCause::WriterBehind,
+        std::cmp::Ordering::Less => UnresolvedInputCause::WriterPastBatch,
+        std::cmp::Ordering::Equal => match db_tip_hash {
+            Some(tip_hash) if tip_hash.as_slice() != first_parent_hash => {
+                UnresolvedInputCause::OrphanedTip
+            }
+            _ => UnresolvedInputCause::MissingInputs,
+        },
+    })
+}
+
 /// Advance the parser's unresolved-input retry budget by one attempt.
 ///
-/// The budget exists to detect inputs that will never resolve. A reorg
-/// rollback is the one case where "unresolved" is expected and temporary: it
-/// republishes the very cells the parser is waiting on, and its writes stay
-/// uncommitted — invisible to reads — until it finishes. Attempts made while
-/// one is running therefore carry no evidence either way and must not consume
-/// the budget. Counting them is what killed live sync on testnet: a rollback
-/// outlasted the budget, the parser gave up mid-reorg, and the pipeline reset
-/// into an epoch with no parser and aborted the process.
+/// The budget exists to detect inputs that will never resolve. Two causes
+/// make "unresolved" expected and temporary, and attempts made under them
+/// carry no evidence either way, so they must not consume the budget:
+///
+/// - A reorg rollback in progress republishes the very cells the parser is
+///   waiting on, invisibly until it commits. Counting those attempts killed
+///   live sync on testnet once: a rollback outlasted the budget, the parser
+///   gave up mid-reorg, and the pipeline reset into an epoch with no parser.
+/// - An orphaned tip waits for the writer's reorg check, which the parser has
+///   requested. Counting those attempts was the v0.8.2 crash loop: the parser
+///   spent its budget on inputs only the replacement block creates, and the
+///   writer, which never received a batch, never compared the tip with the
+///   node.
 pub(crate) fn advance_unresolved_retry_budget(
     retry_count: &mut usize,
-    rollback_in_progress: bool,
+    cause: UnresolvedInputCause,
 ) -> UnresolvedRetryDecision {
-    if rollback_in_progress {
-        return UnresolvedRetryDecision::Retry;
+    match cause {
+        UnresolvedInputCause::RollbackInProgress | UnresolvedInputCause::OrphanedTip => {
+            return UnresolvedRetryDecision::Retry;
+        }
+        UnresolvedInputCause::WriterBehind
+        | UnresolvedInputCause::MissingInputs
+        | UnresolvedInputCause::WriterPastBatch => {}
     }
     *retry_count += 1;
     if *retry_count >= PARSER_UNRESOLVED_MAX_RETRIES {
@@ -1071,6 +1142,46 @@ pub(crate) fn advance_unresolved_retry_budget(
 
 pub(crate) fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -> bool {
     consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
+}
+
+// ── Parser → writer reorg-check request ─────────────────────────────────
+
+/// The empty request slot. Pipeline epochs count resets up from 0.
+pub(crate) const NO_REORG_CHECK_REQUEST: u64 = u64::MAX;
+
+/// What the writer finds in the reorg-check request slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReorgCheckRequest {
+    Empty,
+    /// Made for a batch of the current pipeline epoch: run the check.
+    Current,
+    /// Made for a batch of an earlier epoch. The reset that ended that epoch
+    /// discarded the batch, so the request means nothing any more.
+    Stale {
+        requested_epoch: u64,
+    },
+}
+
+/// Parser side: ask the writer to run its reorg check because the batch of
+/// `batch_epoch` found an orphaned tip. Idempotent; the slot holds the epoch
+/// so a request can never act in an epoch other than its own.
+pub(crate) fn request_reorg_check(slot: &AtomicU64, batch_epoch: u64) -> anyhow::Result<()> {
+    if batch_epoch == NO_REORG_CHECK_REQUEST {
+        anyhow::bail!(
+            "pipeline epoch {batch_epoch} collides with the empty reorg-check request slot"
+        );
+    }
+    slot.store(batch_epoch, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Writer side: take the pending request, emptying the slot.
+pub(crate) fn take_reorg_check_request(slot: &AtomicU64, current_epoch: u64) -> ReorgCheckRequest {
+    match slot.swap(NO_REORG_CHECK_REQUEST, Ordering::SeqCst) {
+        NO_REORG_CHECK_REQUEST => ReorgCheckRequest::Empty,
+        requested_epoch if requested_epoch == current_epoch => ReorgCheckRequest::Current,
+        requested_epoch => ReorgCheckRequest::Stale { requested_epoch },
+    }
 }
 
 // ── Worker exit reason helpers ──────────────────────────────────────────
@@ -1259,6 +1370,13 @@ mod tests {
         assert!(!should_log_unresolved_retry(2));
         assert!(should_log_unresolved_retry(10));
         assert!(should_log_unresolved_retry(PARSER_UNRESOLVED_MAX_RETRIES));
+        // Past the budget limit (a frozen budget) the cadence stays 1-in-10.
+        assert!(!should_log_unresolved_retry(
+            PARSER_UNRESOLVED_MAX_RETRIES + 1
+        ));
+        assert!(should_log_unresolved_retry(
+            PARSER_UNRESOLVED_MAX_RETRIES * 10
+        ));
     }
 
     #[test]
@@ -1266,12 +1384,15 @@ mod tests {
         let mut retry_count = 0usize;
         for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
             assert_eq!(
-                advance_unresolved_retry_budget(&mut retry_count, false),
+                advance_unresolved_retry_budget(
+                    &mut retry_count,
+                    UnresolvedInputCause::MissingInputs
+                ),
                 UnresolvedRetryDecision::Retry
             );
         }
         assert_eq!(
-            advance_unresolved_retry_budget(&mut retry_count, false),
+            advance_unresolved_retry_budget(&mut retry_count, UnresolvedInputCause::MissingInputs),
             UnresolvedRetryDecision::GiveUp
         );
         assert_eq!(retry_count, PARSER_UNRESOLVED_MAX_RETRIES);
@@ -1283,26 +1404,208 @@ mod tests {
     /// must not consume the budget, however long it takes.
     #[test]
     fn test_unresolved_retry_budget_frozen_while_rollback_in_progress() {
+        assert_budget_frozen_then_fully_available(UnresolvedInputCause::RollbackInProgress);
+    }
+
+    /// Regression test for the v0.8.2 testnet crash loop: the store's tip
+    /// was orphaned, the parser spent its whole budget on inputs that only
+    /// the replacement block creates, and the pipeline died before the writer
+    /// ever compared the tip with the node. While the parser waits for the
+    /// writer's reorg check, attempts must not consume the budget.
+    #[test]
+    fn test_unresolved_retry_budget_frozen_while_orphaned_tip_awaits_writer_reorg() {
+        assert_budget_frozen_then_fully_available(UnresolvedInputCause::OrphanedTip);
+    }
+
+    fn assert_budget_frozen_then_fully_available(frozen: UnresolvedInputCause) {
         let mut retry_count = 0usize;
         for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES * 10) {
             assert_eq!(
-                advance_unresolved_retry_budget(&mut retry_count, true),
-                UnresolvedRetryDecision::Retry
-            );
-        }
-        assert_eq!(retry_count, 0, "rollback attempts must not consume budget");
-
-        // Once the rollback commits, the full budget is still available.
-        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
-            assert_eq!(
-                advance_unresolved_retry_budget(&mut retry_count, false),
+                advance_unresolved_retry_budget(&mut retry_count, frozen),
                 UnresolvedRetryDecision::Retry
             );
         }
         assert_eq!(
-            advance_unresolved_retry_budget(&mut retry_count, false),
+            retry_count, 0,
+            "{frozen:?} attempts must not consume budget"
+        );
+
+        // Once the writer has acted, the full budget is still available.
+        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
+            assert_eq!(
+                advance_unresolved_retry_budget(
+                    &mut retry_count,
+                    UnresolvedInputCause::MissingInputs
+                ),
+                UnresolvedRetryDecision::Retry
+            );
+        }
+        assert_eq!(
+            advance_unresolved_retry_budget(&mut retry_count, UnresolvedInputCause::MissingInputs),
             UnresolvedRetryDecision::GiveUp
         );
+    }
+
+    /// Unchanged behaviour: waiting on an earlier in-flight batch, and a batch
+    /// the writer has already passed (a reset is pending), both still count.
+    #[test]
+    fn test_unresolved_retry_budget_counts_writer_behind_and_writer_past_batch() {
+        for cause in [
+            UnresolvedInputCause::WriterBehind,
+            UnresolvedInputCause::WriterPastBatch,
+            UnresolvedInputCause::MissingInputs,
+        ] {
+            let mut retry_count = 0usize;
+            assert_eq!(
+                advance_unresolved_retry_budget(&mut retry_count, cause),
+                UnresolvedRetryDecision::Retry
+            );
+            assert_eq!(retry_count, 1, "{cause:?} consumes budget");
+        }
+    }
+
+    const STORED_TIP_HASH: [u8; 32] = [0x11; 32];
+    const OTHER_HASH: [u8; 32] = [0x22; 32];
+
+    fn classify(
+        db_tip: i64,
+        start_block: u64,
+        first_parent_hash: [u8; 32],
+        rollback_in_progress: bool,
+    ) -> UnresolvedInputCause {
+        classify_unresolved_inputs(
+            db_tip,
+            &Some(STORED_TIP_HASH.to_vec()),
+            start_block,
+            &first_parent_hash,
+            rollback_in_progress,
+        )
+        .expect("non-negative tip classifies")
+    }
+
+    #[test]
+    fn test_classify_orphaned_tip_when_the_next_batch_is_not_the_tips_child() {
+        assert_eq!(
+            classify(100, 101, OTHER_HASH, false),
+            UnresolvedInputCause::OrphanedTip
+        );
+    }
+
+    #[test]
+    fn test_classify_missing_inputs_when_the_next_batch_extends_the_tip() {
+        assert_eq!(
+            classify(100, 101, STORED_TIP_HASH, false),
+            UnresolvedInputCause::MissingInputs
+        );
+    }
+
+    /// Only the batch right after the tip can be judged against the tip's
+    /// hash; any later batch waits for the earlier ones, whatever its parent.
+    #[test]
+    fn test_classify_writer_behind_when_an_earlier_batch_is_still_in_flight() {
+        for (start_block, parent) in [
+            (102, OTHER_HASH),
+            (102, STORED_TIP_HASH),
+            (5_000, OTHER_HASH),
+        ] {
+            assert_eq!(
+                classify(100, start_block, parent, false),
+                UnresolvedInputCause::WriterBehind,
+                "start_block={start_block}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_writer_past_batch_when_the_store_already_holds_its_start() {
+        for (db_tip, parent) in [(101, OTHER_HASH), (101, STORED_TIP_HASH), (250, OTHER_HASH)] {
+            assert_eq!(
+                classify(db_tip, 101, parent, false),
+                UnresolvedInputCause::WriterPastBatch,
+                "db_tip={db_tip}"
+            );
+        }
+    }
+
+    /// A rollback stages everything and commits at the end, so the tip it
+    /// shows mid-flight is the one it is removing: never request a second
+    /// reorg check against it.
+    #[test]
+    fn test_classify_rollback_in_progress_overrides_every_tip_relation() {
+        for (db_tip, start_block, parent) in [
+            (100, 101, OTHER_HASH),
+            (100, 101, STORED_TIP_HASH),
+            (100, 102, OTHER_HASH),
+            (101, 101, OTHER_HASH),
+        ] {
+            assert_eq!(
+                classify(db_tip, start_block, parent, true),
+                UnresolvedInputCause::RollbackInProgress,
+                "db_tip={db_tip} start_block={start_block}"
+            );
+        }
+    }
+
+    /// An empty store has no tip hash to compare: the genesis batch's missing
+    /// inputs are a real hole, any later batch waits for genesis.
+    #[test]
+    fn test_classify_empty_store() {
+        assert_eq!(
+            classify_unresolved_inputs(0, &None, 0, &OTHER_HASH, false).unwrap(),
+            UnresolvedInputCause::MissingInputs
+        );
+        assert_eq!(
+            classify_unresolved_inputs(0, &None, 1, &OTHER_HASH, false).unwrap(),
+            UnresolvedInputCause::WriterBehind
+        );
+    }
+
+    #[test]
+    fn test_classify_rejects_a_negative_store_tip() {
+        let err =
+            classify_unresolved_inputs(-1, &Some(STORED_TIP_HASH.to_vec()), 0, &OTHER_HASH, false)
+                .unwrap_err();
+        assert!(err.to_string().contains("negative block number"), "{err}");
+    }
+
+    #[test]
+    fn test_take_reorg_check_request_when_none_was_made() {
+        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
+        assert_eq!(take_reorg_check_request(&slot, 0), ReorgCheckRequest::Empty);
+    }
+
+    #[test]
+    fn test_reorg_check_request_is_served_once_in_its_own_epoch() {
+        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
+        request_reorg_check(&slot, 3).unwrap();
+        // The parser repeats the request every attempt; it stays one request.
+        request_reorg_check(&slot, 3).unwrap();
+        assert_eq!(
+            take_reorg_check_request(&slot, 3),
+            ReorgCheckRequest::Current
+        );
+        assert_eq!(take_reorg_check_request(&slot, 3), ReorgCheckRequest::Empty);
+    }
+
+    /// A pipeline reset discards the batch that asked. Its request must not
+    /// reach the next epoch, even when the parser stores it after the reset.
+    #[test]
+    fn test_reorg_check_request_from_an_earlier_epoch_is_stale() {
+        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
+        request_reorg_check(&slot, 3).unwrap();
+        assert_eq!(
+            take_reorg_check_request(&slot, 4),
+            ReorgCheckRequest::Stale { requested_epoch: 3 }
+        );
+        assert_eq!(take_reorg_check_request(&slot, 4), ReorgCheckRequest::Empty);
+    }
+
+    #[test]
+    fn test_request_reorg_check_rejects_the_empty_slot_sentinel() {
+        let slot = AtomicU64::new(NO_REORG_CHECK_REQUEST);
+        let err = request_reorg_check(&slot, NO_REORG_CHECK_REQUEST).unwrap_err();
+        assert!(err.to_string().contains("pipeline epoch"), "{err}");
+        assert_eq!(take_reorg_check_request(&slot, 0), ReorgCheckRequest::Empty);
     }
 
     #[test]
