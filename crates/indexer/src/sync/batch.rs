@@ -10810,6 +10810,107 @@ mod tests {
             );
         }
 
+        /// The parser-requested check lands on a fork deeper than
+        /// `DEEP_FORK_DEPTH`: the store and the node disagree at the bounded
+        /// search floor too. Like the stale-fork branch, the writer records the
+        /// deep fork, resets the pipeline, drains, and pauses 30 s; nothing is
+        /// rolled back. Tokio time is paused, so the pause costs nothing.
+        #[tokio::test]
+        async fn requested_reorg_check_on_a_deep_fork_records_it_and_pauses() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let _log = scoped_test_log();
+            let StoreWithTipA {
+                store,
+                mut indexer,
+                hash_a,
+                orphan_spend,
+                dir: _dir,
+            } = store_with_tip_a().await;
+            let node_dir = tempfile::tempdir().unwrap();
+            let node = NodeChain::create(node_dir.path());
+            node.put_canonical_hash(FLOOR_BLOCK, [0xddu8; 32]);
+            node.put_canonical_hash(ORPHAN_TIP, hash_b());
+            node.set_tip(hash_b());
+            node.close();
+            let _node = attach_node(&mut indexer, node_dir.path()).await;
+
+            let committed_tip = AtomicI64::new(i64::try_from(FORK_POINT).unwrap());
+            let (stale_batch_tx, mut parse_rx) = tokio::sync::mpsc::channel::<u64>(4);
+            stale_batch_tx.send(NEXT_BLOCK).await.unwrap();
+            let pending_txs = AtomicU64::new(7);
+            let report = crate::sync::diagnostics::OrphanedTipReport {
+                batch_epoch: 0,
+                start_block: NEXT_BLOCK,
+                first_parent_hash: hash_b().to_vec(),
+            };
+            let mut streak = crate::sync::diagnostics::NoDivergenceStreak::default();
+
+            tokio::time::pause();
+            let started = tokio::time::Instant::now();
+            indexer
+                .run_parser_requested_reorg_check(
+                    &report,
+                    &committed_tip,
+                    &mut parse_rx,
+                    &pending_txs,
+                    &mut streak,
+                )
+                .await
+                .expect("a deep fork pauses instead of failing");
+
+            assert!(
+                started.elapsed() >= Duration::from_secs(30),
+                "the writer pauses 30 s, as the stale-fork branch does"
+            );
+            assert_eq!(indexer.pipeline_reset_epoch.load(Ordering::SeqCst), 1);
+            assert!(
+                parse_rx.try_recv().is_err(),
+                "queued parsed batches drained"
+            );
+            assert_eq!(pending_txs.load(Ordering::Relaxed), 0);
+            let deep_fork = indexer
+                .repo
+                .get_deep_fork_info()
+                .unwrap()
+                .expect("the deep fork is recorded for the operator");
+            assert_eq!(
+                (
+                    deep_fork.fork_point,
+                    deep_fork.db_tip,
+                    deep_fork.chain_tip_hash.as_slice()
+                ),
+                (
+                    i64::try_from(FLOOR_BLOCK).unwrap(),
+                    i64::try_from(ORPHAN_TIP).unwrap(),
+                    hash_b().as_slice()
+                )
+            );
+            assert!(indexer.repo.has_unresolved_deep_fork().unwrap());
+            assert_eq!(
+                store_tip(&store),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), hash_a.to_vec())),
+                "a deep fork rolls nothing back"
+            );
+            let event = store
+                .get_latest_reorg_event()
+                .unwrap()
+                .expect("the deep fork is logged as a reorg event")
+                .event;
+            assert_eq!(
+                (event.kind, event.orphaned_blocks),
+                (ckbadger_store::types::ReorgEventKind::Deep, 0)
+            );
+            assert_eq!(
+                store.get_tx_location(&orphan_spend).unwrap(),
+                Some((i64::try_from(ORPHAN_TIP).unwrap(), 1))
+            );
+            assert_eq!(
+                committed_tip.load(Ordering::SeqCst),
+                i64::try_from(FORK_POINT).unwrap()
+            );
+        }
+
         /// A node whose block 102 does not extend its own block 101: the
         /// store holds A at 101 and so does the node, but 102 names B as its
         /// parent. No reorg check can find a divergence, so before the fix
