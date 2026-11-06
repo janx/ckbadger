@@ -10429,15 +10429,53 @@ mod tests {
 
         /// Point the indexer at the node chain store, as `Indexer::new` does,
         /// with a short poll so the writer's idle branch runs every 100 ms.
-        fn attach_node(indexer: &mut Indexer, node_dir: &std::path::Path) -> tempfile::TempDir {
+        /// What `attach_node` gives the indexer besides the node chain store.
+        struct AttachedNode {
+            /// The node's JSON-RPC endpoint. It records every call and
+            /// answers each with a null result.
+            rpc: wiremock::MockServer,
+            _incident_dir: tempfile::TempDir,
+        }
+
+        async fn attach_node(indexer: &mut Indexer, node_dir: &std::path::Path) -> AttachedNode {
             indexer.ckb_store = Some(Arc::new(
                 CkbChainReader::open(node_dir.to_str().unwrap())
                     .expect("open the node chain store as the indexer does"),
             ));
             indexer.config.poll_interval_ms = 50;
+            let rpc = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": null}),
+                    ),
+                )
+                .mount(&rpc)
+                .await;
+            indexer.rpc = CkbRpcClient::new(rpc.uri());
             let incident_dir = tempfile::tempdir().unwrap();
             indexer.incident_dir = incident_dir.path().to_path_buf();
-            incident_dir
+            AttachedNode {
+                rpc,
+                _incident_dir: incident_dir,
+            }
+        }
+
+        /// How many `get_transaction` calls the indexer made to the node:
+        /// the parser's unresolved-input RPC probe is the only caller.
+        async fn node_get_transaction_calls(node: &AttachedNode) -> usize {
+            node.rpc
+                .received_requests()
+                .await
+                .expect("the mock node records requests")
+                .iter()
+                .filter(|request| {
+                    serde_json::from_slice::<serde_json::Value>(&request.body)
+                        .ok()
+                        .and_then(|body| body.get("method").cloned())
+                        == Some(serde_json::json!("get_transaction"))
+                })
+                .count()
         }
 
         struct OrphanTipScenario {
@@ -10447,6 +10485,7 @@ mod tests {
             orphan_spend: [u8; 32],
             b_spend_hash: [u8; 32],
             c_spend_hash: Option<[u8; 32]>,
+            node: AttachedNode,
             _dirs: Vec<tempfile::TempDir>,
         }
 
@@ -10497,7 +10536,7 @@ mod tests {
             node.put_block(&block_c);
             node.set_tip(hash_c());
             node.close();
-            let incident_dir = attach_node(&mut indexer, node_dir.path());
+            let node = attach_node(&mut indexer, node_dir.path()).await;
 
             OrphanTipScenario {
                 store,
@@ -10506,7 +10545,8 @@ mod tests {
                 orphan_spend,
                 b_spend_hash,
                 c_spend_hash,
-                _dirs: vec![dir, node_dir, incident_dir],
+                node,
+                _dirs: vec![dir, node_dir],
             }
         }
 
@@ -10670,6 +10710,14 @@ mod tests {
                 "the reorg must land before the parser could have spent its budget: {elapsed:?}"
             );
             assert_store_follows_node(&scenario);
+            // The node can say nothing useful about outputs of a block the
+            // store never indexed; asking it is pure load while the parser
+            // waits, which a deep-fork pause can make indefinite.
+            assert_eq!(
+                node_get_transaction_calls(&scenario.node).await,
+                0,
+                "no node RPC probe while the orphaned tip waits for the writer"
+            );
         }
 
         /// The same orphaned tip when the node's next block needs nothing from
@@ -10711,7 +10759,7 @@ mod tests {
             node.put_canonical_hash(ORPHAN_TIP, hash_a);
             node.set_tip(hash_a);
             node.close();
-            let _incident_dir = attach_node(&mut indexer, node_dir.path());
+            let _node = attach_node(&mut indexer, node_dir.path()).await;
 
             let committed_tip = AtomicI64::new(i64::try_from(FORK_POINT).unwrap());
             let (stale_batch_tx, mut parse_rx) = tokio::sync::mpsc::channel::<u64>(4);

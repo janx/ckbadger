@@ -1033,6 +1033,8 @@ impl Indexer {
         let repo_for_parser = self.repo.clone();
         let reorg_check_request_for_parser = Arc::clone(&self.reorg_check_request);
         let run_id_for_parser = self.run_id.clone();
+        // Throttles the warnings of frozen-budget waits for the task's life.
+        let frozen_budget_waits = RepeatedWarningTracker::default();
         let cell_lookup_stats_for_parser = Arc::clone(&self.parser_cell_lookup_stats);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -1417,7 +1419,7 @@ impl Indexer {
                             return;
                         }
                     };
-                    if cause == UnresolvedInputCause::OrphanedTip {
+                    if let UnresolvedInputCause::OrphanedTip { stored_tip_hash } = &cause {
                         if let Err(e) =
                             request_reorg_check(&reorg_check_request_for_parser, batch_epoch)
                         {
@@ -1444,7 +1446,7 @@ impl Indexer {
                                 start_block,
                                 end_block,
                                 db_tip,
-                                stored_tip_hash = ?db_tip_hash.as_deref().map(hex::encode),
+                                stored_tip_hash = %hex::encode(stored_tip_hash),
                                 first_parent_hash = %hex::encode(first_parent_hash),
                                 unresolved_count = unresolved_outpoints.len(),
                                 "Parser: the store's tip is not the parent of the next batch (orphaned tip); requested a writer reorg check, retry budget frozen until it lands"
@@ -1452,45 +1454,78 @@ impl Indexer {
                         }
                     }
                     let retry_decision =
-                        advance_unresolved_retry_budget(&mut unresolved_retry_count, cause);
+                        advance_unresolved_retry_budget(&mut unresolved_retry_count, &cause);
                     unresolved_attempts += 1;
-                    if should_log_unresolved_retry(unresolved_attempts) {
+                    if let Some(log) = plan_unresolved_retry_log(
+                        &cause,
+                        unresolved_attempts,
+                        &frozen_budget_waits,
+                        Instant::now(),
+                    ) {
                         let unresolved_local_probe = classify_unresolved_local_probe(
                             &writer_for_parser,
                             &unresolved_outpoints,
                             PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
                         )
                         .format_for_log();
-                        let unresolved_rpc_probe = match tokio::time::timeout(
-                            Duration::from_secs(PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS),
-                            collect_unresolved_rpc_probe(
-                                &rpc_for_parser,
-                                &unresolved_outpoints,
-                                PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(summary) => summary.format_for_log(),
-                            Err(_) => format!(
-                                "timeout_after={}s",
-                                PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS
-                            ),
-                        };
-                        warn!(
-                            start_block,
-                            end_block,
-                            attempt = unresolved_attempts,
-                            retry = unresolved_retry_count,
-                            rollback_in_progress,
-                            cause = ?cause,
-                            unresolved_count = unresolved_outpoints.len(),
-                            unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
-                            db_lookup_failed,
-                            unresolved_local_probe = %unresolved_local_probe,
-                            unresolved_rpc_probe = %unresolved_rpc_probe,
-                            "Parser: unresolved input cells detected; waiting for writer progress and retrying same batch"
-                        );
+                        match log {
+                            UnresolvedRetryLog::Counting { rpc_probe } => {
+                                let unresolved_rpc_probe = if rpc_probe {
+                                    match tokio::time::timeout(
+                                        Duration::from_secs(
+                                            PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS,
+                                        ),
+                                        collect_unresolved_rpc_probe(
+                                            &rpc_for_parser,
+                                            &unresolved_outpoints,
+                                            PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
+                                        ),
+                                    )
+                                    .await
+                                    {
+                                        Ok(summary) => summary.format_for_log(),
+                                        Err(_) => format!(
+                                            "timeout_after={}s",
+                                            PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS
+                                        ),
+                                    }
+                                } else {
+                                    "not_probed".to_string()
+                                };
+                                warn!(
+                                    cause = cause.name(),
+                                    waiting_for = cause.waiting_for(),
+                                    start_block,
+                                    end_block,
+                                    attempt = unresolved_attempts,
+                                    retry = unresolved_retry_count,
+                                    unresolved_count = unresolved_outpoints.len(),
+                                    unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
+                                    db_lookup_failed,
+                                    unresolved_local_probe = %unresolved_local_probe,
+                                    unresolved_rpc_probe = %unresolved_rpc_probe,
+                                    "Parser: unresolved input cells, retrying the same batch; retry budget counting"
+                                );
+                            }
+                            UnresolvedRetryLog::Frozen(repeat) => {
+                                warn!(
+                                    cause = cause.name(),
+                                    waiting_for = cause.waiting_for(),
+                                    start_block,
+                                    end_block,
+                                    attempt = unresolved_attempts,
+                                    retry = unresolved_retry_count,
+                                    unresolved_count = unresolved_outpoints.len(),
+                                    unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
+                                    db_lookup_failed,
+                                    unresolved_local_probe = %unresolved_local_probe,
+                                    repeat_count = repeat.total_count,
+                                    suppressed_since_last = repeat.suppressed_since_last_emit,
+                                    first_seen_secs_ago = repeat.first_seen_secs_ago,
+                                    "Parser: unresolved input cells, retrying the same batch; retry budget frozen"
+                                );
+                            }
+                        }
                     }
 
                     if retry_decision == UnresolvedRetryDecision::GiveUp {
@@ -1520,7 +1555,7 @@ impl Indexer {
                             start_block,
                             end_block,
                             retries = unresolved_retry_count,
-                            cause = ?cause,
+                            cause = cause.name(),
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,

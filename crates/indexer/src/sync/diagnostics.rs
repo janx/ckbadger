@@ -967,7 +967,17 @@ impl RepeatedWarningTracker {
         key: &'static str,
         min_emit_interval: Duration,
     ) -> Option<RepeatedWarningSnapshot> {
-        let now = Instant::now();
+        self.record_at(key, min_emit_interval, Instant::now())
+    }
+
+    /// `record` at a given instant, so callers' cadences can be tested
+    /// without sleeping.
+    pub(crate) fn record_at(
+        &self,
+        key: &'static str,
+        min_emit_interval: Duration,
+        now: Instant,
+    ) -> Option<RepeatedWarningSnapshot> {
         let mut states = match self.states.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -1034,11 +1044,10 @@ pub(crate) fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> b
     blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
 }
 
-/// Log the first unresolved attempt and every 10th; the give-up attempt logs
-/// its own error. The cadence follows attempts, not the budget: attempts keep
-/// counting while the budget is frozen, which can last indefinitely (an
-/// orphaned tip whose reorg check paused sync on a deep fork), so a clause
-/// keyed on the budget limit would log every attempt from then on.
+/// Attempt cadence for unresolved inputs while the retry budget counts: the
+/// first attempt and every 10th. The give-up attempt logs its own error. A
+/// batch's attempts can outnumber its budgeted retries (frozen attempts count
+/// as attempts), so nothing here is keyed on the budget limit.
 pub(crate) fn should_log_unresolved_retry(attempt: usize) -> bool {
     attempt == 1 || attempt.is_multiple_of(10)
 }
@@ -1053,7 +1062,7 @@ pub(crate) enum UnresolvedRetryDecision {
 /// Why a parser batch still has inputs that neither the batch, the parser
 /// cache nor the store can resolve, judged against the store's committed tip
 /// exactly as the writer judges a batch it receives (position, then parent).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UnresolvedInputCause {
     /// A reorg rollback is running. It republishes the very cells the parser
     /// is waiting on, and its writes stay invisible until it commits.
@@ -1064,14 +1073,47 @@ pub(crate) enum UnresolvedInputCause {
     /// The batch is the next one the writer expects, but its first block is
     /// not the stored tip's child: the node has replaced the tip. Inputs
     /// created only by the replacement block can never come from writer
-    /// progress; only the writer's reorg handling can resolve them.
-    OrphanedTip,
+    /// progress; only the writer's reorg handling can resolve them. Carries
+    /// the stored tip's hash, which this classification requires to exist.
+    OrphanedTip { stored_tip_hash: Vec<u8> },
     /// The batch extends the stored tip and nothing is in flight, yet inputs
     /// are missing: a real hole, which the retry budget exists to catch.
     MissingInputs,
     /// The store already holds this batch's first block: the batch is stale
     /// and the pipeline reset that discards it is pending.
     WriterPastBatch,
+}
+
+impl UnresolvedInputCause {
+    /// Stable name for log fields.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            UnresolvedInputCause::RollbackInProgress => "rollback_in_progress",
+            UnresolvedInputCause::WriterBehind => "writer_behind",
+            UnresolvedInputCause::OrphanedTip { .. } => "orphaned_tip",
+            UnresolvedInputCause::MissingInputs => "missing_inputs",
+            UnresolvedInputCause::WriterPastBatch => "writer_past_batch",
+        }
+    }
+
+    /// What the parser is waiting for while it retries under this cause.
+    pub(crate) fn waiting_for(&self) -> &'static str {
+        match self {
+            UnresolvedInputCause::RollbackInProgress => "the writer's rollback to commit",
+            UnresolvedInputCause::WriterBehind => {
+                "the writer to commit the batches before this one"
+            }
+            UnresolvedInputCause::OrphanedTip { .. } => {
+                "the writer's reorg check of the orphaned store tip"
+            }
+            UnresolvedInputCause::MissingInputs => {
+                "nothing in flight: the inputs are missing from the store the batch extends"
+            }
+            UnresolvedInputCause::WriterPastBatch => {
+                "a pipeline reset: the writer already holds this batch's first block"
+            }
+        }
+    }
 }
 
 /// Classify one failed resolution attempt of the batch starting at
@@ -1098,7 +1140,9 @@ pub(crate) fn classify_unresolved_inputs(
         std::cmp::Ordering::Less => UnresolvedInputCause::WriterPastBatch,
         std::cmp::Ordering::Equal => match db_tip_hash {
             Some(tip_hash) if tip_hash.as_slice() != first_parent_hash => {
-                UnresolvedInputCause::OrphanedTip
+                UnresolvedInputCause::OrphanedTip {
+                    stored_tip_hash: tip_hash.clone(),
+                }
             }
             _ => UnresolvedInputCause::MissingInputs,
         },
@@ -1122,10 +1166,10 @@ pub(crate) fn classify_unresolved_inputs(
 ///   node.
 pub(crate) fn advance_unresolved_retry_budget(
     retry_count: &mut usize,
-    cause: UnresolvedInputCause,
+    cause: &UnresolvedInputCause,
 ) -> UnresolvedRetryDecision {
     match cause {
-        UnresolvedInputCause::RollbackInProgress | UnresolvedInputCause::OrphanedTip => {
+        UnresolvedInputCause::RollbackInProgress | UnresolvedInputCause::OrphanedTip { .. } => {
             return UnresolvedRetryDecision::Retry;
         }
         UnresolvedInputCause::WriterBehind
@@ -1137,6 +1181,49 @@ pub(crate) fn advance_unresolved_retry_budget(
         UnresolvedRetryDecision::GiveUp
     } else {
         UnresolvedRetryDecision::Retry
+    }
+}
+
+/// How long the parser stays quiet between warnings about one frozen-budget
+/// wait: as long as the writer's own deep-fork pause warning.
+pub(crate) const PARSER_FROZEN_BUDGET_WARN_INTERVAL: Duration = Duration::from_secs(120);
+
+/// How the parser reports one failed resolution attempt.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UnresolvedRetryLog {
+    /// The budget counts: warn on the attempt cadence. Only a real hole is
+    /// worth asking the node about; inputs that an earlier in-flight batch or
+    /// a pending reset will settle are not.
+    Counting { rpc_probe: bool },
+    /// The budget is frozen: warn at most once per
+    /// `PARSER_FROZEN_BUDGET_WARN_INTERVAL` and never ask the node. The
+    /// missing outputs are in a block the store has not indexed or is
+    /// restoring, which the node cannot explain, and the wait lasts as long as
+    /// the writer needs — indefinitely when a deep fork pauses sync.
+    Frozen(RepeatedWarningSnapshot),
+}
+
+/// Decide whether, and how, attempt number `attempt` under `cause` is logged.
+/// `frozen_waits` throttles the frozen causes by time; it lives as long as
+/// the parser task.
+pub(crate) fn plan_unresolved_retry_log(
+    cause: &UnresolvedInputCause,
+    attempt: usize,
+    frozen_waits: &RepeatedWarningTracker,
+    now: Instant,
+) -> Option<UnresolvedRetryLog> {
+    match cause {
+        UnresolvedInputCause::RollbackInProgress | UnresolvedInputCause::OrphanedTip { .. } => {
+            frozen_waits
+                .record_at(cause.name(), PARSER_FROZEN_BUDGET_WARN_INTERVAL, now)
+                .map(UnresolvedRetryLog::Frozen)
+        }
+        UnresolvedInputCause::MissingInputs => should_log_unresolved_retry(attempt)
+            .then_some(UnresolvedRetryLog::Counting { rpc_probe: true }),
+        UnresolvedInputCause::WriterBehind | UnresolvedInputCause::WriterPastBatch => {
+            should_log_unresolved_retry(attempt)
+                .then_some(UnresolvedRetryLog::Counting { rpc_probe: false })
+        }
     }
 }
 
@@ -1386,13 +1473,13 @@ mod tests {
             assert_eq!(
                 advance_unresolved_retry_budget(
                     &mut retry_count,
-                    UnresolvedInputCause::MissingInputs
+                    &UnresolvedInputCause::MissingInputs
                 ),
                 UnresolvedRetryDecision::Retry
             );
         }
         assert_eq!(
-            advance_unresolved_retry_budget(&mut retry_count, UnresolvedInputCause::MissingInputs),
+            advance_unresolved_retry_budget(&mut retry_count, &UnresolvedInputCause::MissingInputs),
             UnresolvedRetryDecision::GiveUp
         );
         assert_eq!(retry_count, PARSER_UNRESOLVED_MAX_RETRIES);
@@ -1414,14 +1501,14 @@ mod tests {
     /// writer's reorg check, attempts must not consume the budget.
     #[test]
     fn test_unresolved_retry_budget_frozen_while_orphaned_tip_awaits_writer_reorg() {
-        assert_budget_frozen_then_fully_available(UnresolvedInputCause::OrphanedTip);
+        assert_budget_frozen_then_fully_available(orphaned_tip());
     }
 
     fn assert_budget_frozen_then_fully_available(frozen: UnresolvedInputCause) {
         let mut retry_count = 0usize;
         for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES * 10) {
             assert_eq!(
-                advance_unresolved_retry_budget(&mut retry_count, frozen),
+                advance_unresolved_retry_budget(&mut retry_count, &frozen),
                 UnresolvedRetryDecision::Retry
             );
         }
@@ -1435,13 +1522,13 @@ mod tests {
             assert_eq!(
                 advance_unresolved_retry_budget(
                     &mut retry_count,
-                    UnresolvedInputCause::MissingInputs
+                    &UnresolvedInputCause::MissingInputs
                 ),
                 UnresolvedRetryDecision::Retry
             );
         }
         assert_eq!(
-            advance_unresolved_retry_budget(&mut retry_count, UnresolvedInputCause::MissingInputs),
+            advance_unresolved_retry_budget(&mut retry_count, &UnresolvedInputCause::MissingInputs),
             UnresolvedRetryDecision::GiveUp
         );
     }
@@ -1457,15 +1544,21 @@ mod tests {
         ] {
             let mut retry_count = 0usize;
             assert_eq!(
-                advance_unresolved_retry_budget(&mut retry_count, cause),
+                advance_unresolved_retry_budget(&mut retry_count, &cause),
                 UnresolvedRetryDecision::Retry
             );
-            assert_eq!(retry_count, 1, "{cause:?} consumes budget");
+            assert_eq!(retry_count, 1, "{} consumes budget", cause.name());
         }
     }
 
     const STORED_TIP_HASH: [u8; 32] = [0x11; 32];
     const OTHER_HASH: [u8; 32] = [0x22; 32];
+
+    fn orphaned_tip() -> UnresolvedInputCause {
+        UnresolvedInputCause::OrphanedTip {
+            stored_tip_hash: STORED_TIP_HASH.to_vec(),
+        }
+    }
 
     fn classify(
         db_tip: i64,
@@ -1485,10 +1578,7 @@ mod tests {
 
     #[test]
     fn test_classify_orphaned_tip_when_the_next_batch_is_not_the_tips_child() {
-        assert_eq!(
-            classify(100, 101, OTHER_HASH, false),
-            UnresolvedInputCause::OrphanedTip
-        );
+        assert_eq!(classify(100, 101, OTHER_HASH, false), orphaned_tip());
     }
 
     #[test]
@@ -1566,6 +1656,73 @@ mod tests {
             classify_unresolved_inputs(-1, &Some(STORED_TIP_HASH.to_vec()), 0, &OTHER_HASH, false)
                 .unwrap_err();
         assert!(err.to_string().contains("negative block number"), "{err}");
+    }
+
+    /// A frozen wait warns once, then at most once per interval however many
+    /// attempts it makes, and never asks the node.
+    #[test]
+    fn test_frozen_budget_warns_at_most_once_per_interval_without_node_probe() {
+        for cause in [UnresolvedInputCause::RollbackInProgress, orphaned_tip()] {
+            let waits = RepeatedWarningTracker::default();
+            let start = Instant::now();
+            let at = |secs: u64| start + Duration::from_secs(secs);
+            let interval = PARSER_FROZEN_BUDGET_WARN_INTERVAL.as_secs();
+
+            // `Frozen` carries no probe: a frozen wait never asks the node.
+            assert!(
+                matches!(
+                    plan_unresolved_retry_log(&cause, 1, &waits, at(0)),
+                    Some(UnresolvedRetryLog::Frozen(_))
+                ),
+                "{}: the first frozen attempt warns",
+                cause.name()
+            );
+            // One attempt every 500 ms until just before the interval ends,
+            // including attempt numbers the counting cadence would log.
+            for (attempt, half_secs) in (2..).zip(1..(interval * 2)) {
+                let now = start + Duration::from_millis(half_secs * 500);
+                assert!(
+                    plan_unresolved_retry_log(&cause, attempt, &waits, now).is_none(),
+                    "{}: attempt {attempt} inside the interval stays quiet",
+                    cause.name()
+                );
+            }
+            match plan_unresolved_retry_log(&cause, 10_000, &waits, at(interval)) {
+                Some(UnresolvedRetryLog::Frozen(repeat)) => {
+                    assert_eq!(repeat.suppressed_since_last_emit, interval * 2 - 1);
+                    assert_eq!(repeat.first_seen_secs_ago, interval);
+                }
+                other => panic!(
+                    "{}: expected the next frozen warn, got {other:?}",
+                    cause.name()
+                ),
+            }
+            assert!(plan_unresolved_retry_log(&cause, 10_001, &waits, at(interval + 1)).is_none());
+        }
+    }
+
+    /// Counting causes keep the attempt cadence; only a real hole asks the node.
+    #[test]
+    fn test_counting_budget_warns_on_attempt_cadence_and_probes_only_missing_inputs() {
+        let waits = RepeatedWarningTracker::default();
+        let now = Instant::now();
+        for (cause, rpc_probe) in [
+            (UnresolvedInputCause::MissingInputs, true),
+            (UnresolvedInputCause::WriterBehind, false),
+            (UnresolvedInputCause::WriterPastBatch, false),
+        ] {
+            for attempt in [1, 10, 240, 2_400] {
+                match plan_unresolved_retry_log(&cause, attempt, &waits, now) {
+                    Some(UnresolvedRetryLog::Counting { rpc_probe: probe }) => {
+                        assert_eq!(probe, rpc_probe, "{} attempt {attempt}", cause.name());
+                    }
+                    other => panic!("{} attempt {attempt}: {other:?}", cause.name()),
+                }
+            }
+            for attempt in [2, 9, 241] {
+                assert!(plan_unresolved_retry_log(&cause, attempt, &waits, now).is_none());
+            }
+        }
     }
 
     #[test]
