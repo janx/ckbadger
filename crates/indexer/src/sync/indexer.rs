@@ -391,11 +391,11 @@ pub struct Indexer {
     pub(crate) startup_decision: StartupSyncDecision,
     pub(crate) rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
-    /// The parser's request for a writer reorg check: the pipeline epoch of
-    /// the batch that found the store's tip orphaned, or
-    /// `NO_REORG_CHECK_REQUEST`. The writer, the only owner of reorg handling,
-    /// takes it on its idle branch and honours it only in that same epoch.
-    pub(crate) reorg_check_request: Arc<AtomicU64>,
+    /// The parser's request for a writer reorg check, made by a batch that
+    /// found the store's tip orphaned. The writer, the only owner of reorg
+    /// handling, takes it on its idle branch and honours it only in the
+    /// batch's own pipeline epoch.
+    pub(crate) reorg_check_request: Arc<ReorgCheckRequestSlot>,
     pub(crate) pipeline_reset_reason_code: Arc<AtomicU8>,
     pub(crate) startup_phase: AtomicU8,
     pub(crate) pipeline_reset_epoch: Arc<AtomicU64>,
@@ -503,7 +503,7 @@ impl Indexer {
             startup_decision,
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            reorg_check_request: Arc::new(AtomicU64::new(NO_REORG_CHECK_REQUEST)),
+            reorg_check_request: Arc::new(ReorgCheckRequestSlot::default()),
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
             startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
             pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),

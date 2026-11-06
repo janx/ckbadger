@@ -1676,8 +1676,7 @@ impl Indexer {
             .set_queue_capacities(PIPELINE_CHANNEL_CAPACITY, PIPELINE_CHANNEL_CAPACITY);
         // A reorg-check request is made by one batch of one run; none may
         // carry over into this run.
-        self.reorg_check_request
-            .store(NO_REORG_CHECK_REQUEST, Ordering::SeqCst);
+        self.reorg_check_request.clear();
 
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
@@ -2214,24 +2213,11 @@ impl Indexer {
                         }
                     };
                     if let UnresolvedInputCause::OrphanedTip { stored_tip_hash } = &cause {
-                        if let Err(e) =
-                            request_reorg_check(&reorg_check_request_for_parser, batch_epoch)
-                        {
-                            error!(
-                                start_block,
-                                end_block,
-                                batch_epoch,
-                                error = %e,
-                                "Parser: cannot request a writer reorg check; stopping parser task"
-                            );
-                            record_worker_exit_reason(
-                                &parser_exit_reason_for_parser,
-                                format!(
-                                    "failed to request a writer reorg check for range {start_block}-{end_block}: {e}"
-                                ),
-                            );
-                            return;
-                        }
+                        reorg_check_request_for_parser.request(OrphanedTipReport {
+                            batch_epoch,
+                            start_block,
+                            first_parent_hash: first_parent_hash.clone(),
+                        });
                         if !orphaned_tip_reported {
                             orphaned_tip_reported = true;
                             warn!(
@@ -2549,6 +2535,7 @@ impl Indexer {
         let mut consecutive_idle_timeouts: u64 = 0;
         let mut pipeline_batch_index: u64 = 0;
         let mut batch_failure_tracker = BatchFailureTracker::default();
+        let mut no_divergence_streak = NoDivergenceStreak::default();
 
         // Resolve disk device once for per-batch I/O delta tracking
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
@@ -2760,6 +2747,7 @@ impl Indexer {
                                         .await?
                                     {
                                         Some(ReorgAction::Handled) => {
+                                            no_divergence_streak.reset();
                                             let reorg_tip = self
                                                 .reset_caches_and_trackers_after_reorg(
                                                     &committed_tip_for_cache_for_writer,
@@ -2823,11 +2811,23 @@ impl Indexer {
                                         None => {
                                             // check_and_handle_reorg returned None: the chain
                                             // hash at db_tip matches our stored hash (possible
-                                            // RPC race). Pipeline reset and retry.
+                                            // RPC race). Pipeline reset and retry, unless the
+                                            // same tip keeps producing this result.
+                                            let streak = no_divergence_streak.record(
+                                                db_tip,
+                                                stored_hash,
+                                                &NoDivergenceEvidence {
+                                                    source: "stale-fork",
+                                                    pipeline_epoch: current_epoch,
+                                                    start_block,
+                                                    first_parent_hash: &first_parsed.parent_hash,
+                                                },
+                                            )?;
                                             info!(
                                                 run_id = %self.run_id,
                                                 pipeline_epoch = current_epoch,
                                                 db_tip,
+                                                no_divergence_streak = streak,
                                                 "Stale fork detected but reorg check found no divergence (RPC race), resetting pipeline"
                                             );
                                         }
@@ -2864,6 +2864,7 @@ impl Indexer {
                                 )?;
                                 match self.check_and_handle_reorg(db_tip_u64, stored_hash).await? {
                                     Some(ReorgAction::Handled) => {
+                                        no_divergence_streak.reset();
                                         let reorg_tip = self
                                             .reset_caches_and_trackers_after_reorg(
                                                 &committed_tip_for_cache_for_writer,
@@ -2956,6 +2957,7 @@ impl Indexer {
                     {
                         Ok(metrics) => {
                             batch_failure_tracker.record_success();
+                            no_divergence_streak.reset();
                             metrics
                         }
                         Err(e) => {
@@ -3357,21 +3359,24 @@ impl Indexer {
                     // A parser stuck on an orphaned tip produces nothing, so
                     // its request reaches this branch within one recv timeout.
                     let pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                    match take_reorg_check_request(&self.reorg_check_request, pipeline_epoch) {
+                    match self.reorg_check_request.take(pipeline_epoch) {
                         ReorgCheckRequest::Empty => {}
-                        ReorgCheckRequest::Stale { requested_epoch } => {
+                        ReorgCheckRequest::Stale(report) => {
                             debug!(
                                 run_id = %self.run_id,
                                 pipeline_epoch,
-                                requested_epoch,
+                                requested_epoch = report.batch_epoch,
+                                start_block = report.start_block,
                                 "Dropping a parser reorg-check request from an earlier pipeline epoch"
                             );
                         }
-                        ReorgCheckRequest::Current => {
+                        ReorgCheckRequest::Current(report) => {
                             self.run_parser_requested_reorg_check(
+                                &report,
                                 &committed_tip_for_cache_for_writer,
                                 &mut parse_rx,
                                 &parse_tx_pending_txs_for_writer,
+                                &mut no_divergence_streak,
                             )
                             .await?;
                         }
@@ -3419,9 +3424,11 @@ impl Indexer {
     /// store's tip; an error propagates and stops the pipeline.
     pub(super) async fn run_parser_requested_reorg_check<T>(
         &self,
+        report: &OrphanedTipReport,
         committed_tip_for_cache: &AtomicI64,
         parse_rx: &mut tokio::sync::mpsc::Receiver<T>,
         parse_tx_pending_txs: &AtomicU64,
+        no_divergence_streak: &mut NoDivergenceStreak,
     ) -> Result<()> {
         let pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
         let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
@@ -3438,6 +3445,8 @@ impl Indexer {
             pipeline_epoch,
             db_tip,
             stored_hash = %hex::encode(&stored_hash),
+            start_block = report.start_block,
+            first_parent_hash = %hex::encode(&report.first_parent_hash),
             "Parser reported that the store's tip is not the parent of the next batch; running the reorg check"
         );
         match self
@@ -3445,6 +3454,7 @@ impl Indexer {
             .await?
         {
             Some(ReorgAction::Handled) => {
+                no_divergence_streak.reset();
                 let reorg_tip = self
                     .reset_caches_and_trackers_after_reorg(committed_tip_for_cache)
                     .await?;
@@ -3486,12 +3496,24 @@ impl Indexer {
             None => {
                 // The node's block at db_tip is the stored one, so the
                 // parser's batch was fetched from a fork the node has since
-                // left. Refetching from db_tip + 1 reads the node as it is now.
+                // left. Refetching from db_tip + 1 reads the node as it is now,
+                // unless the same tip keeps producing this result.
+                let streak = no_divergence_streak.record(
+                    db_tip,
+                    &stored_hash,
+                    &NoDivergenceEvidence {
+                        source: "parser-reported orphaned tip",
+                        pipeline_epoch,
+                        start_block: report.start_block,
+                        first_parent_hash: &report.first_parent_hash,
+                    },
+                )?;
                 warn!(
                     run_id = %self.run_id,
                     pipeline_epoch,
                     db_tip,
                     stored_hash = %hex::encode(&stored_hash),
+                    no_divergence_streak = streak,
                     "Parser reported an orphaned tip, but the node's block at db_tip matches the store; the parser's batch is stale, resetting the pipeline to refetch from db_tip + 1"
                 );
                 self.request_pipeline_reset(
