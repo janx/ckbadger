@@ -16104,6 +16104,37 @@ mod tests {
                 "nothing was rolled back"
             );
             assert!(seeded.store.get_latest_reorg_event().unwrap().is_none());
+            assert_one_no_divergence_incident(&seeded.indexer, &message);
+        }
+
+        /// The bail leaves an incident record, as a dying worker does: crash
+        /// triage reads these files, and a supervisor restarting into the same
+        /// bail must not leave the operator with nothing but a log tail.
+        fn assert_one_no_divergence_incident(indexer: &Indexer, bail: &str) {
+            let incidents: Vec<serde_json::Value> = std::fs::read_dir(&indexer.incident_dir)
+                .expect("the incidents dir exists")
+                .map(|entry| {
+                    let path = entry.expect("incident dir entry").path();
+                    serde_json::from_slice(&std::fs::read(&path).expect("read incident file"))
+                        .expect("incident file is JSON")
+                })
+                .filter(|report: &serde_json::Value| {
+                    report["reason"] == serde_json::json!("pipeline_no_divergence_loop")
+                })
+                .collect();
+            assert_eq!(
+                incidents.len(),
+                1,
+                "exactly one pipeline_no_divergence_loop incident in {}",
+                indexer.incident_dir.display()
+            );
+            let detail = incidents[0]["detail"]
+                .as_str()
+                .expect("incident detail is text");
+            assert!(
+                detail.contains(bail),
+                "the incident carries the bail text: {detail}"
+            );
         }
 
         #[tokio::test]
