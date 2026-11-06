@@ -2707,7 +2707,8 @@ impl Indexer {
                                             // hash at db_tip matches our stored hash (possible
                                             // RPC race). Pipeline reset and retry, unless the
                                             // same tip keeps producing this result.
-                                            let streak = no_divergence_streak.record(
+                                            let streak = self.record_no_divergence(
+                                                &mut no_divergence_streak,
                                                 db_tip,
                                                 stored_hash,
                                                 &NoDivergenceEvidence {
@@ -3379,7 +3380,8 @@ impl Indexer {
                 // parser's batch was fetched from a fork the node has since
                 // left. Refetching from db_tip + 1 reads the node as it is now,
                 // unless the same tip keeps producing this result.
-                let streak = no_divergence_streak.record(
+                let streak = self.record_no_divergence(
+                    no_divergence_streak,
                     db_tip,
                     &stored_hash,
                     &NoDivergenceEvidence {
@@ -3414,6 +3416,32 @@ impl Indexer {
             }
         }
         Ok(())
+    }
+
+    /// Record one no-divergence result of a writer reorg check in the shared
+    /// streak. When the streak reaches its bound, the bail is filed as a
+    /// `pipeline_no_divergence_loop` incident, as a dying worker's is, before
+    /// it stops the pipeline: a supervisor restarting into the same bail must
+    /// leave a record with the full context, not only a log tail.
+    fn record_no_divergence(
+        &self,
+        streak: &mut NoDivergenceStreak,
+        db_tip: i64,
+        stored_hash: &[u8],
+        evidence: &NoDivergenceEvidence<'_>,
+    ) -> Result<u32> {
+        streak
+            .record(db_tip, stored_hash, evidence)
+            .inspect_err(|bail| {
+                let incident_id =
+                    self.report_incident("pipeline_no_divergence_loop", format!("{bail:#}"));
+                error!(
+                    run_id = %self.run_id,
+                    incident_id = %incident_id,
+                    error = %bail,
+                    "Pipeline stopped: reorg checks keep finding no divergence for one store tip"
+                );
+            })
     }
 
     /// Fetch blocks from CKB RocksDB using scoped threads for parallel I/O.
