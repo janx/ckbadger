@@ -437,19 +437,19 @@ impl BatchWriter {
                 old_lock,
             )?;
             if old_count <= 0 {
-                bail!(
+                return Err(super::aggregate_underflow(format!(
                     "identity owner count underflow: collection_id=0x{}, lock_hash=0x{}, owner_count={}",
                     hex::encode(collection_id),
                     hex::encode(old_lock),
                     old_count
-                );
+                )));
             } else if old_count == 1 {
                 if agg.holders_count <= 0 {
-                    bail!(
+                    return Err(super::aggregate_underflow(format!(
                         "identity aggregate holders_count underflow: collection_id=0x{}, holders_count={}",
                         hex::encode(collection_id),
                         agg.holders_count
-                    );
+                    )));
                 }
                 state.delete_identity_owner(kind, collection_id, old_lock, batch);
                 agg.holders_count -= 1;
@@ -497,19 +497,19 @@ impl BatchWriter {
             let old_count =
                 state.get_cluster_owner_count(self.store.as_ref(), cluster_id, old_lock)?;
             if old_count <= 0 {
-                bail!(
+                return Err(super::aggregate_underflow(format!(
                     "spore owner count underflow: cluster_id=0x{}, lock_hash=0x{}, owner_count={}",
                     hex::encode(cluster_id),
                     hex::encode(old_lock),
                     old_count
-                );
+                )));
             } else if old_count == 1 {
                 if agg.owner_count <= 0 {
-                    bail!(
+                    return Err(super::aggregate_underflow(format!(
                         "spore aggregate owner_count underflow: cluster_id=0x{}, owner_count={}",
                         hex::encode(cluster_id),
                         agg.owner_count
-                    );
+                    )));
                 }
                 state.delete_cluster_owner(cluster_id, old_lock, batch);
                 agg.owner_count -= 1;
@@ -2529,6 +2529,81 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("live_count underflow"));
+    }
+
+    fn assert_rebuild_required(err: &anyhow::Error, what: &str) {
+        assert!(crate::lifecycle::is_rebuild_required(err), "{err:#}");
+        assert!(err.to_string().contains(what), "{what}: {err:#}");
+    }
+
+    /// Finding 13: the owner-transition underflows (an owner count with no
+    /// row, an aggregate that counts no owner/holder) are rebuild-required
+    /// like F2, for clusters and for identities.
+    #[test]
+    fn owner_transition_underflows_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let (collection, old) = (vec![0xa1; 32], vec![0xa2; 32]);
+
+        let err = writer
+            .apply_owner_transition(
+                &collection,
+                Some(&old),
+                None,
+                &mut ClusterAggregate::default(),
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert_rebuild_required(&err, "spore owner count underflow");
+        state.put_cluster_owner_count(&collection, &old, 1, &mut batch);
+        let err = writer
+            .apply_owner_transition(
+                &collection,
+                Some(&old),
+                None,
+                &mut ClusterAggregate::default(),
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert_rebuild_required(&err, "spore aggregate owner_count underflow");
+
+        let err = writer
+            .apply_identity_owner_transition(
+                &collection,
+                IdentityOwnerKeyKind::LockHash32,
+                Some(&old),
+                None,
+                &mut IdentityCollectionAggregate::default(),
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert_rebuild_required(&err, "identity owner count underflow");
+        state.put_identity_owner_count(
+            IdentityOwnerKeyKind::LockHash32,
+            &collection,
+            &old,
+            1,
+            &mut batch,
+        );
+        let err = writer
+            .apply_identity_owner_transition(
+                &collection,
+                IdentityOwnerKeyKind::LockHash32,
+                Some(&old),
+                None,
+                &mut IdentityCollectionAggregate::default(),
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert_rebuild_required(&err, "identity aggregate holders_count underflow");
     }
 
     /// B-7 (F2): a cluster's `live_count` going negative is the same

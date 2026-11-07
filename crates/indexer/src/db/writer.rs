@@ -31,6 +31,13 @@ pub(crate) enum ContractRequirement {
     OptionalOnFreshStore,
 }
 
+/// A derived count the chain cannot take below zero went below zero: the
+/// stored aggregate no longer matches the chain, so the sync stops
+/// rebuild-required (the F1 policy; B-6, F2 and their siblings, finding 13).
+pub(crate) fn aggregate_underflow(diagnosis: String) -> anyhow::Error {
+    anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(diagnosis))
+}
+
 /// Decode a stored `script_info` row. An undecodable row is corruption the
 /// chain cannot repair, so it is rebuild-required (finding 12, the F1
 /// policy) from the live batch writer and from the bulk finalize alike; a

@@ -32,12 +32,14 @@ fn checked_inc(current: i64, label: &str, id: &[u8]) -> Result<i64> {
     })
 }
 
+/// A `.cell` aggregate count going below zero is rebuild-required, like
+/// its did:ckb and spore siblings (finding 13).
 fn checked_dec(current: i64, label: &str, id: &[u8]) -> Result<i64> {
     if current <= 0 {
-        bail!(
+        return Err(super::aggregate_underflow(format!(
             "{label} underflow: id=0x{}, current={current}",
             hex::encode(id)
-        );
+        )));
     }
     Ok(current - 1)
 }
@@ -359,6 +361,24 @@ mod tests {
 
     use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
     use crate::db::writer::BatchWriter;
+
+    /// Finding 13: a `.cell` aggregate count going below zero is
+    /// rebuild-required, like its did:ckb and spore siblings.
+    #[test]
+    fn a_dotcell_count_underflow_is_rebuild_required() {
+        assert_eq!(
+            checked_dec(2, "dotcell live_count", &[0x01; 20]).unwrap(),
+            1
+        );
+        let err = checked_dec(0, "dotcell live_count on consume", &[0x02; 20]).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("dotcell live_count on consume underflow"),
+            "{text}"
+        );
+        assert!(text.contains(&hex::encode([0x02; 20])), "{text}");
+    }
 
     /// 2023-11-14: every fixture name's expiry lies after this, so no test
     /// write here is a takeover unless it says so.
