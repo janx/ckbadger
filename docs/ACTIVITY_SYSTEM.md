@@ -42,23 +42,47 @@ Fetcher (RPC)  →  Parser (CPU)  →  Writer (DB)  →  API (read)  →  Fronte
 
 **Write path**: The indexer pipeline builds `TxActions` per transaction, writes records to `CF_TX_ACTIONS`, thin index entries to `CF_ADDR_TXS`, and accumulates stats into `CF_STATS_CHAIN`.
 
-**Read path**: The API reads `TxActions` from `CF_TX_ACTIONS`, extracts per-participant data for address feeds or expands all participants for global feeds, validates canonicality, and returns paginated JSON. The frontend classifies and renders.
+**Read path**: The API reads the stored rows of `CF_TX_ACTIONS` by position, completes each page
+into `TxActions` with one batched read (`tx_index` for the hash, time and cellbase flag,
+`block_headers` for the block hash), extracts per-participant data for address feeds or expands all
+participants for global feeds, and returns paginated JSON. Every row is canonical by construction
+(its key is its position, and a rollback removes the rows of the blocks it removes), so there is no
+canonicality filter. The frontend classifies and renders.
 
 ## Data Structures
 
-### TxActions — Canonical Storage Type
+### StoredTxActions / TxActions — stored form and read form
 
-One record per canonical transaction. TX-level fields are stored once; per-participant data is in the `participants` vector.
+One `activities` row per canonical non-cellbase transaction, keyed by its position
+`block_num_desc(8) + tx_idx_desc(4)` (12 B). The row stores only what the transaction did:
 
 ```rust
-// crates/ckbadger-store/src/types.rs
+// crates/ckbadger-store/src/types.rs — the stored value (strict bincode, decode_stored_tx_actions)
+pub struct StoredTxActions {
+    pub protocol_actions: Vec<ProtocolAction>,  // Layer 3: TX-level (stored once)
+    pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
+    pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
+    pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
+}
+```
+
+The writers build the full `TxActions` and store its `StoredTxActions` part (live:
+`TxActions::encode_stored`; bulk: `TxActions::stored_ref`, serialized straight into the history
+chunk — the same bytes). Readers get `TxActions` back, completed from the position: the hash, the
+timestamp and the cellbase flag are the `tx_index` entry there, the block hash is `block_headers`
+at the block (`docs/prompts/DATA_DESIGN.md` principle 3, pointer over hash). A page is completed
+with one batched read per kind (`CkbadgerStore::tx_actions_of` for transactions the reader has
+already resolved, the list helpers otherwise); a position without a `tx_index` row is an error.
+
+```rust
+// crates/ckbadger-store/src/types.rs — the read form
 pub struct TxActions {
-    pub tx_hash: Vec<u8>,                    // 32-byte tx hash
-    pub block_hash: Vec<u8>,                 // 32-byte block hash
-    pub block_number: i64,
-    pub tx_index: i32,
-    pub timestamp: i64,                      // Unix epoch seconds
-    pub is_cellbase: bool,
+    pub tx_hash: Vec<u8>,                    // tx_index at the position
+    pub block_hash: Vec<u8>,                 // block_headers at the block
+    pub block_number: i64,                   // the key
+    pub tx_index: i32,                       // the key
+    pub timestamp: i64,                      // tx_index at the position (ms)
+    pub is_cellbase: bool,                   // tx_index at the position
     pub protocol_actions: Vec<ProtocolAction>,  // Layer 3: TX-level (stored once)
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
@@ -225,15 +249,20 @@ pub struct DailyActivityStats {
 }
 ```
 
-### ObjectCollectionActivityEntry — Pre-Computed Collection Feed
+### ObjectCollectionActivityEntry — Pre-Computed Collection Feed (read form)
+
+A collection feed row (`object_collection_activities` / `identity_collection_activities`) is keyed
+`collection(32) + block_num_desc(8) + tx_idx_desc(4)` (44 B) and stores only the actions,
+`Vec<AssetAction>` (strict bincode, `decode_stored_collection_activity`). Readers complete a page
+into the read form with one `tx_index` read (hash, time) and one `block_headers` read (block hash):
 
 ```rust
-// crates/ckbadger-store/src/types.rs
+// crates/ckbadger-store/src/types.rs — the read form
 pub struct ObjectCollectionActivityEntry {
-    pub tx_hash: Vec<u8>,
-    pub block_hash: Vec<u8>,
-    pub timestamp_ms: i64,
-    pub actions: Vec<AssetAction>,       // Aggregated actions within one tx
+    pub tx_hash: Vec<u8>,                // tx_index at the position
+    pub block_hash: Vec<u8>,             // block_headers at the block
+    pub timestamp_ms: i64,               // tx_index at the position
+    pub actions: Vec<AssetAction>,       // the stored value: aggregated actions within one tx
 }
 ```
 
@@ -780,15 +809,24 @@ has neither a value nor a reason.
 
 **BTC Time Lock decoder**: btc_txid is the last 32 bytes of args (matching `RgbppParser::extract_btc_txid_from_btc_time_lock_args` in the indexer). Minimum 36 bytes.
 
-### Canonicality Validation
+### Canonical by construction
 
-The API validates that each activity entry matches the canonical chain position. This is necessary because during reorgs, activity entries from orphaned blocks may linger until rollback completes.
+Every activity row is keyed by its transaction's position, and the rollback removes the rows of
+every block it removes in the same commit (`CF_TX_ACTIONS` by block range, the address and
+collection rows through the block journal). A row the API reads is therefore canonical; there is no
+per-entry canonicality check and nothing to drop. What the API does check fails loudly:
 
-Each entry is checked against `TX_HASH_MAP` and `TX_INDEX`: its transaction hash must still resolve
-to the stored `(block_number, tx_index)`, and that canonical position must still exist in
-`TX_INDEX`. Non-matching entries are dropped.
+- the one batched completion of a page (`tx_index` for every position, `block_headers` for every
+  block) errors on a position without a `tx_index` row or a block without a header;
+- an address row (`addr_txs` / `addr_txs_by_prefix`) of a non-cellbase transaction without an
+  `activities` row is an error;
+- a transaction in which the address takes no part (a stale address row) is an error naming the
+  address and the position (`CkbadgerStore::matches_activity_filter`), never a row to skip.
 
-The `list_canonical_activities_page()` function implements a loop that scans entries in chunks, filters orphans, and continues scanning until `limit` canonical entries are found or the address runs out of entries.
+`list_canonical_activities_page()` scans the address's positions in chunks of at least 128, drops
+the ones whose tag bitmap cannot match the filter before any read, completes the survivors with one
+read of each kind per chunk, and continues until `limit` entries are found or the address runs
+out.
 
 ### Script Info Resolution
 
@@ -1021,7 +1059,8 @@ filtering needed, no scan.
 
 - Keys in descending block_num order make the rolled-back `CF_TX_ACTIONS` rows one range
 - After rollback, the domain store contains only canonical entries — no secondary cleanup needed
-- The API's canonicality check provides a safety net during the brief window between chain reorg detection and rollback completion
+- The API serves a pinned read view (`crates/ckbadger-store/src/read_view.rs`), so a page never
+  mixes rows from before and after a rollback commit
 
 ---
 
@@ -1068,11 +1107,14 @@ transaction with three token changes is counted once in `token_count`.
 
 - **Daily**: Key prefix `0x1D` + `YYYYMMDD` in `CF_STATS_CHAIN`
 - **Hourly**: Key prefix `0x1E` + `YYYYMMDDHH` in `CF_STATS_CHAIN`
-- **Unique addresses**: bulk build writes each bucket's address set as one blob (`0x23` daily /
-  `0x24` hourly + bucket); live sync never rewrites it and records each address it sees first in a
-  bucket as its own empty row (`0x26` daily / `0x27` hourly + bucket + lock hash), raising the
-  bucket's `unique_address_count` by one (`docs/STORE_SCHEMA.md` → `stats_chain` activity address
-  sets)
+- **Unique addresses**: one empty row per address of a bucket (`0x26` daily / `0x27` hourly +
+  bucket + lock hash), kept only while a block can still reach the bucket. Live sync writes the row
+  of each address new to a bucket in its block's scope, raising the bucket's
+  `unique_address_count` by one; live batches delete the rows of the buckets behind the rollback
+  coverage floor, oldest first (journaled), and record the hour pruned to
+  (`activity_addr_row_floor`). Bulk build keeps a bucket's set in memory until the bucket seals and
+  writes rows only for the buckets still open at the handoff. The retired `0x23` / `0x24` blobs
+  are not written (`docs/STORE_SCHEMA.md` → `stats_chain` activity address rows)
 
 Live-sync stats are accumulated per block and merged into the block's day and hour buckets, on top
 of the rows the previous block left, with `BatchWriter::update_activity_bucket_stats`, because a
@@ -1149,7 +1191,7 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 
 | File                                  | Content                                                                |
 | ------------------------------------- | ---------------------------------------------------------------------- |
-| `crates/api/src/routes/activities.rs` | Endpoints, response types, canonicality validation, `decode_lock_args` (registry `[lock_args]` layouts) |
+| `crates/api/src/routes/activities.rs` | Endpoints, response types, page completion, `decode_lock_args` (registry `[lock_args]` layouts) |
 
 ### Statistics
 
