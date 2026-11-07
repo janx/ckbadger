@@ -6868,7 +6868,7 @@ mod tests {
                 crate::sync::types::fold_tx_address_deltas(
                     changes.block_mut(tx_data.block_number)?,
                     tx_data.block_number,
-                    &tx_data.hash,
+                    tx_data.tx_index,
                     tx_data.is_cellbase,
                     crate::sync::types::TxAddressEffects {
                         balance: &balance,
@@ -8965,15 +8965,13 @@ mod tests {
                 prefix_rows(&store)
             );
             let balance = store.get_addr_balance(&lock_a).unwrap().expect("A");
+            // 0xc1 is block 101's cellbase (tx 0); the naming tx 0xd1 is tx 1.
             assert_eq!(
-                (
-                    balance.last_activity_block,
-                    balance.last_activity_tx.clone()
-                ),
-                (101, vec![0xc1u8; 32]),
+                (balance.last_activity_block, balance.last_activity_tx_idx),
+                (101, 0),
                 "last_activity is A's last CELL participation, not the naming tx 0xd1"
             );
-            assert_ne!(balance.last_activity_tx, vec![0xd1u8; 32]);
+            assert_ne!(balance.last_activity_tx_idx, 1);
             assert_eq!(
                 balance.txs_count, 3,
                 "txs_count counts cell participations only"

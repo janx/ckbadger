@@ -26,8 +26,6 @@ pub(crate) struct AddressTxDelta {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompactAddressBalance {
-    first_seen_tx: [u8; 32],
-    last_activity_tx: [u8; 32],
     pub(crate) balance: u64,
     pub(crate) used_capacity: u64,
     pub(crate) total_cells_count: i64,
@@ -35,11 +33,15 @@ pub(crate) struct CompactAddressBalance {
     pub(crate) first_seen_block: i64,
     pub(crate) last_activity_block: i64,
     pub(crate) live_cells_count: i32,
-    /// `AddressBalance::cellbase_txs_count`. A `u32` placed after the `i32`
-    /// fills what was trailing padding, so the entry stays 120 bytes: the
-    /// counter costs bulk no retained memory (a chain of ~2^32 blocks would be
-    /// needed to overflow it, and overflow is a checked error, not a wrap).
+    /// `AddressBalance::cellbase_txs_count`. A `u32` beside the `i32` packs
+    /// into one 8-byte slot: the counter costs bulk no retained memory (a
+    /// chain of ~2^32 blocks would be needed to overflow it, and overflow is a
+    /// checked error, not a wrap).
     pub(crate) cellbase_txs_count: u32,
+    /// The first and the last transaction touching the address, by their
+    /// index in `first_seen_block` / `last_activity_block`.
+    first_seen_tx_idx: i32,
+    last_activity_tx_idx: i32,
 }
 
 impl CompactAddressBalance {
@@ -52,17 +54,17 @@ impl CompactAddressBalance {
             txs_count: self.txs_count,
             cellbase_txs_count: i64::from(self.cellbase_txs_count),
             first_seen_block: self.first_seen_block,
-            first_seen_tx: self.first_seen_tx.to_vec(),
+            first_seen_tx_idx: self.first_seen_tx_idx,
             last_activity_block: self.last_activity_block,
-            last_activity_tx: self.last_activity_tx.to_vec(),
+            last_activity_tx_idx: self.last_activity_tx_idx,
         }
     }
 
     #[cfg(test)]
     fn for_test(seed: u64) -> Self {
         Self {
-            first_seen_tx: [seed as u8; 32],
-            last_activity_tx: [seed as u8; 32],
+            first_seen_tx_idx: 0,
+            last_activity_tx_idx: 0,
             balance: seed,
             used_capacity: seed,
             total_cells_count: seed as i64,
@@ -370,7 +372,7 @@ impl AddressOwner {
                             )
                         })?;
                     balance.last_activity_block = tx.block_number;
-                    balance.last_activity_tx = tx.tx_hash;
+                    balance.last_activity_tx_idx = tx.tx_index;
                 }
                 None => {
                     if delta.balance_delta < 0
@@ -441,9 +443,9 @@ impl AddressOwner {
                             txs_count: 1,
                             cellbase_txs_count: cellbase_increment,
                             first_seen_block: tx.block_number,
-                            first_seen_tx: tx.tx_hash,
+                            first_seen_tx_idx: tx.tx_index,
                             last_activity_block: tx.block_number,
-                            last_activity_tx: tx.tx_hash,
+                            last_activity_tx_idx: tx.tx_index,
                         },
                     })?;
                     let entries = &self.entries;
@@ -767,7 +769,7 @@ pub(crate) fn materialize_address_balances_for_test(
         let mut snapshot = HashMap::new();
         for item in iter {
             let (key, value) = item?;
-            let balance: AddressBalance = bincode::deserialize(&value)?;
+            let balance = ckbadger_store::decode_address_balance(&key, &value)?;
             snapshot.insert(key.to_vec(), balance);
         }
         snapshot
@@ -794,7 +796,7 @@ mod tests {
         );
         assert_eq!(
             std::mem::size_of::<AddressEntry>(),
-            152,
+            96,
             "address entry layout changed; re-evaluate bulk retained memory"
         );
     }
@@ -830,9 +832,11 @@ mod tests {
 
     #[test]
     fn compact_address_balance_has_no_heap_backed_tx_hash_fields() {
+        // The first / last transactions are positions (i32 tx index beside
+        // the block number already held), not 32-byte hashes: 120 -> 64 bytes.
         assert_eq!(
             std::mem::size_of::<CompactAddressBalance>(),
-            120,
+            64,
             "CompactAddressBalance layout changed; re-evaluate bulk retained memory"
         );
         let compact = CompactAddressBalance {
@@ -842,16 +846,19 @@ mod tests {
             total_cells_count: 4,
             txs_count: 5,
             first_seen_block: 6,
-            first_seen_tx: [0xAA; 32],
+            first_seen_tx_idx: 2,
             last_activity_block: 7,
-            last_activity_tx: [0xBB; 32],
+            last_activity_tx_idx: 3,
             cellbase_txs_count: 4,
         };
         let stored = compact.to_stored();
         assert_eq!(stored.txs_count, 5);
         assert_eq!(stored.cellbase_txs_count, 4);
-        assert_eq!(stored.first_seen_tx, vec![0xAA; 32]);
-        assert_eq!(stored.last_activity_tx, vec![0xBB; 32]);
+        assert_eq!((stored.first_seen_block, stored.first_seen_tx_idx), (6, 2));
+        assert_eq!(
+            (stored.last_activity_block, stored.last_activity_tx_idx),
+            (7, 3)
+        );
     }
 
     /// W5: the reducer counts a cellbase in `cellbase_txs_count` inside the

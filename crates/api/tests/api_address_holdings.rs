@@ -179,9 +179,9 @@ async fn fixture_with_cluster(has_cluster: bool) -> Fixture {
             txs_count: 1,
             cellbase_txs_count: 0,
             first_seen_block: 7,
-            first_seen_tx: hash.clone(),
+            first_seen_tx_idx: 0,
             last_activity_block: 7,
-            last_activity_tx: hash.clone(),
+            last_activity_tx_idx: 0,
         },
     );
     batch.put_token(
@@ -1252,9 +1252,9 @@ async fn dao_capacity_fixture() -> (axum::Router, Arc<CkbadgerStore>, Vec<u8>, p
             txs_count: 1,
             cellbase_txs_count: 0,
             first_seen_block: 7,
-            first_seen_tx: hash.clone(),
+            first_seen_tx_idx: 0,
             last_activity_block: 7,
-            last_activity_tx: hash.clone(),
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();

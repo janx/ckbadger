@@ -1602,7 +1602,7 @@ pub(crate) fn precompute_live_batch(
         fold_tx_address_deltas(
             address_balance_changes.block_mut(tx_data.block_number)?,
             tx_data.block_number,
-            &tx_data.hash,
+            tx_data.tx_index,
             tx_data.is_cellbase,
             TxAddressEffects {
                 balance: &tx_balance_changes,

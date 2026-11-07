@@ -871,9 +871,9 @@ fn seed_activity_with_txs_count(
                 txs_count,
                 cellbase_txs_count,
                 first_seen_block: 10,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 10,
-                last_activity_tx: tx_hash.clone(),
+                last_activity_tx_idx: 0,
             },
         )
         .unwrap();

@@ -20,7 +20,9 @@ fn decode_addr_prefix_stats(prefix: &[u8], value: &[u8]) -> anyhow::Result<AddrP
 impl CkbadgerStore {
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
         match self.get_cf(self.cf_addr_balance(), lock_hash)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(crate::types::decode_address_balance(
+                lock_hash, &value,
+            )?)),
             None => Ok(None),
         }
     }

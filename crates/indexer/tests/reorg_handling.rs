@@ -250,9 +250,9 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_args: &[u8], block_count: i6
                 txs_count: cells,
                 cellbase_txs_count: 0,
                 first_seen_block: 1,
-                first_seen_tx: vec![0u8; 32],
+                first_seen_tx_idx: 0,
                 last_activity_block: block,
-                last_activity_tx: vec![0u8; 32],
+                last_activity_tx_idx: 0,
             };
             batch.put_addr_balance(lock_hash, &addr_bal);
 
@@ -690,9 +690,9 @@ fn test_rollback_updates_derived_cfs_inline() {
                     txs_count: block,
                     cellbase_txs_count: 0,
                     first_seen_block: 1,
-                    first_seen_tx: vec![0u8; 32],
+                    first_seen_tx_idx: 0,
                     last_activity_block: block,
-                    last_activity_tx: vec![0u8; 32],
+                    last_activity_tx_idx: 0,
                 },
             );
             // script_info for lock_code_hash [0xAA;32]

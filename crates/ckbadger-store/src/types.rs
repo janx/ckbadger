@@ -623,10 +623,31 @@ pub struct AddressBalance {
     /// paths through [`AddressBalance::cellbase_tx_increment`] and reversed by
     /// rollback from the deleted `addr_txs` rows at tx position 0.
     pub cellbase_txs_count: i64,
+    /// The first transaction touching the address, by its position
+    /// `(first_seen_block, first_seen_tx_idx)`: its hash is `tx_index` there.
     pub first_seen_block: i64,
-    pub first_seen_tx: Vec<u8>,
+    pub first_seen_tx_idx: i32,
+    /// The last transaction touching the address, by position.
     pub last_activity_block: i64,
-    pub last_activity_tx: Vec<u8>,
+    pub last_activity_tx_idx: i32,
+}
+
+/// Decode an `addr_balance` value: exactly one [`AddressBalance`] (bincode,
+/// fixed-width integers, no trailing bytes). The layout that stored the first
+/// and last transactions' hashes does not decode: re-sync required.
+pub fn decode_address_balance(lock_hash: &[u8], value: &[u8]) -> anyhow::Result<AddressBalance> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<AddressBalance>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "addr_balance of 0x{} ({} bytes) does not decode ({e}): written by an older layout, \
+                 re-sync required",
+                hex::encode(lock_hash),
+                value.len()
+            )
+        })
 }
 
 impl AddressBalance {
@@ -4445,12 +4466,15 @@ mod tests {
             txs_count: 7,
             cellbase_txs_count: 4,
             first_seen_block: 100,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 1,
             last_activity_block: 500,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 2,
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: AddressBalance = bincode::deserialize(&bytes).unwrap();
+        // 16 + 16 + 4 + 8 + 8 + 8 + 8 + 4 + 8 + 4: the two transactions are
+        // positions (4 B each), not hashes (8 + 32 B each).
+        assert_eq!(bytes.len(), 84);
+        let decoded = decode_address_balance(&[0xAA; 32], &bytes).unwrap();
         assert_eq!(decoded.balance, 100_000_000_000);
         assert_eq!(decoded.used_capacity, 610_000_000_000);
         assert_eq!(decoded.live_cells_count, 3);
@@ -4458,7 +4482,46 @@ mod tests {
         assert_eq!(decoded.txs_count, 7);
         assert_eq!(decoded.cellbase_txs_count, 4);
         assert_eq!(decoded.first_seen_block, 100);
+        assert_eq!(decoded.first_seen_tx_idx, 1);
         assert_eq!(decoded.last_activity_block, 500);
+        assert_eq!(decoded.last_activity_tx_idx, 2);
+    }
+
+    #[test]
+    fn decode_address_balance_refuses_the_hash_layout() {
+        #[derive(Serialize)]
+        struct HashLayout {
+            balance: i128,
+            used_capacity: i128,
+            live_cells_count: i32,
+            total_cells_count: i64,
+            txs_count: i64,
+            cellbase_txs_count: i64,
+            first_seen_block: i64,
+            first_seen_tx: Vec<u8>,
+            last_activity_block: i64,
+            last_activity_tx: Vec<u8>,
+        }
+        let old = bincode::serialize(&HashLayout {
+            balance: 1,
+            used_capacity: 1,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count: 1,
+            cellbase_txs_count: 0,
+            first_seen_block: 100,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 500,
+            last_activity_tx: vec![0x02; 32],
+        })
+        .unwrap();
+        let err = decode_address_balance(&[0xAA; 32], &old)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("re-sync required") && err.contains("aaaa"),
+            "{err}"
+        );
     }
 
     #[test]

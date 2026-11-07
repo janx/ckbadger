@@ -757,13 +757,15 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(lock_hashes.len());
         for (res, lock_hash) in results.into_iter().zip(lock_hashes.iter()) {
             let existing: Option<AddressBalance> = match res {
-                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize address balance: lock_hash=0x{}, error={}",
-                        hex::encode(lock_hash),
-                        e
-                    )
-                })?),
+                Ok(Some(value)) => Some(
+                    ckbadger_store::decode_address_balance(lock_hash, &value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize address balance: lock_hash=0x{}, error={:#}",
+                            hex::encode(lock_hash),
+                            e
+                        )
+                    })?,
+                ),
                 Ok(None) => None,
                 Err(e) => {
                     bail!(
@@ -928,7 +930,7 @@ impl BatchWriter {
                     bal.txs_count = next_txs_count;
                     bal.cellbase_txs_count = next_cellbase_txs_count;
                     bal.last_activity_block = delta.last_activity_block;
-                    bal.last_activity_tx = delta.last_activity_tx.clone();
+                    bal.last_activity_tx_idx = delta.last_activity_tx_idx;
                     bal
                 }
                 None => {
@@ -959,9 +961,9 @@ impl BatchWriter {
                         txs_count: delta.tx_delta,
                         cellbase_txs_count: delta.cellbase_tx_delta,
                         first_seen_block: delta.first_seen_block,
-                        first_seen_tx: delta.first_seen_tx.clone(),
+                        first_seen_tx_idx: delta.first_seen_tx_idx,
                         last_activity_block: delta.last_activity_block,
-                        last_activity_tx: delta.last_activity_tx.clone(),
+                        last_activity_tx_idx: delta.last_activity_tx_idx,
                     }
                 }
             };

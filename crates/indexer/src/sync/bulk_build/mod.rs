@@ -6441,13 +6441,7 @@ fn collect_core_owner_state_snapshot(
     let addr_iter = domain_store.iterator_cf(domain_store.cf_addr_balance(), IteratorMode::Start);
     for item in addr_iter {
         let (key, value) = item?;
-        let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize AddressBalance in core owner snapshot helper: lock_hash=0x{}, error={}",
-                hex::encode(&key),
-                e
-            )
-        })?;
+        let balance = ckbadger_store::decode_address_balance(&key, &value)?;
         address_balances.insert(key.to_vec(), balance);
     }
 

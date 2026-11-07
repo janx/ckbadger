@@ -1863,9 +1863,9 @@ mod tests {
                     txs_count: 1,
                     cellbase_txs_count: 0,
                     first_seen_block: 100,
-                    first_seen_tx: initial_tx_hash.clone(),
+                    first_seen_tx_idx: 0,
                     last_activity_block: 200,
-                    last_activity_tx: reactivate_tx_hash.clone(),
+                    last_activity_tx_idx: 0,
                 },
             );
             script_rows(batch, 2, 1, 100_00000000);

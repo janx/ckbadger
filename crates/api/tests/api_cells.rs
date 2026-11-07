@@ -1424,9 +1424,9 @@ async fn test_get_address_resolves_lock_script_with_zero_live_cells() {
             txs_count: 3,
             cellbase_txs_count: 0,
             first_seen_block: 10,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 90,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -1503,9 +1503,9 @@ async fn test_get_address_keeps_exact_hash_type_for_live_address() {
             txs_count: 1,
             cellbase_txs_count: 0,
             first_seen_block: 77,
-            first_seen_tx: vec![0x51; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 77,
-            last_activity_tx: vec![0x51; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -1820,9 +1820,9 @@ fn seed_burn_lock(store: &Arc<CkbadgerStore>) -> Vec<u8> {
             txs_count: 9,
             cellbase_txs_count: 0,
             first_seen_block: 1,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 5,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -1964,9 +1964,9 @@ async fn test_get_address_lock_script_info_reports_deprecated_version() {
             txs_count: 1,
             cellbase_txs_count: 0,
             first_seen_block: 10,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 20,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -2001,9 +2001,9 @@ fn seed_pool_address_balance(store: &Arc<CkbadgerStore>, lock_hash: &[u8], txs_c
             txs_count,
             cellbase_txs_count: 0,
             first_seen_block: 1,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 10,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
