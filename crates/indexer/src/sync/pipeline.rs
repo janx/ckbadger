@@ -150,12 +150,18 @@ struct ParserBatchPerfSample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BatchWriteFailurePolicy {
     FailFastPreCommitInvariant,
+    /// The store's derived state no longer matches the chain
+    /// (`RebuildRequiredError`): no retry can repair it (B-7, F1).
+    FailFastRebuildRequired,
     CleanupAndRetry,
 }
 
 pub(super) fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
     if error.downcast_ref::<PreCommitInvariantError>().is_some() {
         BatchWriteFailurePolicy::FailFastPreCommitInvariant
+    } else if crate::lifecycle::is_rebuild_required(error) {
+        // An error the chain cannot repair is never transient (B-7, F1).
+        BatchWriteFailurePolicy::FailFastRebuildRequired
     } else {
         BatchWriteFailurePolicy::CleanupAndRetry
     }
@@ -2838,6 +2844,9 @@ impl Indexer {
                                 BatchWriteFailurePolicy::FailFastPreCommitInvariant => {
                                     "pipeline_precommit_invariant_failed"
                                 }
+                                BatchWriteFailurePolicy::FailFastRebuildRequired => {
+                                    "pipeline_rebuild_required"
+                                }
                                 BatchWriteFailurePolicy::CleanupAndRetry => {
                                     "pipeline_batch_write_failed"
                                 }
@@ -2858,6 +2867,14 @@ impl Indexer {
                                 error = ?e,
                                 "Sync error while writing parsed batch"
                             );
+                            if failure_policy == BatchWriteFailurePolicy::FailFastRebuildRequired {
+                                return Err(e).with_context(|| {
+                                    format!(
+                                        "live sync fail-fast: the store's derived state no longer matches the chain in range {}-{} (chain_tip={}); rollback cleanup and retry are disabled, the store needs a rebuild",
+                                        start_block, end_block, chain_tip
+                                    )
+                                });
+                            }
                             if failure_policy == BatchWriteFailurePolicy::FailFastPreCommitInvariant
                             {
                                 return Err(e).with_context(|| {
@@ -3581,6 +3598,22 @@ mod tests {
         assert_eq!(
             classify_batch_write_failure(&error),
             BatchWriteFailurePolicy::FailFastPreCommitInvariant
+        );
+    }
+
+    /// B-7 (F1): an error the chain cannot repair is never transient. A
+    /// `RebuildRequiredError` from the writer (e.g. `apply_dob_outcome`'s
+    /// store invariants), even under a context layer, stops live sync at once
+    /// instead of three cleanup-and-retry rounds.
+    #[test]
+    fn a_rebuild_required_failure_is_fail_fast_under_context() {
+        let error = anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(
+            "missing cluster aggregate while applying a DOB decode outcome",
+        ))
+        .context("atomic domain commit failed for blocks 100-101");
+        assert_eq!(
+            classify_batch_write_failure(&error),
+            BatchWriteFailurePolicy::FailFastRebuildRequired
         );
     }
 
