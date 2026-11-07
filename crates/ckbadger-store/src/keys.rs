@@ -840,14 +840,14 @@ pub mod stats_prefix {
     pub const TOKEN_DAILY: u8 = 0x10;
     pub const CLUSTER_DAILY: u8 = 0x11;
     pub const SPORE_DAILY: u8 = 0x12;
-    pub const SPORE_OUTPOINT: u8 = 0x13;
+    // 0x13 / 0x1A (spore item outpoint and its by-id reverse index), 0x17 /
+    // 0x18 (mNFT class / token outpoint) and 0x19 / 0x1F (`.bit` account
+    // outpoint and its by-account reverse index) moved to the
+    // `object_outpoints` / `object_outpoint_by_id` CFs (C-4b; see
+    // `object_outpoint_kind`) and are not reused.
     pub const SPORE_TYPE_INDEX: u8 = 0x14;
     pub const OBJECT_DAILY: u8 = 0x15;
     pub const OBJECT_TYPE_INDEX: u8 = 0x16;
-    pub const MNFT_CLASS_OUTPOINT: u8 = 0x17;
-    pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
-    pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
-    pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
     pub const OBJECT_COLLECTION_OWNER: u8 = 0x1C;
     /// Activity daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
@@ -855,7 +855,6 @@ pub mod stats_prefix {
     /// Activity hourly stats. Suffix: `%Y%m%d%H` on the **UTC+8** clock
     /// (unlike chain-level `HOURLY`, which is UTC).
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
-    pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
     pub const CELL_DISTRIBUTION: u8 = 0x21;
     pub const ADDR_COHORT: u8 = 0x22;
@@ -903,20 +902,13 @@ pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
 pub const STATS_PREFIX_TOKEN_DAILY: u8 = stats_prefix::TOKEN_DAILY;
 pub const STATS_PREFIX_CLUSTER_DAILY: u8 = stats_prefix::CLUSTER_DAILY;
 pub const STATS_PREFIX_SPORE_DAILY: u8 = stats_prefix::SPORE_DAILY;
-pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
 pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
 pub const STATS_PREFIX_OBJECT_DAILY: u8 = stats_prefix::OBJECT_DAILY;
 pub const STATS_PREFIX_OBJECT_TYPE_INDEX: u8 = stats_prefix::OBJECT_TYPE_INDEX;
-pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOINT;
-pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
-pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
-pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
 pub const STATS_PREFIX_OBJECT_COLLECTION_OWNER: u8 = stats_prefix::OBJECT_COLLECTION_OWNER;
 pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
-pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
-    stats_prefix::DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
 pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
 pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
 pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
@@ -1177,7 +1169,26 @@ pub fn decode_spore_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     (spore_id, date)
 }
 
-/// Spore outpoint lookup key: prefix(1B) + outpoint(34B)
+/// The kind of object a row of `object_outpoints` / `object_outpoint_by_id`
+/// indexes: the first byte of every key of both CFs (C-4b). Every reader asks
+/// for one kind, so each kind's rows are one contiguous key range (the mNFT
+/// token scans and the per-transaction class seek read only their kind).
+pub mod object_outpoint_kind {
+    /// Spore, did:ckb and `.bit Cell` items, which share one id space: the
+    /// item id at its natural width (32 bytes; did:ckb also 20). By-id rows
+    /// carry the item's `AssetAction` byte for an identity, nothing for a
+    /// spore.
+    pub const SPORE_ITEM: u8 = 0x01;
+    /// mNFT classes (outpoint rows only).
+    pub const MNFT_CLASS: u8 = 0x02;
+    /// mNFT tokens (outpoint rows only).
+    pub const MNFT_TOKEN: u8 = 0x03;
+    /// `.bit` accounts (20-byte account id); by-id rows carry the
+    /// `AssetAction` byte.
+    pub const DOTBIT_ACCOUNT: u8 = 0x04;
+}
+
+/// Spore item outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const SPORE_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_spore_outpoint_key(
@@ -1185,7 +1196,7 @@ pub fn encode_spore_outpoint_key(
     output_index: i16,
 ) -> [u8; SPORE_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; SPORE_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_SPORE_OUTPOINT;
+    key[0] = object_outpoint_kind::SPORE_ITEM;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
@@ -1194,8 +1205,8 @@ pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
-/// Spore/identity outpoint reverse index key:
-/// `prefix(1B) + id(1..=32B, verbatim) + outpoint(34B)`
+/// Spore/identity outpoint reverse index key (`object_outpoint_by_id`):
+/// `kind(1B) + id(1..=32B, verbatim) + outpoint(34B)`
 ///
 /// The id component is VARIABLE width. Spore and `.bit Cell` ids are always 32
 /// bytes, but did:ckb item ids are the type-script args verbatim and occur on
@@ -1241,7 +1252,7 @@ pub fn encode_spore_outpoint_by_id_key(
 ) -> Vec<u8> {
     assert_by_id_len("encode_spore_outpoint_by_id_key", spore_id.len());
     let mut key = Vec::with_capacity(spore_outpoint_by_id_key_len(spore_id.len()));
-    key.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    key.push(object_outpoint_kind::SPORE_ITEM);
     key.extend_from_slice(spore_id);
     key.extend_from_slice(&encode_outpoint(tx_hash, output_index));
     key
@@ -1250,7 +1261,7 @@ pub fn encode_spore_outpoint_by_id_key(
 pub fn encode_spore_outpoint_by_id_prefix(spore_id: &[u8]) -> Vec<u8> {
     assert_by_id_len("encode_spore_outpoint_by_id_prefix", spore_id.len());
     let mut prefix = Vec::with_capacity(1 + spore_id.len());
-    prefix.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    prefix.push(object_outpoint_kind::SPORE_ITEM);
     prefix.extend_from_slice(spore_id);
     prefix
 }
@@ -1265,7 +1276,7 @@ pub fn decode_spore_outpoint_by_id_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[key.len() - OUTPOINT_KEY_SIZE..])
 }
 
-/// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
+/// mNFT class outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const MNFT_CLASS_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_mnft_class_outpoint_key(
@@ -1273,13 +1284,13 @@ pub fn encode_mnft_class_outpoint_key(
     output_index: i16,
 ) -> [u8; MNFT_CLASS_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; MNFT_CLASS_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    key[0] = object_outpoint_kind::MNFT_CLASS;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
 /// The prefix of every mNFT class outpoint key one transaction created:
-/// prefix(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
+/// kind(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
 /// lists exactly that transaction's class outputs.
 pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
     assert_key_component_len(
@@ -1289,12 +1300,12 @@ pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
         HASH32_LEN,
     );
     let mut prefix = [0u8; 33];
-    prefix[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    prefix[0] = object_outpoint_kind::MNFT_CLASS;
     prefix[1..].copy_from_slice(tx_hash);
     prefix
 }
 
-/// mNFT token outpoint lookup key: prefix(1B) + outpoint(34B)
+/// mNFT token outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const MNFT_TOKEN_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_mnft_token_outpoint_key(
@@ -1302,12 +1313,12 @@ pub fn encode_mnft_token_outpoint_key(
     output_index: i16,
 ) -> [u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_MNFT_TOKEN_OUTPOINT;
+    key[0] = object_outpoint_kind::MNFT_TOKEN;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
-/// .bit account outpoint lookup key: prefix(1B) + outpoint(34B)
+/// .bit account outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_dotbit_account_outpoint_key(
@@ -1315,7 +1326,7 @@ pub fn encode_dotbit_account_outpoint_key(
     output_index: i16,
 ) -> [u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT;
+    key[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
@@ -1339,10 +1350,11 @@ pub fn encode_dotbit_unindexed_outpoint_key(
     key
 }
 
-/// .bit outpoint reverse index key: prefix(1B) + account_id(20B) + outpoint(34B)
+/// .bit outpoint reverse index key (`object_outpoint_by_id`):
+/// kind(1B) + account_id(20B) + outpoint(34B)
 pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE: usize = 55;
 
-/// Prefix for scanning all outpoints of a given .bit account: prefix(1B) + account_id(20B)
+/// Prefix for scanning all outpoints of a given .bit account: kind(1B) + account_id(20B)
 pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE: usize = 21;
 
 pub fn encode_dotbit_outpoint_by_account_id_key(
@@ -1357,7 +1369,7 @@ pub fn encode_dotbit_outpoint_by_account_id_key(
         DOTBIT_ACCOUNT_ID_LEN,
     );
     let mut key = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    key[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     key[1..21].copy_from_slice(&account_id[..20]);
     key[21..55].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
@@ -1373,7 +1385,7 @@ pub fn encode_dotbit_outpoint_by_account_id_prefix(
         DOTBIT_ACCOUNT_ID_LEN,
     );
     let mut prefix = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE];
-    prefix[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    prefix[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     prefix[1..21].copy_from_slice(&account_id[..20]);
     prefix
 }
@@ -2949,7 +2961,7 @@ mod tests {
         let tx_hash = [0xABu8; 32];
         let key = encode_spore_outpoint_key(&tx_hash, 7);
         assert_eq!(key.len(), SPORE_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 7);
@@ -2962,7 +2974,7 @@ mod tests {
         let key = encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, 3);
         assert_eq!(key.len(), spore_outpoint_by_id_key_len(spore_id.len()));
         assert_eq!(key.len(), 67);
-        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+        assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
         assert_eq!(&key[1..33], &spore_id);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_by_id_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
@@ -2986,7 +2998,7 @@ mod tests {
             let key = encode_spore_outpoint_by_id_key(&id, &tx_hash, 5);
             assert_eq!(key.len(), 1 + id_len + OUTPOINT_KEY_SIZE);
             assert_eq!(key.len(), spore_outpoint_by_id_key_len(id_len));
-            assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+            assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
             assert_eq!(&key[1..1 + id_len], id.as_slice());
 
             let prefix = encode_spore_outpoint_by_id_prefix(&id);
@@ -3047,7 +3059,7 @@ mod tests {
         let tx_hash = [0xACu8; 32];
         let key = encode_mnft_class_outpoint_key(&tx_hash, 8);
         assert_eq!(key.len(), MNFT_CLASS_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_MNFT_CLASS_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::MNFT_CLASS);
         let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 8);
@@ -3058,7 +3070,7 @@ mod tests {
         let tx_hash = [0xADu8; 32];
         let key = encode_mnft_token_outpoint_key(&tx_hash, 9);
         assert_eq!(key.len(), MNFT_TOKEN_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_MNFT_TOKEN_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::MNFT_TOKEN);
         let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 9);
@@ -3069,7 +3081,7 @@ mod tests {
         let tx_hash = [0xAEu8; 32];
         let key = encode_dotbit_account_outpoint_key(&tx_hash, 10);
         assert_eq!(key.len(), DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_ACCOUNT);
         let (decoded_tx_hash, decoded_output_index) = decode_dotbit_account_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 10);
@@ -3082,9 +3094,10 @@ mod tests {
         assert_eq!(key.len(), DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE);
         assert_eq!(key[0], STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT);
         assert_eq!(&key[1..35], encode_outpoint(&tx_hash, 3).as_slice());
-        assert_ne!(
-            key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT,
-            "the marker never shares the account outpoint family"
+        assert_eq!(
+            crate::CkbadgerStore::stats_cf_name_by_prefix(key[0]).unwrap(),
+            crate::store::CF_STATS_MNFT,
+            "the marker stays in stats_mnft; account outpoints are in object_outpoints"
         );
     }
 
@@ -3094,7 +3107,7 @@ mod tests {
         let tx_hash = [0xBBu8; 32];
         let key = encode_dotbit_outpoint_by_account_id_key(&account_id, &tx_hash, 5);
         assert_eq!(key.len(), DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_ACCOUNT);
         assert_eq!(&key[1..21], &account_id);
         let (decoded_tx_hash, decoded_output_index) =
             decode_dotbit_outpoint_by_account_id_key(&key);

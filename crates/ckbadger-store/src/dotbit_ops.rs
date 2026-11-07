@@ -18,7 +18,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_mnft(), &key)? {
+        match self.get_cf(self.cf_object_outpoints(), &key)? {
             Some(value) if value.is_empty() => anyhow::bail!(
                 "empty dotbit account id for outpoint: tx_hash=0x{}, output_index={}",
                 bytes_to_hex(tx_hash),
@@ -55,7 +55,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<Vec<DotbitOutpointLookup>> {
-        let cf = self.cf_stats_mnft();
+        let cf = self.cf_object_outpoints();
         let keys: Vec<[u8; keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_dotbit_account_outpoint_key(tx_hash, *idx))
@@ -114,7 +114,7 @@ impl CkbadgerStore {
 
         for account_id in account_ids {
             let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
-            let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
+            let iter = self.prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix);
 
             for item in iter {
                 let (key, _) = item.map_err(|e| {
@@ -178,7 +178,7 @@ impl CkbadgerStore {
         account_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
@@ -289,7 +289,9 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_b = [0xC2u8; 32];
         let key = keys::encode_dotbit_account_outpoint_key(&tx_b, 5);
-        store.put_cf(store.cf_stats_mnft(), &key, b"").unwrap();
+        store
+            .put_cf(store.cf_object_outpoints(), &key, b"")
+            .unwrap();
 
         let dotbit_outpoints: Vec<(&[u8], i16)> = vec![(&tx_b, 5)];
         let err = store

@@ -1423,22 +1423,41 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
+    /// A spore item's outpoint (`object_outpoints`) and its reverse-index row
+    /// (`object_outpoint_by_id`, value empty; an identity's action is
+    /// [`Self::put_spore_item_action`]).
     pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_spore(), key, spore_id);
-        // Reverse index: spore_id → outpoints
+        self.put_cf(self.store.cf_object_outpoints(), key, spore_id);
         let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_spore(), rev_key, &[] as &[u8]);
+        self.put_cf(self.store.cf_object_outpoint_by_id(), rev_key, &[] as &[u8]);
+    }
+
+    /// An identity item's (did:ckb, `.bit Cell`) output action on its
+    /// reverse-index row (`object_outpoint_by_id`).
+    pub fn put_spore_item_action(
+        &mut self,
+        id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+        action: AssetAction,
+    ) {
+        let key = keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index);
+        self.put_cf(
+            self.store.cf_object_outpoint_by_id(),
+            key,
+            [action.compact()],
+        );
     }
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, class_id);
+        self.put_cf(self.store.cf_object_outpoints(), key, class_id);
     }
 
     pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, token_id);
+        self.put_cf(self.store.cf_object_outpoints(), key, token_id);
     }
 
     pub fn put_dotbit_account_outpoint(
@@ -1448,7 +1467,7 @@ impl<'a> StoreBatch<'a> {
         account_id: &[u8],
     ) {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, account_id);
+        self.put_cf(self.store.cf_object_outpoints(), key, account_id);
     }
 
     /// Record that this `.bit` AccountCell-typed output holds no indexed
@@ -1466,7 +1485,11 @@ impl<'a> StoreBatch<'a> {
         action: AssetAction,
     ) {
         let key = keys::encode_dotbit_outpoint_by_account_id_key(account_id, tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, [action.compact()]);
+        self.put_cf(
+            self.store.cf_object_outpoint_by_id(),
+            key,
+            [action.compact()],
+        );
     }
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {

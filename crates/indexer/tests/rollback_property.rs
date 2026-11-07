@@ -530,6 +530,12 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_SPORE_BY_CLUSTER, None),
     (ckbadger_store::CF_CLUSTER_AGG, None),
     (ckbadger_store::CF_STATS_SPORE, None),
+    // C-4b: the object outpoint indexes (spore / did:ckb / `.bit Cell` items,
+    // mNFT classes and tokens, `.bit` accounts) moved out of `stats_spore` /
+    // `stats_mnft`; written by the same object-loop writes, in the block of
+    // the output they index.
+    (ckbadger_store::CF_OBJECT_OUTPOINTS, None),
+    (ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID, None),
     (ckbadger_store::CF_IDENTITY_DATA, None),
     (ckbadger_store::store::CF_IDENTITY_BY_COLLECTION, None),
     (ckbadger_store::store::CF_STATS_IDENTITY, None),
@@ -594,8 +600,9 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     // B-3 mnft.rs: the object type-index rows (`stats_mnft` 0x16) carry the
     // block whose output carried them; the mNFT entity rows were scoped with
     // the object loop (96802ea4). `stats_mnft` holds the object entity stats,
-    // the type index, the mNFT / `.bit` outpoint indexes and the collection
-    // owner counts, all written per block now.
+    // the type index, the unindexed `.bit` AccountCell markers and the
+    // collection owner counts, all written per block now (the outpoint
+    // indexes are `object_outpoints` / `object_outpoint_by_id`, C-4b).
     (ckbadger_store::CF_MNFT_DATA, None),
     (ckbadger_store::CF_MNFT_BY_COLLECTION, None),
     (ckbadger_store::CF_STATS_MNFT, None),

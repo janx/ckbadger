@@ -14511,7 +14511,10 @@ mod tests {
         fn stats_dao_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
             let mut rows = Vec::new();
             for &name in ckbadger_store::DOMAIN_CFS {
-                if name.starts_with("stats_") || name.starts_with("dao_") {
+                if name.starts_with("stats_")
+                    || name.starts_with("dao_")
+                    || name.starts_with("object_outpoint")
+                {
                     for row in store.iterator_cf(store.cf(name), rocksdb::IteratorMode::Start) {
                         let (key, value) = row.unwrap();
                         rows.push((name, key.to_vec(), value.to_vec()));

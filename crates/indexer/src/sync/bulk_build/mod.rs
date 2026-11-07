@@ -4227,7 +4227,12 @@ fn collect_bulk_artifact_snapshot(
 ) -> Result<BulkArtifactSnapshot> {
     let mut stats_dao_rows = Vec::new();
     for &name in ckbadger_store::DOMAIN_CFS {
-        if name.starts_with("stats_") || name.starts_with("dao_") {
+        // The `object_*` CFs hold the outpoint indexes that lived in
+        // `stats_spore` / `stats_mnft` until C-4b.
+        if name.starts_with("stats_")
+            || name.starts_with("dao_")
+            || name.starts_with("object_outpoint")
+        {
             for row in domain_store.iterator_cf(domain_store.cf(name), IteratorMode::Start) {
                 let (key, value) = row?;
                 stats_dao_rows.push((name, key.to_vec(), value.to_vec()));

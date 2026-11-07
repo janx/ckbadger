@@ -513,6 +513,12 @@ pub const CF_DOB_DECODED: &str = "dob_decoded";
 /// its canonical slot (`block ‖ tx_idx`): written by the on-demand cycles
 /// worker after the block committed, removed with the block on rollback.
 pub const CF_TX_GROUP_CYCLES: &str = "tx_group_cycles";
+/// Object outpoint index: `kind(1) + outpoint(34)` → the object id
+/// (`keys::object_outpoint_kind`; C-4b, from `stats_spore` / `stats_mnft`).
+pub const CF_OBJECT_OUTPOINTS: &str = "object_outpoints";
+/// Object outpoints by id: `kind(1) + id + outpoint(34)` → empty, or the
+/// identity's `AssetAction` byte (C-4b, from `stats_spore` / `stats_mnft`).
+pub const CF_OBJECT_OUTPOINT_BY_ID: &str = "object_outpoint_by_id";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 /// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
@@ -721,6 +727,8 @@ mod cf_table {
         cf(CF_OBJECT_COLLECTION_ACTIVITY_COUNT,       Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_BIT_CELL_BY_ACCOUNT,                    Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_TX_GROUP_CYCLES,                        Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   RangeByBlock),
+        cf(CF_OBJECT_OUTPOINTS,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -2161,6 +2169,12 @@ impl CkbadgerStore {
     pub fn cf_tx_group_cycles(&self) -> &ColumnFamily {
         self.cf(CF_TX_GROUP_CYCLES)
     }
+    pub fn cf_object_outpoints(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_OUTPOINTS)
+    }
+    pub fn cf_object_outpoint_by_id(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_OUTPOINT_BY_ID)
+    }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
     }
@@ -2570,16 +2584,10 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_HOURLY
             | keys::STATS_PREFIX_CLUSTER_DAILY
             | keys::STATS_PREFIX_SPORE_DAILY
-            | keys::STATS_PREFIX_SPORE_OUTPOINT
-            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(self.cf_stats_spore()),
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX => Ok(self.cf_stats_spore()),
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
             | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
@@ -2625,16 +2633,10 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_HOURLY
             | keys::STATS_PREFIX_CLUSTER_DAILY
             | keys::STATS_PREFIX_SPORE_DAILY
-            | keys::STATS_PREFIX_SPORE_OUTPOINT
-            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(CF_STATS_SPORE),
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX => Ok(CF_STATS_SPORE),
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
             | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(CF_STATS_MNFT),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
@@ -3803,7 +3805,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(DOMAIN_CFS.len(), 73);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5234,8 +5236,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 75);
-        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(CF_SPECS.len(), 77);
+        assert_eq!(DOMAIN_CFS.len(), 73);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5528,6 +5530,8 @@ mod tests {
     "object_collection_activity_count BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "bit_cell_by_account BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "tx_group_cycles BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_outpoints FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

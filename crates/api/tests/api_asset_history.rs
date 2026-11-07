@@ -708,7 +708,7 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -1159,7 +1159,7 @@ async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() 
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -1271,7 +1271,7 @@ async fn protocol_fixture(
             batch.put_dotbit_account_outpoint(&hash, 0, &id);
             batch
                 .put_raw_cf_by_name(
-                    ckbadger_store::CF_STATS_MNFT,
+                    ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                     &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(&id, &hash, 0),
                     &[AssetAction::Mint.compact()],
                 )
@@ -1414,7 +1414,7 @@ fn seed_item_versions(
         if let Some(action) = version.item_action {
             batch
                 .put_raw_cf_by_name(
-                    ckbadger_store::CF_STATS_SPORE,
+                    ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                     &ckbadger_store::keys::encode_spore_outpoint_by_id_key(id, hash, 0),
                     &[action.compact()],
                 )
@@ -1665,7 +1665,7 @@ async fn did_feed_row_with_unchanged_data_has_an_unchanged_handle() {
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -2064,7 +2064,7 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
         // outpoint (what the item and collection feeds read).
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&[0x44; 20], &hash, 0),
                 &[action.compact()],
             )

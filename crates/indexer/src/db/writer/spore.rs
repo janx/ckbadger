@@ -7,7 +7,6 @@ use crate::parser::{
 };
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::CF_STATS_SPORE;
 use ckbadger_store::types::{
     ClusterAggregate, CompositionTier, DotCellRingRoot, IdentityCollectionAggregate, IdentityEntry,
     IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
@@ -793,8 +792,7 @@ impl BatchWriter {
         batch.put_identity(&did.did_id, &identity);
         state.put_identity(&did.did_id, identity);
         self.put_object_outpoint_rows(&did.did_id, tx_hash, output_index, batch, state)?;
-        let action_key = keys::encode_spore_outpoint_by_id_key(&did.did_id, tx_hash, output_index);
-        batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
+        batch.put_spore_item_action(&did.did_id, tx_hash, output_index, item_action);
 
         // Update identity collection aggregate
         let cid = &DID_CKB_SENTINEL_COLLECTION;
@@ -1161,8 +1159,7 @@ impl BatchWriter {
         });
         state.put_identity(identity_id, identity);
         self.put_object_outpoint_rows(identity_id, tx_hash, output_index, batch, state)?;
-        let action_key = keys::encode_spore_outpoint_by_id_key(identity_id, tx_hash, output_index);
-        batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
+        batch.put_spore_item_action(identity_id, tx_hash, output_index, item_action);
 
         let collection_id = &BIT_CELL_SENTINEL_COLLECTION;
         let mut aggregate = state.get_identity_agg(self.store.as_ref(), collection_id)?;
@@ -2808,7 +2805,10 @@ mod tests {
         batch.commit().unwrap();
         let key = keys::encode_spore_outpoint_by_id_key(&did.did_id, &[0x44; 32], 0);
         assert_eq!(
-            store.get_cf(store.cf_stats_spore(), &key).unwrap().unwrap(),
+            store
+                .get_cf(store.cf_object_outpoint_by_id(), &key)
+                .unwrap()
+                .unwrap(),
             vec![5],
             "same-owner document edit is Update"
         );
@@ -3591,13 +3591,20 @@ mod tests {
                 ckbadger_store::block_overlay::journal_seq(&mut counters, block)
             })
             .expect_err("a failed previous-value read must not be journaled as an absent row");
+        // Both rows `put_object_outpoint_rows` writes sit in the corrupted
+        // SSTs (C-4b: one CF each); the overlay names whichever read failed
+        // first, with its CF and key.
         let message = format!("{err:#}");
-        assert!(message.contains("cf=stats_spore"), "{message}");
+        let named =
+            |cf: &str, key: &[u8]| message.contains(&format!("cf={cf} key=0x{}", hex::encode(key)));
         assert!(
-            message.contains(&format!(
-                "key=0x{}",
-                hex::encode(keys::encode_spore_outpoint_key(&tx_hash, 0))
-            )),
+            named(
+                ckbadger_store::CF_OBJECT_OUTPOINTS,
+                &keys::encode_spore_outpoint_key(&tx_hash, 0)
+            ) || named(
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
+                &keys::encode_spore_outpoint_by_id_key(&item_id, &tx_hash, 0)
+            ),
             "{message}"
         );
     }
