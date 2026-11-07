@@ -5014,11 +5014,12 @@ fn build_history_rows_for_block(
         let tx_actions = &built.actions;
         if !tx_actions.is_cellbase {
             // Keyed by its position; the value is what the transaction did
-            // (`TxActions::encode_stored`): its hash, block hash, timestamp
+            // (`TxActions::stored_ref`, serialized straight into the chunk —
+            // the bytes of `encode_stored`): its hash, block hash, timestamp
             // and cellbase flag are `tx_index` / `block_headers` there.
             let tx_actions_key =
                 keys::encode_tx_actions_key(tx_actions.block_number, tx_actions.tx_index);
-            rows.push_raw(CF_TX_ACTIONS, &tx_actions_key, &tx_actions.encode_stored())?;
+            rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, &tx_actions.stored_ref())?;
             // Its global bucket row, derived by the same function the live
             // writer's `StoreBatch::put_tx_actions` uses, into the same rows.
             let bucket_key =
@@ -5047,10 +5048,10 @@ fn build_history_rows_for_block(
                 tx_actions.block_number,
                 tx_actions.tx_index,
             );
-            rows.push_raw(
+            rows.push_serialized(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &entry.encode_stored(),
+                entry.stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -5233,10 +5234,10 @@ fn build_history_rows_for_block(
                     tx.block_number,
                     tx.tx_index,
                 );
-                rows.push_raw(
+                rows.push_serialized(
                     CF_IDENTITY_COLLECTION_ACTIVITIES,
                     &activity_key,
-                    &entry.encode_stored(),
+                    entry.stored(),
                 )?;
                 fold_collection_activity_row(
                     &mut collection_activity_daily,
@@ -5272,10 +5273,10 @@ fn build_history_rows_for_block(
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
             );
-            rows.push_raw(
+            rows.push_serialized(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &resolved_entry.entry.encode_stored(),
+                resolved_entry.entry.stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -5300,10 +5301,10 @@ fn build_history_rows_for_block(
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
             );
-            rows.push_raw(
+            rows.push_serialized(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &resolved_entry.entry.encode_stored(),
+                resolved_entry.entry.stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -8970,6 +8971,84 @@ mod tests {
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
         assert!(!direct_snapshot_rows.is_empty());
+    }
+
+    /// The bulk build serializes an `activities` value and a collection
+    /// activity value straight into its history chunk from the borrowed
+    /// stored views (`TxActions::stored_ref`, `ObjectCollectionActivityEntry::stored`):
+    /// no `Vec` per row, and the bytes are exactly the live writer's
+    /// `encode_stored()`.
+    #[test]
+    fn history_chunk_writes_stored_activity_values_as_encode_stored() {
+        let tx_actions = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index: 3,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![ckbadger_store::types::ProtocolAction::new(
+                "spore",
+                "mint",
+                serde_json::json!({"id": "0x01"}),
+            )],
+            type_calls: vec![ckbadger_store::types::TypeCallEntry {
+                type_code_hash: vec![0x5c; 32],
+                type_hash_type: 1,
+                type_args: vec![7, 8],
+            }],
+            lock_calls: vec![ckbadger_store::types::LockCallEntry {
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 1,
+                lock_args: vec![9; 20],
+            }],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                id: ParticipantId::Lock([0x33; 32]),
+                ckb_delta: -100_00000000,
+                used_delta: 61_00000000,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            }],
+        };
+        let entry = ckbadger_store::types::ObjectCollectionActivityEntry {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            timestamp_ms: 1_700_000_000_000,
+            actions: vec![AssetAction::Mint, AssetAction::Transfer],
+        };
+
+        let mut chunk = materialize::EncodedHistoryChunk::with_capacity(2, 0);
+        chunk
+            .push_serialized(CF_TX_ACTIONS, b"tx", &tx_actions.stored_ref())
+            .unwrap();
+        chunk
+            .push_serialized(CF_OBJECT_COLLECTION_ACTIVITIES, b"col", entry.stored())
+            .unwrap();
+        let mut rows = Vec::new();
+        chunk
+            .consume(|cf, key, value| {
+                rows.push((cf, key.to_vec(), value.to_vec()));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (CF_TX_ACTIONS, b"tx".to_vec(), tx_actions.encode_stored()),
+                (
+                    CF_OBJECT_COLLECTION_ACTIVITIES,
+                    b"col".to_vec(),
+                    entry.encode_stored()
+                ),
+            ]
+        );
+        let stored = ckbadger_store::types::decode_stored_tx_actions(&rows[0].2).unwrap();
+        assert_eq!(stored.participants.len(), 1);
+        assert_eq!(
+            ckbadger_store::types::decode_stored_collection_activity(&rows[1].2).unwrap(),
+            entry.actions
+        );
     }
 
     #[test]

@@ -2767,10 +2767,12 @@ pub struct StoredTxActions {
     pub participants: Vec<ParticipantDelta>,
 }
 
-/// [`StoredTxActions`] borrowed from a [`TxActions`], for encoding without a
-/// copy (serializes exactly as the owned form).
+/// [`StoredTxActions`] borrowed from a [`TxActions`] ([`TxActions::stored_ref`]),
+/// for encoding without a copy: it serializes exactly as the owned form, so
+/// the bulk build serializes it straight into its history chunk and the live
+/// writer through [`TxActions::encode_stored`] — the same bytes.
 #[derive(Serialize)]
-struct StoredTxActionsRef<'a> {
+pub struct StoredTxActionsRef<'a> {
     protocol_actions: &'a [ProtocolAction],
     type_calls: &'a [TypeCallEntry],
     lock_calls: &'a [LockCallEntry],
@@ -2796,15 +2798,20 @@ pub fn decode_stored_tx_actions(value: &[u8]) -> anyhow::Result<StoredTxActions>
 }
 
 impl TxActions {
-    /// The `activities` value of this transaction ([`StoredTxActions`]).
-    pub fn encode_stored(&self) -> Vec<u8> {
-        bincode::serialize(&StoredTxActionsRef {
+    /// The stored part of this transaction, borrowed: what an `activities`
+    /// value serializes ([`StoredTxActions`]).
+    pub fn stored_ref(&self) -> StoredTxActionsRef<'_> {
+        StoredTxActionsRef {
             protocol_actions: &self.protocol_actions,
             type_calls: &self.type_calls,
             lock_calls: &self.lock_calls,
             participants: &self.participants,
-        })
-        .expect("serialize stored TxActions")
+        }
+    }
+
+    /// The `activities` value of this transaction ([`StoredTxActions`]).
+    pub fn encode_stored(&self) -> Vec<u8> {
+        bincode::serialize(&self.stored_ref()).expect("serialize stored TxActions")
     }
 
     /// A stored row completed from its position, its `tx_index` entry and its
@@ -3248,9 +3255,15 @@ pub struct ObjectCollectionActivityEntry {
 }
 
 impl ObjectCollectionActivityEntry {
-    /// The stored value of this row: its actions (bincode `Vec<AssetAction>`).
+    /// The stored part of this row, borrowed: its actions, which a collection
+    /// activity value serializes (bincode `Vec<AssetAction>`).
+    pub fn stored(&self) -> &Vec<AssetAction> {
+        &self.actions
+    }
+
+    /// The stored value of this row ([`Self::stored`]).
     pub fn encode_stored(&self) -> Vec<u8> {
-        bincode::serialize(&self.actions).expect("serialize collection activity actions")
+        bincode::serialize(self.stored()).expect("serialize collection activity actions")
     }
 
     /// A stored row completed from its position's `tx_index` entry and its
