@@ -501,11 +501,19 @@ async fn asset_feed_rejects_missing_actions_and_foreign_cursor() {
     store.delete_cf(store.cf_tx_actions(), &key).unwrap();
     let (status, body) = response_json(&app, &path).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    // The page's one actions read names the transaction it lacks.
     assert!(
         body["message"]
             .as_str()
             .unwrap()
-            .contains("missing actions block=2"),
+            .contains("activities has no row for non-cellbase transaction"),
+        "{body}"
+    );
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("at block=2, tx_idx=2"),
         "{body}"
     );
 }

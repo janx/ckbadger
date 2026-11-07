@@ -23,7 +23,12 @@ use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
 };
 use crate::{AppState, RequestReadView, RequestWait};
+use ckbadger_store::{ResolvedTx, TxActions};
 use tracing::instrument;
+
+/// Transactions of one block whose actions a filtered block page reads with
+/// one `activities` multi_get.
+const BLOCK_FILTER_CHUNK: usize = 128;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
 type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry);
@@ -234,33 +239,67 @@ fn required_tx_timestamp(
         })
 }
 
-/// `reward_window` is the consensus proposal window, which a cellbase row needs
-/// for its `pays`; a cellbase row without it is an error, never a `null`.
+/// The responses of a page of resolved transactions: their `TxActions` read
+/// with one `activities` multi_get ([`ckbadger_store::CkbadgerStore::tx_actions_of`]),
+/// then one [`transaction_response`] a row.
+pub(crate) fn transaction_responses(
+    state: &AppState,
+    txs: &[ResolvedTx<'_>],
+    window: Option<ProposalWindow>,
+    reward_window: Option<ProposalWindow>,
+) -> Result<Vec<TransactionResponse>, ApiRouteError> {
+    let actions = state
+        .store
+        .tx_actions_of(txs)
+        .map_err(|error| ApiError::internal(format!("transaction page actions: {error:#}")))?;
+    txs.iter()
+        .zip(&actions)
+        .map(|(tx, actions)| {
+            transaction_response(state, *tx, actions.as_ref(), window, reward_window)
+        })
+        .collect()
+}
+
+/// One transaction row. `actions` is the transaction's `TxActions` (a page
+/// reads them at once, [`transaction_responses`]): present exactly when the
+/// transaction is not a cellbase. `reward_window` is the consensus proposal
+/// window, which a cellbase row needs for its `pays`; a cellbase row without
+/// it is an error, never a `null`.
 pub(crate) fn transaction_response(
     state: &AppState,
-    block: i64,
-    index: i32,
-    entry: &ckbadger_store::TxIndexEntry,
-    block_hash: &[u8],
+    tx: ResolvedTx<'_>,
+    actions: Option<&TxActions>,
     window: Option<ProposalWindow>,
     reward_window: Option<ProposalWindow>,
 ) -> Result<TransactionResponse, ApiRouteError> {
-    let (value, activity) = if entry.is_cellbase {
-        ("0".into(), None)
-    } else {
-        let actions = state.store.get_tx_actions(block, index, &entry.tx_hash)
-            .map_err(|error| ApiError::internal(format!("tx actions block={block} index={index}: {error}")))?
-            .ok_or_else(|| ApiError::internal(format!("transaction requires missing canonical actions: block={block} index={index} tx=0x{}", hex::encode(entry.tx_hash))))?;
-        let activity = super::activities::build_global_activity_response(
-            &state.store,
-            &state.append_only_store,
-            &state.ckb_network,
-            &actions,
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-        )
-        .map_err(|error| ApiError::internal(error.to_string()))?;
-        (actions.ckb_moved().to_string(), Some(activity))
+    let ResolvedTx {
+        block_number: block,
+        tx_index: index,
+        entry,
+        block_hash,
+    } = tx;
+    let (value, activity) = match (entry.is_cellbase, actions) {
+        (true, None) => ("0".into(), None),
+        (false, Some(actions)) => {
+            let activity = super::activities::build_global_activity_response(
+                &state.store,
+                &state.append_only_store,
+                &state.ckb_network,
+                actions,
+                &mut std::collections::HashMap::new(),
+                &mut std::collections::HashMap::new(),
+            )
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+            (actions.ckb_moved().to_string(), Some(activity))
+        }
+        (is_cellbase, actions) => {
+            return Err(ApiError::internal(format!(
+                "transaction block={block} index={index} tx=0x{}: a {} transaction {} actions",
+                hex::encode(entry.tx_hash),
+                if is_cellbase { "cellbase" } else { "non-cellbase" },
+                if actions.is_some() { "with" } else { "without" }
+            )))
+        }
     };
     // One batched read of every output payload, not one point read each.
     let payloads = state
@@ -417,39 +456,44 @@ async fn list_transactions(
         if let Some(filter) = activity_filter.clone() {
             let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
             let store = state.store.clone();
-            let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<TxListEntry>> {
+            type FilteredRow = (TxListEntry, Option<TxActions>);
+            let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<FilteredRow>> {
                 if filter == "cellbase" {
-                    return list_canonical_cellbase_page(&store, limit as usize + 1, cursor);
+                    return Ok(
+                        list_canonical_cellbase_page(&store, limit as usize + 1, cursor)?
+                            .into_iter()
+                            .map(|row| (row, None))
+                            .collect(),
+                    );
                 }
-                super::activities::list_canonical_global_actions_page(
+                let page = super::activities::list_canonical_global_actions_page(
                     &store,
                     limit as usize + 1,
                     cursor,
                     Some(&filter),
-                )?
-                .into_iter()
-                .map(|actions| {
-                    let entry = store
-                        .get_tx_index(actions.block_number, actions.tx_index)?
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "canonical filtered transaction missing index at {}:{}",
+                )?;
+                // The rows come completed (block hash included); their
+                // `tx_index` entries are one read for the page.
+                let positions: Vec<(i64, i32)> = page
+                    .iter()
+                    .map(|actions| (actions.block_number, actions.tx_index))
+                    .collect();
+                let entries = store.tx_index_entries_at("activities", &positions)?;
+                Ok(page
+                    .into_iter()
+                    .zip(entries)
+                    .map(|(actions, entry)| {
+                        (
+                            (
                                 actions.block_number,
-                                actions.tx_index
-                            )
-                        })?;
-                    let header =
-                        store
-                            .get_block_header(actions.block_number)?
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "canonical filtered transaction missing block {}",
-                                    actions.block_number
-                                )
-                            })?;
-                    Ok((actions.block_number, header.hash, actions.tx_index, entry))
-                })
-                .collect()
+                                actions.block_hash.clone(),
+                                actions.tx_index,
+                                entry,
+                            ),
+                            Some(actions),
+                        )
+                    })
+                    .collect())
             })
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
@@ -458,19 +502,22 @@ async fn list_transactions(
             let page: Vec<_> = rows.into_iter().take(limit as usize).collect();
             let next_cursor = if has_more {
                 page.last()
-                    .map(|(block, _, index, _)| encode_cursor(*block, *index))
+                    .map(|((block, _, index, _), _)| encode_cursor(*block, *index))
             } else {
                 None
             };
             let rows = page
-                .into_iter()
-                .map(|(block, hash, index, entry)| {
+                .iter()
+                .map(|((block, hash, index, entry), actions)| {
                     transaction_response(
                         &state,
-                        block,
-                        index,
-                        &entry,
-                        &hash,
+                        ResolvedTx {
+                            block_number: *block,
+                            tx_index: *index,
+                            entry,
+                            block_hash: hash,
+                        },
+                        actions.as_ref(),
                         None,
                         Some(reward_window),
                     )
@@ -536,72 +583,89 @@ async fn list_transactions(
         let after_tx_idx = cursor.map(|(_, idx)| idx).unwrap_or(-1);
         let fetch_limit = (limit + 1) as usize;
 
+        // The rows carry their proposal evidence, which needs the node's
+        // store: without it the page cannot be served, so nothing is read.
+        if state.ckb_store.is_none() {
+            return Err(ApiError::internal(
+                "block transaction evidence requires CKB RocksDB reader",
+            ));
+        }
+        let block_hash = selected_block_hash.expect("block filter established header");
         let store_c = store.clone();
         let filter = activity_filter.clone();
+        let hash_c = block_hash.clone();
         let page_txs = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            if let Some(filter) = filter {
-                let mut rows = Vec::with_capacity(fetch_limit);
-                for (index, entry) in store_c.list_block_txs(block_number)? {
-                    if index <= after_tx_idx {
-                        continue;
-                    }
-                    let matches = if entry.is_cellbase {
-                        filter == "cellbase"
-                    } else {
-                        let actions = store_c
-                            .get_tx_actions(block_number, index, &entry.tx_hash)?
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "missing actions for block {block_number} transaction {index}"
-                                )
-                            })?;
-                        super::activities::matches_global_activity_filter(&actions, Some(&filter))
+            let txs = if filter.is_some() {
+                store_c
+                    .list_block_txs(block_number)?
+                    .into_iter()
+                    .filter(|(index, _)| *index > after_tx_idx)
+                    .collect::<Vec<_>>()
+            } else {
+                store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)?
+            };
+            // The actions of BLOCK_FILTER_CHUNK transactions at a time, one
+            // `activities` read each: a filter scans until it has a page.
+            let mut rows = Vec::with_capacity(fetch_limit);
+            for chunk in txs.chunks(BLOCK_FILTER_CHUNK) {
+                let page: Vec<ResolvedTx<'_>> = chunk
+                    .iter()
+                    .map(|(index, entry)| ResolvedTx {
+                        block_number,
+                        tx_index: *index,
+                        entry,
+                        block_hash: &hash_c,
+                    })
+                    .collect();
+                let actions = store_c.tx_actions_of(&page)?;
+                for ((index, entry), actions) in chunk.iter().zip(actions) {
+                    let matches = match (&filter, &actions) {
+                        (None, _) => true,
+                        (Some(filter), None) => filter == "cellbase",
+                        (Some(filter), Some(actions)) => {
+                            super::activities::matches_global_activity_filter(
+                                actions,
+                                Some(filter.as_str()),
+                            )
+                        }
                     };
                     if matches {
-                        rows.push((index, entry));
+                        rows.push((*index, entry.clone(), actions));
                     }
-
                     if rows.len() == fetch_limit {
-                        break;
+                        return Ok(rows);
                     }
                 }
-                Ok(rows)
-            } else {
-                store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)
             }
+            Ok(rows)
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        // Get block hash for responses
-        let block_hash = selected_block_hash.expect("block filter established header");
 
         let has_more = page_txs.len() as i64 > limit;
         let page: Vec<_> = page_txs.into_iter().take(limit as usize).collect();
 
         let next_cursor = if has_more {
             page.last()
-                .map(|(tx_idx, _)| encode_cursor(block_number, *tx_idx))
+                .map(|(tx_idx, _, _)| encode_cursor(block_number, *tx_idx))
         } else {
             None
         };
 
-        if state.ckb_store.is_none() {
-            return Err(ApiError::internal(
-                "block transaction evidence requires CKB RocksDB reader",
-            ));
-        }
         let window = state.consensus().await?.tx_proposal_window;
         let txs: Vec<TransactionResponse> = page
-            .into_iter()
-            .map(|(tx_idx, entry)| -> Result<_, ApiRouteError> {
+            .iter()
+            .map(|(tx_idx, entry, actions)| -> Result<_, ApiRouteError> {
                 transaction_response(
                     &state,
-                    block_number,
-                    tx_idx,
-                    &entry,
-                    &block_hash,
+                    ResolvedTx {
+                        block_number,
+                        tx_index: *tx_idx,
+                        entry,
+                        block_hash: &block_hash,
+                    },
+                    actions.as_ref(),
                     Some(window),
                     Some(window),
                 )
@@ -681,22 +745,16 @@ async fn list_transactions(
             None
         };
 
-        let txs: Vec<TransactionResponse> = page
-            .into_iter()
-            .map(
-                |(block_num, block_hash, tx_idx, entry)| -> Result<_, ApiRouteError> {
-                    transaction_response(
-                        &state,
-                        block_num,
-                        tx_idx,
-                        &entry,
-                        &block_hash,
-                        None,
-                        Some(reward_window),
-                    )
-                },
-            )
-            .collect::<Result<_, _>>()?;
+        let resolved: Vec<ResolvedTx<'_>> = page
+            .iter()
+            .map(|(block_num, block_hash, tx_idx, entry)| ResolvedTx {
+                block_number: *block_num,
+                tx_index: *tx_idx,
+                entry,
+                block_hash,
+            })
+            .collect();
+        let txs = transaction_responses(&state, &resolved, None, Some(reward_window))?;
 
         ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
     }
@@ -720,15 +778,14 @@ async fn get_transaction(
         Some((block_num, tx_idx, entry)) => {
             let block_hash = required_tx_block_hash(&state, block_num)?;
             let reward_window = state.consensus().await?.tx_proposal_window;
-            ok(transaction_response(
-                &state,
-                block_num,
-                tx_idx,
-                &entry,
-                &block_hash,
-                None,
-                Some(reward_window),
-            )?)
+            let tx = ResolvedTx {
+                block_number: block_num,
+                tx_index: tx_idx,
+                entry: &entry,
+                block_hash: &block_hash,
+            };
+            let mut rows = transaction_responses(&state, &[tx], None, Some(reward_window))?;
+            ok(rows.pop().expect("one transaction, one response"))
         }
         None => {
             let ckb_block_number =

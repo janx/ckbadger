@@ -37,7 +37,59 @@ fn tags_pass_filter(tags: u16, filter: Option<&str>) -> bool {
     }
 }
 
+/// One transaction a reader has already resolved: its canonical position,
+/// its `tx_index` entry there and its block's hash. The input of
+/// [`CkbadgerStore::tx_actions_of`], which completes `activities` rows from it
+/// without reading `tx_index` or `block_headers` again.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedTx<'a> {
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub entry: &'a TxIndexEntry,
+    pub block_hash: &'a [u8],
+}
+
 impl CkbadgerStore {
+    /// The `TxActions` of a page of transactions the reader has already
+    /// resolved, in order: one `multi_get` on `activities` for the page's
+    /// non-cellbase transactions, completed from the reader's entries and
+    /// block hashes (no `tx_index` or `block_headers` read). A cellbase has no
+    /// `activities` row and reads as `None`; a non-cellbase transaction
+    /// without its row is an error naming it.
+    pub fn tx_actions_of(&self, txs: &[ResolvedTx<'_>]) -> anyhow::Result<Vec<Option<TxActions>>> {
+        let positions: Vec<(i64, i32)> = txs
+            .iter()
+            .filter(|tx| !tx.entry.is_cellbase)
+            .map(|tx| (tx.block_number, tx.tx_index))
+            .collect();
+        let mut stored = self.stored_tx_actions_at(&positions)?.into_iter();
+        txs.iter()
+            .map(|tx| {
+                if tx.entry.is_cellbase {
+                    return Ok(None);
+                }
+                let row = stored
+                    .next()
+                    .expect("one stored row per non-cellbase position")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "activities has no row for non-cellbase transaction 0x{} at block={}, tx_idx={}",
+                            bytes_to_hex(&tx.entry.tx_hash),
+                            tx.block_number,
+                            tx.tx_index
+                        )
+                    })?;
+                Ok(Some(TxActions::from_stored(
+                    row,
+                    tx.block_number,
+                    tx.tx_index,
+                    tx.entry,
+                    tx.block_hash.to_vec(),
+                )))
+            })
+            .collect()
+    }
+
     /// Stored `activities` rows completed into `TxActions` — the one way a
     /// reader turns a row into what the API serves: the tx hash, timestamp and
     /// cellbase flag from `entries` (`tx_index` at each row's position), the
@@ -94,6 +146,9 @@ impl CkbadgerStore {
         &self,
         positions: &[(i64, i32)],
     ) -> anyhow::Result<Vec<Option<StoredTxActions>>> {
+        if positions.is_empty() {
+            return Ok(Vec::new());
+        }
         let cf = self.cf_tx_actions();
         let keys: Vec<[u8; keys::TX_ACTIONS_KEY_SIZE]> = positions
             .iter()
@@ -1108,6 +1163,108 @@ mod global_bucket_tests {
         let err = store.get_tx_actions_at(5, 1).unwrap_err().to_string();
         assert!(
             err.contains("activities points at block=5, tx_idx=1, which has no tx_index row"),
+            "{err}"
+        );
+    }
+
+    /// Review P1-1: a page of resolved transactions reads its `activities`
+    /// rows with one `multi_get` and nothing else; the rows are completed
+    /// from the reader's entries and block hashes; a cellbase reads as `None`.
+    #[test]
+    fn tx_actions_of_a_resolved_page_is_one_multi_get() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        super::tests::seed_activity(&mut batch, &bucket_fixture(5, 1, 0));
+        super::tests::seed_activity(&mut batch, &bucket_fixture(6, 2, TAG_TOKEN));
+        batch.commit().unwrap();
+        let entry = |actions: &TxActions| TxIndexEntry {
+            tx_hash: actions.tx_hash.as_slice().try_into().unwrap(),
+            is_cellbase: false,
+            timestamp: actions.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let (first, second) = (bucket_fixture(5, 1, 0), bucket_fixture(6, 2, TAG_TOKEN));
+        let (first_entry, second_entry) = (entry(&first), entry(&second));
+        let cellbase = TxIndexEntry {
+            is_cellbase: true,
+            ..entry(&first)
+        };
+        let page = [
+            ResolvedTx {
+                block_number: 6,
+                tx_index: 2,
+                entry: &second_entry,
+                block_hash: &[0x66; 32],
+            },
+            ResolvedTx {
+                block_number: 6,
+                tx_index: 0,
+                entry: &cellbase,
+                block_hash: &[0x66; 32],
+            },
+            ResolvedTx {
+                block_number: 5,
+                tx_index: 1,
+                entry: &first_entry,
+                block_hash: &[0x55; 32],
+            },
+        ];
+        store.reset_read_call_counters();
+        let actions = store.tx_actions_of(&page).unwrap();
+        assert_eq!(store.read_call_counts(), (0, 1), "(get_cf, multi_get_cf)");
+        let second_actions = actions[0].as_ref().expect("row at 6:2");
+        assert_eq!(
+            (second_actions.block_number, second_actions.tx_index),
+            (6, 2)
+        );
+        assert_eq!(second_actions.tx_hash, second.tx_hash);
+        assert_eq!(second_actions.block_hash, vec![0x66; 32]);
+        assert_eq!(second_actions.participants[0].tags, TAG_TOKEN);
+        assert!(actions[1].is_none(), "a cellbase has no activities row");
+        let first_actions = actions[2].as_ref().expect("row at 5:1");
+        assert_eq!(first_actions.tx_hash, first.tx_hash);
+        assert_eq!(first_actions.block_hash, vec![0x55; 32]);
+
+        store.reset_read_call_counters();
+        assert!(store.tx_actions_of(&[]).unwrap().is_empty());
+        assert_eq!(store.read_call_counts(), (0, 0), "an empty page reads nothing");
+    }
+
+    #[test]
+    fn tx_actions_of_fails_on_a_non_cellbase_transaction_without_its_row() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let entry = TxIndexEntry {
+            tx_hash: [0x77; 32],
+            is_cellbase: false,
+            timestamp: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let err = store
+            .tx_actions_of(&[ResolvedTx {
+                block_number: 9,
+                tx_index: 3,
+                entry: &entry,
+                block_hash: &[0x99; 32],
+            }])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!(
+                "activities has no row for non-cellbase transaction 0x{} at block=9, tx_idx=3",
+                "77".repeat(32)
+            )),
             "{err}"
         );
     }

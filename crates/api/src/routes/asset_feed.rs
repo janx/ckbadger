@@ -2,7 +2,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{ensure, Context};
-use ckbadger_store::{CkbadgerStore, TxActions, TxIndexEntry};
+use ckbadger_store::{CkbadgerStore, ResolvedTx, TxActions, TxIndexEntry};
 
 use super::{
     activities::{build_global_activity_response, GlobalActivityResponse},
@@ -158,58 +158,75 @@ pub(crate) fn project_activities(
     state: &AppState,
     rows: Vec<AssetTransaction>,
 ) -> Result<Vec<GlobalActivityResponse>, ApiRouteError> {
+    let actions = canonical_actions(state, &rows).map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    project_actions(state, &actions)
+}
+
+/// [`project_activities`] of a page whose `TxActions` the caller has read.
+pub(crate) fn project_actions(
+    state: &AppState,
+    actions: &[TxActions],
+) -> Result<Vec<GlobalActivityResponse>, ApiRouteError> {
     let mut scripts = HashMap::new();
     let mut addresses = HashMap::new();
-    rows.into_iter()
-        .map(|row| {
-            let result = (|| -> anyhow::Result<_> {
-                let actions = canonical_actions(state, &row)?;
-                build_global_activity_response(
-                    &state.store,
-                    &state.append_only_store,
-                    &state.ckb_network,
-                    &actions,
-                    &mut scripts,
-                    &mut addresses,
-                )
-            })();
-            result.map_err(|e| ApiError::internal(e.to_string()))
+    actions
+        .iter()
+        .map(|actions| {
+            build_global_activity_response(
+                &state.store,
+                &state.append_only_store,
+                &state.ckb_network,
+                actions,
+                &mut scripts,
+                &mut addresses,
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))
         })
         .collect()
 }
 
-/// The canonical `TxActions` of one resolved row, checked against the block
-/// header it claims.
+/// The canonical `TxActions` of a page of resolved rows, in order: one
+/// `block_headers` read for the page's blocks and one `activities` read
+/// ([`CkbadgerStore::tx_actions_of`]). An asset feed lists no cellbase (CKB
+/// cellbase outputs carry no type script); a cellbase row is an error.
 pub(crate) fn canonical_actions(
     state: &AppState,
-    row: &AssetTransaction,
-) -> anyhow::Result<TxActions> {
-    let actions = state
+    rows: &[AssetTransaction],
+) -> anyhow::Result<Vec<TxActions>> {
+    let mut blocks: Vec<i64> = rows.iter().map(|row| row.block_number).collect();
+    blocks.sort_unstable();
+    blocks.dedup();
+    let headers = state.store.get_block_headers_batch(&blocks)?;
+    let resolved = rows
+        .iter()
+        .map(|row| {
+            let header = headers
+                .get(&row.block_number)
+                .with_context(|| format!("asset feed missing header block={}", row.block_number))?;
+            Ok(ResolvedTx {
+                block_number: row.block_number,
+                tx_index: row.tx_index,
+                entry: &row.entry,
+                block_hash: &header.hash,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    state
         .store
-        .get_tx_actions(row.block_number, row.tx_index, &row.entry.tx_hash)?
-        .with_context(|| {
-            format!(
-                "asset feed missing actions block={} index={} tx=0x{}",
-                row.block_number,
-                row.tx_index,
-                hex::encode(row.entry.tx_hash)
-            )
-        })?;
-    let header = state
-        .store
-        .get_block_header(row.block_number)?
-        .with_context(|| format!("asset feed missing header block={}", row.block_number))?;
-    ensure!(
-        actions.block_hash == header.hash
-            && actions.tx_hash == row.entry.tx_hash
-            && actions.block_number == row.block_number
-            && actions.tx_index == row.tx_index,
-        "asset feed action identity mismatch block={} index={} tx=0x{}",
-        row.block_number,
-        row.tx_index,
-        hex::encode(row.entry.tx_hash)
-    );
-    Ok(actions)
+        .tx_actions_of(&resolved)?
+        .into_iter()
+        .zip(rows)
+        .map(|(actions, row)| {
+            actions.with_context(|| {
+                format!(
+                    "asset feed row block={} index={} tx=0x{} is a cellbase",
+                    row.block_number,
+                    row.tx_index,
+                    hex::encode(row.entry.tx_hash)
+                )
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn transactions(
@@ -232,27 +249,32 @@ pub(crate) fn project_transactions(
     state: &AppState,
     rows: Vec<AssetTransaction>,
 ) -> Result<Vec<TransactionResponse>, ApiRouteError> {
-    rows.into_iter()
-        .map(|row| {
-            let header = state
-                .store
-                .get_block_header(row.block_number)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "asset feed missing header block={}",
-                        row.block_number
-                    ))
-                })?;
+    let actions = canonical_actions(state, &rows).map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    project_transactions_of(state, &rows, &actions)
+}
+
+/// [`project_transactions`] of a page whose `TxActions` the caller has read
+/// ([`canonical_actions`]); each row's block hash is its actions'.
+pub(crate) fn project_transactions_of(
+    state: &AppState,
+    rows: &[AssetTransaction],
+    actions: &[TxActions],
+) -> Result<Vec<TransactionResponse>, ApiRouteError> {
+    rows.iter()
+        .zip(actions)
+        .map(|(row, actions)| {
             transaction_response(
                 state,
-                row.block_number,
-                row.tx_index,
-                &row.entry,
-                &header.hash,
+                ResolvedTx {
+                    block_number: row.block_number,
+                    tx_index: row.tx_index,
+                    entry: &row.entry,
+                    block_hash: &actions.block_hash,
+                },
+                Some(actions),
                 None,
                 // CKB cellbase outputs carry no type script, so no asset feed
-                // lists a cellbase; one that did would fail on its `pays`.
+                // lists a cellbase ([`canonical_actions`] refuses one).
                 None,
             )
         })

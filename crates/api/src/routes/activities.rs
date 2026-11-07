@@ -8,7 +8,7 @@ use ckbadger_store::{
         participant_roles, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
         TxActions, TypeCallEntry,
     },
-    CkbadgerStore,
+    CkbadgerStore, ResolvedTx,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1401,8 +1401,58 @@ fn ensure_activity_total_covers_page_one(
     Ok(())
 }
 
-/// Cellbase actions are intentionally not materialized. Reuse the indexer's
-/// interpreter over the node's exact outputs when a block/detail requests one.
+/// Transactions of one block whose actions `/activities?blockNumber=` reads
+/// with one `activities` multi_get.
+const BLOCK_ACTIONS_CHUNK: usize = 128;
+
+/// The `TxActions` of one block's transactions (`txs`, in the page's order),
+/// filtered, until `limit + 1` match: `BLOCK_ACTIONS_CHUNK` transactions'
+/// rows at a time with one `activities` read, completed with the block's hash
+/// read once; a cellbase goes through [`cellbase_transaction_actions`].
+fn block_transaction_actions(
+    store: &CkbadgerStore,
+    node: Option<&ckb_store_reader::CkbChainReader>,
+    block: i64,
+    txs: &[(i32, ckbadger_store::TxIndexEntry)],
+    filter: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<TxActions>> {
+    if txs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let block_hash = store
+        .get_block_header(block)?
+        .ok_or_else(|| anyhow::anyhow!("activities of block {block}: no block header"))?
+        .hash;
+    let mut rows = Vec::new();
+    for chunk in txs.chunks(BLOCK_ACTIONS_CHUNK) {
+        let page: Vec<ResolvedTx<'_>> = chunk
+            .iter()
+            .map(|(index, entry)| ResolvedTx {
+                block_number: block,
+                tx_index: *index,
+                entry,
+                block_hash: &block_hash,
+            })
+            .collect();
+        for ((index, entry), actions) in chunk.iter().zip(store.tx_actions_of(&page)?) {
+            let actions = match actions {
+                Some(actions) => actions,
+                None => cellbase_transaction_actions(node, block, *index, entry, &block_hash)?,
+            };
+            if matches_global_activity_filter(&actions, filter) {
+                rows.push(actions);
+            }
+            if rows.len() > limit {
+                return Ok(rows);
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// The `TxActions` of one canonical transaction: its `activities` row, or
+/// for a cellbase [`cellbase_transaction_actions`].
 fn canonical_transaction_actions(
     store: &CkbadgerStore,
     node: Option<&ckb_store_reader::CkbChainReader>,
@@ -1410,16 +1460,39 @@ fn canonical_transaction_actions(
     index: i32,
     entry: &ckbadger_store::TxIndexEntry,
 ) -> anyhow::Result<TxActions> {
-    if !entry.is_cellbase {
-        return store
-            .get_tx_actions(block, index, &entry.tx_hash)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "canonical activity missing at block={block} index={index} tx=0x{}",
-                    hex::encode(entry.tx_hash)
-                )
-            });
+    let block_hash = store
+        .get_block_header(block)?
+        .ok_or_else(|| anyhow::anyhow!("transaction block {block} has no block header"))?
+        .hash;
+    let [actions] = store
+        .tx_actions_of(&[ResolvedTx {
+            block_number: block,
+            tx_index: index,
+            entry,
+            block_hash: &block_hash,
+        }])?
+        .try_into()
+        .expect("one transaction, one row");
+    match actions {
+        Some(actions) => Ok(actions),
+        None => cellbase_transaction_actions(node, block, index, entry, &block_hash),
     }
+}
+
+/// Cellbase actions are intentionally not materialized. Reuse the indexer's
+/// interpreter over the node's exact outputs when a block/detail requests one.
+fn cellbase_transaction_actions(
+    node: Option<&ckb_store_reader::CkbChainReader>,
+    block: i64,
+    index: i32,
+    entry: &ckbadger_store::TxIndexEntry,
+    block_hash: &[u8],
+) -> anyhow::Result<TxActions> {
+    anyhow::ensure!(
+        entry.is_cellbase,
+        "transaction 0x{} at block={block} index={index} is not a cellbase",
+        hex::encode(entry.tx_hash)
+    );
     use ckb_types::prelude::*;
     let node = node.ok_or_else(|| {
         anyhow::anyhow!("cellbase activity at block {block} requires CKB RocksDB reader")
@@ -1439,9 +1512,6 @@ fn canonical_transaction_actions(
         tx.outputs().len() == tx.outputs_data().len(),
         "cellbase output/data length mismatch at block {block}"
     );
-    let header = store
-        .get_block_header(block)?
-        .ok_or_else(|| anyhow::anyhow!("cellbase block {block} header missing"))?;
     let cells = tx
         .outputs()
         .into_iter()
@@ -1493,7 +1563,7 @@ fn canonical_transaction_actions(
         .collect::<anyhow::Result<Vec<_>>>()?;
     let view = ckbadger_indexer::db::TxView {
         tx_hash: &entry.tx_hash,
-        block_hash: &header.hash,
+        block_hash,
         tx_index: index,
         block_number: block,
         timestamp: entry.timestamp,
@@ -1573,33 +1643,29 @@ async fn get_global_activities(
     let filter = params.filter.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = if let Some(block) = block_number {
-            let mut rows = Vec::new();
             let mut txs = store.list_block_txs(block)?;
             if !ascending {
                 txs.reverse();
             }
-            for (index, tx) in txs {
-                // The cursor is the last row served: continue past it in the
-                // page's own direction.
-                if cursor.is_some_and(|(_, last)| {
+            // The cursor is the last row served: continue past it in the
+            // page's own direction.
+            txs.retain(|(index, _)| {
+                !cursor.is_some_and(|(_, last)| {
                     if ascending {
-                        index <= last
+                        *index <= last
                     } else {
-                        index >= last
+                        *index >= last
                     }
-                }) {
-                    continue;
-                }
-                let actions =
-                    canonical_transaction_actions(&store, node.as_deref(), block, index, &tx)?;
-                if matches_global_activity_filter(&actions, filter.as_deref()) {
-                    rows.push(actions);
-                }
-                if rows.len() > limit {
-                    break;
-                }
-            }
-            rows
+                })
+            });
+            block_transaction_actions(
+                &store,
+                node.as_deref(),
+                block,
+                &txs,
+                filter.as_deref(),
+                limit,
+            )?
         } else {
             list_canonical_global_actions_page(
                 store.as_ref(),

@@ -2487,36 +2487,73 @@ pub(super) fn nft_item_tx_meaning(
     })
 }
 
-/// The protocol actions of one lifecycle transaction of item `item_id`,
-/// from its canonical activity row.
-fn item_tx_protocol_actions(
+/// The protocol actions of lifecycle transactions of item `item_id`, by
+/// transaction hash, from their canonical activity rows: one `tx_hash_map` +
+/// `tx_index` read, one `block_headers` read and one `activities` read for
+/// all of them.
+fn item_txs_protocol_actions(
     state: &AppState,
     item_id: &[u8],
-    tx_hash: &[u8],
-) -> Result<Vec<ckbadger_store::types::ProtocolAction>, ApiRouteError> {
-    let (block, index) = state
+    tx_hashes: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, Vec<ckbadger_store::types::ProtocolAction>>, ApiRouteError> {
+    let item = |e: anyhow::Error| {
+        ApiError::internal(format!(
+            "lifecycle transactions of item 0x{}: {e:#}",
+            hex::encode(item_id)
+        ))
+    };
+    let rows = state
         .store
-        .get_tx_location(tx_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing lifecycle transaction 0x{} of item 0x{}",
-                hex::encode(tx_hash),
-                hex::encode(item_id)
-            ))
-        })?;
-    Ok(state
-        .store
-        .get_tx_actions(block, index, tx_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
-                hex::encode(tx_hash),
-                hex::encode(item_id)
-            ))
-        })?
-        .protocol_actions)
+        .get_txs_by_hash_batch(tx_hashes)
+        .map_err(item)?
+        .into_iter()
+        .map(|(hash, row)| {
+            row.map(|(block, index, entry)| (hash.clone(), block, index, entry))
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "missing lifecycle transaction 0x{} of item 0x{}",
+                        hex::encode(&hash),
+                        hex::encode(item_id)
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut blocks: Vec<i64> = rows.iter().map(|(_, block, _, _)| *block).collect();
+    blocks.sort_unstable();
+    blocks.dedup();
+    let headers = state.store.get_block_headers_batch(&blocks).map_err(item)?;
+    let resolved = rows
+        .iter()
+        .map(|(hash, block, index, entry)| {
+            let header = headers.get(block).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "lifecycle transaction 0x{} of item 0x{}: block {block} has no header",
+                    hex::encode(hash),
+                    hex::encode(item_id)
+                ))
+            })?;
+            Ok(ckbadger_store::ResolvedTx {
+                block_number: *block,
+                tx_index: *index,
+                entry,
+                block_hash: &header.hash,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    let actions = state.store.tx_actions_of(&resolved).map_err(item)?;
+    rows.iter()
+        .zip(actions)
+        .map(|((hash, ..), actions)| {
+            let actions = actions.ok_or_else(|| {
+                ApiError::internal(format!(
+                    "lifecycle transaction 0x{} of item 0x{} is a cellbase",
+                    hex::encode(hash),
+                    hex::encode(item_id)
+                ))
+            })?;
+            Ok((hash.clone(), actions.protocol_actions))
+        })
+        .collect()
 }
 
 /// A `.cell` name's own protocol actions in one of its lifecycle
@@ -2527,7 +2564,10 @@ pub(super) fn dotcell_own_actions(
     item_id: &[u8],
     tx_hash: &[u8],
 ) -> Result<Vec<String>, ApiRouteError> {
-    let actions = item_tx_protocol_actions(state, item_id, tx_hash)?;
+    let mut actions = item_txs_protocol_actions(state, item_id, &[tx_hash.to_vec()])?;
+    let actions = actions
+        .remove(tx_hash)
+        .expect("one lifecycle transaction, one row");
     Ok(dotcell_lifecycle_action(item_id, tx_hash, &actions)?.protocol_actions)
 }
 
@@ -2590,14 +2630,24 @@ pub(super) fn collect_nft_item_lifecycle_actions(
     let mut lifecycle_txs: HashSet<Vec<u8>> = created_outputs.keys().cloned().collect();
     lifecycle_txs.extend(consumed_txs.iter().cloned());
 
+    // Only `.cell` and `.bit` name items in their protocol actions: one
+    // batched read of every lifecycle transaction's actions.
+    let names_items = matches!(
+        standard,
+        NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
+    );
+    let mut protocol_actions_by_tx = if names_items {
+        let hashes: Vec<Vec<u8>> = lifecycle_txs.iter().cloned().collect();
+        item_txs_protocol_actions(state, nft_id_bytes, &hashes)?
+    } else {
+        HashMap::new()
+    };
     let mut rows = Vec::with_capacity(lifecycle_txs.len());
     for tx_hash in lifecycle_txs {
-        // Only `.cell` and `.bit` name items in their protocol actions.
-        let protocol_actions = if matches!(
-            standard,
-            NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
-        ) {
-            item_tx_protocol_actions(state, nft_id_bytes, &tx_hash)?
+        let protocol_actions = if names_items {
+            protocol_actions_by_tx
+                .remove(&tx_hash)
+                .expect("every lifecycle transaction's actions were read")
         } else {
             Vec::new()
         };

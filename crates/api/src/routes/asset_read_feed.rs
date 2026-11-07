@@ -201,24 +201,26 @@ fn collection_feed(
     };
     // What each row did to THIS collection's items (OB-C13), computed once.
     let members = CollectionMembers::of(collection.source, &id)?;
+    // The page's actions, read once for the contexts and the projection.
+    let actions = asset_feed::canonical_actions(state, &page).map_err(context)?;
     let contexts = page
         .iter()
-        .map(|row| {
-            let actions = asset_feed::canonical_actions(state, row).map_err(context)?;
-            collection_context(&state.store, &members, &actions, row.entry.outputs_count)
+        .zip(&actions)
+        .map(|(row, actions)| {
+            collection_context(&state.store, &members, actions, row.entry.outputs_count)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let total = collection.activities_count(state, &id)?;
     let response = if transactions {
         serde_json::to_value(CursorPaginatedResponse::with_optional_total(
-            asset_feed::project_transactions(state, page)?,
+            asset_feed::project_transactions_of(state, &page, &actions)?,
             total,
             limit,
             next,
         ))
     } else {
         serde_json::to_value(CursorPaginatedResponse::with_optional_total(
-            asset_feed::project_activities(state, page)?,
+            asset_feed::project_actions(state, &actions)?,
             total,
             limit,
             next,
