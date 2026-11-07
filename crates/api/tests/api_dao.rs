@@ -1994,7 +1994,7 @@ fn r2b_put_dao_tx(store: &Arc<CkbadgerStore>, block: i64, index: i32, actions: &
         })
         .collect();
     let mut batch = StoreBatch::new(store.as_ref());
-    put_tx_actions_indexed_keeping_headers(&store, &mut batch, &tx);
+    put_tx_actions_indexed_keeping_headers(store, &mut batch, &tx);
     batch.commit().unwrap();
 }
 
