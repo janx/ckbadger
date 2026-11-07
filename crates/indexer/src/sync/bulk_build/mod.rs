@@ -3290,6 +3290,7 @@ impl BulkBuildRuntimeState {
         } = self;
 
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
+        materializer.materialize_final_snapshot(&prepared_finalize.activity_snapshot_rows)?;
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
         let frozen = interner.snapshot_for_reads();
         materializer.materialize_final_snapshot_bounded(|sink| {
@@ -3954,7 +3955,6 @@ where
         .owners
         .dao
         .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
-    let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir(temp_root_label);
     std::fs::create_dir_all(&root)?;
@@ -3966,81 +3966,123 @@ where
     let snapshot = {
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
-        domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         seed_test_genesis_baseline(domain_store.as_ref())?;
         // The consensus secondary epoch reward the indexer persists at
         // startup (the DAO reducer above is handed it directly); the DAO tip
         // summary after finalize reads it from the store.
         domain_store.set_secondary_epoch_reward(61_369_863_013_698)?;
-        start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
-        let mut materializer =
-            materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
-        let mut current_block = 0u64;
-        let mut processed_blocks = 0usize;
-
-        for (block_idx, block) in blocks.iter().enumerate() {
-            if chain_tip.saturating_sub(current_block) <= bulk_sync_threshold {
-                break;
-            }
-
-            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(
-                std::slice::from_ref(block),
-                true,
-                &FxHashMap::default(),
-            )?;
-            let history_count = pending.history_row_count();
-            let sealed_count = pending.sealed_rows.len();
-            let prepared = materialize::prepare_flush(
-                domain_store.as_ref(),
-                append_store.as_ref(),
-                pending.history_chunks,
-                pending.sealed_rows,
-            )?;
-            materializer.add_external_counts(history_count, sealed_count, 1);
-            if !prepared.append_batch.is_empty() {
-                append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
-            }
-            if !prepared.domain_batch.is_empty() {
-                domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
-            }
-            sync_totals.record_batch(&batch_stats)?;
-            let last_block_number = batch_stats
-                .last_block_number
-                .ok_or_else(|| anyhow!("bulk stage test batch missing last block number"))?;
-            current_block = u64::try_from(last_block_number).map_err(|_| {
-                anyhow!(
-                    "bulk stage test batch returned negative last block number: last_block_number={}",
-                    last_block_number
-                )
-            })?;
-            processed_blocks = block_idx + 1;
-        }
-
-        let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
-        let sync_status = sync_totals.finalize_success(
-            domain_store.as_ref(),
-            false,
-            live_cell_summary.as_ref(),
+        let state = run_bulk_stage_on_stores(
+            runtime,
+            &domain_store,
+            &append_store,
+            blocks,
+            chain_tip,
+            bulk_sync_threshold,
         )?;
-        crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
-            .refresh_latest_dao_statistics()?;
-        domain_store.clear_bulk_build_session_marker()?;
-        let report = materializer.finish();
-
-        finish(
-            domain_store.as_ref(),
-            append_store.as_ref(),
-            BulkStageTestState {
-                processed_blocks,
-                report,
-                sync_status,
-            },
-        )?
+        finish(domain_store.as_ref(), append_store.as_ref(), state)?
     };
 
     let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
+}
+
+/// Bulk-build `blocks` from genesis into `domain_store` / `append_store`
+/// (which hold the genesis baseline and the secondary epoch reward, as
+/// startup leaves them) through the production reducers, finalize and
+/// completion status: the stores end as a bulk build that reached the chain
+/// tip at the last block leaves them, ready for a restart into live sync
+/// (the bulk → live activity parity test, finding 27).
+pub(crate) fn bulk_build_into_stores_for_test(
+    domain_store: &Arc<CkbadgerStore>,
+    append_store: &Arc<CkbadgerStore>,
+    blocks: &[BlockResponseWithCycles],
+) -> Result<()> {
+    let last = blocks
+        .last()
+        .ok_or_else(|| anyhow!("bulk build test seam needs at least one block"))?;
+    let tip = u64::from_str_radix(last.block.header.number.trim_start_matches("0x"), 16)?;
+    let mut runtime = BulkBuildRuntimeState::default();
+    runtime
+        .owners
+        .dao
+        .set_secondary_epoch_reward(required_secondary_epoch_reward(domain_store.as_ref())?);
+    // A chain tip one above the last block puts every block behind it.
+    let state = run_bulk_stage_on_stores(runtime, domain_store, append_store, blocks, tip + 1, 0)?;
+    anyhow::ensure!(
+        state.processed_blocks == blocks.len(),
+        "bulk build test seam built {} of {} blocks",
+        state.processed_blocks,
+        blocks.len()
+    );
+    persist_bulk_sync_completion_status(domain_store.as_ref(), tip, i64::try_from(tip)?)
+}
+
+/// The bulk stage of the test seams on open stores: the blocks behind
+/// `chain_tip - bulk_sync_threshold`, one per batch, then finalize, the
+/// handoff sync status and the DAO statistics.
+fn run_bulk_stage_on_stores(
+    mut runtime: BulkBuildRuntimeState,
+    domain_store: &Arc<CkbadgerStore>,
+    append_store: &Arc<CkbadgerStore>,
+    blocks: &[BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> Result<BulkStageTestState> {
+    let mut sync_totals = BulkBuildSyncTotals::default();
+    domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+    start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
+    let mut materializer =
+        materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
+    let mut current_block = 0u64;
+    let mut processed_blocks = 0usize;
+    for (block_idx, block) in blocks.iter().enumerate() {
+        if chain_tip.saturating_sub(current_block) <= bulk_sync_threshold {
+            break;
+        }
+
+        let (batch_stats, _timings, pending) =
+            runtime.apply_blocks_hex(std::slice::from_ref(block), true, &FxHashMap::default())?;
+        let history_count = pending.history_row_count();
+        let sealed_count = pending.sealed_rows.len();
+        let prepared = materialize::prepare_flush(
+            domain_store.as_ref(),
+            append_store.as_ref(),
+            pending.history_chunks,
+            pending.sealed_rows,
+        )?;
+        materializer.add_external_counts(history_count, sealed_count, 1);
+        if !prepared.append_batch.is_empty() {
+            append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
+        }
+        if !prepared.domain_batch.is_empty() {
+            domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
+        }
+        sync_totals.record_batch(&batch_stats)?;
+        let last_block_number = batch_stats
+            .last_block_number
+            .ok_or_else(|| anyhow!("bulk stage test batch missing last block number"))?;
+        current_block = u64::try_from(last_block_number).map_err(|_| {
+            anyhow!(
+                "bulk stage test batch returned negative last block number: last_block_number={}",
+                last_block_number
+            )
+        })?;
+        processed_blocks = block_idx + 1;
+    }
+
+    let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+    flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
+    let sync_status =
+        sync_totals.finalize_success(domain_store.as_ref(), false, live_cell_summary.as_ref())?;
+    crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
+        .refresh_latest_dao_statistics()?;
+    domain_store.clear_bulk_build_session_marker()?;
+    let report = materializer.finish();
+    Ok(BulkStageTestState {
+        processed_blocks,
+        report,
+        sync_status,
+    })
 }
 
 fn apply_pipeline_sync_status_for_test(

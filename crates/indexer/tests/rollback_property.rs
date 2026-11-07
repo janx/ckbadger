@@ -2125,6 +2125,96 @@ async fn activity_address_rows_behind_the_coverage_floor_are_pruned_and_restored
     .unwrap_or_else(|report| panic!("{report}"));
 }
 
+/// Finding 27 (bulk → live parity of the activity rows): a store bulk-built
+/// to block 200 and then synced live until the coverage floor has left the
+/// handoff hour and day holds the same activity rows of `stats_chain` — the
+/// bucket counts and the address rows — and the same
+/// `activity_addr_row_floor` cursor as a store synced live from genesis with
+/// the same live batches after the handoff.
+#[tokio::test]
+async fn bulk_handoff_then_live_past_the_floor_writes_the_activity_rows_of_a_live_chain() {
+    use keys::stats_prefix::{
+        ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_ROW,
+    };
+    // Ten minutes a block from 2026-09-22 09:00 UTC+8: the handoff block 200
+    // is in hour 2026092318. At the tip 1260 the floor is block 259 (04:10
+    // on the third day), so both stores have pruned the handoff hour, the
+    // handoff day and the third day's first hours. Live batches: 100 blocks
+    // a batch to block 999 (no floor before the committed tip reaches
+    // 1000), then one block a batch, so the prune keeps up with the floor.
+    let chain = long_transfer_chain(1_261);
+    let (handoff, tip) = (200usize, 1_260usize);
+    let mut plan = chunked_plan(1_000, 100);
+    plan.extend((1_000..=tip).map(|block| block..=block));
+
+    let live = open_stores();
+    sync_prefix(&live, &chain, &plan, 0, tip).await;
+
+    let FixtureStores {
+        domain,
+        _append: append,
+        _dirs,
+    } = open_fixture_stores();
+    ckbadger_indexer::sync::bulk_build_into_stores_for_test(&domain, &append, &chain[..=handoff])
+        .unwrap_or_else(|e| panic!("bulk build to {handoff}: {e:#}"));
+    assert_eq!(
+        domain.get_activity_addr_row_floor().unwrap().as_deref(),
+        Some("2026092318"),
+        "bulk finalize records the handoff hour"
+    );
+    let indexer = restart(domain.clone(), append.clone(), NETWORK)
+        .unwrap_or_else(|e| panic!("restart after the bulk build: {e:#}"));
+    let bulk = Stores {
+        domain,
+        _append: append,
+        indexer,
+        _dirs,
+    };
+    sync_prefix(&bulk, &chain, &plan, handoff + 1, tip).await;
+
+    let activity_rows = |store: &CkbadgerStore| -> Dump {
+        dump_domain(store)
+            .into_iter()
+            .filter(|((cf, key), _)| {
+                (*cf == ckbadger_store::CF_STATS_CHAIN
+                    && matches!(
+                        key.first().copied(),
+                        Some(
+                            ACTIVITY_DAILY
+                                | ACTIVITY_HOURLY
+                                | ACTIVITY_DAILY_ADDR_ROW
+                                | ACTIVITY_HOURLY_ADDR_ROW
+                        )
+                    ))
+                    || (*cf == ckbadger_store::CF_SYNC_META
+                        && key.as_slice() == sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR)
+            })
+            .collect()
+    };
+    let expected = activity_rows(&live.domain);
+    assert_eq!(
+        live.domain
+            .get_activity_addr_row_floor()
+            .unwrap()
+            .as_deref(),
+        Some("2026092404"),
+        "the live store's prune caught up with the floor"
+    );
+    assert!(
+        expected
+            .keys()
+            .any(|(cf, key)| *cf == ckbadger_store::CF_STATS_CHAIN
+                && key[0] == ACTIVITY_HOURLY_ADDR_ROW),
+        "the tip's buckets keep address rows"
+    );
+    compare_dumps(
+        &activity_rows(&bulk.domain),
+        &expected,
+        &format!("bulk to {handoff} then live to {tip} vs live from genesis"),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+}
+
 #[tokio::test]
 async fn plain_transfers_fork_inside_a_multi_block_batch_roll_back_byte_equal() {
     let chain = transfer_chain(14);
