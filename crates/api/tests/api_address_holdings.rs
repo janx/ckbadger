@@ -555,8 +555,15 @@ async fn address_identity_histories_resolve_consumers_once_per_page() {
     // The fixture's transaction at (7, 0) consumed an earlier incarnation of
     // the did:ckb (output 8) and of the .bit Cell (output 9).
     seed_tx_at(&mut b, &f.hash, 7, 0);
-    for (previous, output, id) in [([0xa1u8; 32], 8i16, vec![0x61u8; 20]), ([0xa3; 32], 9, vec![0x62; 32])] {
-        let current = f.store.get_cell(&f.hash, output, &f.store).unwrap().unwrap();
+    for (previous, output, id) in [
+        ([0xa1u8; 32], 8i16, vec![0x61u8; 20]),
+        ([0xa3; 32], 9, vec![0x62; 32]),
+    ] {
+        let current = f
+            .store
+            .get_cell(&f.hash, output, &f.store)
+            .unwrap()
+            .unwrap();
         b.put_consumed_cell(&previous, 0, &current.cell, 2, 7, 0);
         b.put_spore_outpoint(&previous, 0, &id);
     }

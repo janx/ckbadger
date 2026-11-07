@@ -1570,13 +1570,14 @@ fn versions_code_cells(
     let mut versions = Vec::with_capacity(version_hashes.len());
     for version_hash in version_hashes {
         let mut code_cells =
-            list_version_code_cells(&state.store, &state.append_only_store, version_hash)
-                .map_err(|e| {
+            list_version_code_cells(&state.store, &state.append_only_store, version_hash).map_err(
+                |e| {
                     ApiError::internal(format!(
                         "code cells of version 0x{}: {e:#}",
                         hex::encode(version_hash)
                     ))
-                })?;
+                },
+            )?;
         sort_code_cells(&mut code_cells);
         let consumed = consumed_code_cells(state, &code_cells)?;
         versions.push((code_cells, consumed));
@@ -1655,42 +1656,44 @@ fn script_version_deployments(
         .iter()
         .zip(&cells.consumed)
         .zip(&cells.consumers)
-        .map(|(((tx_hash, output_index, cell, is_live), consumed), consumer)| {
-            let type_script_hash = cell.type_script_hash();
-            let hash_type = if type_script_hash.is_some() {
-                "type".to_string()
-            } else {
-                "data".to_string()
-            };
-            let type_reference_hash =
-                type_script_hash.map(|hash| format!("0x{}", hex::encode(hash)));
+        .map(
+            |(((tx_hash, output_index, cell, is_live), consumed), consumer)| {
+                let type_script_hash = cell.type_script_hash();
+                let hash_type = if type_script_hash.is_some() {
+                    "type".to_string()
+                } else {
+                    "data".to_string()
+                };
+                let type_reference_hash =
+                    type_script_hash.map(|hash| format!("0x{}", hex::encode(hash)));
 
-            let mut custody = classify_code_cell_lock(&cell.cell)?;
-            mark_never_signed_if_proven(state, &cell.cell, &mut custody)?;
-            attach_multisig_witness(
-                state,
-                tx_hash,
-                *output_index,
-                &cell.cell,
-                consumer.as_ref().map(|hash| hash.as_slice()),
-                &mut custody,
-            )?;
+                let mut custody = classify_code_cell_lock(&cell.cell)?;
+                mark_never_signed_if_proven(state, &cell.cell, &mut custody)?;
+                attach_multisig_witness(
+                    state,
+                    tx_hash,
+                    *output_index,
+                    &cell.cell,
+                    consumer.as_ref().map(|hash| hash.as_slice()),
+                    &mut custody,
+                )?;
 
-            Ok(ScriptVersionDeploymentResponse {
-                hash_type,
-                type_reference_hash,
-                data_reference_hash: format!("0x{}", hex::encode(version_hash)),
-                code_cell_tx_hash: format!("0x{}", hex::encode(tx_hash)),
-                code_cell_output_index: i32::from(*output_index),
-                deployed_at: code_cell_timestamp(state, version_hash, cell.created_at_block)?,
-                created_at_block: cell.created_at_block,
-                status: if *is_live { "live" } else { "consumed" }.to_string(),
-                consumed_at_block: consumed.as_ref().map(|c| c.consumed_at_block),
-                consumed_by_tx: consumer.map(|hash| format!("0x{}", hex::encode(hash))),
-                custody,
-                consumed_tx_index: consumed.as_ref().map(|c| c.consumer_position().1),
-            })
-        })
+                Ok(ScriptVersionDeploymentResponse {
+                    hash_type,
+                    type_reference_hash,
+                    data_reference_hash: format!("0x{}", hex::encode(version_hash)),
+                    code_cell_tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                    code_cell_output_index: i32::from(*output_index),
+                    deployed_at: code_cell_timestamp(state, version_hash, cell.created_at_block)?,
+                    created_at_block: cell.created_at_block,
+                    status: if *is_live { "live" } else { "consumed" }.to_string(),
+                    consumed_at_block: consumed.as_ref().map(|c| c.consumed_at_block),
+                    consumed_by_tx: consumer.map(|hash| format!("0x{}", hex::encode(hash))),
+                    custody,
+                    consumed_tx_index: consumed.as_ref().map(|c| c.consumer_position().1),
+                })
+            },
+        )
         .collect()
 }
 

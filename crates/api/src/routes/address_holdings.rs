@@ -1133,9 +1133,8 @@ fn cell_response(
                     | IdentityExtra::DotCell { expired_at, .. } => Some(expired_at),
                     IdentityExtra::DidCkb => None,
                 };
-                held_since_block = Some(
-                    held_since.context("identity holding lacks its held-since history")?,
-                );
+                held_since_block =
+                    Some(held_since.context("identity holding lacks its held-since history")?);
             }
         }
     }
@@ -1192,7 +1191,13 @@ fn identities_held_since(
         histories.push(match &evidence.item {
             Some((id, Item::Identity(entry))) => Some(
                 identity_predecessors(state, id, entry.standard, hash, *index).with_context(
-                    || format!("identity 0x{} at 0x{}:{index}", hex::encode(id), hex::encode(hash)),
+                    || {
+                        format!(
+                            "identity 0x{} at 0x{}:{index}",
+                            hex::encode(id),
+                            hex::encode(hash)
+                        )
+                    },
                 )?,
             ),
             _ => None,

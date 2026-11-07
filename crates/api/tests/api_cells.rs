@@ -1637,14 +1637,11 @@ async fn cell_detail_rejects_a_consumer_position_without_a_transaction() {
     let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
-        body["message"]
-            .as_str()
-            .unwrap()
-            .contains(&format!(
-                "consumed_cells row of item=0x{0} outpoint=0x{0}:0 points at block=456, tx_idx=3, \
+        body["message"].as_str().unwrap().contains(&format!(
+            "consumed_cells row of item=0x{0} outpoint=0x{0}:0 points at block=456, tx_idx=3, \
                  which has no tx_index row",
-                hex::encode(&tx)
-            )),
+            hex::encode(&tx)
+        )),
         "{body}"
     );
 }
@@ -2776,7 +2773,10 @@ async fn address_transactions_page_reads_entries_and_headers_once_per_page() {
     store.reset_read_call_counters();
     let (status, json) = get_json(
         &app,
-        &format!("/addresses/0x{}/transactions?limit=5", hex::encode(lock_hash)),
+        &format!(
+            "/addresses/0x{}/transactions?limit=5",
+            hex::encode(lock_hash)
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");

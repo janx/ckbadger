@@ -1221,10 +1221,7 @@ mod tests {
         );
         // With the header, the first orphan is height 9.
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(
-            10,
-            &store.get_block_header(9).unwrap().unwrap(),
-        );
+        batch.put_block_header(10, &store.get_block_header(9).unwrap().unwrap());
         batch.commit().unwrap();
         assert_eq!(
             super::first_orphan_of_stored_branch(&store, 8, &[8; 32], 11, &[11; 32]).unwrap(),

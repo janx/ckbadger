@@ -1488,7 +1488,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("object_collection_activities row at block=100, tx_idx=1 has no block header"),
+            err.contains(
+                "object_collection_activities row at block=100, tx_idx=1 has no block header"
+            ),
             "{err}"
         );
     }

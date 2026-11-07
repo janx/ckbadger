@@ -242,7 +242,9 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         after_block: Option<i64>,
     ) -> anyhow::Result<Vec<TxActions>> {
-        Ok(self.list_tx_actions_recent_page(limit, cursor, after_block)?.0)
+        Ok(self
+            .list_tx_actions_recent_page(limit, cursor, after_block)?
+            .0)
     }
 
     /// [`Self::list_tx_actions_recent_in_range`] with the block headers the
@@ -762,16 +764,8 @@ mod tests {
     fn test_matches_activity_filter_all() {
         let actions = make_tx_actions(100, 0, 0xAA);
         let lock_hash = vec![0xAA; 32];
-        assert!(CkbadgerStore::matches_activity_filter(
-            &actions, &lock_hash, None
-        )
-            .unwrap());
-        assert!(CkbadgerStore::matches_activity_filter(
-            &actions,
-            &lock_hash,
-            Some("all")
-        )
-            .unwrap());
+        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, None).unwrap());
+        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("all")).unwrap());
     }
 
     #[test]
@@ -779,12 +773,7 @@ mod tests {
         let actions = make_tx_actions(100, 0, 0xAA);
         let lock_hash = vec![0xAA; 32];
         // tags=0 means pure CKB
-        assert!(CkbadgerStore::matches_activity_filter(
-            &actions,
-            &lock_hash,
-            Some("ckb")
-        )
-            .unwrap());
+        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("ckb")).unwrap());
     }
 
     #[test]
@@ -792,18 +781,12 @@ mod tests {
         let mut actions = make_tx_actions(100, 0, 0xAA);
         actions.participants[0].tags = TAG_TOKEN;
         let lock_hash = vec![0xAA; 32];
-        assert!(CkbadgerStore::matches_activity_filter(
-            &actions,
-            &lock_hash,
-            Some("token")
-        )
-            .unwrap());
-        assert!(!CkbadgerStore::matches_activity_filter(
-            &actions,
-            &lock_hash,
-            Some("ckb")
-        )
-            .unwrap());
+        assert!(
+            CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("token")).unwrap()
+        );
+        assert!(
+            !CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("ckb")).unwrap()
+        );
     }
 
     /// Review P1-3: with position keys, a transaction in which the address
@@ -946,8 +929,7 @@ mod tests {
             let mut actions = make_tx_actions(100, 0, 0xAA);
             actions.participants[0].tags = tags;
             assert_eq!(
-                CkbadgerStore::matches_activity_filter(&actions, &lock, Some("script"))
-            .unwrap(),
+                CkbadgerStore::matches_activity_filter(&actions, &lock, Some("script")).unwrap(),
                 expected,
                 "tags {tags:#b}"
             );
@@ -970,13 +952,13 @@ mod tests {
             &lock_hash,
             Some("protocol:rgbpp")
         )
-            .unwrap());
+        .unwrap());
         assert!(!CkbadgerStore::matches_activity_filter(
             &actions,
             &lock_hash,
             Some("protocol:fiber")
         )
-            .unwrap());
+        .unwrap());
     }
 
     #[test]
@@ -1113,18 +1095,8 @@ mod prefix_participant_filter_tests {
                 roles: 0,
             }],
         };
-        assert!(CkbadgerStore::matches_activity_filter(
-            &actions,
-            &lock,
-            Some("identity")
-        )
-            .unwrap());
-        assert!(!CkbadgerStore::matches_activity_filter(
-            &actions,
-            &lock,
-            Some("token")
-        )
-            .unwrap());
+        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock, Some("identity")).unwrap());
+        assert!(!CkbadgerStore::matches_activity_filter(&actions, &lock, Some("token")).unwrap());
     }
 }
 
@@ -1401,7 +1373,11 @@ mod global_bucket_tests {
 
         store.reset_read_call_counters();
         assert!(store.tx_actions_of(&[]).unwrap().is_empty());
-        assert_eq!(store.read_call_counts(), (0, 0), "an empty page reads nothing");
+        assert_eq!(
+            store.read_call_counts(),
+            (0, 0),
+            "an empty page reads nothing"
+        );
     }
 
     #[test]

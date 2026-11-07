@@ -5500,9 +5500,8 @@ mod tests {
             .iter()
             .filter_map(|(name, store, _)| {
                 let spec = cf_spec(name)?;
-                (spec.store != *store).then(|| {
-                    format!("{name}: marked {store:?}, CF_SPECS says {:?}", spec.store)
-                })
+                (spec.store != *store)
+                    .then(|| format!("{name}: marked {store:?}, CF_SPECS says {:?}", spec.store))
             })
             .collect();
         assert!(
@@ -5758,8 +5757,14 @@ mod tests {
         assert!(!states_total("block_number + tx_index", 12));
         assert!(states_total("lock(32) + desc(12) = 44B", 44));
         // A component's width that equals the total is not the total.
-        assert!(!states_total("hash (32B) + block (8B BE) + outpoint (74B)", 74));
-        assert!(states_total("hash (32B) + block (8B BE) + outpoint (34B) = 74B", 74));
+        assert!(!states_total(
+            "hash (32B) + block (8B BE) + outpoint (74B)",
+            74
+        ));
+        assert!(states_total(
+            "hash (32B) + block (8B BE) + outpoint (34B) = 74B",
+            74
+        ));
         assert_eq!(
             counts_stated_before("74 domain + 1 append-only; the 68 domain CFs", " domain"),
             vec![74, 68]

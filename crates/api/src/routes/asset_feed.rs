@@ -158,7 +158,8 @@ pub(crate) fn project_activities(
     state: &AppState,
     rows: Vec<AssetTransaction>,
 ) -> Result<Vec<GlobalActivityResponse>, ApiRouteError> {
-    let actions = canonical_actions(state, &rows).map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    let actions =
+        canonical_actions(state, &rows).map_err(|e| ApiError::internal(format!("{e:#}")))?;
     project_actions(state, &actions)
 }
 
@@ -249,7 +250,8 @@ pub(crate) fn project_transactions(
     state: &AppState,
     rows: Vec<AssetTransaction>,
 ) -> Result<Vec<TransactionResponse>, ApiRouteError> {
-    let actions = canonical_actions(state, &rows).map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    let actions =
+        canonical_actions(state, &rows).map_err(|e| ApiError::internal(format!("{e:#}")))?;
     project_transactions_of(state, &rows, &actions)
 }
 

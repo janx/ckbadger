@@ -3595,12 +3595,9 @@ mod tests {
         by_prefix[28] = 0x80;
         let mut collection = encode_object_collection_activity_key(&[0xCC; 32], 5, 1).to_vec();
         collection[40] = 0x80;
-        let mut bucket = encode_tx_actions_by_bucket_key(
-            crate::global_bucket::GlobalBucket::Token,
-            5,
-            1,
-        )
-        .to_vec();
+        let mut bucket =
+            encode_tx_actions_by_bucket_key(crate::global_bucket::GlobalBucket::Token, 5, 1)
+                .to_vec();
         bucket[1] = 0x80;
         let errors = [
             decode_stored_tx_actions_key(&activities).unwrap_err(),
@@ -3626,7 +3623,10 @@ mod tests {
             .contains("encodes no block"));
         // The extremes of a valid component still decode.
         assert_eq!(decode_desc_block_num(&i64::MAX.to_be_bytes()).unwrap(), 0);
-        assert_eq!(decode_desc_block_num(&0i64.to_be_bytes()).unwrap(), i64::MAX);
+        assert_eq!(
+            decode_desc_block_num(&0i64.to_be_bytes()).unwrap(),
+            i64::MAX
+        );
         assert_eq!(decode_desc_tx_idx(&0i32.to_be_bytes()).unwrap(), i32::MAX);
     }
 

@@ -4796,15 +4796,10 @@ mod tests {
         // Per REORG_HANDLING.md rollback deletes a rolled-back block's
         // collection rows, so a row at a position with no transaction is a
         // rollback bug: the feed names it instead of hiding it.
-        let error = list_canonical_nft_collection_activities_page(
-            &domain,
-            &collection_id,
-            3,
-            None,
-            None,
-        )
-        .map(|_| ())
-        .unwrap_err();
+        let error =
+            list_canonical_nft_collection_activities_page(&domain, &collection_id, 3, None, None)
+                .map(|_| ())
+                .unwrap_err();
         let message = format!("{error:#}");
         assert!(
             message.contains(
@@ -4820,14 +4815,9 @@ mod tests {
                 &ckbadger_store::keys::encode_object_collection_activity_key(&collection_id, 30, 0),
             )
             .unwrap();
-        let listed = list_canonical_nft_collection_activities_page(
-            &domain,
-            &collection_id,
-            3,
-            None,
-            None,
-        )
-        .unwrap();
+        let listed =
+            list_canonical_nft_collection_activities_page(&domain, &collection_id, 3, None, None)
+                .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].0, 20);
         assert_eq!(listed[1].0, 10);
@@ -4879,14 +4869,9 @@ mod tests {
         domain_batch.put_block_header(20, &make_header(0xBB));
         domain_batch.commit().unwrap();
 
-        let listed = list_canonical_nft_collection_activities_page(
-            &domain,
-            &collection_id,
-            10,
-            None,
-            None,
-        )
-        .unwrap();
+        let listed =
+            list_canonical_nft_collection_activities_page(&domain, &collection_id, 10, None, None)
+                .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].2.block_hash, make_header(0xBB).hash);
         assert_eq!(listed[0].2.actions, vec![AssetAction::Transfer]);

@@ -296,7 +296,11 @@ pub(crate) fn transaction_response(
             return Err(ApiError::internal(format!(
                 "transaction block={block} index={index} tx=0x{}: a {} transaction {} actions",
                 hex::encode(entry.tx_hash),
-                if is_cellbase { "cellbase" } else { "non-cellbase" },
+                if is_cellbase {
+                    "cellbase"
+                } else {
+                    "non-cellbase"
+                },
                 if actions.is_some() { "with" } else { "without" }
             )))
         }
