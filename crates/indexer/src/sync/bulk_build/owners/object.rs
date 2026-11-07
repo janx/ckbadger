@@ -4301,8 +4301,9 @@ mod tests {
             .apply_object_activity_count_deltas(&object_activity_count_deltas)
             .expect("apply object activity deltas");
 
-        let root = unique_temp_test_dir("bulk-build-object-owner-mnft-real-blocks");
-        std::fs::create_dir_all(&root).expect("root");
+        // Removed when the test ends, after the stores below close.
+        let root_dir = tempfile::tempdir().expect("root");
+        let root = root_dir.path();
         let domain_path = root.join("domain");
         let append_path = root.join("append-only");
         std::fs::create_dir_all(&domain_path).expect("domain");

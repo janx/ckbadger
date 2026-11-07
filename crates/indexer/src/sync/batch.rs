@@ -7741,9 +7741,7 @@ mod tests {
         /// `raw_inputs + compensation - outputs` in `TxIndexEntry`.
         #[tokio::test]
         async fn test_live_write_path_stores_corrected_dao_phase2_fee() {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             // Real consensus secondary_epoch_reward; the live write path needs
             // it for the per-block miner secondary split.
             store
@@ -7803,9 +7801,7 @@ mod tests {
         /// current fee value.
         #[tokio::test]
         async fn test_live_write_path_recomputes_fee_for_phase2_with_plain_inputs() {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             // Real consensus secondary_epoch_reward; the live write path needs
             // it for the per-block miner secondary split.
             store
@@ -7927,9 +7923,7 @@ mod tests {
         }
 
         fn live_dao_fixture_store() -> (Arc<CkbadgerStore>, Indexer) {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             store
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
@@ -11758,9 +11752,7 @@ mod tests {
         }
 
         async fn indexed_through(last: BlockResponseWithCycles) -> Arc<CkbadgerStore> {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             let indexer = indexer_for_live_write_test(store.clone());
             store
                 .set_secondary_epoch_reward(61_369_863_013_698)
@@ -11846,9 +11838,7 @@ mod tests {
         async fn derived_collection_activity_count_is_maintained_live_and_rolls_back() {
             let _guard =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             let indexer = indexer_for_live_write_test(store.clone());
             store
                 .set_secondary_epoch_reward(61_369_863_013_698)
@@ -11948,9 +11938,7 @@ mod tests {
             assert_eq!(bulk.collection_activity_daily, expected, "bulk rows");
 
             let open = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 let indexer = indexer_for_live_write_test(store.clone());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
@@ -12327,9 +12315,7 @@ mod tests {
                 let _guard = crate::db::writer::activities::test_detector_override::install(
                     naming_detectors,
                 );
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
@@ -12831,9 +12817,7 @@ mod tests {
                     .collect(),
             );
             let open_live = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
@@ -13337,9 +13321,7 @@ mod tests {
         }
 
         async fn write_blocks_live(blocks: &[BlockResponseWithCycles]) -> Arc<CkbadgerStore> {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             // Real consensus secondary_epoch_reward; the live write path needs
             // it for the per-block miner secondary split.
             store
@@ -13647,9 +13629,7 @@ mod tests {
             batches: &[Vec<BlockResponseWithCycles>],
             label_row: Option<(Vec<u8>, TokenInfo)>,
         ) -> Arc<CkbadgerStore> {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             store
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
@@ -14303,9 +14283,7 @@ mod tests {
         }
 
         async fn write_live(blocks: &[BlockResponseWithCycles]) -> Arc<CkbadgerStore> {
-            let dir = tempfile::tempdir().unwrap();
-            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-            std::mem::forget(dir);
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
             store
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
@@ -14589,9 +14567,7 @@ mod tests {
             let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
                 .expect("continuous genesis bulk build");
             let open_live = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
@@ -14759,9 +14735,7 @@ mod tests {
             assert_eq!(bulk.tx_actions_by_bucket, expected, "bulk bucket rows");
 
             let open_live = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
@@ -14855,9 +14829,7 @@ mod tests {
             );
 
             let open_live = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
@@ -15037,9 +15009,7 @@ mod tests {
             assert_eq!(miner_cellbases, 4, "fixture miner: {bulk_rows:?}");
 
             let open_live = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
@@ -15124,9 +15094,7 @@ mod tests {
             canonical[3].block.transactions[0].outputs[0].lock = new_lock;
 
             let open_live = || {
-                let dir = tempfile::tempdir().unwrap();
-                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-                std::mem::forget(dir);
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
                 store
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();

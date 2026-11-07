@@ -975,12 +975,8 @@ mod tests {
     }
 
     fn test_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-        std::mem::forget(domain_dir);
-        std::mem::forget(append_dir);
+        let domain = Arc::new(CkbadgerStore::open_domain_temp().unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only_temp().unwrap());
         (domain, append)
     }
 

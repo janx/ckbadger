@@ -1421,11 +1421,12 @@ async fn block_miner_message_text_drops_the_versionbits_prefix() {
 }
 
 /// A `<work_dir>/metadata` directory holding only `pools.toml` (R-12): the
-/// override label import's metadata directory takes, here for the API.
-fn pools_metadata_dir(pools_toml: &str) -> std::path::PathBuf {
+/// override label import's metadata directory takes, here for the API. The
+/// caller keeps it until the router is built (removed when it drops).
+fn pools_metadata_dir(pools_toml: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("pools.toml"), pools_toml).unwrap();
-    dir.keep()
+    dir
 }
 
 /// The lock every `attach_block_evidence*` cellbase names, as its script hash.
@@ -1444,7 +1445,8 @@ async fn block_500_with(message: &[u8], pools_toml: Option<&str>) -> serde_json:
     mount_block_economic_state_not_finalized(&server).await;
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
-    config.metadata_path = pools_toml.map(pools_metadata_dir);
+    let metadata = pools_toml.map(pools_metadata_dir);
+    config.metadata_path = metadata.as_ref().map(|dir| dir.path().to_path_buf());
     let app = create_router(attach_block_evidence_with_message(config, &[500], message)).await;
     let (status, detail) = get_json(&app, "/blocks/500").await;
     assert_eq!(status, StatusCode::OK, "{detail}");
@@ -1506,11 +1508,12 @@ async fn block_miner_pool_conflict_between_lock_and_message_is_an_error() {
     mount_block_economic_state_not_finalized(&server).await;
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
-    config.metadata_path = Some(pools_metadata_dir(&format!(
+    let metadata = pools_metadata_dir(&format!(
         "[[pools]]\nname = \"Lock Pool\"\n[pools.mainnet]\nlock_hashes = [\"{}\"]\n\
          [[pools]]\nname = \"Message Pool\"\n[pools.mainnet]\nmessage_prefixes = [\"0x636b62\"]\n",
         fixture_miner_lock_hash()
-    )));
+    ));
+    config.metadata_path = Some(metadata.path().to_path_buf());
     let app = create_router(attach_block_evidence(config, &[500])).await;
     let (status, body) = get_json(&app, "/blocks/500").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
@@ -1526,9 +1529,10 @@ async fn block_miner_pool_conflict_between_lock_and_message_is_an_error() {
 #[tokio::test]
 async fn router_build_fails_on_a_malformed_pools_override() {
     let mut config = test_config(test_store());
-    config.metadata_path = Some(pools_metadata_dir(
+    let metadata = pools_metadata_dir(
         "[[pools]]\nname = \"Short\"\n[pools.mainnet]\nlock_hashes = [\"0xaa\"]\n",
-    ));
+    );
+    config.metadata_path = Some(metadata.path().to_path_buf());
     let error = match ckbadger_api::try_create_router(config).await {
         Ok(_) => panic!("a malformed pools.toml must fail the router build"),
         Err(error) => format!("{error:#}"),

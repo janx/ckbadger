@@ -3957,6 +3957,7 @@ where
         .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
 
     let root = unique_temp_test_dir(temp_root_label);
+    let _remove_root = RemoveTestDirOnDrop(root.clone());
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -3981,8 +3982,6 @@ where
         )?;
         finish(domain_store.as_ref(), append_store.as_ref(), state)?
     };
-
-    let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
 }
 
@@ -4192,6 +4191,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
+    let _remove_root = RemoveTestDirOnDrop(root.clone());
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -4278,8 +4278,6 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             sync_status,
         )?
     };
-
-    let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
 }
 
@@ -6793,6 +6791,17 @@ fn collect_core_owner_state_snapshot(
         dao_state,
         object_state,
     })
+}
+
+/// Removes a test seam's [`unique_temp_test_dir`] root when dropped, on the
+/// error paths as well (an early `?` used to skip the removal and leave the
+/// stores behind). Declare it before the stores, so they close first.
+struct RemoveTestDirOnDrop(PathBuf);
+
+impl Drop for RemoveTestDirOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 pub(crate) fn unique_temp_test_dir(prefix: &str) -> PathBuf {

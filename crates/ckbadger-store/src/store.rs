@@ -1304,6 +1304,12 @@ pub struct CkbadgerStore {
     /// batched read instead of N point reads. Never compiled into the binary.
     #[cfg(any(test, feature = "read-call-counters"))]
     read_calls: ReadCallCounters,
+    /// Test-only: the temporary directory an `open_*_temp` store lives in,
+    /// removed when the store drops. The LAST field: fields drop in
+    /// declaration order and `db` is the first, so the database closes before
+    /// its directory is removed, however many `Arc`s shared the store.
+    #[cfg(any(test, feature = "test-store"))]
+    test_dir: Option<tempfile::TempDir>,
 }
 
 #[cfg(any(test, feature = "read-call-counters"))]
@@ -1539,6 +1545,8 @@ impl CkbadgerStore {
             cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
+            #[cfg(any(test, feature = "test-store"))]
+            test_dir: None,
         })
     }
 
@@ -1640,6 +1648,8 @@ impl CkbadgerStore {
             cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
+            #[cfg(any(test, feature = "test-store"))]
+            test_dir: None,
         })
     }
 
@@ -1782,6 +1792,50 @@ impl CkbadgerStore {
     /// Test helper: open a fresh network store (mirrors [`Self::open_test_unified`]).
     pub fn open_test_network<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         Self::open_network(path)
+    }
+
+    /// Test helper: a fresh unified store (every CF of every store class) in
+    /// a new temporary directory that goes with the store: removed when the
+    /// last handle drops, after the database closed.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_test_unified_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_test_unified(path))
+    }
+
+    /// Test helper: [`Self::open_test_network`] in a temporary directory that
+    /// goes with the store.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_test_network_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_test_network(path))
+    }
+
+    /// Test helper: [`Self::open_domain`] in a temporary directory that goes
+    /// with the store.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_domain_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_domain(path))
+    }
+
+    /// Test helper: [`Self::open_append_only`] in a temporary directory that
+    /// goes with the store.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_append_only_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_append_only(path))
+    }
+
+    /// The temporary directory an `open_*_temp` store lives in; `None` for a
+    /// store opened at a caller's path.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn test_dir(&self) -> Option<&Path> {
+        self.test_dir.as_ref().map(tempfile::TempDir::path)
+    }
+
+    #[cfg(any(test, feature = "test-store"))]
+    fn open_in_test_dir(open: impl FnOnce(&Path) -> anyhow::Result<Self>) -> anyhow::Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let mut store = open(dir.path())?;
+        store.test_dir = Some(dir);
+        Ok(store)
     }
 
     /// Catch up with primary instance writes (secondary only).
@@ -3719,6 +3773,58 @@ pub struct FlushStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A temp test store owns its directory: shared through `Arc`s it stays,
+    /// and the last handle's drop closes the database (the first field) and
+    /// then removes the directory (the last field). The helpers used to
+    /// `mem::forget` the `TempDir`, leaking one RocksDB directory a call.
+    /// The directory must be gone afterwards: `TempDir`'s drop swallows its
+    /// error, so a failed removal would leave it, and a database still open
+    /// would write its LOG / MANIFEST on close and recreate it.
+    #[test]
+    fn a_temp_test_store_removes_its_directory_with_the_last_handle() {
+        type Open = fn() -> anyhow::Result<CkbadgerStore>;
+        let opens: [(&str, Open); 4] = [
+            ("unified", CkbadgerStore::open_test_unified_temp),
+            ("network", CkbadgerStore::open_test_network_temp),
+            ("domain", CkbadgerStore::open_domain_temp),
+            ("append-only", CkbadgerStore::open_append_only_temp),
+        ];
+        for (kind, open) in opens {
+            let store = std::sync::Arc::new(open().unwrap());
+            let dir = store
+                .test_dir()
+                .unwrap_or_else(|| panic!("{kind}: a temp store knows its directory"))
+                .to_path_buf();
+            assert!(
+                dir.join("CURRENT").exists(),
+                "{kind}: a RocksDB lives there"
+            );
+            let cf = store
+                .db
+                .cf_handle(CF_SYNC_META)
+                .or_else(|| store.db.cf_handle(CF_CELLS));
+            let cf = cf.or_else(|| store.db.cf_handle(CF_NET_NODES)).unwrap();
+            store.put_cf(cf, b"k", b"v").unwrap();
+            let shared = std::sync::Arc::clone(&store);
+            drop(store);
+            assert!(dir.exists(), "{kind}: a shared store keeps its directory");
+            drop(shared);
+            assert!(
+                !dir.exists(),
+                "{kind}: the last handle removes the directory, after the database closed"
+            );
+        }
+        // A store opened at a caller's path owns no directory.
+        let caller = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(caller.path()).unwrap();
+        assert!(store.test_dir().is_none());
+        drop(store);
+        assert!(
+            caller.path().exists(),
+            "the caller's directory is the caller's"
+        );
+    }
 
     #[test]
     fn compaction_control_rejects_missing_or_failed_property() {

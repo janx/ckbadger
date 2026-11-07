@@ -211,10 +211,7 @@ mod tests {
     }
 
     fn make_test_invalidator() -> CacheInvalidator {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        // Leak tempdir to keep it alive for the test
-        std::mem::forget(dir);
+        let store = Arc::new(CkbadgerStore::open_domain_temp().unwrap());
         CacheInvalidator::new(store)
     }
 

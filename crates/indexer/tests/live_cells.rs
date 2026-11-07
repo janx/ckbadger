@@ -11,10 +11,7 @@ use ckbadger_store::{LiveCellInfo, PositionedCellInfo};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 /// The seed bytes go into the script args, so distinct seeds are distinct
