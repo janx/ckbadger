@@ -1555,14 +1555,17 @@ fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
             vec![],
         )],
     );
-    // 15: a data cell (a `cell_by_data_hash` row) ...
+    // 15: a code cell (a `cell_by_data_hash` row) ...
     chain.push(
         t(15),
         vec![tx(
             0x0f01,
             vec![funding(11)],
             vec![
-                (output(1_000, lock(0x0f), None), data(b"code-cell-bytes")),
+                (
+                    output(1_000, lock(0x0f), None),
+                    data(b"\x7fELF\x02\x01\x01code-cell-bytes"),
+                ),
                 plain(FUND - 1_001, 0x2b),
             ],
             vec![],
@@ -1621,6 +1624,37 @@ async fn protocol_chain_single_block_batches_roll_back_byte_equal() {
     let chain = protocol_chain(0);
     let plan = single_block_plan(chain.len());
     assert_rollback_properties(&chain, &plan, 16, &[13, 10, 5]).await;
+}
+
+/// C-2: the protocol chain's one code cell (block 15) is its only
+/// `cell_by_data_hash` row, kept when block 16 consumes it — so the rollback
+/// cases above restore a real row; every other cell with data (the spore,
+/// cluster, mNFT, `.bit`, did:ckb, `.cell` and xUDT cells) is not code.
+#[tokio::test]
+async fn protocol_chain_files_only_its_code_cell_by_data_hash() {
+    let chain = protocol_chain(0);
+    let stores = open_stores();
+    sync_prefix(&stores, &chain, &single_block_plan(chain.len()), 0, 16).await;
+    let store = &stores.domain;
+    let rows: Vec<Vec<u8>> = store
+        .iterator_cf(store.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
+        .map(|item| item.unwrap().0.to_vec())
+        .collect();
+    let code = b"\x7fELF\x02\x01\x01code-cell-bytes";
+    let expected = keys::encode_cell_index_key(
+        &ckbadger_indexer::parser::ScriptParser::compute_data_hash(code),
+        15,
+        &tx_hash(0x0f01),
+        0,
+    );
+    assert_eq!(rows, vec![expected], "the code cell, and nothing else");
+    assert!(
+        store
+            .get_cell(&tx_hash(0x0f01), 0, &stores._append)
+            .unwrap()
+            .is_none(),
+        "block 16 consumed the code cell; its row stays"
+    );
 }
 
 #[tokio::test]

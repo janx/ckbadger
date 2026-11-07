@@ -5367,7 +5367,11 @@ fn build_history_rows_for_block(
                 ));
             }
 
-            if keys::cell_has_data_hash_row(cell.data_size) {
+            let type_script = cell
+                .type_code_hash_id
+                .zip(cell.type_hash_type)
+                .map(|(code_hash_id, hash_type)| (interner.resolve_bytes(code_hash_id), hash_type));
+            if keys::is_code_cell(&cell.data, type_script) {
                 let data_hash = cell.data_hash.as_ref().ok_or_else(|| {
                     anyhow!(
                         "bulk build cell with {} data bytes has no data hash: outpoint=0x{}:{}, block={}",

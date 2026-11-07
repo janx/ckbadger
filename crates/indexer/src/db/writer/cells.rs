@@ -190,7 +190,7 @@ impl BatchWriter {
                         *output_index,
                     );
                 }
-                if keys::cell_has_data_hash_row(cell.data_size) {
+                if cell.is_code_cell() {
                     domain_batch.put_cell_by_data_hash(
                         &cell.data_hash,
                         info.created_at_block,
@@ -769,20 +769,64 @@ mod tests {
         );
     }
 
+    /// A cell with `data` under an optional type script `(code_hash,
+    /// hash_type)`, with its real data hash.
+    fn build_data_cell(data: Vec<u8>, type_script: Option<([u8; 32], i16)>) -> ParsedCell {
+        let script_hash = crate::parser::ScriptParser::compute_script_hash_raw;
+        ParsedCell {
+            capacity: 100_000_000_000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            lock_script_hash: script_hash(&[0x11; 32], 1, &[0x22; 20]),
+            type_script_hash: type_script.map(|(code_hash, hash_type)| {
+                script_hash(&code_hash, hash_type as u8, &[0x33; 32])
+            }),
+            type_code_hash: type_script.map(|(code_hash, _)| code_hash.to_vec()),
+            type_hash_type: type_script.map(|(_, hash_type)| hash_type),
+            type_args: type_script.map(|_| vec![0x33; 32]),
+            data_hash: crate::parser::ScriptParser::compute_data_hash(&data),
+            data_size: data.len() as i32,
+            data,
+        }
+    }
+
+    /// C-2: `cell_by_data_hash` files exactly the code cells — a RISC-V
+    /// binary, or a Type ID cell with data — and no other cell with data.
     #[test]
-    fn test_insert_cells_batch_populates_data_hash_index() {
+    fn test_insert_cells_batch_indexes_only_code_cells_by_data_hash() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let type_code_hash =
-            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
-        let cell = build_udt_cell(type_code_hash, vec![0x01, 0x02, 0x03]);
+        let mut type_id = [0u8; 32];
+        type_id[25..].copy_from_slice(b"TYPE_ID");
+        let xudt: [u8; 32] =
+            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE)
+                .try_into()
+                .unwrap();
+        let elf = build_data_cell(b"\x7fELF\x02\x01\x01binary".to_vec(), None);
+        let deployment = build_data_cell(b"upgradable state".to_vec(), Some((type_id, 1)));
+        let udt = build_data_cell(1_000u128.to_le_bytes().to_vec(), Some((xudt, 1)));
+        let plain_data = build_data_cell(b"not a binary".to_vec(), None);
         let tx_hash = vec![0xDA; 32];
-        let output_index = 0i16;
         let block_num = 42i64;
-        let all_cells = vec![(tx_hash.as_slice(), output_index, &cell, block_num)];
-        let precomputed = precomputed_info_map(&tx_hash, output_index, &cell, block_num, None);
+        let cells = [&elf, &deployment, &udt, &plain_data];
+        let all_cells: Vec<_> = cells
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| (tx_hash.as_slice(), index as i16, *cell, block_num))
+            .collect();
+        let mut precomputed = HashMap::new();
+        for (index, cell) in cells.iter().enumerate() {
+            precomputed.extend(precomputed_info_map(
+                &tx_hash,
+                index as i16,
+                cell,
+                block_num,
+                None,
+            ));
+        }
 
         let mut domain_batch = StoreBatch::new(&store);
         let mut cells_batch = StoreBatch::new(&store);
@@ -798,13 +842,19 @@ mod tests {
         cells_batch.commit().unwrap();
         domain_batch.commit().unwrap();
 
-        // The data_hash from build_udt_cell is vec![0x66; 32]
-        let results = store
-            .list_cells_by_data_hash(&cell.data_hash, 10, None, &store)
-            .unwrap();
-        assert_eq!(results.len(), 1, "expected one cell indexed by data hash");
-        assert_eq!(results[0].0, tx_hash);
-        assert_eq!(results[0].1, output_index);
+        let rows: Vec<Vec<u8>> = store
+            .iterator_cf(store.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
+            .map(|item| item.unwrap().0.to_vec())
+            .collect();
+        let mut expected = vec![
+            keys::encode_cell_index_key(&elf.data_hash, block_num, &tx_hash, 0),
+            keys::encode_cell_index_key(&deployment.data_hash, block_num, &tx_hash, 1),
+        ];
+        expected.sort();
+        assert_eq!(
+            rows, expected,
+            "only the ELF binary and the Type ID deployment are code cells"
+        );
     }
 
     #[test]
@@ -813,9 +863,8 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let type_code_hash =
-            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
-        let cell = build_udt_cell(type_code_hash, vec![0x04, 0x05]);
+        // A code cell, so the skip flag is the only reason it has no row.
+        let cell = build_data_cell(b"\x7fELF\x02\x01\x01skipped".to_vec(), None);
         let tx_hash = vec![0xDB; 32];
         let all_cells = vec![(tx_hash.as_slice(), 0i16, &cell, 10i64)];
         let precomputed = precomputed_info_map(&tx_hash, 0, &cell, 10, None);

@@ -1190,14 +1190,22 @@ impl Check for GenesisBaselineBurntInvariant {
     }
 }
 
-/// F8: `cell_by_data_hash` files a row exactly for a cell with data
-/// (`keys::cell_has_data_hash_row`), so the hash of empty data must name no
-/// row at all. A bulk build used to file every empty-data cell of the chain
-/// under it while live sync filed none (D-2). Read through the bounded raw
-/// export `GET /verify/data-hash-rows`, which also fails on a dangling row.
-pub struct DataHashIndexFilesOnlyCellsWithData;
+/// F8: `cell_by_data_hash` files a row exactly for a code cell
+/// (`keys::is_code_cell`: a RISC-V binary, or a Type ID cell with data), on
+/// chain data from the node:
+///
+/// - the hash of empty data names no row — an empty cell is never code (a
+///   bulk build used to file every empty-data cell under it, D-2);
+/// - every output of the genesis block (the system scripts' binaries, their
+///   dep group, the secp256k1 data, the issuance cells) is named by a row
+///   under the hash of its data iff it is a code cell.
+///
+/// Read through the bounded raw export `GET /verify/data-hash-rows`, which
+/// also fails on a dangling row.
+pub struct DataHashIndexFilesOnlyCodeCells;
 
-/// Rows the check asks for: enough to name the offending cells.
+/// Rows the check asks for under one data hash: enough to name the offending
+/// cells, and to find a genesis output (block 0 rows sort first).
 const DATA_HASH_ROWS_SAMPLE: usize = 16;
 
 #[derive(Debug, serde::Deserialize)]
@@ -1217,60 +1225,206 @@ struct DataHashRowEvidence {
     data_size: i64,
 }
 
-impl Check for DataHashIndexFilesOnlyCellsWithData {
+impl DataHashRowEvidence {
+    fn describe(&self) -> String {
+        format!(
+            "{}:{} filed at block {} ({}, data_size {})",
+            self.tx_hash,
+            self.output_index,
+            self.created_at_block,
+            if self.live { "live" } else { "consumed" },
+            self.data_size
+        )
+    }
+}
+
+/// One output of a node block: its outpoint, data and type script, as the
+/// node's JSON carries them.
+struct NodeOutput {
+    tx_hash: String,
+    index: i64,
+    data: Vec<u8>,
+    type_script: Option<([u8; 32], i16)>,
+}
+
+/// Every output of a `get_block_by_number` result; any malformed field is an
+/// error naming it.
+fn node_block_outputs(block: &serde_json::Value) -> anyhow::Result<Vec<NodeOutput>> {
+    let txs = block["transactions"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("node block has no transactions array"))?;
+    let mut outputs = Vec::new();
+    for tx in txs {
+        let tx_hash = tx["hash"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("node transaction has no hash"))?
+            .to_ascii_lowercase();
+        let cells = tx["outputs"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("node transaction {tx_hash} has no outputs"))?;
+        let data = tx["outputs_data"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("node transaction {tx_hash} has no outputs_data"))?;
+        anyhow::ensure!(
+            cells.len() == data.len(),
+            "node transaction {tx_hash} has {} outputs but {} outputs_data",
+            cells.len(),
+            data.len()
+        );
+        for (index, (cell, data)) in cells.iter().zip(data).enumerate() {
+            let data = data
+                .as_str()
+                .and_then(|hex| hex::decode(hex.trim_start_matches("0x")).ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("node output {tx_hash}:{index} has malformed data")
+                })?;
+            let type_script = match &cell["type"] {
+                serde_json::Value::Null => None,
+                script => {
+                    let code_hash: [u8; 32] = script["code_hash"]
+                        .as_str()
+                        .and_then(|hex| hex::decode(hex.trim_start_matches("0x")).ok())
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "node output {tx_hash}:{index} has a malformed type code hash"
+                            )
+                        })?;
+                    let hash_type = script["hash_type"]
+                        .as_str()
+                        .and_then(ckbadger_common::hash_type_from_label)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "node output {tx_hash}:{index} has a malformed type hash_type"
+                            )
+                        })?;
+                    Some((code_hash, i16::from(hash_type)))
+                }
+            };
+            outputs.push(NodeOutput {
+                tx_hash: tx_hash.clone(),
+                index: index as i64,
+                data,
+                type_script,
+            });
+        }
+    }
+    Ok(outputs)
+}
+
+impl Check for DataHashIndexFilesOnlyCodeCells {
     fn name(&self) -> &'static str {
-        "data_hash_index_only_cells_with_data"
+        "data_hash_index_only_code_cells"
     }
     fn description(&self) -> &'static str {
-        "cell_by_data_hash files no row under the hash of empty data (a row exists iff its cell has data)"
+        "cell_by_data_hash files a row iff the cell is a code cell (the empty-data hash names \
+         none; every genesis output is checked both ways)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
     }
+    fn requires_rpc(&self) -> bool {
+        true
+    }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let empty_data_hash = format!(
-            "0x{}",
-            hex::encode(crate::parser::script::ScriptParser::compute_data_hash(&[]))
-        );
-        let page: DataHashRowsPage = api_get(
-            ctx,
-            &format!(
-                "verify/data-hash-rows?data_hash={empty_data_hash}&limit={DATA_HASH_ROWS_SAMPLE}"
-            ),
-        )?;
-        if page.rows.is_empty() {
-            return Ok(CheckResult::pass_with_detail(
-                1,
-                format!("no cell_by_data_hash row under the hash of empty data {empty_data_hash}"),
-            ));
-        }
-        let mut details: Vec<String> = page
-            .rows
-            .iter()
-            .map(|row| {
-                format!(
-                    "{}:{} filed at block {} ({}, data_size {})",
-                    row.tx_hash,
-                    row.output_index,
-                    row.created_at_block,
-                    if row.live { "live" } else { "consumed" },
-                    row.data_size
-                )
-            })
-            .collect();
-        if !page.complete {
-            details.push(format!(
-                "more rows follow the first {}: the index files empty-data cells",
-                page.rows.len()
-            ));
-        }
-        Ok(CheckResult::fail(
-            1,
-            vec![Finding {
-                entity: format!("cell_by_data_hash {empty_data_hash}"),
+        let rpc_url = ctx
+            .rpc_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("data_hash_index_only_code_cells needs --rpc-url"))?;
+        let rows_under = |data_hash: &[u8; 32]| -> anyhow::Result<DataHashRowsPage> {
+            api_get(
+                ctx,
+                &format!(
+                    "verify/data-hash-rows?data_hash=0x{}&limit={DATA_HASH_ROWS_SAMPLE}",
+                    hex::encode(data_hash)
+                ),
+            )
+        };
+        let mut findings = Vec::new();
+        let mut checked = 1u64;
+
+        let empty_data_hash = crate::parser::script::ScriptParser::compute_data_hash(&[]);
+        let page = rows_under(&empty_data_hash)?;
+        if !page.rows.is_empty() {
+            let mut details: Vec<String> = page
+                .rows
+                .iter()
+                .map(DataHashRowEvidence::describe)
+                .collect();
+            if !page.complete {
+                details.push(format!(
+                    "more rows follow the first {}: the index files empty-data cells",
+                    page.rows.len()
+                ));
+            }
+            findings.push(Finding {
+                entity: format!("cell_by_data_hash 0x{}", hex::encode(empty_data_hash)),
                 details,
-            }],
-        ))
+            });
+        }
+
+        let genesis = rpc_get_block(ctx, rpc_url, 0)?
+            .ok_or_else(|| anyhow::anyhow!("the node has no genesis block"))?;
+        let mut code_cells = 0u64;
+        for output in node_block_outputs(&genesis)? {
+            if output.data.is_empty() {
+                continue;
+            }
+            checked += 1;
+            let code = ckbadger_store::keys::is_code_cell(
+                &output.data,
+                output
+                    .type_script
+                    .as_ref()
+                    .map(|(code_hash, hash_type)| (code_hash.as_slice(), *hash_type)),
+            );
+            let data_hash = crate::parser::script::ScriptParser::compute_data_hash(&output.data);
+            let page = rows_under(&data_hash)?;
+            let filed = page.rows.iter().any(|row| {
+                row.tx_hash.eq_ignore_ascii_case(&output.tx_hash)
+                    && row.output_index == output.index
+            });
+            let outpoint = format!("{}:{}", output.tx_hash, output.index);
+            if code {
+                code_cells += 1;
+                if !filed {
+                    findings.push(Finding {
+                        entity: format!("genesis code cell {outpoint}"),
+                        details: vec![format!(
+                            "a code cell ({} data bytes) with no row under 0x{}{}",
+                            output.data.len(),
+                            hex::encode(data_hash),
+                            if page.complete {
+                                ""
+                            } else {
+                                " (among the first rows of an incomplete page)"
+                            }
+                        )],
+                    });
+                }
+            } else if filed {
+                findings.push(Finding {
+                    entity: format!("genesis non-code cell {outpoint}"),
+                    details: vec![format!(
+                        "not a code cell ({} data bytes) but filed under 0x{}",
+                        output.data.len(),
+                        hex::encode(data_hash)
+                    )],
+                });
+            }
+        }
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!(
+                    "no row under the empty-data hash; the {} genesis outputs with data are \
+                     filed iff code ({code_cells} code cells)",
+                    checked - 1
+                ),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
     }
 }
 
@@ -6514,7 +6668,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DeepForkClear),
         Box::new(DaoStatisticsSane),
         Box::new(GenesisBaselineBurntInvariant),
-        Box::new(DataHashIndexFilesOnlyCellsWithData),
+        Box::new(DataHashIndexFilesOnlyCodeCells),
         // Sampling
         Box::new(BlockHashRoundtrip),
         Box::new(BlockParentChain),
@@ -6756,7 +6910,7 @@ mod tests {
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
         assert!(names.contains(&"genesis_baseline_burnt_invariant"));
-        assert!(names.contains(&"data_hash_index_only_cells_with_data"));
+        assert!(names.contains(&"data_hash_index_only_code_cells"));
         assert!(names.contains(&"chart_block_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_length_sane"));
@@ -7009,68 +7163,210 @@ mod tests {
         );
     }
 
+    /// The answer of `/verify/data-hash-rows` under `data_hash`.
     fn mount_data_hash_rows(
         runtime: &tokio::runtime::Runtime,
         server: &MockServer,
+        data_hash: [u8; 32],
         body: serde_json::Value,
     ) {
-        let empty = format!(
-            "0x{}",
-            hex::encode(crate::parser::script::ScriptParser::compute_data_hash(&[]))
-        );
+        let data_hash = format!("0x{}", hex::encode(data_hash));
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path("/api/v1/verify/data-hash-rows"))
-                .and(query_param("data_hash", empty.as_str()))
+                .and(query_param("data_hash", data_hash.as_str()))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body))
                 .mount(server)
                 .await;
         });
     }
 
-    #[test]
-    fn data_hash_index_check_passes_when_the_empty_data_hash_names_no_row() {
+    const GENESIS_CELLBASE: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const GENESIS_DEP_GROUP_TX: &str =
+        "0x2222222222222222222222222222222222222222222222222222222222222222";
+
+    fn type_id_script() -> serde_json::Value {
+        json!({
+            "code_hash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+            "hash_type": "type",
+            "args": "0x01",
+        })
+    }
+
+    fn genesis_lock() -> serde_json::Value {
+        json!({"code_hash": format!("0x{}", "00".repeat(32)), "hash_type": "data", "args": "0x"})
+    }
+
+    /// A genesis block like mainnet's, in miniature: an issuance cell without
+    /// data, a system binary under Type ID, a Type ID deployment whose data is
+    /// not ELF, a data cell that is not code, and a dep group.
+    fn genesis_block() -> serde_json::Value {
+        let cell = |type_script: serde_json::Value| json!({"capacity": "0x1", "lock": genesis_lock(), "type": type_script});
+        json!({
+            "header": {"number": "0x0"},
+            "transactions": [
+                {
+                    "hash": GENESIS_CELLBASE,
+                    "outputs": [
+                        cell(serde_json::Value::Null),
+                        cell(type_id_script()),
+                        cell(type_id_script()),
+                        cell(serde_json::Value::Null),
+                    ],
+                    "outputs_data": ["0x", GENESIS_BINARY, "0x7374617465", "0x736563703235366b31"],
+                },
+                {
+                    "hash": GENESIS_DEP_GROUP_TX,
+                    "outputs": [cell(serde_json::Value::Null)],
+                    "outputs_data": [GENESIS_DEP_GROUP],
+                },
+            ],
+        })
+    }
+
+    const GENESIS_BINARY: &str = "0x7f454c46020101";
+    const GENESIS_DEP_GROUP: &str = "0x0100000011";
+
+    fn hash_of(data_hex: &str) -> [u8; 32] {
+        crate::parser::script::ScriptParser::compute_data_hash(
+            &hex::decode(data_hex.trim_start_matches("0x")).unwrap(),
+        )
+    }
+
+    fn row(tx_hash: &str, output_index: i64, data_size: i64) -> serde_json::Value {
+        json!({"txHash": tx_hash, "outputIndex": output_index, "createdAtBlock": 0,
+               "live": true, "dataSize": data_size})
+    }
+
+    fn rows(rows: Vec<serde_json::Value>) -> serde_json::Value {
+        json!({"dataHash": "0x", "rows": rows, "complete": true})
+    }
+
+    /// Mount the node's genesis and the store's rows: `empty` under the
+    /// empty-data hash, and under each genesis data hash the rows `filed`
+    /// says (`[binary, deployment, data cell, dep group]`).
+    fn mount_data_hash_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        empty: serde_json::Value,
+        filed: [bool; 4],
+    ) {
+        mount_data_hash_rows(runtime, server, hash_of("0x"), empty);
+        for ((data, tx, index), filed) in [
+            (GENESIS_BINARY, GENESIS_CELLBASE, 1),
+            ("0x7374617465", GENESIS_CELLBASE, 2),
+            ("0x736563703235366b31", GENESIS_CELLBASE, 3),
+            (GENESIS_DEP_GROUP, GENESIS_DEP_GROUP_TX, 0),
+        ]
+        .into_iter()
+        .zip(filed)
+        {
+            let size = (data.len() as i64 - 2) / 2;
+            let body = if filed {
+                rows(vec![row(tx, index, size)])
+            } else {
+                rows(vec![])
+            };
+            mount_data_hash_rows(runtime, server, hash_of(data), body);
+        }
+        let genesis = genesis_block();
+        runtime.block_on(async {
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": genesis})),
+                )
+                .mount(server)
+                .await;
+        });
+    }
+
+    fn rpc_ctx(server: &MockServer) -> CheckContext {
+        CheckContext {
+            rpc_url: Some(server.uri()),
+            ..mock_ctx(server)
+        }
+    }
+
+    fn run_data_hash_check(empty: serde_json::Value, filed: [bool; 4]) -> CheckResult {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let server = runtime.block_on(MockServer::start());
-        mount_data_hash_rows(
-            &runtime,
-            &server,
-            json!({"dataHash": "0x", "rows": [], "complete": true}),
-        );
+        mount_data_hash_fixture(&runtime, &server, empty, filed);
+        DataHashIndexFilesOnlyCodeCells
+            .run(&rpc_ctx(&server), &ProgressReporter::new(None))
+            .unwrap()
+    }
 
-        let result = DataHashIndexFilesOnlyCellsWithData
-            .run(&mock_ctx(&server), &ProgressReporter::new(None))
-            .unwrap();
-
+    #[test]
+    fn data_hash_index_check_passes_when_exactly_the_code_cells_are_filed() {
+        let result = run_data_hash_check(rows(vec![]), [true, true, false, false]);
         assert!(result.passed(), "{:?}", result.findings);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(2 code cells)"),
+            "{:?}",
+            result.detail
+        );
+    }
+
+    #[test]
+    fn data_hash_index_check_requires_the_node() {
+        assert!(DataHashIndexFilesOnlyCodeCells.requires_rpc());
     }
 
     /// The bulk build used to file every empty-data cell under the hash of
     /// empty data; such a store must fail, naming the cells.
     #[test]
     fn data_hash_index_check_fails_naming_empty_data_cells_it_filed() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let server = runtime.block_on(MockServer::start());
-        mount_data_hash_rows(
-            &runtime,
-            &server,
-            json!({
-                "dataHash": "0x",
-                "rows": [{"txHash": "0xc0c0", "outputIndex": 0, "createdAtBlock": 100, "live": true, "dataSize": 0}],
-                "complete": false,
-            }),
-        );
-
-        let result = DataHashIndexFilesOnlyCellsWithData
-            .run(&mock_ctx(&server), &ProgressReporter::new(None))
-            .unwrap();
-
+        let empty = json!({
+            "dataHash": "0x",
+            "rows": [{"txHash": "0xc0c0", "outputIndex": 0, "createdAtBlock": 100, "live": true, "dataSize": 0}],
+            "complete": false,
+        });
+        let result = run_data_hash_check(empty, [true, true, false, false]);
         assert!(!result.passed());
         let details = result.findings[0].details.join("\n");
         assert!(
             details.contains("0xc0c0:0 filed at block 100 (live, data_size 0)")
                 && details.contains("more rows follow"),
             "{details}"
+        );
+    }
+
+    /// C-2: a code cell without its row fails, both kinds of code cell.
+    #[test]
+    fn data_hash_index_check_fails_on_a_code_cell_without_a_row() {
+        let result = run_data_hash_check(rows(vec![]), [true, false, false, false]);
+        assert!(!result.passed());
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert_eq!(
+            result.findings[0].entity,
+            format!("genesis code cell {GENESIS_CELLBASE}:2")
+        );
+    }
+
+    /// C-2: a cell with data that is not code — a plain data cell, a dep
+    /// group — must have no row (the old predicate filed every data cell).
+    #[test]
+    fn data_hash_index_check_fails_on_a_filed_cell_that_is_not_code() {
+        let result = run_data_hash_check(rows(vec![]), [true, true, true, true]);
+        assert!(!result.passed());
+        let entities: Vec<&str> = result
+            .findings
+            .iter()
+            .map(|finding| finding.entity.as_str())
+            .collect();
+        assert_eq!(
+            entities,
+            vec![
+                format!("genesis non-code cell {GENESIS_CELLBASE}:3").as_str(),
+                format!("genesis non-code cell {GENESIS_DEP_GROUP_TX}:0").as_str(),
+            ]
         );
     }
 

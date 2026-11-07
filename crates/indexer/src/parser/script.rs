@@ -6,12 +6,10 @@ use crate::rpc::{parse_hex_to_bytes, Script};
 pub const TYPE_ID_CODE_HASH: &str =
     "00000000000000000000000000000000000000000000000000545950455f4944";
 
-/// The consensus type-id script, compared without allocating on the bulk path.
+/// The consensus type-id script, compared without allocating on the bulk path
+/// (the one rule: [`ckbadger_store::keys::is_type_id_script`]).
 pub(crate) fn is_type_id(code_hash: &[u8], hash_type: i16) -> bool {
-    hash_type == 1
-        && code_hash.len() == 32
-        && code_hash[..25] == [0; 25]
-        && &code_hash[25..] == b"TYPE_ID"
+    ckbadger_store::keys::is_type_id_script(code_hash, hash_type)
 }
 
 pub struct ScriptParser;

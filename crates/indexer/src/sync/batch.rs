@@ -14272,16 +14272,23 @@ mod tests {
             }
         }
 
-        /// Block 100 funds, block 101 creates a cell carrying data (so it has a
-        /// `cell_by_data_hash` row), block 102 consumes it.
+        /// A RISC-V binary: a code cell, so it has a `cell_by_data_hash` row.
+        const CODE_CELL_DATA: &str = "0x7f454c460201010000";
+        /// Data that is not code: no `cell_by_data_hash` row (C-2).
+        const NON_CODE_DATA: &str = "0xdeadbeefcafe";
+
+        /// Block 100 funds, block 101 creates a code cell (so it has a
+        /// `cell_by_data_hash` row) and a data cell that is not code (no
+        /// row), block 102 consumes the code cell.
         fn blocks() -> Vec<BlockResponseWithCycles> {
             let create = tx(
                 0xe1,
                 vec![input(0xc0, 0)],
                 vec![
-                    (output(DATA_CELL_CAPACITY, lock_script()), "0xdeadbeefcafe"),
+                    (output(DATA_CELL_CAPACITY, lock_script()), CODE_CELL_DATA),
+                    (output(DATA_CELL_CAPACITY, lock_script()), NON_CODE_DATA),
                     (
-                        output(FUNDING_CAPACITY - DATA_CELL_CAPACITY, lock_script()),
+                        output(FUNDING_CAPACITY - 2 * DATA_CELL_CAPACITY, lock_script()),
                         "0x",
                     ),
                 ],
@@ -14356,7 +14363,7 @@ mod tests {
             assert_eq!(
                 data_hash_rows(&store),
                 1,
-                "fixture: the consumed data cell keeps its data-hash row"
+                "fixture: the consumed code cell keeps its data-hash row"
             );
 
             // Fork after block 101: the cell survives, its consumption does not.
@@ -14380,10 +14387,11 @@ mod tests {
             );
         }
 
-        /// D-2: a `cell_by_data_hash` row exists iff the cell has data, on both
-        /// write paths. Bulk used to file one row per created cell — every
-        /// empty-data cell under the hash of empty data — where live files
-        /// only the data cell.
+        /// D-2 / C-2: a `cell_by_data_hash` row exists iff the cell is a code
+        /// cell, on both write paths. Bulk used to file one row per created
+        /// cell — every empty-data cell under the hash of empty data — where
+        /// live filed only the data cells; now both file the code cell only,
+        /// not the data cell that is not code.
         #[tokio::test]
         async fn bulk_and_live_write_identical_data_hash_rows() {
             let all = blocks();
@@ -14398,15 +14406,15 @@ mod tests {
             let mut bulk_rows: Vec<Vec<u8>> = bulk.cell_by_data_hash.into_iter().collect();
             bulk_rows.sort();
 
-            let data_cell_row = ckbadger_store::keys::encode_cell_index_key(
-                &crate::parser::ScriptParser::compute_data_hash(&[
-                    0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe,
-                ]),
+            let code_cell_row = ckbadger_store::keys::encode_cell_index_key(
+                &crate::parser::ScriptParser::compute_data_hash(&crate::rpc::parse_hex_to_bytes(
+                    CODE_CELL_DATA,
+                )),
                 101,
                 &[0xe1; 32],
                 0,
             );
-            assert_eq!(live_rows, vec![data_cell_row], "live: the data cell only");
+            assert_eq!(live_rows, vec![code_cell_row], "live: the code cell only");
             assert_eq!(
                 bulk_rows.iter().map(hex::encode).collect::<Vec<_>>(),
                 live_rows.iter().map(hex::encode).collect::<Vec<_>>(),

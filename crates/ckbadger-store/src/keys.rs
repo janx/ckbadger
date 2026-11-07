@@ -382,28 +382,49 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
         .expect("fixed-width complemented token balance must decode")
 }
 
-/// Encode a cell-by-lock/type index key:
-/// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+/// The first four bytes of every RISC-V binary CKB-VM runs (ELF magic).
+pub const ELF_MAGIC: [u8; 4] = *b"\x7fELF";
+
+/// Whether `(code_hash, hash_type)` is the consensus Type ID script: the
+/// all-zero code hash ending in `TYPE_ID`, referenced by type (hash_type 1).
+pub fn is_type_id_script(code_hash: &[u8], hash_type: i16) -> bool {
+    hash_type == 1
+        && code_hash.len() == HASH32_LEN
+        && code_hash[..25] == [0; 25]
+        && &code_hash[25..] == b"TYPE_ID"
+}
+
+/// Whether a cell is a code cell, and so has a `cell_by_data_hash` row: it
+/// carries data, and the data is a RISC-V binary (it starts with
+/// [`ELF_MAGIC`]) or the cell's type script is Type ID (an upgradable
+/// deployment).
 ///
-/// # Invariant
-///
-/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
-/// fixed, so a longer hash is truncated into the block-number bytes of another
-/// script's row and the scan answers for a different cell owner.
-/// Whether a cell has a `cell_by_data_hash` row: exactly when it carries data.
-///
-/// The one rule for every writer and reader of that index — the live cell
-/// writer, the bulk build, rollback and verify. An empty-data cell has no row
-/// (its data hash, the hash of empty data, would otherwise index every plain
-/// cell of the chain under one key).
-pub fn cell_has_data_hash_row(data_size: i32) -> bool {
-    data_size > 0
+/// The one rule for every writer and checker of that index — the live cell
+/// writer, the bulk build and verify F8. Its readers look up code by a
+/// script's data-hash reference (script resolution, the code-cells endpoint,
+/// the DOB decoder's decoder binary), and a script executes only a binary, so
+/// a cell that is not code is never what they look for. An empty-data cell
+/// has no row: its data hash would index every plain cell of the chain under
+/// one key. `type_script` is the cell's type `(code_hash, hash_type)`.
+pub fn is_code_cell(data: &[u8], type_script: Option<(&[u8], i16)>) -> bool {
+    !data.is_empty()
+        && (data.starts_with(&ELF_MAGIC)
+            || type_script
+                .is_some_and(|(code_hash, hash_type)| is_type_id_script(code_hash, hash_type)))
 }
 
 /// Width of a `cell_by_lock` / `cell_by_type` / `cell_by_data_hash` key:
 /// `hash(32) + block(8 BE) + outpoint(34)`.
 pub const CELL_INDEX_KEY_SIZE: usize = 74;
 
+/// Encode a cell-by-lock/type/data-hash index key:
+/// hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+///
+/// # Invariant
+///
+/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
+/// fixed, so a longer hash is truncated into the block-number bytes of another
+/// script's row and the scan answers for a different cell owner.
 pub fn encode_cell_index_key(
     script_hash: &[u8],
     block_num: i64,
@@ -2445,6 +2466,57 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C-2: `cell_by_data_hash` indexes code cells only — a RISC-V binary, or
+    /// any non-empty cell under a Type ID type script.
+    #[test]
+    fn is_code_cell_is_elf_data_or_a_type_id_cell_with_data() {
+        let mut type_id = [0u8; 32];
+        type_id[25..].copy_from_slice(b"TYPE_ID");
+        let elf = b"\x7fELF\x02\x01\x01rest";
+        let state = b"{\"json\":1}";
+
+        assert!(is_code_cell(elf, None), "an ELF binary is code");
+        assert!(
+            is_code_cell(elf, Some((&[0x11; 32], 1))),
+            "an ELF binary is code under any type script"
+        );
+        assert!(
+            is_code_cell(state, Some((&type_id, 1))),
+            "a Type ID cell with data is a deployment"
+        );
+        assert!(!is_code_cell(state, None), "plain data is not code");
+        assert!(
+            !is_code_cell(&[0x7f, b'E', b'L'], None),
+            "a truncated magic is not code"
+        );
+        assert!(
+            !is_code_cell(&100u128.to_le_bytes(), Some((&[0x22; 32], 1))),
+            "a UDT amount is not code"
+        );
+        assert!(
+            !is_code_cell(state, Some((&type_id, 0))),
+            "the Type ID code hash referenced by data is not the Type ID script"
+        );
+        assert!(!is_code_cell(&[], None), "an empty cell has no row");
+        assert!(
+            !is_code_cell(&[], Some((&type_id, 1))),
+            "an empty Type ID cell has no row (nothing to index)"
+        );
+    }
+
+    #[test]
+    fn is_type_id_script_requires_the_exact_code_hash_and_hash_type_type() {
+        let mut type_id = [0u8; 32];
+        type_id[25..].copy_from_slice(b"TYPE_ID");
+        assert!(is_type_id_script(&type_id, 1));
+        assert!(!is_type_id_script(&type_id, 0));
+        assert!(!is_type_id_script(&type_id, 2));
+        assert!(!is_type_id_script(&type_id[1..], 1));
+        let mut other = type_id;
+        other[0] = 1;
+        assert!(!is_type_id_script(&other, 1));
+    }
 
     #[test]
     fn test_reorg_event_key_roundtrip_and_shape() {
