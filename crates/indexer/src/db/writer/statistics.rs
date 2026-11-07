@@ -795,9 +795,12 @@ impl BatchWriter {
     /// So a UTC+8 midnight journals one day's rows in one block, and a store
     /// that was offline for days catches up over many batches instead of one
     /// block journaling all of them; steady state is about one bucket an hour
-    /// against hundreds of batches. A record at or past the floor's hour
-    /// leaves nothing to do (after a bulk handoff the record leads the floor
-    /// by some 1000 blocks).
+    /// against hundreds of batches. A record at the floor's hour leaves
+    /// nothing to do: after a bulk handoff the record is the handoff hour and
+    /// the floor, for the first ~1000 live blocks, the handoff tip, so the two
+    /// are equal. Every write keeps the record at or below the floor's hour
+    /// and the floor never moves down, so a record past it is a bug and
+    /// rebuild-required (delta review D1).
     ///
     /// Deletes and the record go through `batch`'s journal (the caller scopes
     /// it at the batch's first block): a rollback of that block restores the
@@ -827,11 +830,18 @@ impl BatchWriter {
             })?;
         let floor_hour = Hourly.bucket_label(floor_time)?;
         let cursor = self.store.get_activity_addr_row_floor()?;
-        if cursor
-            .as_deref()
-            .is_some_and(|cursor| cursor >= floor_hour.as_str())
-        {
-            return Ok(0);
+        match cursor.as_deref() {
+            Some(cursor) if cursor == floor_hour => return Ok(0),
+            Some(cursor) if cursor > floor_hour.as_str() => {
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "activity address row floor {cursor} is past the hour {floor_hour} of \
+                         the coverage floor block {coverage_floor}: the record never passes the \
+                         floor's hour and the floor never moves down"
+                    )),
+                ))
+            }
+            _ => {}
         }
         let day_of = |hour: &str| hour[..Daily.bucket_len()].to_string();
         let hour = self.oldest_activity_addr_bucket(Hourly, cursor.as_deref(), &floor_hour)?;
@@ -4637,9 +4647,18 @@ mod activity_stats_tests {
         // A floor block without a header is store corruption.
         let err = prune_result(13).unwrap_err().to_string();
         assert!(err.contains("missing header"), "{err}");
-        // A floor whose hour is before the record (as after a bulk handoff,
-        // which records the handoff hour: finding 11) prunes nothing.
-        assert_eq!(prune(9), 0);
+        // A cursor past the floor's hour (here 2026031000 against block 9's
+        // 2026030902) cannot happen: the bulk record is the handoff hour,
+        // which is the floor's hour at the handoff, every cursor write stays
+        // at or below the floor's hour and the floor never moves down. It is
+        // rebuild-required (delta review D1), and nothing is written.
+        let err = prune_result(9).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("2026031000") && text.contains("2026030902"),
+            "{text}"
+        );
         assert_eq!(
             store.get_activity_addr_row_floor().unwrap().as_deref(),
             Some("2026031000")
