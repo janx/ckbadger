@@ -691,14 +691,36 @@ impl BatchWriter {
     /// small entry per new address and its bucket row, never the bucket-wide
     /// set. A bucket's rows outlive its blocks only until the rollback
     /// coverage floor leaves it ([`Self::stage_activity_addr_retention`]).
+    ///
+    /// `addr_row_floor` is `sync_meta` → `activity_addr_row_floor`: the first
+    /// UTC+8 hour whose address rows are kept (every earlier hour, and every
+    /// day before its day, has none: pruned, or sealed by the bulk build,
+    /// which records the handoff hour). A block landing in such a bucket
+    /// would count every address again, so it is rebuild-required
+    /// (finding 11).
     pub fn update_activity_bucket_stats(
         &self,
         kind: keys::ActivityBucketKind,
         bucket: &str,
         block_stats: &DailyActivityStats,
         block_addrs: &BTreeSet<[u8; 32]>,
+        addr_row_floor: Option<&str>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        if let Some(floor) = addr_row_floor {
+            let first_kept = floor.get(..kind.bucket_len()).ok_or_else(|| {
+                anyhow!("activity address row floor {floor:?} is not a UTC+8 hour label")
+            })?;
+            if bucket < first_kept {
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "{kind:?} activity bucket {bucket} is behind the activity address row \
+                         floor {floor}: its address rows were pruned or sealed, so every \
+                         address of the block would count again"
+                    )),
+                ));
+            }
+        }
         let key = kind.stats_key(bucket)?;
         let existing: Option<DailyActivityStats> = batch
             .get_stats(&key)?
@@ -746,8 +768,9 @@ impl BatchWriter {
         Ok(())
     }
 
-    /// Delete the activity address rows of every bucket the rollback
-    /// coverage floor has left (C-3), in the live batch, journaled.
+    /// Delete the activity address rows of the oldest bucket the rollback
+    /// coverage floor has left (C-3), at most one bucket per batch (finding
+    /// 10), in the live batch, journaled.
     ///
     /// `coverage_floor` is the floor this batch commits
     /// (`entity_stats_undo_contract`). A block reaches a bucket only while its
@@ -758,19 +781,37 @@ impl BatchWriter {
     /// of a bucket no block reaches again — are deleted; the bucket stats rows
     /// are kept.
     ///
-    /// `sync_meta` → `activity_addr_row_floor` records the hour pruned to, so
-    /// a batch scans only the buckets between it and the floor's hour and
-    /// never walks deleted rows again. Deletes and the record go through
-    /// `batch`'s journal (the caller scopes it at the batch's first block): a
-    /// rollback of that block restores the rows and the older record
-    /// together, and the next batch, whose floor never moves down, prunes them
-    /// again. The batch's own blocks lie above the floor, so they write no row
-    /// this deletes. Returns the rows deleted.
+    /// `sync_meta` → `activity_addr_row_floor` is the cursor: every hour
+    /// before it, and every day before its day, has no row (bulk finalize
+    /// starts it at the handoff hour). A batch finds the oldest hour with rows
+    /// from the cursor to the floor's hour, and the oldest day with rows
+    /// before that hour's day (one seek each), and deletes one bucket:
+    /// - such a day goes as its own step, the batch after its last hour with
+    ///   rows; the cursor moves to the next day's first hour;
+    /// - else that hour goes; the cursor moves to the next hour, or, for a
+    ///   day's last hour, stays on it until the day itself goes;
+    /// - with neither, the cursor moves to the floor's hour.
+    ///
+    /// So a UTC+8 midnight journals one day's rows in one block, and a store
+    /// that was offline for days catches up over many batches instead of one
+    /// block journaling all of them; steady state is about one bucket an hour
+    /// against hundreds of batches. A record at or past the floor's hour
+    /// leaves nothing to do (after a bulk handoff the record leads the floor
+    /// by some 1000 blocks).
+    ///
+    /// Deletes and the record go through `batch`'s journal (the caller scopes
+    /// it at the batch's first block): a rollback of that block restores the
+    /// rows and the older record together, and the next batch, whose floor
+    /// never moves down, prunes them again. The batch's own blocks lie above
+    /// the floor, so they write no row this deletes. Returns the rows deleted.
     pub fn stage_activity_addr_retention(
         &self,
         batch: &mut StoreBatch,
         coverage_floor: i64,
     ) -> Result<u64> {
+        use ckbadger_common::stats_bucket::bucket_end_from_utc8_key;
+        use keys::ActivityBucketKind::{Daily, Hourly};
+
         if coverage_floor < 0 {
             return Ok(0);
         }
@@ -784,44 +825,108 @@ impl BatchWriter {
                      address rows: block={coverage_floor}"
                 )
             })?;
-        let floor_hour = keys::ActivityBucketKind::Hourly.bucket_label(floor_time)?;
-        let pruned_to = self.store.get_activity_addr_row_floor()?;
-        match pruned_to.as_deref() {
-            Some(previous) if previous == floor_hour => return Ok(0),
-            Some(previous) if previous > floor_hour.as_str() => bail!(
-                "activity address rows were pruned to hour {previous}, past the coverage floor \
-                 block {coverage_floor}'s hour {floor_hour}: the floor never moves down"
+        let floor_hour = Hourly.bucket_label(floor_time)?;
+        let cursor = self.store.get_activity_addr_row_floor()?;
+        if cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor >= floor_hour.as_str())
+        {
+            return Ok(0);
+        }
+        let day_of = |hour: &str| hour[..Daily.bucket_len()].to_string();
+        let hour = self.oldest_activity_addr_bucket(Hourly, cursor.as_deref(), &floor_hour)?;
+        let day_limit = day_of(hour.as_deref().unwrap_or(&floor_hour));
+        let day = self.oldest_activity_addr_bucket(
+            Daily,
+            cursor.as_deref().map(day_of).as_deref(),
+            &day_limit,
+        )?;
+        let (deleted, next_cursor) = match (day, hour) {
+            (Some(day), _) => (
+                self.stage_delete_activity_addr_bucket(batch, Daily, &day)?,
+                Hourly.bucket_label(bucket_end_from_utc8_key(&day, false)?)?,
             ),
-            _ => {}
-        }
-        let mut deleted = 0u64;
-        for kind in [
-            keys::ActivityBucketKind::Daily,
-            keys::ActivityBucketKind::Hourly,
-        ] {
-            // A day label is its UTC+8 hour label's first eight digits.
-            let label = |hour: &str| hour[..kind.bucket_len()].to_string();
-            let start = match pruned_to.as_deref() {
-                Some(previous) => kind.addr_row_bucket_prefix(&label(previous))?,
-                None => vec![kind.addr_row_prefix()],
-            };
-            let end = kind.addr_row_bucket_prefix(&label(&floor_hour))?;
-            let rows = self.store.iterator_cf(
-                self.store.cf_stats_chain(),
-                rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
-            );
-            for item in rows {
-                let (key, _) = item.map_err(|e| {
-                    anyhow!("failed to iterate {kind:?} activity address rows for pruning: {e}")
-                })?;
-                if key.as_ref() >= end.as_slice() {
-                    break;
-                }
-                batch.delete_stats(&key);
-                deleted += 1;
+            (None, Some(hour)) => {
+                let next = Hourly.bucket_label(bucket_end_from_utc8_key(&hour, true)?)?;
+                let next_cursor = if day_of(&next) == day_of(&hour) {
+                    next
+                } else {
+                    hour.clone()
+                };
+                (
+                    self.stage_delete_activity_addr_bucket(batch, Hourly, &hour)?,
+                    next_cursor,
+                )
             }
+            (None, None) => (0, floor_hour),
+        };
+        batch.put_activity_addr_row_floor(&next_cursor);
+        Ok(deleted)
+    }
+
+    /// The oldest `kind` bucket with an address row from `from` (inclusive;
+    /// `None`: the first) to `before` (exclusive): one seek.
+    fn oldest_activity_addr_bucket(
+        &self,
+        kind: keys::ActivityBucketKind,
+        from: Option<&str>,
+        before: &str,
+    ) -> Result<Option<String>> {
+        let start = match from {
+            Some(label) => kind.addr_row_bucket_prefix(label)?,
+            None => vec![kind.addr_row_prefix()],
+        };
+        let end = kind.addr_row_bucket_prefix(before)?;
+        let mut rows = self.store.iterator_cf(
+            self.store.cf_stats_chain(),
+            rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+        );
+        let Some(row) = rows.next() else {
+            return Ok(None);
+        };
+        let (key, _) = row.map_err(|e| {
+            anyhow!("failed to seek {kind:?} activity address rows for pruning: {e}")
+        })?;
+        if key.as_ref() >= end.as_slice() {
+            return Ok(None);
         }
-        batch.put_activity_addr_row_floor(&floor_hour);
+        let bucket = key
+            .get(1..1 + kind.bucket_len())
+            .and_then(|label| std::str::from_utf8(label).ok())
+            .ok_or_else(|| {
+                anyhow!(
+                    "corrupt {kind:?} activity address row key: 0x{}",
+                    hex::encode(&key)
+                )
+            })?
+            .to_string();
+        kind.decode_addr_row_key(&bucket, &key)?;
+        Ok(Some(bucket))
+    }
+
+    /// Delete one bucket's address rows in `batch`; returns how many.
+    fn stage_delete_activity_addr_bucket(
+        &self,
+        batch: &mut StoreBatch,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+    ) -> Result<u64> {
+        let prefix = kind.addr_row_bucket_prefix(bucket)?;
+        let mut deleted = 0u64;
+        for row in self.store.iterator_cf(
+            self.store.cf_stats_chain(),
+            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        ) {
+            let (key, _) = row.map_err(|e| {
+                anyhow!("failed to iterate {kind:?} activity address rows of {bucket}: {e}")
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            kind.decode_addr_row_key(bucket, &key)?;
+            batch.delete_stats(&key);
+            deleted += 1;
+        }
         Ok(deleted)
     }
 
@@ -4170,6 +4275,7 @@ mod activity_stats_tests {
                 "2026030912",
                 &stats,
                 &addrs,
+                None,
                 &mut batch,
             )
             .unwrap();
@@ -4209,6 +4315,7 @@ mod activity_stats_tests {
                 "2026030912",
                 &s1,
                 &addrs1,
+                None,
                 &mut batch,
             )
             .unwrap();
@@ -4235,6 +4342,7 @@ mod activity_stats_tests {
                 "2026030912",
                 &s2,
                 &addrs2,
+                None,
                 &mut batch2,
             )
             .unwrap();
@@ -4274,6 +4382,7 @@ mod activity_stats_tests {
                 "20260309",
                 &block_stats,
                 &addrs,
+                None,
                 &mut batch.at(block),
             )
             .unwrap();
@@ -4379,6 +4488,7 @@ mod activity_stats_tests {
                 "20260311",
                 &DailyActivityStats::default(),
                 &BTreeSet::from([addr(9)]),
+                None,
                 &mut StoreBatch::new(&bulk_store),
             )
             .unwrap_err()
@@ -4386,12 +4496,12 @@ mod activity_stats_tests {
         assert!(err.contains("but no stats row"), "{err}");
     }
 
-    /// C-3: the live batch deletes the address rows of every bucket the
-    /// coverage floor's chain time has left — daily and hourly alike — and
-    /// keeps the bucket the floor block is in, every later bucket, and every
-    /// stats row; a bucket ending exactly at the floor block's chain time is
-    /// final. The recorded hour bounds the next scan from below and never
-    /// moves down.
+    /// C-3: the live batches delete the address rows of every bucket the
+    /// coverage floor's chain time has left — daily and hourly alike, one
+    /// bucket a batch (finding 10) — and keep the bucket the floor block is
+    /// in, every later bucket, and every stats row; a bucket ending exactly
+    /// at the floor block's chain time is final. The recorded hour bounds the
+    /// next scan from below and never moves down.
     #[test]
     fn activity_addr_rows_behind_the_coverage_floor_are_deleted() {
         let dir = tempfile::tempdir().unwrap();
@@ -4475,16 +4585,19 @@ mod activity_stats_tests {
         };
         let prune = |floor: i64| prune_result(floor).unwrap();
 
+        let cursor = |store: &CkbadgerStore| store.get_activity_addr_row_floor().unwrap();
+
         // No floor yet: nothing.
         assert_eq!(prune(-1), 0);
-        assert_eq!(store.get_activity_addr_row_floor().unwrap(), None);
-        // First prune (no recorded hour): the floor block 5 is in hour 01 of
-        // day 20260309, so hour 00 and day 20260308 are final.
-        assert_eq!(prune(5), 4);
-        assert_eq!(
-            store.get_activity_addr_row_floor().unwrap().as_deref(),
-            Some("2026030901")
-        );
+        assert_eq!(cursor(&store), None);
+        // Floor block 5 is in hour 01 of day 20260309: hour 00 and day
+        // 20260308 are final, one bucket a batch (finding 10). The day comes
+        // first (no hour of it has rows); the cursor moves to the next day.
+        assert_eq!(prune(5), 2);
+        assert_eq!(cursor(&store).as_deref(), Some("2026030900"));
+        assert_eq!(prune(5), 2);
+        assert_eq!(cursor(&store).as_deref(), Some("2026030901"));
+        assert_eq!(prune(5), 0);
         assert_eq!(
             present(&store),
             vec![
@@ -4498,9 +4611,14 @@ mod activity_stats_tests {
         // Floor 5 → 9: block 9's chain time is the end of hour 01, so hour 01
         // is final; the day is not.
         assert_eq!(prune(9), 2);
-        // Floor 9 → 12 (day 20260310): hour 02 and day 20260309 go.
-        assert_eq!(prune(12), 4);
-        // The same floor again: nothing to scan.
+        assert_eq!(cursor(&store).as_deref(), Some("2026030902"));
+        assert_eq!(prune(9), 0);
+        // Floor 9 → 12 (day 20260310): hour 02, then day 20260309 (its last
+        // hour with rows is gone), then nothing.
+        assert_eq!(prune(12), 2);
+        assert_eq!(cursor(&store).as_deref(), Some("2026030903"));
+        assert_eq!(prune(12), 2);
+        assert_eq!(cursor(&store).as_deref(), Some("2026031000"));
         assert_eq!(prune(12), 0);
         assert_eq!(
             present(&store),
@@ -4519,9 +4637,154 @@ mod activity_stats_tests {
         // A floor block without a header is store corruption.
         let err = prune_result(13).unwrap_err().to_string();
         assert!(err.contains("missing header"), "{err}");
-        // A floor below the recorded hour moved down: an invariant violation.
-        let err = prune_result(9).unwrap_err().to_string();
-        assert!(err.contains("the floor never moves down"), "{err}");
+        // A floor whose hour is before the record (as after a bulk handoff,
+        // which records the handoff hour: finding 11) prunes nothing.
+        assert_eq!(prune(9), 0);
+        assert_eq!(
+            store.get_activity_addr_row_floor().unwrap().as_deref(),
+            Some("2026031000")
+        );
+    }
+
+    /// Finding 10: the live prune deletes at most one bucket per batch, the
+    /// oldest behind the floor: three hours go over three batches (a day's
+    /// last hour leaves the cursor on it until its day is pruned), a fourth
+    /// moves the cursor to the floor's hour. The cursor never moves back; a
+    /// rollback restores the rows and the cursor, and the next batches prune
+    /// them again.
+    #[test]
+    fn activity_addr_rows_are_pruned_one_bucket_per_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        const HOUR: i64 = 3_600_000;
+        // 2026-03-09 00:00 UTC+8.
+        let day_start: i64 = 1_772_985_600_000;
+        let put_header = |number: i64, chain_time_ms: i64| {
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![number as u8; 32],
+                    timestamp: chain_time_ms,
+                    chain_time_ms,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 100,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+            batch.commit().unwrap();
+        };
+        // The floor block 7 is at 2026-03-10 01:30 (hour 2026031001); the
+        // pruning batches are blocks 100 to 103.
+        let floor = 7;
+        put_header(floor, day_start + 25 * HOUR + 30 * 60_000);
+        for block in 100..=103 {
+            put_header(block, day_start + 26 * HOUR + block);
+        }
+        let hours = ["2026030921", "2026030922", "2026030923", "2026031001"];
+        for bucket in hours {
+            for address in [addr(1), addr(2)] {
+                store
+                    .put_stats_key(
+                        &keys::ActivityBucketKind::Hourly
+                            .addr_row_key(bucket, &address)
+                            .unwrap(),
+                        &[],
+                    )
+                    .unwrap();
+            }
+        }
+        let prune_at = |block: i64| -> u64 {
+            let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+            let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+            let deleted = writer
+                .stage_activity_addr_retention(&mut batch.at(block), floor)
+                .unwrap();
+            commit_journaled(batch);
+            deleted
+        };
+        let cursor = || store.get_activity_addr_row_floor().unwrap();
+        let left = || -> Vec<&str> {
+            hours
+                .iter()
+                .copied()
+                .filter(|bucket| {
+                    !store
+                        .get_activity_bucket_addrs(keys::ActivityBucketKind::Hourly, bucket)
+                        .unwrap()
+                        .is_empty()
+                })
+                .collect()
+        };
+
+        assert_eq!(prune_at(100), 2);
+        assert_eq!(cursor().as_deref(), Some("2026030922"));
+        assert_eq!(left(), ["2026030922", "2026030923", "2026031001"]);
+        assert_eq!(prune_at(101), 2);
+        assert_eq!(cursor().as_deref(), Some("2026030923"));
+        assert_eq!(left(), ["2026030923", "2026031001"]);
+        assert_eq!(prune_at(102), 2);
+        assert_eq!(cursor().as_deref(), Some("2026030923"));
+        assert_eq!(left(), ["2026031001"]);
+        assert_eq!(prune_at(103), 0);
+        assert_eq!(cursor().as_deref(), Some("2026031001"));
+
+        // Roll back the last two batches: hour 23 and the cursor come back.
+        store.rollback_to_block(101).unwrap();
+        assert_eq!(cursor().as_deref(), Some("2026030923"));
+        assert_eq!(left(), ["2026030923", "2026031001"]);
+        assert_eq!(prune_at(102), 2);
+        assert_eq!(left(), ["2026031001"]);
+        assert_eq!(prune_at(103), 0);
+        assert_eq!(cursor().as_deref(), Some("2026031001"));
+    }
+
+    /// Finding 11: a block landing in a bucket behind the activity address
+    /// row floor (its rows pruned, or sealed by the bulk build) would count
+    /// every address again: rebuild-required, before any write.
+    #[test]
+    fn a_block_behind_the_activity_addr_row_floor_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let addrs = BTreeSet::from([addr(1)]);
+        let update = |kind: keys::ActivityBucketKind, bucket: &str| {
+            let mut batch = StoreBatch::new(&store);
+            writer.update_activity_bucket_stats(
+                kind,
+                bucket,
+                &DailyActivityStats::default(),
+                &addrs,
+                Some("2026030912"),
+                &mut batch,
+            )
+        };
+        for (kind, bucket) in [
+            (keys::ActivityBucketKind::Hourly, "2026030911"),
+            (keys::ActivityBucketKind::Hourly, "2026030823"),
+            (keys::ActivityBucketKind::Daily, "20260308"),
+        ] {
+            let err = update(kind, bucket).unwrap_err();
+            assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+            assert!(err.to_string().contains(bucket), "{err:#}");
+            assert!(err.to_string().contains("2026030912"), "{err:#}");
+        }
+        // The floor's own hour and day, and later buckets, are kept.
+        for (kind, bucket) in [
+            (keys::ActivityBucketKind::Hourly, "2026030912"),
+            (keys::ActivityBucketKind::Hourly, "2026030913"),
+            (keys::ActivityBucketKind::Daily, "20260309"),
+        ] {
+            update(kind, bucket).unwrap();
+        }
     }
 
     #[test]

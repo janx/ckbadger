@@ -504,7 +504,7 @@ pub(crate) fn current_type_id_binary(
     let bytes = hex::decode(data.strip_prefix("0x").unwrap_or(data))?;
     // Same executable recognition as the owning script detector. Retirement
     // may leave a live TYPE_ID cell with non-executable data.
-    if !bytes.starts_with(b"\x7fELF") {
+    if !ckbadger_store::keys::is_code_cell(&bytes) {
         return Ok(None);
     }
     Ok(Some(

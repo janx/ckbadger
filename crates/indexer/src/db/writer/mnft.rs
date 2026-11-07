@@ -173,19 +173,19 @@ impl BatchWriter {
             let old_count =
                 state.get_collection_owner_count(self.store.as_ref(), collection_id, old_lock)?;
             if old_count <= 0 {
-                bail!(
+                return Err(super::aggregate_underflow(format!(
                     "mnft owner count underflow: class_id=0x{}, lock_hash=0x{}, owner_count={}",
                     hex::encode(collection_id),
                     hex::encode(old_lock),
                     old_count
-                );
+                )));
             } else if old_count == 1 {
                 if agg.holders_count <= 0 {
-                    bail!(
+                    return Err(super::aggregate_underflow(format!(
                         "mnft collection holders_count underflow: class_id=0x{}, holders_count={}",
                         hex::encode(collection_id),
                         agg.holders_count
-                    );
+                    )));
                 }
                 state.delete_collection_owner(collection_id, old_lock, batch);
                 agg.holders_count -= 1;
@@ -271,14 +271,14 @@ impl BatchWriter {
             )
         })?;
         if next < 0 {
-            bail!(
+            return Err(super::aggregate_underflow(format!(
                 "mnft collection tier count underflow: collection_id=0x{}, tier={}, current={}, delta={}, context={}",
                 hex::encode(collection_id),
                 tier.as_str(),
                 *slot,
                 delta,
                 context
-            );
+            )));
         }
         *slot = next;
         Ok(())
@@ -1173,6 +1173,62 @@ mod tests {
         assert_eq!(agg.total_count, 2);
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.holders_count, 0);
+    }
+
+    /// Finding 13: the mNFT owner-transition and tier-count underflows are
+    /// rebuild-required like F2.
+    #[test]
+    fn owner_and_tier_underflows_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let (class, old) = (vec![0xb1; 32], vec![0xb2; 32]);
+        let check = |err: anyhow::Error, what: &str| {
+            assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+            assert!(err.to_string().contains(what), "{what}: {err:#}");
+        };
+
+        check(
+            writer
+                .apply_mnft_owner_transition(
+                    &class,
+                    Some(&old),
+                    None,
+                    &mut MnftCollectionAggregate::default(),
+                    &mut batch,
+                    &mut state,
+                )
+                .unwrap_err(),
+            "mnft owner count underflow",
+        );
+        state.put_collection_owner_count(&class, &old, 1, &mut batch);
+        check(
+            writer
+                .apply_mnft_owner_transition(
+                    &class,
+                    Some(&old),
+                    None,
+                    &mut MnftCollectionAggregate::default(),
+                    &mut batch,
+                    &mut state,
+                )
+                .unwrap_err(),
+            "mnft collection holders_count underflow",
+        );
+        check(
+            BatchWriter::adjust_collection_tier_count(
+                &class,
+                &mut MnftCollectionAggregate::default(),
+                CompositionTier::PureCkb,
+                -1,
+                "finding 13",
+            )
+            .unwrap_err(),
+            "mnft collection tier count underflow",
+        );
     }
 
     #[test]

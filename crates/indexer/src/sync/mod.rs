@@ -177,6 +177,18 @@ pub fn materialize_bulk_stage_then_complete_sync_status_for_test(
     )
 }
 
+/// Test hook: bulk-build `blocks` from genesis into the given stores and
+/// complete the bulk sync at the last of them, leaving the stores as a
+/// restart into live sync finds them (the bulk → live activity parity test).
+#[doc(hidden)]
+pub fn bulk_build_into_stores_for_test(
+    domain: &std::sync::Arc<ckbadger_store::CkbadgerStore>,
+    append: &std::sync::Arc<ckbadger_store::CkbadgerStore>,
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<()> {
+    bulk_build::bulk_build_into_stores_for_test(domain, append, blocks)
+}
+
 #[doc(hidden)]
 pub fn simulate_startup_sync_path_for_test(
     blocks: &[crate::rpc::BlockResponseWithCycles],

@@ -963,22 +963,22 @@ impl CkbadgerStore {
     // ---- Script info ----
 
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
-        match self.get_cf(self.cf_script_info(), code_hash)? {
-            Some(value) => {
-                let info = bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize script info: code_hash=0x{}, error={}",
-                        code_hash
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<String>(),
-                        e
-                    )
-                })?;
-                Ok(Some(info))
-            }
-            None => Ok(None),
-        }
+        self.get_cf(self.cf_script_info(), code_hash)?
+            .map(|value| Self::decode_script_info(code_hash, &value))
+            .transpose()
+    }
+
+    /// Decode one stored `script_info` row: the one codec every reader uses
+    /// (the indexer types a failure as rebuild-required, finding 12).
+    pub fn decode_script_info(code_hash: &[u8], value: &[u8]) -> anyhow::Result<ScriptInfo> {
+        bincode::deserialize(value).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to deserialize script info: code_hash=0x{}, {} bytes, error={}",
+                bytes_to_hex(code_hash),
+                value.len(),
+                e
+            )
+        })
     }
 
     pub fn put_script_info_direct(

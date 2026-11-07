@@ -418,23 +418,19 @@ pub fn is_type_id_script(code_hash: &[u8], hash_type: i16) -> bool {
         && &code_hash[25..] == b"TYPE_ID"
 }
 
-/// Whether a cell is a code cell, and so has a `cell_by_data_hash` row: it
-/// carries data, and the data is a RISC-V binary (it starts with
-/// [`ELF_MAGIC`]) or the cell's type script is Type ID (an upgradable
-/// deployment).
+/// Whether a cell's data is code: it starts with [`ELF_MAGIC`] (so it is not
+/// empty). CKB-VM loads only ELF binaries, `ckb_dlopen` libraries are ELF
+/// shared objects, and the DOB decoder's VM loads only ELF.
 ///
-/// The one rule for every writer and checker of that index — the live cell
-/// writer, the bulk build and verify F8. Its readers look up code by a
-/// script's data-hash reference (script resolution, the code-cells endpoint,
-/// the DOB decoder's decoder binary), and a script executes only a binary, so
-/// a cell that is not code is never what they look for. An empty-data cell
-/// has no row: its data hash would index every plain cell of the chain under
-/// one key. `type_script` is the cell's type `(code_hash, hash_type)`.
-pub fn is_code_cell(data: &[u8], type_script: Option<(&[u8], i16)>) -> bool {
-    !data.is_empty()
-        && (data.starts_with(&ELF_MAGIC)
-            || type_script
-                .is_some_and(|(code_hash, hash_type)| is_type_id_script(code_hash, hash_type)))
+/// The one "is code" rule: the `cell_by_data_hash` writers (live cell writer,
+/// bulk build) and verify F8, the Type ID lineage on both sync paths, the cell
+/// page's ELF reading and the code-version reads of the API all ask it. A
+/// Type ID cell whose data is not ELF is state (a config cell, a retired
+/// deployment), not code, and no reader looks it up by data hash. An
+/// empty-data cell is never code: its data hash would index every plain cell
+/// of the chain under one key.
+pub fn is_code_cell(data: &[u8]) -> bool {
+    data.starts_with(&ELF_MAGIC)
 }
 
 /// Width of a `cell_by_lock` / `cell_by_type` / `cell_by_data_hash` key:
@@ -2470,42 +2466,26 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 mod tests {
     use super::*;
 
-    /// C-2: `cell_by_data_hash` indexes code cells only — a RISC-V binary, or
-    /// any non-empty cell under a Type ID type script.
+    /// C-2 (narrowed in the fix round, findings 7 + 9): code is ELF data and
+    /// nothing else — a Type ID cell whose data is not ELF is state.
     #[test]
-    fn is_code_cell_is_elf_data_or_a_type_id_cell_with_data() {
-        let mut type_id = [0u8; 32];
-        type_id[25..].copy_from_slice(b"TYPE_ID");
+    fn is_code_cell_is_elf_data_only() {
         let elf = b"\x7fELF\x02\x01\x01rest";
-        let state = b"{\"json\":1}";
-
-        assert!(is_code_cell(elf, None), "an ELF binary is code");
+        assert!(is_code_cell(elf), "an ELF binary is code");
+        assert!(is_code_cell(&ELF_MAGIC), "the magic alone starts a binary");
         assert!(
-            is_code_cell(elf, Some((&[0x11; 32], 1))),
-            "an ELF binary is code under any type script"
+            !is_code_cell(b"{\"json\":1}"),
+            "state data is not code, under any type script"
         );
         assert!(
-            is_code_cell(state, Some((&type_id, 1))),
-            "a Type ID cell with data is a deployment"
-        );
-        assert!(!is_code_cell(state, None), "plain data is not code");
-        assert!(
-            !is_code_cell(&[0x7f, b'E', b'L'], None),
+            !is_code_cell(&[0x7f, b'E', b'L']),
             "a truncated magic is not code"
         );
         assert!(
-            !is_code_cell(&100u128.to_le_bytes(), Some((&[0x22; 32], 1))),
+            !is_code_cell(&100u128.to_le_bytes()),
             "a UDT amount is not code"
         );
-        assert!(
-            !is_code_cell(state, Some((&type_id, 0))),
-            "the Type ID code hash referenced by data is not the Type ID script"
-        );
-        assert!(!is_code_cell(&[], None), "an empty cell has no row");
-        assert!(
-            !is_code_cell(&[], Some((&type_id, 1))),
-            "an empty Type ID cell has no row (nothing to index)"
-        );
+        assert!(!is_code_cell(&[]), "an empty cell is never code");
     }
 
     #[test]

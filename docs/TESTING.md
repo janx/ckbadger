@@ -69,15 +69,16 @@ rejected when `-C` names an orchestrator root with multiple networks.
 
 `data_hash_index_only_code_cells` (F8, needs `--rpc-url`) reads the bounded raw export
 `GET /verify/data-hash-rows?data_hash=…`. A `cell_by_data_hash` row exists iff its cell is a code
-cell (`keys::is_code_cell`: non-empty data that starts with the ELF magic, or a Type ID type
-script; shared by the live writer and the bulk build; a rollback restores the rows from the block
+cell (`keys::is_code_cell`: non-empty data that starts with the ELF magic, the one rule every
+ELF test uses; a Type ID cell holding state is not code; shared by the live writer and the bulk
+build; a rollback restores the rows from the block
 journal, which the rollback property suite `crates/indexer/tests/rollback_property.rs` pins with a
 code cell created and consumed above the fork). The check asks for the hash of empty data, which
 must name no row, and, for every output of the node's genesis block that carries data (the system
 binaries, their dep group, the secp256k1 data), for the rows under the hash of its data: a code
 cell must be among them, any other cell must not. The export itself answers 500 for a row that
-names neither a live nor a consumed cell. A store built before C-2 filed every cell with data and
-fails until re-synced.
+names neither a live nor a consumed cell. A store built before C-2 filed every cell with data, and
+one built before the fix round filed Type ID cells holding state; both fail until re-synced.
 
 `address_balance_spot_check` is deliberately bounded. It deterministically
 selects at most 10 recently active addresses across live-cell-count bands, then

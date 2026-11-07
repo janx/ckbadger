@@ -53,9 +53,10 @@ pub(crate) struct ObjectOwner {
     /// `CF_OBJECT_OUTPOINTS` rows: kind ‖ outpoint → object id (spore items,
     /// mNFT classes and tokens, `.bit` accounts).
     object_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
-    /// `CF_OBJECT_OUTPOINT_BY_ID` rows: kind ‖ id ‖ outpoint → empty, or the
-    /// identity's `AssetAction` byte.
-    object_outpoint_by_id: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// `CF_OBJECT_OUTPOINT_BY_ID` rows: kind ‖ id ‖ outpoint → empty (`None`),
+    /// or the identity's `AssetAction` byte; the row value is built at emit,
+    /// so reduce allocates nothing per outpoint for it (finding 23).
+    object_outpoint_by_id: BTreeMap<Vec<u8>, Option<u8>>,
     mnft_type_indexes: BTreeMap<Vec<u8>, MnftTypeIndex>,
     mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     spore_hourly_transfers: BTreeMap<Vec<u8>, i64>,
@@ -346,11 +347,11 @@ impl ObjectOwner {
                 id.clone(),
             ))?;
         }
-        for (key, value) in &self.object_outpoint_by_id {
+        for (key, action) in &self.object_outpoint_by_id {
             emit(MaterializedRow::new(
                 CF_OBJECT_OUTPOINT_BY_ID,
                 key.clone(),
-                value.clone(),
+                action.map_or_else(Vec::new, |action| vec![action]),
             ))?;
         }
         for (id, entry) in &self.spore_entries {
@@ -2811,7 +2812,7 @@ impl ObjectOwner {
         );
         self.object_outpoint_by_id.insert(
             keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index),
-            action.map_or_else(Vec::new, |action| vec![action.compact()]),
+            action.map(ckbadger_store::AssetAction::compact),
         );
         Ok(())
     }
@@ -2834,7 +2835,7 @@ impl ObjectOwner {
                 output_index,
             )
             .to_vec(),
-            vec![action.compact()],
+            Some(action.compact()),
         );
         Ok(())
     }
@@ -3137,7 +3138,7 @@ pub(crate) fn materialize_object_state_for_test(
             for item in iter {
                 let (key, value) = item.map_err(|e| {
                     anyhow!(
-                        "failed to iterate stats_object hourly rows in object snapshot helper: collection_id=0x{}, error={}",
+                        "failed to iterate stats_mnft hourly rows in object snapshot helper: collection_id=0x{}, error={}",
                         hex::encode(collection_id),
                         e
                     )
@@ -3833,6 +3834,67 @@ mod tests {
         assert!(owner
             .object_outpoint_by_id
             .contains_key(&keys::encode_spore_outpoint_by_id_key(&did_id, &tx_hash, 0)));
+    }
+
+    /// Finding 23: the by-id map keeps the action byte (`Option<u8>`), not a
+    /// per-outpoint `Vec`; the emitted rows are the same bytes as before —
+    /// empty for a spore item, the action byte for an identity and a `.bit`
+    /// account.
+    #[test]
+    fn object_outpoint_by_id_keeps_the_action_byte_and_emits_the_row_value() {
+        let interner = IdentityInterner::default();
+        let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let type_hash = interner.intern_bytes(vec![0x18; 32]);
+        let tx = did_ckb_tx_facts(vec![0x42; 20], [0x7B; 32], lock, type_hash);
+        let cell = &tx.cells[0];
+        let mut owner = ObjectOwner::default();
+        owner
+            .insert_spore_outpoint_rows(&[0x01; 32], cell, None)
+            .unwrap();
+        owner
+            .insert_spore_outpoint_rows(
+                &[0x02; 20],
+                cell,
+                Some(ckbadger_store::AssetAction::Transfer),
+            )
+            .unwrap();
+        owner
+            .insert_dotbit_outpoint_rows(&[0x03; 20], cell, ckbadger_store::AssetAction::Renew)
+            .unwrap();
+
+        let spore_key = keys::encode_spore_outpoint_by_id_key(&[0x01; 32], &[0x7B; 32], 0);
+        let identity_key = keys::encode_spore_outpoint_by_id_key(&[0x02; 20], &[0x7B; 32], 0);
+        let dotbit_key =
+            keys::encode_dotbit_outpoint_by_account_id_key(&[0x03; 20], &[0x7B; 32], 0).to_vec();
+        let transfer = ckbadger_store::AssetAction::Transfer.compact();
+        let renew = ckbadger_store::AssetAction::Renew.compact();
+        assert_eq!(owner.object_outpoint_by_id.get(&spore_key), Some(&None));
+        assert_eq!(
+            owner.object_outpoint_by_id.get(&identity_key),
+            Some(&Some(transfer))
+        );
+        assert_eq!(
+            owner.object_outpoint_by_id.get(&dotbit_key),
+            Some(&Some(renew))
+        );
+
+        let mut emitted = BTreeMap::new();
+        owner
+            .emit_snapshot_rows(|row| {
+                if row.cf_name == CF_OBJECT_OUTPOINT_BY_ID {
+                    emitted.insert(row.key, row.value);
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            emitted,
+            BTreeMap::from([
+                (spore_key, Vec::new()),
+                (identity_key, vec![transfer]),
+                (dotbit_key, vec![renew]),
+            ])
+        );
     }
 
     /// Live/bulk parity for the width guard: only genuinely unindexable ids

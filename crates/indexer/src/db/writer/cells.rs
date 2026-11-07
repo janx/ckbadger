@@ -852,14 +852,15 @@ mod tests {
             .iterator_cf(store.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
             .map(|item| item.unwrap().0.to_vec())
             .collect();
-        let mut expected = vec![
-            keys::encode_cell_index_key(&elf.data_hash, block_num, &tx_hash, 0),
-            keys::encode_cell_index_key(&deployment.data_hash, block_num, &tx_hash, 1),
-        ];
-        expected.sort();
+        let expected = vec![keys::encode_cell_index_key(
+            &elf.data_hash,
+            block_num,
+            &tx_hash,
+            0,
+        )];
         assert_eq!(
             rows, expected,
-            "only the ELF binary and the Type ID deployment are code cells"
+            "only the ELF binary is a code cell; a Type ID cell holding state is not (finding 7)"
         );
     }
 

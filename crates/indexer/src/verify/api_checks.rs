@@ -1191,8 +1191,8 @@ impl Check for GenesisBaselineBurntInvariant {
 }
 
 /// F8: `cell_by_data_hash` files a row exactly for a code cell
-/// (`keys::is_code_cell`: a RISC-V binary, or a Type ID cell with data), on
-/// chain data from the node:
+/// (`keys::is_code_cell`: data that starts with the ELF magic; a Type ID cell
+/// holding state is not code), on chain data from the node:
 ///
 /// - the hash of empty data names no row — an empty cell is never code (a
 ///   bulk build used to file every empty-data cell under it, D-2);
@@ -1238,13 +1238,12 @@ impl DataHashRowEvidence {
     }
 }
 
-/// One output of a node block: its outpoint, data and type script, as the
-/// node's JSON carries them.
+/// One output of a node block: its outpoint and data, as the node's JSON
+/// carries them.
 struct NodeOutput {
     tx_hash: String,
     index: i64,
     data: Vec<u8>,
-    type_script: Option<([u8; 32], i16)>,
 }
 
 /// Every output of a `get_block_by_number` result; any malformed field is an
@@ -1271,41 +1270,17 @@ fn node_block_outputs(block: &serde_json::Value) -> anyhow::Result<Vec<NodeOutpu
             cells.len(),
             data.len()
         );
-        for (index, (cell, data)) in cells.iter().zip(data).enumerate() {
+        for (index, data) in data.iter().enumerate() {
             let data = data
                 .as_str()
                 .and_then(|hex| hex::decode(hex.trim_start_matches("0x")).ok())
                 .ok_or_else(|| {
                     anyhow::anyhow!("node output {tx_hash}:{index} has malformed data")
                 })?;
-            let type_script = match &cell["type"] {
-                serde_json::Value::Null => None,
-                script => {
-                    let code_hash: [u8; 32] = script["code_hash"]
-                        .as_str()
-                        .and_then(|hex| hex::decode(hex.trim_start_matches("0x")).ok())
-                        .and_then(|bytes| bytes.try_into().ok())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "node output {tx_hash}:{index} has a malformed type code hash"
-                            )
-                        })?;
-                    let hash_type = script["hash_type"]
-                        .as_str()
-                        .and_then(ckbadger_common::hash_type_from_label)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "node output {tx_hash}:{index} has a malformed type hash_type"
-                            )
-                        })?;
-                    Some((code_hash, i16::from(hash_type)))
-                }
-            };
             outputs.push(NodeOutput {
                 tx_hash: tx_hash.clone(),
                 index: index as i64,
                 data,
-                type_script,
             });
         }
     }
@@ -1371,13 +1346,7 @@ impl Check for DataHashIndexFilesOnlyCodeCells {
                 continue;
             }
             checked += 1;
-            let code = ckbadger_store::keys::is_code_cell(
-                &output.data,
-                output
-                    .type_script
-                    .as_ref()
-                    .map(|(code_hash, hash_type)| (code_hash.as_slice(), *hash_type)),
-            );
+            let code = ckbadger_store::keys::is_code_cell(&output.data);
             let data_hash = crate::parser::script::ScriptParser::compute_data_hash(&output.data);
             let page = rows_under(&data_hash)?;
             let filed = page.rows.iter().any(|row| {
@@ -7199,8 +7168,8 @@ mod tests {
     }
 
     /// A genesis block like mainnet's, in miniature: an issuance cell without
-    /// data, a system binary under Type ID, a Type ID deployment whose data is
-    /// not ELF, a data cell that is not code, and a dep group.
+    /// data, a system binary under Type ID, a Type ID cell whose data is state
+    /// (not ELF, so not code), a data cell that is not code, and a dep group.
     fn genesis_block() -> serde_json::Value {
         let cell = |type_script: serde_json::Value| json!({"capacity": "0x1", "lock": genesis_lock(), "type": type_script});
         json!({
@@ -7245,7 +7214,7 @@ mod tests {
 
     /// Mount the node's genesis and the store's rows: `empty` under the
     /// empty-data hash, and under each genesis data hash the rows `filed`
-    /// says (`[binary, deployment, data cell, dep group]`).
+    /// says (`[binary, Type ID state cell, data cell, dep group]`).
     fn mount_data_hash_fixture(
         runtime: &tokio::runtime::Runtime,
         server: &MockServer,
@@ -7301,14 +7270,14 @@ mod tests {
 
     #[test]
     fn data_hash_index_check_passes_when_exactly_the_code_cells_are_filed() {
-        let result = run_data_hash_check(rows(vec![]), [true, true, false, false]);
+        let result = run_data_hash_check(rows(vec![]), [true, false, false, false]);
         assert!(result.passed(), "{:?}", result.findings);
         assert!(
             result
                 .detail
                 .as_deref()
                 .unwrap_or_default()
-                .contains("(2 code cells)"),
+                .contains("(1 code cells)"),
             "{:?}",
             result.detail
         );
@@ -7328,7 +7297,7 @@ mod tests {
             "rows": [{"txHash": "0xc0c0", "outputIndex": 0, "createdAtBlock": 100, "live": true, "dataSize": 0}],
             "complete": false,
         });
-        let result = run_data_hash_check(empty, [true, true, false, false]);
+        let result = run_data_hash_check(empty, [true, false, false, false]);
         assert!(!result.passed());
         let details = result.findings[0].details.join("\n");
         assert!(
@@ -7338,20 +7307,21 @@ mod tests {
         );
     }
 
-    /// C-2: a code cell without its row fails, both kinds of code cell.
+    /// C-2: a code cell (a binary) without its row fails.
     #[test]
     fn data_hash_index_check_fails_on_a_code_cell_without_a_row() {
-        let result = run_data_hash_check(rows(vec![]), [true, false, false, false]);
+        let result = run_data_hash_check(rows(vec![]), [false, false, false, false]);
         assert!(!result.passed());
         assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
         assert_eq!(
             result.findings[0].entity,
-            format!("genesis code cell {GENESIS_CELLBASE}:2")
+            format!("genesis code cell {GENESIS_CELLBASE}:1")
         );
     }
 
-    /// C-2: a cell with data that is not code — a plain data cell, a dep
-    /// group — must have no row (the old predicate filed every data cell).
+    /// C-2: a cell with data that is not code — a Type ID cell holding state
+    /// (finding 7: code is ELF data only), a plain data cell, a dep group —
+    /// must have no row (the old predicate filed every data cell).
     #[test]
     fn data_hash_index_check_fails_on_a_filed_cell_that_is_not_code() {
         let result = run_data_hash_check(rows(vec![]), [true, true, true, true]);
@@ -7364,6 +7334,7 @@ mod tests {
         assert_eq!(
             entities,
             vec![
+                format!("genesis non-code cell {GENESIS_CELLBASE}:2").as_str(),
                 format!("genesis non-code cell {GENESIS_CELLBASE}:3").as_str(),
                 format!("genesis non-code cell {GENESIS_DEP_GROUP_TX}:0").as_str(),
             ]

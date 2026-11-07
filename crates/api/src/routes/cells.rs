@@ -1387,7 +1387,7 @@ fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
             mime_type: Some("application/pdf".to_string()),
             human_value: None,
         });
-    } else if data.starts_with(b"\x7FELF") {
+    } else if ckbadger_store::keys::is_code_cell(data) {
         guesses.push(CellDataGuess {
             kind: "magic_number".to_string(),
             confidence: "high".to_string(),
