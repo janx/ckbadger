@@ -295,8 +295,11 @@ writer** it admits (`OutsideWriter`): the derive scheduler writes through
 `CkbadgerStore::outside_journal_scope(OutsideWriter::LabelImport)` for its direct writes (a scope
 belongs to the thread that opened it and does not nest). Any other unjournaled write to those CFs —
 an untagged batch, the other writer, a direct write outside the scope or from another thread — is
-refused like an unlisted key. The `(cf, key prefix)` entries name narrow key ranges and admit any
-unjournaled writer.
+refused like an unlisted key. The two also-journaled `(cf, key prefix)` entries are bound the same
+way: `live_cell_summary:current` to the deep-fork record (`OutsideWriter::DeepForkRecord`) and the
+`stats_dao` open-day row (0x08) to the DAO tip summary (`OutsideWriter::DaoTipSummary`), each its
+key's one unjournaled writer outside bulk sync. The never-journaled `(cf, key prefix)` entries name
+narrow key ranges and admit any unjournaled writer.
 
 The indexer turns on the **journal discipline** on its domain store before its first write
 (`CkbadgerStore::enforce_journal_discipline`, `entry.rs`): from then on, outside bulk sync, an

@@ -296,7 +296,12 @@ impl BatchWriter {
             depth: depth_i32,
             fork_point,
         });
-        let mut batch = StoreBatch::new(self.store.as_ref());
+        // The deep-fork record is the one unjournaled writer of
+        // `live_cell_summary:current` (its withdrawal below).
+        let mut batch = StoreBatch::outside_journal(
+            self.store.as_ref(),
+            ckbadger_store::OutsideWriter::DeepForkRecord,
+        );
         batch.put_reorg_event(event_key.as_bytes(), &event_bytes);
         batch.put_sync_runtime(&status.runtime())?;
         // The local node has already reported that this tip is no longer

@@ -1564,8 +1564,10 @@ impl BatchWriter {
             rolling_24h,
         };
 
-        // Batch all DAO stats writes atomically
-        let mut dao_batch = StoreBatch::new(&self.store);
+        // Batch all DAO stats writes atomically, outside the journal as the
+        // DAO tip summary (the one unjournaled writer of the open day's row).
+        let mut dao_batch =
+            StoreBatch::outside_journal(&self.store, ckbadger_store::OutsideWriter::DaoTipSummary);
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         let value = bincode::serialize(&latest)?;

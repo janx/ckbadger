@@ -757,6 +757,11 @@ pub enum OutsideWriter {
     LabelImport,
     /// The derive scheduler and the rollback reset of derived aggregates.
     Derive,
+    /// `BatchWriter::record_deep_fork`, which withdraws
+    /// `live_cell_summary:current`.
+    DeepForkRecord,
+    /// `BatchWriter::refresh_latest_dao_statistics`, the DAO tip summary.
+    DaoTipSummary,
 }
 
 /// One range of `Journal`-class keys that is legitimately written outside
@@ -776,9 +781,10 @@ pub struct OutsideJournal {
     /// batches journal it in their block's scope and only the owner writes it
     /// unjournaled.
     pub never_journaled: bool,
-    /// The one writer admitted, for an entry that covers a whole column family
-    /// (Lane B carry-over 4c); `None` for a `(cf, key prefix)` entry, which
-    /// names one narrow key range and admits any unjournaled writer.
+    /// The one writer admitted: every whole-column-family entry (Lane B
+    /// carry-over 4c) and the two also-journaled `(cf, prefix)` entries
+    /// (ruling 5) name it; `None` for a never-journaled `(cf, prefix)` entry,
+    /// which names one narrow key range and admits any unjournaled writer.
     pub writer: Option<OutsideWriter>,
 }
 
@@ -796,6 +802,26 @@ const fn outside(
         reason,
         never_journaled,
         writer: None,
+    }
+}
+
+/// A `(cf, key prefix)` entry with one unjournaled writer: only `writer`
+/// writes its keys outside the journal.
+const fn outside_by(
+    cf: &'static str,
+    key_prefix: &'static [u8],
+    writer: OutsideWriter,
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix,
+        owner,
+        reason,
+        never_journaled,
+        writer: Some(writer),
     }
 }
 
@@ -919,9 +945,10 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         "names the reorg event awaiting canonical replay",
         NEVER,
     ),
-    outside(
+    outside_by(
         CF_SYNC_META,
         keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        OutsideWriter::DeepForkRecord,
         "deep-fork record (withdraws it)",
         "a deep fork withdraws the summary until an operator resolves the fork; live batches \
          journal it per block",
@@ -941,9 +968,10 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         "a function of the sync tip, recomputed after every tip change",
         NEVER,
     ),
-    outside(
+    outside_by(
         CF_STATS_DAO,
         &[keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT],
+        OutsideWriter::DaoTipSummary,
         "DAO tip summary (refresh_latest_dao_statistics)",
         "the open day's row is a function of the tip, recomputed after every tip change; a \
          sealed day's row is journaled at its sealer block",
@@ -5598,6 +5626,65 @@ mod tests {
                 b"p",
             )
             .unwrap();
+    }
+
+    /// Ruling 5: the two also-journaled `(cf, prefix)` entries admit only
+    /// their one unjournaled writer — `live_cell_summary:current` the
+    /// deep-fork record, `stats_dao` 0x08 the DAO tip summary.
+    #[test]
+    fn also_journaled_prefix_entries_admit_only_their_writer() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let summary = keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT;
+        let open_day = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20261107");
+        let write = |writer: Option<OutsideWriter>, cf: &str, key: &[u8]| {
+            let mut batch = match writer {
+                Some(writer) => crate::StoreBatch::outside_journal(&store, writer),
+                None => crate::StoreBatch::new(&store),
+            };
+            batch.put_raw_cf_by_name(cf, key, b"v").unwrap();
+            batch.commit()
+        };
+        for (writer, cf, key, admitted) in [
+            (None, CF_SYNC_META, summary, false),
+            (
+                Some(OutsideWriter::DaoTipSummary),
+                CF_SYNC_META,
+                summary,
+                false,
+            ),
+            (
+                Some(OutsideWriter::DeepForkRecord),
+                CF_SYNC_META,
+                summary,
+                true,
+            ),
+            (None, CF_STATS_DAO, open_day.as_slice(), false),
+            (
+                Some(OutsideWriter::DeepForkRecord),
+                CF_STATS_DAO,
+                open_day.as_slice(),
+                false,
+            ),
+            (
+                Some(OutsideWriter::DaoTipSummary),
+                CF_STATS_DAO,
+                open_day.as_slice(),
+                true,
+            ),
+        ] {
+            let result = write(writer, cf, key);
+            assert_eq!(
+                result.is_ok(),
+                admitted,
+                "{writer:?} writing {cf}:{}: {result:?}",
+                String::from_utf8_lossy(key)
+            );
+        }
+        // The DAO tip summary's never-journaled rows still admit any writer.
+        let latest = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
+        write(None, CF_STATS_DAO, &latest).unwrap();
     }
 
     /// A never-journaled key written through a journaled batch goes straight
