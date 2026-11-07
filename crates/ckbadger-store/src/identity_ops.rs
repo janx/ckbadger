@@ -274,6 +274,20 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         action_filter: Option<&str>,
     ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+        Ok(self
+            .list_identity_collection_activity_page(collection_id, limit, cursor, action_filter)?
+            .0)
+    }
+
+    /// [`Self::list_identity_collection_activities`] with the block headers
+    /// the page's completion read.
+    pub fn list_identity_collection_activity_page(
+        &self,
+        collection_id: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        action_filter: Option<&str>,
+    ) -> anyhow::Result<crate::object_ops::CollectionActivityPage> {
         self.list_collection_activities(
             crate::store::CF_IDENTITY_COLLECTION_ACTIVITIES,
             collection_id,

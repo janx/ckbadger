@@ -674,16 +674,13 @@ pub struct CollectionActivityResponse {
 }
 
 /// The wire rows of one page of a collection's activity rows: each row's
-/// actions and its block's chain time (one header `multi_get` per page). The
-/// one projection of the object and identity collection `/activities` lists.
+/// actions and its block's chain time, from the headers the page's completion
+/// read (`CollectionActivityPage`; no header read here). The one projection of
+/// the object and identity collection `/activities` lists.
 pub(crate) fn collection_activity_responses(
-    store: &CkbadgerStore,
     rows: Vec<(i64, i32, ObjectCollectionActivityEntry)>,
+    headers: &HashMap<i64, ckbadger_store::CachedBlockHeader>,
 ) -> anyhow::Result<Vec<CollectionActivityResponse>> {
-    let mut blocks: Vec<i64> = rows.iter().map(|(block, _, _)| *block).collect();
-    blocks.sort_unstable();
-    blocks.dedup();
-    let headers = store.get_block_headers_batch(&blocks)?;
     rows.into_iter()
         .map(|(block_number, tx_index, entry)| {
             let header = headers.get(&block_number).ok_or_else(|| {
@@ -1390,13 +1387,25 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     cursor: Option<(i64, i32)>,
     action_filter: Option<&str>,
 ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+    Ok(nft_collection_activity_page(store, collection_id, limit, cursor, action_filter)?.0)
+}
+
+/// [`list_canonical_nft_collection_activities_page`] with the block headers
+/// the page's completion read.
+pub(crate) fn nft_collection_activity_page(
+    store: &CkbadgerStore,
+    collection_id: &[u8],
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+    action_filter: Option<&str>,
+) -> anyhow::Result<ckbadger_store::CollectionActivityPage> {
     if limit == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), HashMap::new()));
     }
     if is_identity_sentinel(collection_id) {
-        store.list_identity_collection_activities(collection_id, limit, cursor, action_filter)
+        store.list_identity_collection_activity_page(collection_id, limit, cursor, action_filter)
     } else {
-        store.list_object_collection_activities(collection_id, limit, cursor, action_filter)
+        store.list_object_collection_activity_page(collection_id, limit, cursor, action_filter)
     }
 }
 
@@ -3989,9 +3998,8 @@ async fn list_object_collection_activities(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
-    // Fetch canonical rows only; skip orphaned history entries.
-    let results = list_canonical_nft_collection_activities_page(
-        state.store.as_ref(),
+    // Rows keyed by position are canonical by construction.
+    let (results, headers) = nft_collection_activity_page(
         state.store.as_ref(),
         &collection_id_bytes,
         (limit as usize) + 1,
@@ -4001,11 +4009,9 @@ async fn list_object_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
-    let page = collection_activity_responses(
-        state.store.as_ref(),
-        results.into_iter().take(limit as usize).collect(),
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let page =
+        collection_activity_responses(results.into_iter().take(limit as usize).collect(), &headers)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let next_cursor = if has_more {
         page.last()

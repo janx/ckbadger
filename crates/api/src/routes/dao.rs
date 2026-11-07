@@ -613,14 +613,15 @@ fn dao_24h_counts(
     let mut cursor = Some((tip + 1, 0));
     let (mut deposits, mut requests) = (0u64, 0u64);
     'pages: loop {
-        let rows = store.list_tx_actions_page_by_bucket(
+        // Only counted: the stored rows, not completed into TxActions.
+        let rows = store.list_stored_tx_actions_page_by_bucket(
             ckbadger_store::GlobalBucket::Dao,
             cursor,
             PAGE,
         )?;
         let full = rows.len() == PAGE;
-        for actions in &rows {
-            if actions.block_number <= baseline {
+        for (block_number, tx_index, actions) in &rows {
+            if *block_number <= baseline {
                 break 'pages;
             }
             for action in actions
@@ -634,7 +635,7 @@ fn dao_24h_counts(
                     _ => {}
                 }
             }
-            cursor = Some((actions.block_number, actions.tx_index));
+            cursor = Some((*block_number, *tx_index));
         }
         if !full {
             break;

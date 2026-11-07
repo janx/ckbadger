@@ -9,6 +9,15 @@ use crate::types::{
 
 pub(crate) type MnftBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
+/// One page of a collection activity feed, `(block_number, tx_index, entry)`
+/// rows newest first, with the block headers its completion read (one per
+/// distinct block): a reader that also serves a header field (the chain time)
+/// takes it from here instead of reading the headers again.
+pub type CollectionActivityPage = (
+    Vec<(i64, i32, ObjectCollectionActivityEntry)>,
+    HashMap<i64, crate::types::CachedBlockHeader>,
+);
+
 use crate::bytes_to_hex;
 use crate::types::{
     decode_stored_collection_activity, CollectionActivityDailyBlockDeltas,
@@ -490,6 +499,20 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         action_filter: Option<&str>,
     ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+        Ok(self
+            .list_object_collection_activity_page(collection_id, limit, cursor, action_filter)?
+            .0)
+    }
+
+    /// [`Self::list_object_collection_activities`] with the block headers the
+    /// page's completion read.
+    pub fn list_object_collection_activity_page(
+        &self,
+        collection_id: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        action_filter: Option<&str>,
+    ) -> anyhow::Result<CollectionActivityPage> {
         self.list_collection_activities(
             crate::store::CF_OBJECT_COLLECTION_ACTIVITIES,
             collection_id,
@@ -514,9 +537,9 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
         action_filter: Option<&str>,
-    ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+    ) -> anyhow::Result<CollectionActivityPage> {
         if limit == 0 {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), HashMap::new()));
         }
         let action_filter = match action_filter {
             Some(s) => Some(match s {
@@ -579,19 +602,21 @@ impl CkbadgerStore {
 
     /// Stored collection activity rows completed into entries: the tx hash and
     /// timestamp from `tx_index` at each position, the block hash from
-    /// `block_headers` — one `multi_get` each for the whole slice.
+    /// `block_headers` — one `multi_get` each for the whole slice. The headers
+    /// read come back with the rows.
     fn complete_collection_activities(
         &self,
         row_kind: &str,
         rows: Vec<(i64, i32, Vec<AssetAction>)>,
-    ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+    ) -> anyhow::Result<CollectionActivityPage> {
         let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
         let entries = self.tx_index_entries_at(row_kind, &positions)?;
         let mut blocks: Vec<i64> = positions.iter().map(|(block, _)| *block).collect();
         blocks.sort_unstable();
         blocks.dedup();
         let headers = self.get_block_headers_batch(&blocks)?;
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .zip(entries)
             .map(|((block, tx_idx, actions), entry)| {
                 let header = headers.get(&block).ok_or_else(|| {
@@ -609,7 +634,8 @@ impl CkbadgerStore {
                     ),
                 ))
             })
-            .collect()
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((rows, headers))
     }
 
     /// Count total activities for a collection (prefix scan, no deserialization).

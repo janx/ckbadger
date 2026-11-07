@@ -1031,8 +1031,6 @@ pub(crate) fn build_global_activity_response_with_pool(
     })
 }
 
-const ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
-
 fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
@@ -1131,42 +1129,16 @@ pub(crate) fn list_canonical_global_actions_page(
     }
 }
 
+/// The next `limit` rows of the global feed: `activities` holds no cellbase
+/// row, so they are exactly the next `limit` rows, completed once.
 fn list_canonical_unfiltered_actions_page(
     store: &CkbadgerStore,
     limit: usize,
     cursor: Option<(i64, i32)>,
 ) -> anyhow::Result<Vec<TxActions>> {
-    let scan_limit = ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
-    let mut out = Vec::with_capacity(limit);
-    let mut scan_cursor = cursor;
-
-    loop {
-        let rows = store.list_tx_actions_recent(scan_limit, scan_cursor)?;
-        if rows.is_empty() {
-            break;
-        }
-        let rows_len = rows.len();
-        let mut last_seen = None;
-        for actions in rows {
-            last_seen = Some((actions.block_number, actions.tx_index));
-            if actions.is_cellbase {
-                continue;
-            }
-            out.push(actions);
-            if out.len() >= limit {
-                return Ok(out);
-            }
-        }
-        if rows_len < scan_limit {
-            break;
-        }
-        let Some(next_cursor) = last_seen else {
-            break;
-        };
-        scan_cursor = Some(next_cursor);
-    }
-
-    Ok(out)
+    let rows = store.list_tx_actions_recent(limit, cursor)?;
+    ckbadger_store::ensure_no_cellbase_activity(&rows)?;
+    Ok(rows)
 }
 
 /// Build this lock's tx-pool rows for page one, and the summary describing

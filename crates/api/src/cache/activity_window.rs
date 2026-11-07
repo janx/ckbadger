@@ -92,17 +92,11 @@ impl ActivityWindow {
         let mut cursor = None;
         const PAGE_SIZE: usize = 512;
         'pages: loop {
-            let page = store.list_tx_actions_recent_in_range(PAGE_SIZE, cursor, old_tip)?;
+            // The page's headers come with it: its completion read them.
+            let (page, headers) = store.list_tx_actions_recent_page(PAGE_SIZE, cursor, old_tip)?;
             if page.is_empty() {
                 break;
             }
-            let numbers: Vec<_> = page
-                .iter()
-                .map(|tx| tx.block_number)
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-            let headers = store.get_block_headers_batch(&numbers)?;
             for tx in &page {
                 ensure!(
                     tx.block_number <= tip_number,

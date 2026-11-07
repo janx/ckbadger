@@ -37,6 +37,29 @@ fn tags_pass_filter(tags: u16, filter: Option<&str>) -> bool {
     }
 }
 
+/// A page of completed `TxActions` with the block headers its completion read
+/// (one per distinct block): a reader that also needs a header field (the
+/// chain time) takes it from here instead of reading the headers again.
+pub type TxActionsPage = (
+    Vec<TxActions>,
+    std::collections::HashMap<i64, CachedBlockHeader>,
+);
+
+/// `activities` holds no cellbase row: the writers skip cellbases (their
+/// actions are interpreted from the node when a page asks). One here is a
+/// writer bug, named by its position.
+pub fn ensure_no_cellbase_activity(rows: &[TxActions]) -> anyhow::Result<()> {
+    if let Some(actions) = rows.iter().find(|actions| actions.is_cellbase) {
+        anyhow::bail!(
+            "activities holds a cellbase row at block={}, tx_idx={} (tx 0x{})",
+            actions.block_number,
+            actions.tx_index,
+            bytes_to_hex(&actions.tx_hash)
+        );
+    }
+    Ok(())
+}
+
 /// One transaction a reader has already resolved: its canonical position,
 /// its `tx_index` entry there and its block's hash. The input of
 /// [`CkbadgerStore::tx_actions_of`], which completes `activities` rows from it
@@ -94,12 +117,13 @@ impl CkbadgerStore {
     /// reader turns a row into what the API serves: the tx hash, timestamp and
     /// cellbase flag from `entries` (`tx_index` at each row's position), the
     /// block hash from `block_headers`, read with one `multi_get` for every
-    /// distinct block of the slice. A block without a header is an error.
+    /// distinct block of the slice. A block without a header is an error. The
+    /// headers read come back with the rows.
     fn tx_actions_from_stored(
         &self,
         rows: Vec<(i64, i32, StoredTxActions)>,
         entries: Vec<TxIndexEntry>,
-    ) -> anyhow::Result<Vec<TxActions>> {
+    ) -> anyhow::Result<TxActionsPage> {
         anyhow::ensure!(
             rows.len() == entries.len(),
             "activities completion: {} rows but {} tx_index entries",
@@ -110,7 +134,8 @@ impl CkbadgerStore {
         blocks.sort_unstable();
         blocks.dedup();
         let headers = self.get_block_headers_batch(&blocks)?;
-        rows.into_iter()
+        let actions = rows
+            .into_iter()
             .zip(entries)
             .map(|((block, tx_idx, stored), entry)| {
                 let header = headers.get(&block).ok_or_else(|| {
@@ -126,7 +151,8 @@ impl CkbadgerStore {
                     header.hash.clone(),
                 ))
             })
-            .collect()
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((actions, headers))
     }
 
     /// [`Self::tx_actions_from_stored`] for rows whose `tx_index` entries are
@@ -134,7 +160,7 @@ impl CkbadgerStore {
     fn complete_tx_actions(
         &self,
         rows: Vec<(i64, i32, StoredTxActions)>,
-    ) -> anyhow::Result<Vec<TxActions>> {
+    ) -> anyhow::Result<TxActionsPage> {
         let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
         let entries = self.tx_index_entries_at("activities", &positions)?;
         self.tx_actions_from_stored(rows, entries)
@@ -216,8 +242,19 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         after_block: Option<i64>,
     ) -> anyhow::Result<Vec<TxActions>> {
+        Ok(self.list_tx_actions_recent_page(limit, cursor, after_block)?.0)
+    }
+
+    /// [`Self::list_tx_actions_recent_in_range`] with the block headers the
+    /// page's completion read.
+    pub fn list_tx_actions_recent_page(
+        &self,
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        after_block: Option<i64>,
+    ) -> anyhow::Result<TxActionsPage> {
         if limit == 0 {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), std::collections::HashMap::new()));
         }
 
         let start_key = cursor
@@ -323,6 +360,7 @@ impl CkbadgerStore {
         };
         let [actions] = self
             .complete_tx_actions(vec![(block_num, tx_idx, stored)])?
+            .0
             .try_into()
             .expect("one row completes to one TxActions");
         Ok(Some(actions))
@@ -338,6 +376,39 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         limit: usize,
     ) -> anyhow::Result<Vec<TxActions>> {
+        let rows = self.list_stored_tx_actions_page_by_bucket(bucket, cursor, limit)?;
+        self.complete_tx_actions(rows)?
+            .0
+            .into_iter()
+            .map(|actions| {
+                let (block_num, tx_idx) = (actions.block_number, actions.tx_index);
+                let classified = classify_global_bucket(&actions);
+                if classified != Some(bucket) {
+                    anyhow::bail!(
+                        "tx_actions_by_bucket row disagrees with its tx actions: bucket={}, classified={:?}, block_num={}, tx_idx={}, tx_hash=0x{}",
+                        bucket.as_filter(),
+                        classified.map(|b| b.as_filter()),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&actions.tx_hash)
+                    );
+                }
+                Ok(actions)
+            })
+            .collect()
+    }
+
+    /// The stored `activities` rows of one page of a global bucket, newest
+    /// first, strictly older than `cursor`: what the transactions did, not
+    /// completed (no `tx_index` or `block_headers` read), for a reader that
+    /// only counts their actions. A bucket row without its `activities` row
+    /// fails with its position.
+    pub fn list_stored_tx_actions_page_by_bucket(
+        &self,
+        bucket: GlobalBucket,
+        cursor: Option<(i64, i32)>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(i64, i32, StoredTxActions)>> {
         let positions = self.list_tx_actions_by_bucket(bucket, cursor, limit)?;
         let mut rows = Vec::with_capacity(positions.len());
         for ((block_num, tx_idx), stored) in positions
@@ -355,61 +426,16 @@ impl CkbadgerStore {
             })?;
             rows.push((block_num, tx_idx, stored));
         }
-        self.complete_tx_actions(rows)?
-            .into_iter()
-            .map(|actions| {
-                let (block_num, tx_idx) = (actions.block_number, actions.tx_index);
-                let classified = classify_global_bucket(&actions);
-                if classified != Some(bucket) {
-                    anyhow::bail!(
-                        "tx_actions_by_bucket row disagrees with its tx actions: bucket={}, classified={:?}, block_num={}, tx_idx={}, tx_hash=0x{}",
-                        bucket.as_filter(),
-                        classified.map(GlobalBucket::as_filter),
-                        block_num,
-                        tx_idx,
-                        bytes_to_hex(&actions.tx_hash)
-                    );
-                }
-                Ok(actions)
-            })
-            .collect()
+        Ok(rows)
     }
 
-    /// Return up to 64 most recent non-cellbase TxActions.
+    /// Return up to 64 most recent TxActions. `activities` holds no cellbase
+    /// row (cellbase actions are never materialized), so these are the 64
+    /// newest rows; a cellbase row is an error.
     pub fn get_latest_activities(&self) -> anyhow::Result<Vec<TxActions>> {
         const LATEST_ACTIVITY_LIMIT: usize = 64;
-
-        let mut results = Vec::with_capacity(LATEST_ACTIVITY_LIMIT);
-        let mut cursor = None;
-
-        loop {
-            let actions_list = self.list_tx_actions_recent(LATEST_ACTIVITY_LIMIT, cursor)?;
-            if actions_list.is_empty() {
-                break;
-            }
-
-            let batch_len = actions_list.len();
-            let mut last_seen = None;
-            for actions in actions_list {
-                last_seen = Some((actions.block_number, actions.tx_index));
-                if actions.is_cellbase {
-                    continue;
-                }
-                results.push(actions);
-                if results.len() >= LATEST_ACTIVITY_LIMIT {
-                    return Ok(results);
-                }
-            }
-
-            if batch_len < LATEST_ACTIVITY_LIMIT {
-                break;
-            }
-            let Some(next_cursor) = last_seen else {
-                break;
-            };
-            cursor = Some(next_cursor);
-        }
-
+        let results = self.list_tx_actions_recent(LATEST_ACTIVITY_LIMIT, None)?;
+        ensure_no_cellbase_activity(&results)?;
         Ok(results)
     }
 
@@ -487,7 +513,7 @@ impl CkbadgerStore {
                     ),
                 }
             }
-            for actions in self.tx_actions_from_stored(kept_rows, kept_entries)? {
+            for actions in self.tx_actions_from_stored(kept_rows, kept_entries)?.0 {
                 if Self::matches_activity_filter(&actions, lock_hash, filter)? {
                     results.push(actions);
                     if results.len() >= limit {

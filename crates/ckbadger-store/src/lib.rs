@@ -77,7 +77,8 @@ pub use block_overlay::{
     BlockOverlay, JournalStats, JournalValue, SharedBlockOverlay,
 };
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
-pub use activity_ops::ResolvedTx;
+pub use activity_ops::{ensure_no_cellbase_activity, ResolvedTx, TxActionsPage};
+pub use object_ops::CollectionActivityPage;
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
 pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBucket};
 pub use network_types::*;
