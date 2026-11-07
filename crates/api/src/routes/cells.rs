@@ -2603,7 +2603,7 @@ fn code_cell_upgrade_cohort(
             )));
         }
         if let Some(type_hash) = consumed.cell.type_script_hash() {
-            inputs.push((previous_hash, index, type_hash, consumed.cell.data_hash));
+            inputs.push((previous_hash, index, type_hash, consumed.cell.clone()));
         }
     }
     let mut upgrades = Vec::new();
@@ -2638,11 +2638,9 @@ fn code_cell_upgrade_cohort(
                 matches.len()
             )));
         }
-        let (previous_hash, previous_index, _, previous_version) = matches[0];
-        let mut hasher = ckb_hash::new_blake2b();
-        hasher.update(&data.raw_data());
-        let mut version = [0u8; 32];
-        hasher.finalize(&mut version);
+        let (previous_hash, previous_index, _, previous_cell) = matches[0];
+        let (previous_version_hash, current_version_hash, binary_changed) =
+            upgrade_versions(previous_cell, &data.raw_data());
         upgrades.push(CodeCellUpgrade {
             previous_tx_hash: format!("0x{}", hex::encode(previous_hash)),
             previous_output_index: *previous_index,
@@ -2651,16 +2649,32 @@ fn code_cell_upgrade_cohort(
                 ApiError::internal(format!("cell {outpoint} upgrade output index overflow"))
             })?,
             type_script_hash: format!("0x{}", hex::encode(type_hash.as_slice())),
-            previous_version_hash: previous_version
-                .as_ref()
-                .map(|hash| format!("0x{}", hex::encode(hash))),
-            current_version_hash: format!("0x{}", hex::encode(version)),
-            binary_changed: previous_version
-                .as_ref()
-                .map(|hash| hash.as_slice() != version),
+            previous_version_hash,
+            current_version_hash,
+            binary_changed,
         });
     }
     Ok(upgrades)
+}
+
+/// The version hashes of a Type ID upgrade: the previous cell's data hash as
+/// a script references it (`LiveCellInfo::script_data_hash`, the one
+/// data-hash read path: 32 zero bytes for empty data) and the hash of the
+/// current output's data; `binary_changed` compares the two.
+fn upgrade_versions(
+    previous: &ckbadger_store::LiveCellInfo,
+    current_data: &[u8],
+) -> (Option<String>, String, Option<bool>) {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(current_data);
+    let mut version = [0u8; 32];
+    hasher.finalize(&mut version);
+    let previous_version = previous.script_data_hash();
+    (
+        previous_version.map(|hash| format!("0x{}", hex::encode(hash))),
+        format!("0x{}", hex::encode(version)),
+        previous_version.map(|hash| hash != version),
+    )
 }
 
 fn code_cell_type_id_versions(
@@ -4916,6 +4930,38 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         }
+    }
+
+    /// Review P1-4: a Type ID upgrade whose previous cell had empty data
+    /// reports CKB's zero data hash as the previous version (the hash a
+    /// script references, as the cell page serves it), not the blake2b of
+    /// zero bytes the payload stores.
+    #[test]
+    fn upgrade_versions_serve_the_zero_hash_of_an_empty_previous_cell() {
+        let stored_empty_hash: [u8; 32] = ckb_hash::blake2b_256([]);
+        let previous = LiveCellInfo {
+            data_size: 0,
+            data_hash: Some(stored_empty_hash),
+            ..make_payload()
+        };
+        let current = b"\x7fELF\x02\x01\x01code";
+        let (previous_hash, current_hash, changed) = upgrade_versions(&previous, current);
+        assert_eq!(previous_hash, Some(format!("0x{}", "00".repeat(32))));
+        assert_eq!(
+            current_hash,
+            format!("0x{}", hex::encode(ckb_hash::blake2b_256(current)))
+        );
+        assert_eq!(changed, Some(true));
+
+        // A non-empty previous binary keeps its stored hash.
+        let same = LiveCellInfo {
+            data_size: i32::try_from(current.len()).unwrap(),
+            data_hash: Some(ckb_hash::blake2b_256(current)),
+            ..make_payload()
+        };
+        let (previous_hash, _, changed) = upgrade_versions(&same, current);
+        assert_eq!(previous_hash, Some(current_hash));
+        assert_eq!(changed, Some(false));
     }
 
     fn make_info() -> ckbadger_store::PositionedCellInfo {
