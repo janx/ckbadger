@@ -2564,19 +2564,22 @@ fn item_txs_protocol_actions(
         .collect()
 }
 
-/// A `.cell` name's own protocol actions in one of its lifecycle
-/// transactions — the classification its item feed rows carry as
-/// `protocolActions`.
+/// A `.cell` name's own protocol actions in each of `tx_hashes`, some of its
+/// lifecycle transactions — the classification its item feed rows carry as
+/// `protocolActions` — by transaction hash, read with one
+/// [`item_txs_protocol_actions`] call for all of them.
 pub(super) fn dotcell_own_actions(
     state: &AppState,
     item_id: &[u8],
-    tx_hash: &[u8],
-) -> Result<Vec<String>, ApiRouteError> {
-    let mut actions = item_txs_protocol_actions(state, item_id, &[tx_hash.to_vec()])?;
-    let actions = actions
-        .remove(tx_hash)
-        .expect("one lifecycle transaction, one row");
-    Ok(dotcell_lifecycle_action(item_id, tx_hash, &actions)?.protocol_actions)
+    tx_hashes: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, Vec<String>>, ApiRouteError> {
+    item_txs_protocol_actions(state, item_id, tx_hashes)?
+        .into_iter()
+        .map(|(tx_hash, actions)| {
+            let own = dotcell_lifecycle_action(item_id, &tx_hash, &actions)?.protocol_actions;
+            Ok((tx_hash, own))
+        })
+        .collect()
 }
 
 pub(super) fn collect_nft_item_lifecycle_actions(

@@ -297,14 +297,15 @@ struct DotCellVersionFacts {
 /// actions for the name (the classification its item feed rows carry)
 /// include `edit_records`. Its editor is the manager of the version it
 /// consumed. A version that consumed none (a registration) is no edit and
-/// needs no classification read.
+/// needs no classification read; the transitions' classifications are read
+/// together, with one batched read.
 fn dotcell_record_edits(
     state: &crate::AppState,
     id: &[u8],
     versions: &[DotCellVersionFacts],
 ) -> std::result::Result<DotCellRecordEdits, crate::response::ApiRouteError> {
     use crate::response::ApiError;
-    let mut edits: Vec<(&DotCellVersionFacts, [u8; 20])> = Vec::new();
+    let mut transitions: Vec<(&DotCellVersionFacts, [u8; 20], Vec<u8>)> = Vec::new();
     for version in versions {
         let consumed: Vec<&DotCellVersionFacts> = versions
             .iter()
@@ -325,9 +326,21 @@ fn dotcell_record_edits(
         let tx_hash = hex::decode(version.tx_hash.trim_start_matches("0x")).map_err(|e| {
             ApiError::internal(format!(".cell version hash {}: {e}", version.tx_hash))
         })?;
-        let own = super::assets::dotcell_own_actions(state, id, &tx_hash)?;
-        if own.iter().any(|action| action == "edit_records") {
-            edits.push((version, previous.manager_hash20));
+        transitions.push((version, previous.manager_hash20, tx_hash));
+    }
+    let hashes: Vec<Vec<u8>> = transitions.iter().map(|(_, _, hash)| hash.clone()).collect();
+    let own = super::assets::dotcell_own_actions(state, id, &hashes)?;
+    let mut edits: Vec<(&DotCellVersionFacts, [u8; 20])> = Vec::new();
+    for (version, editor, tx_hash) in transitions {
+        let actions = own.get(&tx_hash).ok_or_else(|| {
+            ApiError::internal(format!(
+                ".cell 0x{} transition {} has no classification",
+                hex::encode(id),
+                version.tx_hash
+            ))
+        })?;
+        if actions.iter().any(|action| action == "edit_records") {
+            edits.push((version, editor));
         }
     }
     let last = match edits.last() {

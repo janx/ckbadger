@@ -1488,7 +1488,8 @@ fn dotcell_email_records(email: &str) -> Vec<u8> {
 /// named by the version each edit consumed (the authority over records),
 /// with how many of the newest edits in a row that party made. Here manager
 /// 0x62… made one edit, handed the name to 0x63… (`edit_manager`, not a
-/// record edit), and 0x63… made the last two.
+/// record edit), and 0x63… made the last two. The four transitions'
+/// classifications are one `activities` read (delta review D2).
 #[tokio::test]
 async fn dotcell_protocol_names_who_made_the_last_record_edits() {
     use ckbadger_indexer::parser::DotCellParser;
@@ -1551,6 +1552,7 @@ async fn dotcell_protocol_names_who_made_the_last_record_edits() {
         },
     );
     batch.commit().unwrap();
+    let counters = store.clone();
     let app = create_router(test_config_with_ckb_db_path(
         store.clone(),
         store,
@@ -1558,9 +1560,15 @@ async fn dotcell_protocol_names_who_made_the_last_record_edits() {
         Some(chain.cleanup),
     ))
     .await;
+    counters.reset_read_call_counters();
     let (status, json) =
         get_json(&app, "/assets/identities/dotcell/items/alice.cell/protocol").await;
     assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        counters.multi_gets(ckbadger_store::CF_TX_ACTIONS),
+        1,
+        "one activities read for every transition"
+    );
     let edits = &json["recordEdits"];
     assert_eq!(edits["count"], 3, "{edits}");
     assert_eq!(
