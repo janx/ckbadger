@@ -5023,12 +5023,12 @@ fn build_history_rows_for_block(
     for built in &built_list {
         let tx_actions = &built.actions;
         if !tx_actions.is_cellbase {
-            let tx_actions_key = keys::encode_tx_actions_key(
-                tx_actions.block_number,
-                tx_actions.tx_index,
-                &tx_actions.tx_hash,
-            );
-            rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, tx_actions)?;
+            // Keyed by its position; the value is what the transaction did
+            // (`TxActions::encode_stored`): its hash, block hash, timestamp
+            // and cellbase flag are `tx_index` / `block_headers` there.
+            let tx_actions_key =
+                keys::encode_tx_actions_key(tx_actions.block_number, tx_actions.tx_index);
+            rows.push_raw(CF_TX_ACTIONS, &tx_actions_key, &tx_actions.encode_stored())?;
             // Its global bucket row, derived by the same function the live
             // writer's `StoreBatch::put_tx_actions` uses, into the same rows.
             let bucket_key =
@@ -6196,17 +6196,11 @@ fn collect_history_snapshot(
         txs_by_hash.insert(tx_hash.to_vec(), tx_entry);
     }
 
+    // Every `activities` row, completed by the store's one reader, keyed by
+    // its raw key.
     let mut tx_actions_map = HashMap::new();
-    let activity_iter = domain_store.iterator_cf(domain_store.cf_tx_actions(), IteratorMode::Start);
-    for item in activity_iter {
-        let (key, value) = item?;
-        let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize TxActions in bulk artifact snapshot helper: key=0x{} error={}",
-                hex::encode(&key),
-                e
-            )
-        })?;
+    for actions in domain_store.list_tx_actions_recent(usize::MAX, None)? {
+        let key = keys::encode_tx_actions_key(actions.block_number, actions.tx_index);
         tx_actions_map.insert(key.to_vec(), actions);
     }
 
@@ -7936,22 +7930,21 @@ mod tests {
             .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
-        let activity_rows: Vec<(Vec<u8>, TxActions)> = domain_store
+        let activity_keys: Vec<Vec<u8>> = domain_store
             .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
-            .map(|item| {
-                let (key, value) = item.expect("iterator item");
-                (
-                    key.to_vec(),
-                    bincode::deserialize(&value).expect("deserialize TxActions"),
-                )
-            })
+            .map(|item| item.expect("iterator item").0.to_vec())
             .collect();
+        let activity_rows = domain_store
+            .list_tx_actions_recent(usize::MAX, None)
+            .expect("read activities");
 
         // Only non-cellbase tx materialized to CF_TX_ACTIONS.
         assert_eq!(activity_rows.len(), 1);
-        let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
-        let (ref actual_key, ref split_actions) = activity_rows[0];
-        assert_eq!(*actual_key, split_key);
+        assert_eq!(
+            activity_keys,
+            vec![keys::encode_tx_actions_key(14_000_888, 1).to_vec()]
+        );
+        let split_actions = &activity_rows[0];
         assert_eq!(split_actions.tx_hash, split_tx_hash);
         assert!(!split_actions.is_cellbase);
         assert_eq!(split_actions.participants.len(), 2);
@@ -8017,12 +8010,8 @@ mod tests {
 
         // CF_TX_ACTIONS rows should NOT include cellbase.
         let tx_action_rows: Vec<TxActions> = domain_store
-            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
-            .map(|item| {
-                let (_key, value) = item.expect("iterator item");
-                bincode::deserialize(&value).expect("deserialize tx_actions")
-            })
-            .collect();
+            .list_tx_actions_recent(usize::MAX, None)
+            .expect("read activities");
 
         // tx_actions_list should include ALL txs (including cellbase) for stats accumulation.
         let cellbase_in_list = result.tx_actions_list.iter().any(|a| a.is_cellbase);
@@ -8126,11 +8115,9 @@ mod tests {
             .expect("commit append");
 
         let open_tx_actions: TxActions = domain_store
-            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
-            .map(|item| {
-                let (_key, value) = item.expect("iterator item");
-                bincode::deserialize::<TxActions>(&value).expect("deserialize TxActions")
-            })
+            .list_tx_actions_recent(usize::MAX, None)
+            .expect("read activities")
+            .into_iter()
             .find(|actions| !actions.is_cellbase)
             .expect("non-cellbase TxActions");
         assert!(

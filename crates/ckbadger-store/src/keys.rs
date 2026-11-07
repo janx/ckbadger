@@ -1842,56 +1842,41 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
     key
 }
 
-/// TxActions key: block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
-pub const TX_ACTIONS_KEY_SIZE: usize = 44;
+/// `activities` (`CF_TX_ACTIONS`) key: the transaction's position,
+/// block_num_desc(8B BE) + tx_idx_desc(4B BE). Its hash is `tx_index` there.
+pub const TX_ACTIONS_KEY_SIZE: usize = 12;
 
-pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8> {
-    assert_key_component_len(
-        "encode_tx_actions_key",
-        "tx_hash",
-        tx_hash.len(),
-        HASH32_LEN,
-    );
-    let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
-    key.extend_from_slice(&encode_desc_block_num(block_num));
-    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&tx_hash[..32]);
+pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32) -> [u8; TX_ACTIONS_KEY_SIZE] {
+    let mut key = [0u8; TX_ACTIONS_KEY_SIZE];
+    key[..8].copy_from_slice(&encode_desc_block_num(block_num));
+    key[8..].copy_from_slice(&encode_desc_tx_idx(tx_idx));
     key
 }
 
+/// The seek key for the first `activities` row strictly after (older than)
+/// the position `(block_num, tx_idx)`: the row key plus one byte.
 pub fn encode_tx_actions_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8> {
-    let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
-    key.extend_from_slice(&encode_desc_block_num(block_num));
-    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&[0xFF; 32]);
+    let mut key = encode_tx_actions_key(block_num, tx_idx).to_vec();
+    key.push(0);
     key
 }
 
-/// [`decode_tx_actions_key`] for a key read back from the store: only
-/// 44-byte keys are ever written to `activities`, so any other width is
-/// corruption, reported with the key instead of skipped.
-pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32, Vec<u8>)> {
+/// `(block_num, tx_idx)` of an `activities` key read back from the store.
+/// Only 12-byte keys are written; any other width — the 44-byte layout that
+/// also held the tx hash included — is refused: re-sync required.
+pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32)> {
     anyhow::ensure!(
         key.len() == TX_ACTIONS_KEY_SIZE,
-        "activities key 0x{} has {} bytes, expected {}",
+        "activities key 0x{} has {} bytes, expected {} (block, tx_idx): written by an older \
+         layout, re-sync required",
         hex::encode(key),
         key.len(),
         TX_ACTIONS_KEY_SIZE
     );
-    Ok(decode_tx_actions_key(key))
-}
-
-pub fn decode_tx_actions_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
-    assert!(
-        key.len() == TX_ACTIONS_KEY_SIZE,
-        "decode_tx_actions_key: expected {} bytes, got {}",
-        TX_ACTIONS_KEY_SIZE,
-        key.len()
-    );
-    let block_num = decode_desc_block_num(&key[0..8]);
-    let tx_idx = decode_desc_tx_idx(&key[8..12]);
-    let tx_hash = key[12..44].to_vec();
-    (block_num, tx_idx, tx_hash)
+    Ok((
+        decode_desc_block_num(&key[0..8]),
+        decode_desc_tx_idx(&key[8..12]),
+    ))
 }
 
 /// Global activity bucket index key:
@@ -1929,15 +1914,6 @@ pub fn decode_tx_actions_by_bucket_key(
         decode_desc_block_num(&key[1..9]),
         decode_desc_tx_idx(&key[9..13]),
     ))
-}
-
-/// The 12-byte `block_num_desc + tx_idx_desc` prefix every `CF_TX_ACTIONS` key
-/// of one transaction position starts with.
-pub fn encode_tx_actions_position_prefix(block_num: i64, tx_idx: i32) -> [u8; 12] {
-    let mut prefix = [0u8; 12];
-    prefix[..8].copy_from_slice(&encode_desc_block_num(block_num));
-    prefix[8..].copy_from_slice(&encode_desc_tx_idx(tx_idx));
-    prefix
 }
 
 /// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
@@ -3108,22 +3084,33 @@ mod tests {
     // ---- Activity key ----
 
     #[test]
-    fn test_tx_actions_key_roundtrip() {
-        let key = encode_tx_actions_key(123, 7, &[0x44; 32]);
+    fn tx_actions_key_is_the_12_byte_position_and_round_trips() {
+        let key = encode_tx_actions_key(123, 7);
         assert_eq!(key.len(), TX_ACTIONS_KEY_SIZE);
+        assert_eq!(TX_ACTIONS_KEY_SIZE, 12);
+        assert_eq!(decode_stored_tx_actions_key(&key).unwrap(), (123, 7));
+        let seek = encode_tx_actions_seek_after_key(123, 7);
+        assert!(seek.as_slice() > key.as_slice());
+        assert!(seek.as_slice() < encode_tx_actions_key(123, 6).as_slice());
+    }
 
-        let (block_num, tx_idx, tx_hash) = decode_tx_actions_key(&key);
-        assert_eq!(block_num, 123);
-        assert_eq!(tx_idx, 7);
-        assert_eq!(tx_hash, vec![0x44; 32]);
+    #[test]
+    fn decode_stored_tx_actions_key_refuses_the_44_byte_layout() {
+        let mut old = encode_tx_actions_key(123, 7).to_vec();
+        old.extend_from_slice(&[0x44; 32]);
+        let err = decode_stored_tx_actions_key(&old).unwrap_err().to_string();
+        assert!(
+            err.contains("has 44 bytes, expected 12") && err.contains("re-sync required"),
+            "{err}"
+        );
     }
 
     #[test]
     fn test_tx_actions_key_descending_sort_order() {
-        let k1 = encode_tx_actions_key(300, 0, &[0x11; 32]);
-        let k2 = encode_tx_actions_key(200, 0, &[0x22; 32]);
-        let k3 = encode_tx_actions_key(100, 5, &[0x33; 32]);
-        let k4 = encode_tx_actions_key(100, 1, &[0x44; 32]);
+        let k1 = encode_tx_actions_key(300, 0);
+        let k2 = encode_tx_actions_key(200, 0);
+        let k3 = encode_tx_actions_key(100, 5);
+        let k4 = encode_tx_actions_key(100, 1);
 
         assert!(k1 < k2);
         assert!(k2 < k3);
@@ -3144,13 +3131,9 @@ mod tests {
                 (bucket, 20_617_704, 13)
             );
         }
-        // The position part is exactly the CF_TX_ACTIONS position prefix.
+        // The position part is exactly the CF_TX_ACTIONS key.
         let key = encode_tx_actions_by_bucket_key(GlobalBucket::Dao, 7, 2);
-        assert_eq!(key[1..], encode_tx_actions_position_prefix(7, 2));
-        assert_eq!(
-            encode_tx_actions_key(7, 2, &[0x55; 32])[..12],
-            encode_tx_actions_position_prefix(7, 2)
-        );
+        assert_eq!(key[1..], encode_tx_actions_key(7, 2));
     }
 
     #[test]
@@ -4087,14 +4070,6 @@ mod tests {
                 expected: 32,
                 call: |h| {
                     let _ = encode_script_daily_code_hash_prefix(h);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_tx_actions_key",
-                component: "tx_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_tx_actions_key(1, 0, h);
                 },
             },
             FixedWidthCase {

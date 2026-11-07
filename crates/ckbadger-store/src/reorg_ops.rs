@@ -491,7 +491,7 @@ mod tests {
         batch
             .put_raw_cf_by_name(
                 CF_TX_ACTIONS,
-                &keys::encode_tx_actions_key(block, 0, &[block as u8; 32]),
+                &keys::encode_tx_actions_key(block, 0),
                 b"activity",
             )
             .unwrap();
@@ -896,11 +896,7 @@ mod tests {
                 keys::encode_reorg_undo_log_key(9, UndoSeqScope::Journal.seq_base()).to_vec(),
                 9,
             ),
-            (
-                CF_TX_ACTIONS,
-                keys::encode_tx_actions_key(7, 0, &[7; 32]).to_vec(),
-                7,
-            ),
+            (CF_TX_ACTIONS, keys::encode_tx_actions_key(7, 0).to_vec(), 7),
         ] {
             let (store, _dir) = open();
             chain(&store);

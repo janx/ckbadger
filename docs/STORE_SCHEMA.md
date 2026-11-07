@@ -85,7 +85,7 @@ requires re-sync from genesis; there is no migration.
 | `stats_identity`                 | collection_id + owner segment (32B)                                           | i64 (owner count)                                                              | Per-owner identity counts by collection. The owner segment is a lock hash for every standard but `.cell`, whose chain-level owner is a 20-byte prefix written as an explicit `owner20 ‖ 0^12` and decoded back by collection — never served as a lock hash |
 | `dotcell_name_by_owner`          | owner_hash20 (20B) + name_id (20B) = 40B                                      | empty                                                                          | The `.cell` names a 20-byte owner prefix holds: address pages, holder counts, and the sale-state join                                                                                                                                                      |
 | `dotcell_ring`                   | namespace_args (20B)                                                          | DotCellRingRoot                                                                | One row per `.cell` namespace: the uniqueness ring's root cell, so verify can walk the ring without scanning. A network runs exactly one namespace                                                                                                         |
-| `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)                                  | TxActions                                                                      | One canonical per-tx activity record; TX-level protocol/type/lock actions stored once plus sorted participant deltas                                                                                                                                       |
+| `activities`                     | block_num_desc(8) + tx_idx_desc(4) = 12B                                      | StoredTxActions                                                                | One canonical per-tx activity record; TX-level protocol/type/lock actions stored once plus sorted participant deltas; tx hash / time / cellbase from `tx_index`, block hash from `block_headers`                                                         |
 | `tx_actions_by_bucket`           | bucket(1) + block_num_desc(8) + tx_idx_desc(4) = 13B                          | empty                                                                          | Global activity bucket index: one row per non-cellbase `activities` row, keyed by `classify_global_bucket` (`Dao=1 … Ckb=7`). Serves filtered `/activities` and `/transactions` pages without scanning; see the note below                                 |
 | `pending_proposals`              | proposal_id (10B hex string)                                                  | CachedProposal (JSON)                                                          | Ephemeral pending proposal cache (live sync only); rollback class `Never`: written out of band from mempool snapshots, a proposal of an orphaned block stays until committed or expired                                                                                                                                                                                                          |
 | `fiber_channels`                 | channel_id (32B blake2b of funding outpoint)                                  | FiberChannel                                                                   | Fiber Network channel registry; funding lock args are descriptive and are not unique                                                                                                                                                                       |
@@ -175,10 +175,11 @@ script calls → Script, else Ckb. Cellbase has no row (it has no `activities` r
 - **Write.** `StoreBatch::put_tx_actions` puts the bucket row in the same batch as the
   `activities` row (live sync), and bulk build pushes it beside the `activities` row in
   `build_history_rows_for_block` (Class A). Both derive the key through `tx_actions_bucket_key`.
-- **Read.** `list_tx_actions_page_by_bucket` seeks the bucket from the cursor and loads each
-  row's `TxActions` by its 12-byte position prefix. A row without `TxActions`, or one whose
-  `TxActions` classifies elsewhere, is an error naming the position. Rows are canonical by
-  construction, so the read does no per-row canonicity lookups.
+- **Read.** `list_tx_actions_page_by_bucket` seeks the bucket from the cursor and loads the page's
+  `activities` rows by their 12-byte keys with one `multi_get`, completed with one `tx_index` and
+  one `block_headers` read. A row without `TxActions`, or one whose `TxActions` classifies
+  elsewhere, is an error naming the position. Rows are canonical by construction, so the read does
+  no per-row canonicity lookups.
 - **Rollback.** The row is written in its block's scope, so the block journal records its
   creation and a rollback deletes it (`Journal` class: unlike `activities`, its key opens with the
   bucket, not the block number). Pinned by the rollback property suite
@@ -808,6 +809,7 @@ is no migration.
 | --- | --- | --- |
 | `consumed_cells` | value `ConsumedCellMeta { created_at_block: i64, consumed_at_block: i64, consumed_tx_idx: i32 }`, 20 B (was 57 B with the consumer's hash); `decode_consumed_cell_meta` refuses any other width | `CkbadgerStore::consumer_tx_hashes(positions)` |
 | `addr_txs` / `addr_txs_by_prefix` | key `party + block_num_desc + tx_idx_desc`, 44 B / 32 B (were 76 B / 64 B with the tx hash); `decode_addr_tx_key` / `decode_addr_tx_by_prefix_key` refuse any other width | `list_addr_txs_recent` / `list_addr_txs_by_prefix_recent` (one `tx_hashes_at` per page); `list_addr_tx_positions_recent` for readers that need no hash |
+| `activities` | key `block_num_desc + tx_idx_desc`, 12 B (was 44 B with the tx hash); value `StoredTxActions` (protocol actions, type / lock calls, participants), without the tx hash, block hash, block number, tx index, timestamp and cellbase flag (−117 B a row); `decode_stored_tx_actions_key` refuses any other key width and `decode_stored_tx_actions` (strict bincode) the old value | `activity_ops.rs` `tx_actions_from_stored`: hash / timestamp / cellbase from `tx_index`, block hash from `block_headers`, one `multi_get` each per page |
 
 ## Key Design
 

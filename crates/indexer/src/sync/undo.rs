@@ -85,7 +85,10 @@ mod tests {
         );
         assert_eq!(iter.count(), 0);
         assert!(domain_store
-            .get_tx_actions(42, 3, &actions.tx_hash)
+            .get_cf(
+                domain_store.cf_tx_actions(),
+                &keys::encode_tx_actions_key(42, 3)
+            )
             .unwrap()
             .is_some());
     }

@@ -1617,11 +1617,11 @@ impl<'a> StoreBatch<'a> {
     /// The transaction's `TxActions` row and, for a non-cellbase transaction,
     /// its `CF_TX_ACTIONS_BY_BUCKET` row — always together, in this batch, so
     /// the index can never be durable without the row it points at.
+    /// The `activities` row of `actions` (keyed by its position, valued by
+    /// what it did: `TxActions::encode_stored`) and its global bucket row.
     pub fn put_tx_actions(&mut self, actions: &TxActions) {
-        let key =
-            keys::encode_tx_actions_key(actions.block_number, actions.tx_index, &actions.tx_hash);
-        let value = bincode::serialize(actions).expect("serialize TxActions");
-        self.put_cf(self.store.cf_tx_actions(), key, &value);
+        let key = keys::encode_tx_actions_key(actions.block_number, actions.tx_index);
+        self.put_cf(self.store.cf_tx_actions(), key, actions.encode_stored());
         if let Some(bucket_key) = crate::global_bucket::tx_actions_bucket_key(actions) {
             self.put_cf(self.store.cf_tx_actions_by_bucket(), bucket_key, b"");
         }

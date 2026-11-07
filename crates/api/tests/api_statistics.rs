@@ -2512,7 +2512,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
         (2, vec![(0xAA, 100)]),
         (3, vec![(0xAA, -50), (0xBB, 25)]),
     ] {
-        batch.put_tx_actions(&TxActions {
+        let actions = TxActions {
             tx_hash: vec![number as u8 + 0x10; 32],
             block_hash: vec![number as u8; 32],
             block_number: number,
@@ -2533,12 +2533,14 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
                     roles: 0,
                 })
                 .collect(),
-        });
+        };
+        batch.put_tx_actions(&actions);
+        index_tx_of_actions(&mut batch, &actions);
     }
     // Cross the 512-row page boundary. Every extra transaction reuses A, so
     // a paginated scan must count transactions while deduplicating addresses.
     for tx_index in 2..=521i32 {
-        batch.put_tx_actions(&TxActions {
+        let actions = TxActions {
             tx_hash: vec![tx_index as u8; 32],
             block_hash: vec![2; 32],
             block_number: 2,
@@ -2556,7 +2558,9 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
                 tags: 0,
                 roles: 0,
             }],
-        });
+        };
+        batch.put_tx_actions(&actions);
+        index_tx_of_actions(&mut batch, &actions);
     }
     batch.commit().unwrap();
     for hour in 0..24 {

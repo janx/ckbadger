@@ -455,9 +455,9 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 
 | CF                                  | Key Size  | Value                           | Purpose                                                          |
 | ----------------------------------- | --------- | ------------------------------- | ---------------------------------------------------------------- |
-| `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (bincode)           | Per-tx actions record                                            |
-| `CF_ADDR_TXS`                       | 76 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
-| `CF_ADDR_TXS_BY_PREFIX`             | 64 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
+| `CF_TX_ACTIONS`                     | 12 bytes  | `StoredTxActions` (bincode)     | Per-tx actions record                                            |
+| `CF_ADDR_TXS`                       | 44 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
+| `CF_ADDR_TXS_BY_PREFIX`             | 32 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
 | `CF_ADDR_PREFIX_STATS`              | 20 bytes  | `AddrPrefixStats` (bincode)     | Per-prefix count of named participations without a cell          |
 | `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds                                      |
 | `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
@@ -470,42 +470,50 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 ### Key Encoding — CF_TX_ACTIONS
 
 ```
-block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 44 bytes
+block_num_desc(8B BE) + tx_idx_desc(4B BE) = 12 bytes
 
 block_num_desc = i64::MAX - block_num
 tx_idx_desc   = i32::MAX - tx_idx
 ```
 
+The key is the transaction's position; the value is `StoredTxActions` — what the transaction did
+(protocol actions, type / lock calls, participants). Its hash, timestamp and cellbase flag are
+`tx_index` at the position and its block hash is `block_headers` at the block, so readers complete
+a page into `TxActions` with one `multi_get` on each (`activity_ops.rs`, `tx_actions_from_stored`).
+A value of the earlier layout (which stored all of these) does not decode: re-sync required.
+
 **Descending order**: Forward RocksDB iteration yields newest transactions first. This enables efficient "latest N" queries and reorg cleanup (the rolled-back blocks' rows are one contiguous key range at the front, removed with one range delete).
 
 ```rust
 // keys.rs
-pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8>;
-pub fn decode_tx_actions_key(key: &[u8]) -> (i64, i32, Vec<u8>);
+pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32) -> [u8; 12];
+pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32)>;
 pub fn encode_tx_actions_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8>;
 ```
 
-The seek-after key pads tx_hash with `0xFF` bytes for cursor-based pagination positioning.
+The seek-after key is the row key plus one `0x00` byte, so a forward seek passes the row itself.
 
 ### Key Encoding — CF_ADDR_TXS
 
 ```
-lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 76 bytes
+lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
 ```
 
 **Prefix scan property**: Prefix by `lock_hash` lists all transactions for an address in descending order.
+The transaction is its position (one row per position); `list_addr_txs_recent` resolves a page's
+hashes through `tx_index` with one `multi_get`.
 
 ```rust
 // keys.rs
-pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8>;
-pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>);
+pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8>;
+pub fn decode_addr_tx_key(key: &[u8]) -> anyhow::Result<([u8; 32], i64, i32)>;
 pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8>;
 ```
 
 ### Key Encoding — CF_ADDR_TXS_BY_PREFIX
 
 ```
-lock_hash_prefix(20B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 64 bytes
+lock_hash_prefix(20B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 32 bytes
 ```
 
 A separate fixed-width CF rather than a tag byte on `CF_ADDR_TXS`: `ADDR_TX_KEY_SIZE` and every
@@ -1130,7 +1138,7 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 | File                                        | Content                                                               |
 | ------------------------------------------- | --------------------------------------------------------------------- |
 | `crates/ckbadger-store/src/activity_ops.rs` | list_activities(), get_latest_activities(), matches_activity_filter() |
-| `crates/ckbadger-store/src/keys.rs`         | Key encoding/decoding for CF_TX_ACTIONS (44B), CF_ADDR_TXS (76B)      |
+| `crates/ckbadger-store/src/keys.rs`         | Key encoding/decoding for CF_TX_ACTIONS (12B), CF_ADDR_TXS (44B)      |
 | `crates/ckbadger-store/src/batch.rs`        | put_tx_actions(), put_addr_tx()                                       |
 | `crates/ckbadger-store/src/reorg_ops.rs`    | The rollback (range delete of `CF_TX_ACTIONS`, journal write-back)    |
 

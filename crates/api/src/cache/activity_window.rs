@@ -117,12 +117,6 @@ impl ActivityWindow {
                         tx.block_number
                     )
                 })?;
-                ensure!(
-                    header.hash == tx.block_hash,
-                    "activity row block hash mismatch: tx=0x{} block={}",
-                    hex::encode(&tx.tx_hash),
-                    tx.block_number
-                );
                 if header.chain_time_ms <= cutoff {
                     break 'pages;
                 }
@@ -295,6 +289,22 @@ mod tests {
             },
         );
         for index in 0..transactions {
+            // The transaction the row's position resolves to.
+            batch.put_tx_index(
+                number,
+                index,
+                &ckbadger_store::types::TxIndexEntry {
+                    tx_hash: [index as u8; 32],
+                    is_cellbase: index == 0,
+                    timestamp: time,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 1,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
             batch.put_tx_actions(&TxActions {
                 block_number: number,
                 block_hash: vec![hash_byte; 32],
@@ -419,15 +429,22 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         seed(&store, 1, DAY_MS + 1000, 2, 2);
-        let mut header = store.get_block_header(1).unwrap().unwrap();
-        header.hash = vec![3; 32];
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header);
-        batch.commit().unwrap();
+        // The new block's second row points at a position with no transaction.
+        store
+            .delete_cf(
+                store.cf_tx_index(),
+                &ckbadger_store::keys::encode_tx_slot_key(1, 1),
+            )
+            .unwrap();
         let error = cache
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap_err();
-        assert!(error.to_string().contains("block hash mismatch"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("activities points at block=1, tx_idx=1, which has no tx_index row"),
+            "{error}"
+        );
         assert!(cache.0.lock().unwrap().is_none());
     }
     #[test]

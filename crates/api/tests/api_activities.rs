@@ -252,7 +252,7 @@ async fn dotbit_protocol_actions_project_with_their_registry_name() {
 
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_tx_actions(&actions);
+    put_tx_actions_indexed(&mut batch, &actions);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, global) = fetch_json(app, "/api/v1/activities?filter=identity&limit=10").await;
@@ -3078,13 +3078,10 @@ async fn global_bucket_filter_never_reads_other_buckets_tx_actions() {
         if expected.contains(&block) {
             continue;
         }
-        let mut tx_hash = [0u8; 32];
-        tx_hash[..8].copy_from_slice(&block.to_be_bytes());
-        tx_hash[31] = 0x0b;
         store
             .put_cf(
                 store.cf_tx_actions(),
-                &ckbadger_store::keys::encode_tx_actions_key(block, 1, &tx_hash),
+                &ckbadger_store::keys::encode_tx_actions_key(block, 1),
                 b"not a TxActions payload",
             )
             .unwrap();

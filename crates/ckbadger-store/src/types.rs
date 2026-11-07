@@ -2696,7 +2696,83 @@ pub struct TxActions {
     pub participants: Vec<ParticipantDelta>,
 }
 
+/// The stored part of an `activities` row: what the transaction did. The row's
+/// key is its canonical position `(block_number, tx_index)`; the hash, the
+/// timestamp and the cellbase flag are `tx_index` at that position and the
+/// block hash is `block_headers` at that block, so none of them is stored
+/// (`docs/prompts/DATA_DESIGN.md` principle 3). Bincode (fixed-width
+/// integers), decoded strictly by [`decode_stored_tx_actions`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoredTxActions {
+    pub protocol_actions: Vec<ProtocolAction>,
+    pub type_calls: Vec<TypeCallEntry>,
+    pub lock_calls: Vec<LockCallEntry>,
+    pub participants: Vec<ParticipantDelta>,
+}
+
+/// [`StoredTxActions`] borrowed from a [`TxActions`], for encoding without a
+/// copy (serializes exactly as the owned form).
+#[derive(Serialize)]
+struct StoredTxActionsRef<'a> {
+    protocol_actions: &'a [ProtocolAction],
+    type_calls: &'a [TypeCallEntry],
+    lock_calls: &'a [LockCallEntry],
+    participants: &'a [ParticipantDelta],
+}
+
+/// Decode an `activities` value. The bytes must be exactly one
+/// [`StoredTxActions`]: a value of the earlier layout (which also stored the
+/// tx hash, block hash, block number, tx index, timestamp and cellbase flag)
+/// does not decode or leaves bytes over — re-sync required.
+pub fn decode_stored_tx_actions(value: &[u8]) -> anyhow::Result<StoredTxActions> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<StoredTxActions>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "activities value of {} bytes is not a stored TxActions ({e}): written by an older \
+                 layout, re-sync required",
+                value.len()
+            )
+        })
+}
+
 impl TxActions {
+    /// The `activities` value of this transaction ([`StoredTxActions`]).
+    pub fn encode_stored(&self) -> Vec<u8> {
+        bincode::serialize(&StoredTxActionsRef {
+            protocol_actions: &self.protocol_actions,
+            type_calls: &self.type_calls,
+            lock_calls: &self.lock_calls,
+            participants: &self.participants,
+        })
+        .expect("serialize stored TxActions")
+    }
+
+    /// A stored row completed from its position, its `tx_index` entry and its
+    /// block's hash.
+    pub fn from_stored(
+        stored: StoredTxActions,
+        block_number: i64,
+        tx_index: i32,
+        tx: &TxIndexEntry,
+        block_hash: Vec<u8>,
+    ) -> Self {
+        Self {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash,
+            block_number,
+            tx_index,
+            timestamp: tx.timestamp,
+            is_cellbase: tx.is_cellbase,
+            protocol_actions: stored.protocol_actions,
+            type_calls: stored.type_calls,
+            lock_calls: stored.lock_calls,
+            participants: stored.participants,
+        }
+    }
+
     /// Capacity actually received by participants, in shannons. Sender outflow,
     /// self-change and fees are not counted a second time; issuance is excluded.
     /// Shared by transaction Value, activity aggregates and rollback.
@@ -3644,6 +3720,72 @@ mod tests {
         let info = sample_live_cell_info();
         let bytes = info.encode().unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
+    }
+
+    // ---- activities value: StoredTxActions ----
+
+    fn tx_actions_for_layout() -> TxActions {
+        TxActions {
+            tx_hash: vec![0xAA; 32],
+            block_hash: vec![0xBB; 32],
+            block_number: 7,
+            tx_index: 2,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![ProtocolAction::new(
+                "dao",
+                "deposit",
+                serde_json::json!({"k": 1}),
+            )],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::lock(&[0x11; 32]).unwrap(),
+                ckb_delta: -5,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: TAG_DAO,
+                roles: 0,
+            }],
+        }
+    }
+
+    #[test]
+    fn stored_tx_actions_hold_only_what_the_transaction_did_and_round_trip() {
+        let actions = tx_actions_for_layout();
+        let bytes = actions.encode_stored();
+        // The full value of the earlier layout carried 32 + 32 + 8 + 4 + 8 + 1
+        // bytes of position, hashes and time, plus two 8-byte length prefixes.
+        let full = bincode::serialize(&actions).unwrap();
+        assert_eq!(full.len() - bytes.len(), 32 + 32 + 8 + 4 + 8 + 1 + 16);
+        let stored = decode_stored_tx_actions(&bytes).unwrap();
+        let tx = TxIndexEntry {
+            tx_hash: [0xAA; 32],
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let completed = TxActions::from_stored(stored, 7, 2, &tx, vec![0xBB; 32]);
+        assert_eq!(
+            bincode::serialize(&completed).unwrap(),
+            full,
+            "completion restores every field"
+        );
+    }
+
+    #[test]
+    fn decode_stored_tx_actions_refuses_the_full_layout() {
+        let full = bincode::serialize(&tx_actions_for_layout()).unwrap();
+        let err = decode_stored_tx_actions(&full).unwrap_err().to_string();
+        assert!(err.contains("re-sync required"), "{err}");
+        let mut padded = tx_actions_for_layout().encode_stored();
+        padded.push(0);
+        assert!(decode_stored_tx_actions(&padded).is_err());
     }
 
     // ---- TxActions / ItemDelta / ParticipantDelta ----

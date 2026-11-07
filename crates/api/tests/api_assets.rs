@@ -3351,6 +3351,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             0,
             0,
         ));
+        put_test_block_header(&mut batch, block, &[0xba; 32], 1_700_000_000 + block);
     }
     batch.put_tx_hash_map(&mint_tx, 300, 0);
     batch.put_tx_index(
@@ -3556,6 +3557,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
             0,
             0,
         ));
+        put_test_block_header(&mut batch, block, &[0xba; 32], 1_700_000_000 + block);
     }
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(

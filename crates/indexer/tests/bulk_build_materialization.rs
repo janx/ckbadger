@@ -1159,12 +1159,13 @@ fn bulk_build_materializes_tx_actions_from_single_pass() {
     // Cellbase (tx index 0) is excluded — the API filters them at read time.
     assert_eq!(snapshot.tx_actions_map.len(), 1);
 
-    let consume_key = keys::encode_tx_actions_key(14_000_321, 1, &consume_tx_hash);
+    let consume_key = keys::encode_tx_actions_key(14_000_321, 1).to_vec();
 
     let consume_actions = snapshot
         .tx_actions_map
         .get(&consume_key)
         .expect("consume tx actions");
+    assert_eq!(consume_actions.tx_hash, consume_tx_hash);
     assert!(!consume_actions.is_cellbase);
     assert_eq!(consume_actions.participants.len(), 1);
     assert_eq!(

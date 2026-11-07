@@ -37,49 +37,111 @@ fn tags_pass_filter(tags: u16, filter: Option<&str>) -> bool {
     }
 }
 
-fn validate_tx_actions_identity(
-    actions: &TxActions,
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash_from_key: &[u8],
-) -> anyhow::Result<()> {
-    if actions.block_number != block_num || actions.tx_index != tx_idx {
-        anyhow::bail!(
-            "tx actions key/value location mismatch: key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
-            block_num,
-            actions.block_number,
-            tx_idx,
-            actions.tx_index
-        );
-    }
-    if actions.tx_hash != tx_hash_from_key {
-        anyhow::bail!(
-            "tx actions key/value tx_hash mismatch: block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
-            block_num,
-            tx_idx,
-            bytes_to_hex(tx_hash_from_key),
-            bytes_to_hex(&actions.tx_hash)
-        );
-    }
-    Ok(())
-}
-
 impl CkbadgerStore {
+    /// Stored `activities` rows completed into `TxActions` — the one way a
+    /// reader turns a row into what the API serves: the tx hash, timestamp and
+    /// cellbase flag from `entries` (`tx_index` at each row's position), the
+    /// block hash from `block_headers`, read with one `multi_get` for every
+    /// distinct block of the slice. A block without a header is an error.
+    fn tx_actions_from_stored(
+        &self,
+        rows: Vec<(i64, i32, StoredTxActions)>,
+        entries: Vec<TxIndexEntry>,
+    ) -> anyhow::Result<Vec<TxActions>> {
+        anyhow::ensure!(
+            rows.len() == entries.len(),
+            "activities completion: {} rows but {} tx_index entries",
+            rows.len(),
+            entries.len()
+        );
+        let mut blocks: Vec<i64> = rows.iter().map(|(block, _, _)| *block).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        let headers = self.get_block_headers_batch(&blocks)?;
+        rows.into_iter()
+            .zip(entries)
+            .map(|((block, tx_idx, stored), entry)| {
+                let header = headers.get(&block).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "activities row at block={block}, tx_idx={tx_idx} has no block header"
+                    )
+                })?;
+                Ok(TxActions::from_stored(
+                    stored,
+                    block,
+                    tx_idx,
+                    &entry,
+                    header.hash.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// [`Self::tx_actions_from_stored`] for rows whose `tx_index` entries are
+    /// not read yet: one `multi_get` on `tx_index` for the slice.
+    fn complete_tx_actions(
+        &self,
+        rows: Vec<(i64, i32, StoredTxActions)>,
+    ) -> anyhow::Result<Vec<TxActions>> {
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
+        let entries = self.tx_index_entries_at("activities", &positions)?;
+        self.tx_actions_from_stored(rows, entries)
+    }
+
+    /// The stored `activities` rows at `positions`, in order, read with one
+    /// `multi_get` (`None` where a position has no row).
+    fn stored_tx_actions_at(
+        &self,
+        positions: &[(i64, i32)],
+    ) -> anyhow::Result<Vec<Option<StoredTxActions>>> {
+        let cf = self.cf_tx_actions();
+        let keys: Vec<[u8; keys::TX_ACTIONS_KEY_SIZE]> = positions
+            .iter()
+            .map(|(block, tx_idx)| keys::encode_tx_actions_key(*block, *tx_idx))
+            .collect();
+        let values =
+            self.multi_get_cf_sorted(keys.iter().map(|key| (cf, key.as_slice())).collect());
+        positions
+            .iter()
+            .zip(values)
+            .map(|((block, tx_idx), value)| {
+                value
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "reading activities at block={block}, tx_idx={tx_idx} failed: {e}"
+                        )
+                    })?
+                    .map(|bytes| {
+                        decode_stored_tx_actions(&bytes).map_err(|e| {
+                            anyhow::anyhow!("activities at block={block}, tx_idx={tx_idx}: {e:#}")
+                        })
+                    })
+                    .transpose()
+            })
+            .collect()
+    }
+
+    /// The `TxActions` of the transaction at `(block_num, tx_idx)`, which must
+    /// be `tx_hash` (a caller that names the hash expects that transaction
+    /// there; another one is an error).
     pub fn get_tx_actions(
         &self,
         block_num: i64,
         tx_idx: i32,
         tx_hash: &[u8],
     ) -> anyhow::Result<Option<TxActions>> {
-        let key = keys::encode_tx_actions_key(block_num, tx_idx, tx_hash);
-        match self.get_cf(self.cf_tx_actions(), &key)? {
-            Some(value) => {
-                let actions: TxActions = bincode::deserialize(&value)?;
-                validate_tx_actions_identity(&actions, block_num, tx_idx, tx_hash)?;
-                Ok(Some(actions))
-            }
-            None => Ok(None),
-        }
+        let Some(actions) = self.get_tx_actions_at(block_num, tx_idx)? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            actions.tx_hash == tx_hash,
+            "activities at block={}, tx_idx={} is transaction 0x{}, not 0x{}",
+            block_num,
+            tx_idx,
+            bytes_to_hex(&actions.tx_hash),
+            bytes_to_hex(tx_hash)
+        );
+        Ok(Some(actions))
     }
 
     pub fn list_tx_actions_recent(
@@ -92,6 +154,7 @@ impl CkbadgerStore {
 
     /// Recent actions strictly above `after_block`, stopping at the key before
     /// deserializing older rows. Used by incremental, read-only API windows.
+    /// The page is completed with one `tx_index` and one `block_headers` read.
     pub fn list_tx_actions_recent_in_range(
         &self,
         limit: usize,
@@ -113,7 +176,7 @@ impl CkbadgerStore {
             None => self.iterator_cf(self.cf_tx_actions(), rocksdb::IteratorMode::Start),
         };
 
-        let mut results = Vec::new();
+        let mut rows = Vec::new();
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -121,21 +184,20 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let (block_num, tx_idx, tx_hash_from_key) = keys::decode_stored_tx_actions_key(&key)?;
+            let (block_num, tx_idx) = keys::decode_stored_tx_actions_key(&key)?;
             if after_block.is_some_and(|number| block_num <= number) {
                 break;
             }
-
-            let actions: TxActions = bincode::deserialize(&value)?;
-            validate_tx_actions_identity(&actions, block_num, tx_idx, &tx_hash_from_key)?;
-
-            results.push(actions);
-            if results.len() >= limit {
+            let stored = decode_stored_tx_actions(&value).map_err(|e| {
+                anyhow::anyhow!("activities at block={block_num}, tx_idx={tx_idx}: {e:#}")
+            })?;
+            rows.push((block_num, tx_idx, stored));
+            if rows.len() >= limit {
                 break;
             }
         }
 
-        Ok(results)
+        self.complete_tx_actions(rows)
     }
 
     /// Positions `(block_num, tx_idx)` of one global activity bucket, newest
@@ -190,64 +252,24 @@ impl CkbadgerStore {
         Ok(positions)
     }
 
-    /// The `TxActions` row at one transaction position, found by its 12-byte
-    /// position prefix. Two rows at one position is a broken rollback, never a
-    /// choice to make here.
+    /// The `TxActions` row at one transaction position (`None` when the
+    /// position has no `activities` row: a cellbase, or no transaction).
     pub fn get_tx_actions_at(
         &self,
         block_num: i64,
         tx_idx: i32,
     ) -> anyhow::Result<Option<TxActions>> {
-        let prefix = keys::encode_tx_actions_position_prefix(block_num, tx_idx);
-        let mut iter = self.prefix_iterator_cf(self.cf_tx_actions(), &prefix);
-        let Some(first) = iter.next() else {
+        let [stored] = self
+            .stored_tx_actions_at(&[(block_num, tx_idx)])?
+            .try_into()
+            .expect("one position reads one row");
+        let Some(stored) = stored else {
             return Ok(None);
         };
-        let (key, value) = first.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to read tx actions at block_num={}, tx_idx={}: {}",
-                block_num,
-                tx_idx,
-                e
-            )
-        })?;
-        if key.len() != keys::TX_ACTIONS_KEY_SIZE {
-            anyhow::bail!(
-                "tx actions key at block_num={}, tx_idx={} has {} bytes, expected {}",
-                block_num,
-                tx_idx,
-                key.len(),
-                keys::TX_ACTIONS_KEY_SIZE
-            );
-        }
-        if let Some(second) = iter.next() {
-            let (second_key, _) = second.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to read tx actions at block_num={}, tx_idx={}: {}",
-                    block_num,
-                    tx_idx,
-                    e
-                )
-            })?;
-            anyhow::bail!(
-                "two tx actions rows at one position: block_num={}, tx_idx={}, keys=0x{} and 0x{}",
-                block_num,
-                tx_idx,
-                bytes_to_hex(&key),
-                bytes_to_hex(&second_key)
-            );
-        }
-        let (_, _, tx_hash_from_key) = keys::decode_tx_actions_key(&key);
-        let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to deserialize tx actions at block_num={}, tx_idx={}, tx_hash=0x{}: {}",
-                block_num,
-                tx_idx,
-                bytes_to_hex(&tx_hash_from_key),
-                e
-            )
-        })?;
-        validate_tx_actions_identity(&actions, block_num, tx_idx, &tx_hash_from_key)?;
+        let [actions] = self
+            .complete_tx_actions(vec![(block_num, tx_idx, stored)])?
+            .try_into()
+            .expect("one row completes to one TxActions");
         Ok(Some(actions))
     }
 
@@ -261,17 +283,27 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         limit: usize,
     ) -> anyhow::Result<Vec<TxActions>> {
-        self.list_tx_actions_by_bucket(bucket, cursor, limit)?
+        let positions = self.list_tx_actions_by_bucket(bucket, cursor, limit)?;
+        let mut rows = Vec::with_capacity(positions.len());
+        for ((block_num, tx_idx), stored) in positions
+            .iter()
+            .copied()
+            .zip(self.stored_tx_actions_at(&positions)?)
+        {
+            let stored = stored.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "tx_actions_by_bucket row has no tx actions: bucket={}, block_num={}, tx_idx={}",
+                    bucket.as_filter(),
+                    block_num,
+                    tx_idx
+                )
+            })?;
+            rows.push((block_num, tx_idx, stored));
+        }
+        self.complete_tx_actions(rows)?
             .into_iter()
-            .map(|(block_num, tx_idx)| {
-                let actions = self.get_tx_actions_at(block_num, tx_idx)?.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "tx_actions_by_bucket row has no tx actions: bucket={}, block_num={}, tx_idx={}",
-                        bucket.as_filter(),
-                        block_num,
-                        tx_idx
-                    )
-                })?;
+            .map(|actions| {
+                let (block_num, tx_idx) = (actions.block_number, actions.tx_index);
                 let classified = classify_global_bucket(&actions);
                 if classified != Some(bucket) {
                     anyhow::bail!(
@@ -353,8 +385,6 @@ impl CkbadgerStore {
         let scan_limit = limit.max(128);
         let mut results = Vec::with_capacity(limit);
         let mut scan_cursor = cursor;
-        let activity_cf = self.cf_tx_actions();
-
         loop {
             let rows = self.list_addr_tx_positions_recent(lock_hash, scan_limit, scan_cursor)?;
             if rows.is_empty() {
@@ -374,64 +404,39 @@ impl CkbadgerStore {
                 .filter(|(_, _, addr_tx_value)| tags_pass_filter(addr_tx_value.tags, filter))
                 .map(|(block_num, tx_idx, _)| (*block_num, *tx_idx))
                 .collect();
-            // The survivors' hashes, one tx_index read for the chunk.
-            let surviving_hashes = self.tx_hashes_at("addr_txs", &surviving_positions)?;
-            let surviving: Vec<(i64, i32, [u8; 32])> = surviving_positions
-                .iter()
-                .zip(surviving_hashes)
-                .map(|((block_num, tx_idx), hash)| (*block_num, *tx_idx, hash))
-                .collect();
-
-            if !surviving.is_empty() {
-                let action_keys: Vec<Vec<u8>> = surviving
-                    .iter()
-                    .map(|(block_num, tx_idx, tx_hash)| {
-                        keys::encode_tx_actions_key(*block_num, *tx_idx, tx_hash)
-                    })
-                    .collect();
-                let action_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = action_keys
-                    .iter()
-                    .map(|key| (activity_cf, key.as_slice()))
-                    .collect();
-                let action_values = self.multi_get_cf(action_refs);
-
-                for ((block_num, tx_idx, tx_hash), value_result) in
-                    surviving.iter().zip(action_values)
-                {
-                    let value = match value_result {
-                        Ok(Some(value)) => value,
-                        Ok(None) => {
-                            // Cellbase txs are written to CF_ADDR_TXS but intentionally
-                            // excluded from CF_TX_ACTIONS (see batch.rs/bulk_build). Skip.
-                            continue;
-                        }
-                        Err(e) => {
-                            anyhow::bail!(
-                                "rocksdb multi_get failed in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
-                                bytes_to_hex(lock_hash),
-                                block_num,
-                                tx_idx,
-                                bytes_to_hex(tx_hash),
-                                e
-                            );
-                        }
-                    };
-                    let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to deserialize tx actions in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
-                            bytes_to_hex(lock_hash),
-                            block_num,
-                            tx_idx,
-                            bytes_to_hex(tx_hash),
-                            e
-                        )
-                    })?;
-                    validate_tx_actions_identity(&actions, *block_num, *tx_idx, tx_hash)?;
-                    if Self::matches_activity_filter(&actions, lock_hash, filter) {
-                        results.push(actions);
-                        if results.len() >= limit {
-                            return Ok(results);
-                        }
+            // The survivors' transactions and activity rows: one tx_index and
+            // one activities read for the chunk (and one block_headers read
+            // to complete them).
+            let entries = self.tx_index_entries_at("addr_txs", &surviving_positions)?;
+            let stored = self.stored_tx_actions_at(&surviving_positions)?;
+            let mut kept_rows = Vec::with_capacity(stored.len());
+            let mut kept_entries = Vec::with_capacity(stored.len());
+            for (((block_num, tx_idx), entry), stored) in
+                surviving_positions.iter().zip(entries).zip(stored)
+            {
+                match stored {
+                    Some(stored) => {
+                        kept_rows.push((*block_num, *tx_idx, stored));
+                        kept_entries.push(entry);
+                    }
+                    // A cellbase has an addr_txs row and, by design, no
+                    // activities row; any other transaction without one is a
+                    // lost row.
+                    None if entry.is_cellbase => {}
+                    None => anyhow::bail!(
+                        "addr_txs row of 0x{} at block={}, tx_idx={} (tx 0x{}) has no activities row",
+                        bytes_to_hex(lock_hash),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&entry.tx_hash)
+                    ),
+                }
+            }
+            for actions in self.tx_actions_from_stored(kept_rows, kept_entries)? {
+                if Self::matches_activity_filter(&actions, lock_hash, filter) {
+                    results.push(actions);
+                    if results.len() >= limit {
+                        return Ok(results);
                     }
                 }
             }
@@ -538,6 +543,46 @@ mod tests {
         }
     }
 
+    /// `actions` as the writers leave it: its `activities` row, and the
+    /// `tx_index` entry and block header its position resolves to.
+    pub(crate) fn seed_activity(batch: &mut StoreBatch, actions: &TxActions) {
+        batch.put_tx_actions(actions);
+        batch.put_tx_index(
+            actions.block_number,
+            actions.tx_index,
+            &TxIndexEntry {
+                tx_hash: actions.tx_hash.as_slice().try_into().unwrap(),
+                is_cellbase: actions.is_cellbase,
+                timestamp: actions.timestamp,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_block_header(
+            actions.block_number,
+            &CachedBlockHeader {
+                hash: actions.block_hash.clone(),
+                parent_hash: vec![0; 32],
+                timestamp: actions.timestamp,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: actions.timestamp,
+            },
+        );
+    }
+
     #[test]
     fn test_put_and_get_tx_actions_roundtrip() {
         let dir = TempDir::new().unwrap();
@@ -545,7 +590,7 @@ mod tests {
 
         let actions = make_tx_actions(100, 0, 0xAA);
         let mut batch = StoreBatch::new(&store);
-        batch.put_tx_actions(&actions);
+        seed_activity(&mut batch, &actions);
         batch.commit().unwrap();
 
         let got = store
@@ -566,9 +611,9 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         // Insert 3 txs in ascending order (keys sort ascending by block_num desc + tx_idx desc)
-        batch.put_tx_actions(&make_tx_actions(100, 0, 0x01));
-        batch.put_tx_actions(&make_tx_actions(100, 1, 0x02));
-        batch.put_tx_actions(&make_tx_actions(101, 0, 0x03));
+        seed_activity(&mut batch, &make_tx_actions(100, 0, 0x01));
+        seed_activity(&mut batch, &make_tx_actions(100, 1, 0x02));
+        seed_activity(&mut batch, &make_tx_actions(101, 0, 0x03));
         batch.commit().unwrap();
 
         let results = store.list_tx_actions_recent(10, None).unwrap();
@@ -580,11 +625,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let mut batch = StoreBatch::new(&store);
-        batch.put_tx_actions(&make_tx_actions(100, 0, 1));
-        batch.put_tx_actions(&make_tx_actions(101, 0, 2));
-        batch.put_tx_actions(&make_tx_actions(101, 1, 3));
+        seed_activity(&mut batch, &make_tx_actions(100, 0, 1));
+        seed_activity(&mut batch, &make_tx_actions(101, 0, 2));
+        seed_activity(&mut batch, &make_tx_actions(101, 1, 3));
         batch.commit().unwrap();
-        let old_key = keys::encode_tx_actions_key(100, 0, &[1; 32]);
+        let old_key = keys::encode_tx_actions_key(100, 0);
         store
             .put_cf(store.cf_tx_actions(), &old_key, b"unreadable old payload")
             .unwrap();
@@ -607,9 +652,9 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_tx_actions(&make_tx_actions(100, 0, 0x01));
-        batch.put_tx_actions(&make_tx_actions(100, 1, 0x02));
-        batch.put_tx_actions(&make_tx_actions(101, 0, 0x03));
+        seed_activity(&mut batch, &make_tx_actions(100, 0, 0x01));
+        seed_activity(&mut batch, &make_tx_actions(100, 1, 0x02));
+        seed_activity(&mut batch, &make_tx_actions(101, 0, 0x03));
         batch.commit().unwrap();
 
         let results = store.list_tx_actions_recent(2, None).unwrap();
@@ -729,7 +774,6 @@ mod tests {
 
         let lock = vec![0xAA; 32];
         let matching_tx_hash = [0x01; 32];
-        let non_matching_tx_hash = [0x02; 32];
 
         let mut batch = StoreBatch::new(&store);
         // Matching entry: AddrTxValue.tags has TAG_TOKEN. Real TxActions also written.
@@ -768,7 +812,7 @@ mod tests {
                 roles: 0,
             }],
         };
-        batch.put_tx_actions(&matching_actions);
+        seed_activity(&mut batch, &matching_actions);
 
         // Non-matching entry: AddrTxValue.tags = 0 (no TAG_TOKEN). CF_TX_ACTIONS
         // intentionally corrupt — list_activities(filter=token) must NOT read it.
@@ -776,7 +820,7 @@ mod tests {
         batch.put_addr_tx(&lock, 99, 0, &AddrTxValue::new(10, false, true, 0));
         batch.commit().unwrap();
 
-        let corrupt_key = keys::encode_tx_actions_key(99, 0, &non_matching_tx_hash);
+        let corrupt_key = keys::encode_tx_actions_key(99, 0);
         store
             .put_cf(store.cf_tx_actions(), &corrupt_key, &[0xFF; 7])
             .unwrap();
@@ -795,7 +839,7 @@ mod tests {
     fn list_tx_actions_recent_in_range_rejects_a_key_of_the_wrong_width() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let short_key = [0x00; 12];
+        let short_key = [0x00; 13];
         store
             .put_cf(store.cf_tx_actions(), &short_key, b"orphan")
             .unwrap();
@@ -804,7 +848,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains(&hex::encode(short_key)) && err.contains("12 bytes"),
+            err.contains(&hex::encode(short_key)) && err.contains("13 bytes, expected 12"),
             "{err}"
         );
     }
@@ -965,7 +1009,7 @@ mod global_bucket_tests {
             (90, 3, TAG_OBJECT),
             (80, 1, TAG_DAO),
         ] {
-            batch.put_tx_actions(&bucket_fixture(block, tx, tags));
+            super::tests::seed_activity(&mut batch, &bucket_fixture(block, tx, tags));
         }
         batch.commit().unwrap();
 
@@ -1023,29 +1067,48 @@ mod global_bucket_tests {
         );
     }
 
+    /// The key is the position, so a position holds one `activities` row
+    /// (a second write replaces the first; the journal rollback leaves no
+    /// ghost row beside it), completed from `tx_index` and the block header.
     #[test]
-    fn get_tx_actions_at_finds_one_row_and_rejects_two() {
+    fn get_tx_actions_at_reads_the_one_row_of_a_position() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         assert!(store.get_tx_actions_at(5, 1).unwrap().is_none());
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_tx_actions(&bucket_fixture(5, 1, 0));
-        batch.put_tx_actions(&bucket_fixture(5, 2, 0));
+        super::tests::seed_activity(&mut batch, &bucket_fixture(5, 1, 0));
+        super::tests::seed_activity(&mut batch, &bucket_fixture(5, 2, 0));
         batch.commit().unwrap();
         let got = store.get_tx_actions_at(5, 1).unwrap().expect("row at 5:1");
         assert_eq!((got.block_number, got.tx_index), (5, 1));
+        assert_eq!(got.tx_hash, bucket_fixture(5, 1, 0).tx_hash);
 
-        // A second transaction hash at the same position: what a rollback that
-        // forgot a row would leave behind.
-        let mut stale = bucket_fixture(5, 1, 0);
-        stale.tx_hash = vec![0xEE; 32];
+        let mut replaced = bucket_fixture(5, 1, TAG_TOKEN);
+        replaced.tx_hash = vec![0xEE; 32];
         let mut batch = StoreBatch::new(&store);
-        batch.put_tx_actions(&stale);
+        super::tests::seed_activity(&mut batch, &replaced);
+        batch.commit().unwrap();
+        let got = store.get_tx_actions_at(5, 1).unwrap().expect("row at 5:1");
+        assert_eq!(got.tx_hash, vec![0xEE; 32]);
+        assert_eq!(got.participants[0].tags, TAG_TOKEN);
+        assert_eq!(
+            store.list_tx_actions_recent(10, None).unwrap().len(),
+            2,
+            "one row per position"
+        );
+    }
+
+    #[test]
+    fn get_tx_actions_at_fails_on_a_position_without_a_transaction() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&bucket_fixture(5, 1, 0));
         batch.commit().unwrap();
         let err = store.get_tx_actions_at(5, 1).unwrap_err().to_string();
         assert!(
-            err.contains("two tx actions rows at one position: block_num=5, tx_idx=1"),
+            err.contains("activities points at block=5, tx_idx=1, which has no tx_index row"),
             "{err}"
         );
     }
@@ -1078,7 +1141,7 @@ mod global_bucket_tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let mut batch = StoreBatch::new(&store);
-        batch.put_tx_actions(&bucket_fixture(12, 0, TAG_TOKEN));
+        super::tests::seed_activity(&mut batch, &bucket_fixture(12, 0, TAG_TOKEN));
         batch.commit().unwrap();
         store
             .put_cf(

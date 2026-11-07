@@ -1144,6 +1144,95 @@ pub fn seed_tx_at(batch: &mut StoreBatch, tx_hash: &[u8], block: i64, tx_idx: i3
     );
 }
 
+/// A minimal header of `block` with `hash` and raw / chain time `timestamp`:
+/// what an `activities` row at that block completes its block hash from.
+pub fn put_test_block_header(batch: &mut StoreBatch, block: i64, hash: &[u8], timestamp: i64) {
+    batch.put_block_header(
+        block,
+        &CachedBlockHeader {
+            hash: hash.to_vec(),
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: timestamp,
+        },
+    );
+}
+
+/// [`put_tx_actions_indexed`] for a store that may already hold the block's
+/// header (a fixture's tip header, say): the header is written only when the
+/// store has none for that block.
+pub fn put_tx_actions_indexed_keeping_headers(
+    store: &CkbadgerStore,
+    batch: &mut StoreBatch,
+    actions: &TxActions,
+) {
+    batch.put_tx_actions(actions);
+    index_tx_of_actions(batch, actions);
+    if store
+        .get_block_header(actions.block_number)
+        .unwrap()
+        .is_none()
+    {
+        put_test_block_header(
+            batch,
+            actions.block_number,
+            &actions.block_hash,
+            actions.timestamp,
+        );
+    }
+}
+
+/// The `tx_index` / `tx_hash_map` entry an `activities` row of `actions`
+/// resolves to.
+pub fn index_tx_of_actions(batch: &mut StoreBatch, actions: &TxActions) {
+    batch.put_tx_hash_map(&actions.tx_hash, actions.block_number, actions.tx_index);
+    batch.put_tx_index(
+        actions.block_number,
+        actions.tx_index,
+        &TxIndexEntry {
+            tx_hash: actions
+                .tx_hash
+                .as_slice()
+                .try_into()
+                .expect("32-byte tx hash"),
+            is_cellbase: actions.is_cellbase,
+            timestamp: actions.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+}
+
+/// `actions` as the indexer leaves it: its `activities` row plus the
+/// `tx_index` / `tx_hash_map` entry and the block header its position
+/// resolves to (an `activities` row stores neither the hash, the timestamp nor
+/// the block hash). For fixtures that seed no transaction or header of their
+/// own at that position.
+pub fn put_tx_actions_indexed(batch: &mut StoreBatch, actions: &TxActions) {
+    batch.put_tx_actions(actions);
+    index_tx_of_actions(batch, actions);
+    put_test_block_header(
+        batch,
+        actions.block_number,
+        &actions.block_hash,
+        actions.timestamp,
+    );
+}
+
 pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(

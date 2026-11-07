@@ -1075,27 +1075,10 @@ fn validate_global_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteE
     Ok(())
 }
 
-/// Check if an addr_tx entry is canonical using the same logic as
-/// the transactions endpoint (`is_canonical_addr_tx` in cells.rs):
-/// verify tx_hash location matches (block_num, tx_idx) in TX_HASH_MAP + TX_INDEX.
-/// No block_hash comparison — position match is sufficient for canonicity.
-fn is_canonical_activity(
-    store: &CkbadgerStore,
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> anyhow::Result<bool> {
-    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(tx_hash)? else {
-        return Ok(false);
-    };
-    if canonical_block != block_num || canonical_tx_idx != tx_idx {
-        return Ok(false);
-    }
-    Ok(store
-        .get_tx_index(canonical_block, canonical_tx_idx)?
-        .is_some())
-}
-
+/// An address's activities, newest first. Every row is canonical by
+/// construction: an `activities` row is keyed by its transaction's position and
+/// completed from `tx_index` there, so there is no orphaned row to skip (a
+/// position without a transaction is an error in the store reader).
 fn list_canonical_activities_page(
     store: &CkbadgerStore,
     lock_hash: &[u8],
@@ -1103,45 +1086,7 @@ fn list_canonical_activities_page(
     cursor: Option<(i64, i32)>,
     filter: Option<&str>,
 ) -> anyhow::Result<Vec<TxActions>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let scan_limit = ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
-    let mut out = Vec::with_capacity(limit);
-    let mut scan_cursor = cursor;
-
-    loop {
-        let rows = store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
-        if rows.is_empty() {
-            break;
-        }
-        let rows_len = rows.len();
-        let mut last_seen = None;
-        for actions in rows {
-            last_seen = Some((actions.block_number, actions.tx_index));
-            if is_canonical_activity(
-                store,
-                actions.block_number,
-                actions.tx_index,
-                &actions.tx_hash,
-            )? {
-                out.push(actions);
-                if out.len() >= limit {
-                    return Ok(out);
-                }
-            }
-        }
-        if rows_len < scan_limit {
-            break;
-        }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        scan_cursor = Some(last_seen_cursor);
-    }
-
-    Ok(out)
+    store.list_activities(lock_hash, limit, cursor, filter)
 }
 
 /// Whether a `TxActions` falls under a global activity filter. The bucket comes
@@ -1205,14 +1150,6 @@ fn list_canonical_unfiltered_actions_page(
         for actions in rows {
             last_seen = Some((actions.block_number, actions.tx_index));
             if actions.is_cellbase {
-                continue;
-            }
-            if !is_canonical_activity(
-                store,
-                actions.block_number,
-                actions.tx_index,
-                &actions.tx_hash,
-            )? {
                 continue;
             }
             out.push(actions);
@@ -1721,21 +1658,11 @@ async fn get_latest_activities(
     let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let items = store.get_latest_activities()?;
 
-        // Filter to canonical entries only:
-        // verify tx location matches (block_num, tx_idx) — no block_hash comparison.
+        // Every row is canonical: completed from `tx_index` at its position.
         let mut script_info_cache = HashMap::new();
         let mut address_cache = HashMap::new();
         let activities: Vec<GlobalActivityResponse> = items
             .iter()
-            .filter(|actions| {
-                is_canonical_activity(
-                    store.as_ref(),
-                    actions.block_number,
-                    actions.tx_index,
-                    &actions.tx_hash,
-                )
-                .unwrap_or(false)
-            })
             .take(limit)
             .map(|actions| {
                 build_global_activity_response(
