@@ -341,7 +341,7 @@ impl BatchWriter {
     /// block whose transaction consumed the cell.
     pub fn consume_cells_batch_preloaded(
         &self,
-        consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
+        consumptions: &[(&[u8], i16, i64, &[u8], i64, i32)],
         preloaded_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         same_batch_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         script_hashes: &crate::sync::types::InputScriptHashes,
@@ -352,8 +352,14 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _idx) in
-            consumptions
+        for (
+            tx_hash,
+            output_index,
+            _created_at_block,
+            consumed_by_tx,
+            consumed_at_block,
+            consumed_tx_idx,
+        ) in consumptions
         {
             let lookup_key = (tx_hash.to_vec(), *output_index);
             let info = preloaded_cells
@@ -380,7 +386,7 @@ impl BatchWriter {
                 &raw_key,
                 info.created_at_block,
                 *consumed_at_block,
-                Some(*consumed_by_tx),
+                *consumed_tx_idx,
             );
             domain_batch.delete_cell_raw_key(&raw_key);
             if !skip_cell_indices {
@@ -586,7 +592,7 @@ mod tests {
 
         let tx_hash = vec![0xFB; 32];
         let consumed_by = [0xBD_u8; 32];
-        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i32)> =
             vec![(tx_hash.as_slice(), 0, 20, consumed_by.as_slice(), 21, 1)];
         let info = PositionedCellInfo::new(
             build_udt_cell(vec![0x77; 32], vec![0u8; 16])
@@ -656,7 +662,7 @@ mod tests {
 
         let tx_hash = vec![0xFA; 32];
         let consumed_by = [0xBC_u8; 32];
-        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i32)> =
             vec![(tx_hash.as_slice(), 2, 20, consumed_by.as_slice(), 21, 0)];
         let preloaded_cells: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let same_batch_cells: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();

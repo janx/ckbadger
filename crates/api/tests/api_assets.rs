@@ -1518,7 +1518,7 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
             &[1],
         )
         .unwrap();
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -1535,7 +1535,8 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
         },
         300,
         400,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 300, 0);
     batch.put_tx_index(
@@ -1637,7 +1638,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             &[1],
         )
         .unwrap();
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -1654,7 +1655,8 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -2114,7 +2116,7 @@ async fn test_assets_bit_cell_item_activities() {
             &[1],
         )
         .unwrap();
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -2131,7 +2133,8 @@ async fn test_assets_bit_cell_item_activities() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -2755,7 +2758,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         AssetAction::Transfer,
     );
-    core_batch.put_consumed_cell_with_consumer(
+    core_batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -2772,9 +2775,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
-    core_batch.put_consumed_cell_with_consumer(
+    core_batch.put_consumed_cell(
         &transfer_tx,
         0,
         &LiveCellInfo {
@@ -2791,7 +2795,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         },
         200,
         300,
-        Some(&burn_tx),
+        // Consumed by burn_tx, indexed at tx index 0 of that block.
+        0,
     );
     core_batch.put_tx_hash_map(&mint_tx, 100, 0);
     core_batch.put_tx_index(
@@ -3123,7 +3128,7 @@ async fn test_assets_nft_item_activities_mnft() {
     );
     batch.put_mnft_token_outpoint(&mint_tx, 0, &token_id);
     batch.put_mnft_token_outpoint(&transfer_tx, 0, &token_id);
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -3140,7 +3145,8 @@ async fn test_assets_nft_item_activities_mnft() {
         },
         100,
         300,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -3289,7 +3295,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_1, 0, AssetAction::Transfer);
     batch.put_dotbit_account_outpoint(&transfer_tx_2, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_2, 0, AssetAction::Transfer);
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -3306,9 +3312,10 @@ async fn test_assets_nft_item_activities_dotbit() {
         },
         300,
         320,
-        Some(&transfer_tx_1),
+        // Consumed by transfer_tx_1, indexed at tx index 0 of that block.
+        0,
     );
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &transfer_tx_1,
         0,
         &LiveCellInfo {
@@ -3325,7 +3332,8 @@ async fn test_assets_nft_item_activities_dotbit() {
         },
         320,
         340,
-        Some(&transfer_tx_2),
+        // Consumed by transfer_tx_2, indexed at tx index 0 of that block.
+        0,
     );
     // Every canonical transaction has its `TxActions`; a `.bit` lifecycle
     // reads them for the account's own `dotbit` actions.
@@ -3496,7 +3504,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
     batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0, AssetAction::Mint);
     batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0, AssetAction::Transfer);
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -3513,9 +3521,10 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &transfer_tx,
         0,
         &LiveCellInfo {
@@ -3532,7 +3541,8 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         },
         200,
         260,
-        Some(&burn_tx),
+        // Consumed by burn_tx, indexed at tx index 0 of that block.
+        0,
     );
     // Every canonical transaction has its `TxActions`; a `.bit` lifecycle
     // reads them for the account's own `dotbit` actions.

@@ -74,14 +74,8 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
     );
     batch.put_spore_outpoint(&mint, 0, &id);
     batch.put_spore_outpoint(&transfer, 0, &id);
-    batch.put_consumed_cell_with_consumer(
-        &mint,
-        0,
-        &cell(&id, 307_00000000, 1),
-        100,
-        100,
-        Some(&transfer),
-    );
+    // Consumed by `transfer`, indexed at (100, 2) below.
+    batch.put_consumed_cell(&mint, 0, &cell(&id, 307_00000000, 1), 100, 100, 2);
     let mut current = cell(&id, 320_00000000, 2);
     match corrupt {
         Some("lock") => current.lock_args[0] ^= 1,
@@ -1022,9 +1016,8 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
         batch.put_tx_actions(&tx_actions);
         batch.put_spore_outpoint(hash, 0, &id);
         match txs.get(position + 1) {
-            Some((consumer, _)) => {
-                batch.put_consumed_cell_with_consumer(hash, 0, &version, 100, 100, Some(consumer))
-            }
+            // The next transaction, indexed at (100, index + 1).
+            Some(_) => batch.put_consumed_cell(hash, 0, &version, 100, 100, index + 1),
             None => batch.put_cell(hash, 0, &version, 100),
         }
     }
@@ -1421,14 +1414,8 @@ fn seed_item_versions(
                 .unwrap();
         }
         match hashes.get(k + 1) {
-            Some(consumer) => batch.put_consumed_cell_with_consumer(
-                hash,
-                0,
-                &payloads[k],
-                block,
-                block + 1,
-                Some(consumer),
-            ),
+            // The next version's transaction, indexed at (block + 1, 0).
+            Some(_) => batch.put_consumed_cell(hash, 0, &payloads[k], block, block + 1, 0),
             None => batch.put_cell(hash, 0, &payloads[k], block),
         }
     }
@@ -2340,14 +2327,8 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
 async fn history_consumer_must_follow_creation_even_in_same_block() {
     let (store, id) = history_fixture();
     let mut batch = StoreBatch::new(&store);
-    batch.put_consumed_cell_with_consumer(
-        &[0x51; 32],
-        0,
-        &cell(&id, 307_00000000, 1),
-        100,
-        100,
-        Some(&[0x51; 32]),
-    );
+    // "Consumed" by the transaction that created it (indexed at (100, 1)).
+    batch.put_consumed_cell(&[0x51; 32], 0, &cell(&id, 307_00000000, 1), 100, 100, 1);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(

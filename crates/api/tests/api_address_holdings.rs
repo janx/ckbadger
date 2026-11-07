@@ -526,14 +526,14 @@ async fn address_identity_held_since_follows_self_updates_but_not_transfer_or_re
             previous.lock_args = vec![0x88; 20];
         }
         let mut b = StoreBatch::new(&f.store);
-        b.put_consumed_cell_with_consumer(
-            &[0xa1; 32],
-            0,
-            &previous,
-            2,
-            if linked { 7 } else { 4 },
-            Some(if linked { &f.hash } else { &[0xa2; 32] }),
-        );
+        // Consumed by the fixture's transaction at (7, 0), or by another one
+        // at (4, 0).
+        if linked {
+            seed_tx_at(&mut b, &f.hash, 7, 0);
+        } else {
+            seed_tx_at(&mut b, &[0xa2; 32], 4, 0);
+        }
+        b.put_consumed_cell(&[0xa1; 32], 0, &previous, 2, if linked { 7 } else { 4 }, 0);
         b.put_spore_outpoint(&[0xa1; 32], 0, &[0x61; 20]);
         b.commit().unwrap();
         let (s, j) = get(
@@ -733,8 +733,9 @@ async fn address_identity_history_rejects_multiple_predecessors() {
         .unwrap()
         .cell;
     let mut b = StoreBatch::new(&f.store);
+    seed_tx_at(&mut b, &f.hash, 7, 0);
     for hash in [[0xb1; 32], [0xb2; 32]] {
-        b.put_consumed_cell_with_consumer(&hash, 0, &cell, 2, 7, Some(&f.hash));
+        b.put_consumed_cell(&hash, 0, &cell, 2, 7, 0);
         b.put_spore_outpoint(&hash, 0, &[0x61; 20]);
     }
     b.commit().unwrap();

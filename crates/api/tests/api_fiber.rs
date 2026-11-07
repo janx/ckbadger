@@ -408,14 +408,8 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
             semantic_tags: 0,
         },
     );
-    batch.put_consumed_cell_with_consumer(
-        &previous_hash,
-        0,
-        &previous_cell,
-        9,
-        10,
-        Some(&opening_hash),
-    );
+    // Consumed by the opening transaction, seeded at (10, 0).
+    batch.put_consumed_cell(&previous_hash, 0, &previous_cell, 9, 10, 0);
     batch.put_cell(&opening_hash, 0, &funding_cell, 10);
     batch.put_fiber_channel(&channel_id, &channel);
     batch.commit().unwrap();
@@ -633,21 +627,22 @@ async fn fiber_force_close_evidence_serializes_decoded_commitment_delay() {
             },
         );
     }
-    batch.put_consumed_cell_with_consumer(
+    // Consumed by the opening (10, 0) and the close (11, 0) transactions.
+    batch.put_consumed_cell(
         &previous_hash,
         0,
         &cell(&owner_code, &owner_args, 100_000_000_000),
         9,
         10,
-        Some(&opening_hash),
+        0,
     );
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &opening_hash,
         0,
         &cell(&funding_code, &funding_args, 30_000_000_000),
         10,
         11,
-        Some(&close_hash),
+        0,
     );
     batch.put_cell(
         &close_hash,

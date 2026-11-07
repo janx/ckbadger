@@ -1094,7 +1094,9 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
         &ConsumedCellMeta {
             created_at_block: 14_000_777,
             consumed_at_block: 14_000_777,
-            consumed_by_tx: Some(consume_tx_hash.clone()),
+            // The consuming transaction is the block's second
+            // (`transactions[1]`); its hash is `tx_index` at that position.
+            consumed_tx_idx: 1,
         }
     );
 

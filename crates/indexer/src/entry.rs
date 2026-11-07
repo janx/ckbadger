@@ -1959,7 +1959,7 @@ mod tests {
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
         batch.put_cell(&[0x10; 32], 0, &live_cell, 1);
-        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 1, 2);
+        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 1, 2, 1);
         batch.commit().unwrap();
 
         store

@@ -1496,14 +1496,8 @@ fn seed_spore_cell(
         None => batch.put_cell(&tx, index, &cell, block),
         Some((consumer, consumed_at)) => {
             index_tx(batch, consumer, consumed_at);
-            batch.put_consumed_cell_with_consumer(
-                &tx,
-                index,
-                &cell,
-                block,
-                consumed_at,
-                Some(&consumer),
-            );
+            // `index_tx` indexes every transaction at tx index 1.
+            batch.put_consumed_cell(&tx, index, &cell, block, consumed_at, 1);
         }
     }
 }

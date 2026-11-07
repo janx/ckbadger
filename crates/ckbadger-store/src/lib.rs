@@ -47,6 +47,7 @@ mod identity_ops;
 mod mnft_ops;
 mod network_ops;
 mod object_ops;
+mod pointer_ops;
 mod proposal_ops;
 mod reorg_ops;
 mod script_family_ops;

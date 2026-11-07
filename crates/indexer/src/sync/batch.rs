@@ -1775,7 +1775,9 @@ impl Indexer {
         )?;
 
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
-        let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
+        // (previous tx hash, output index, created at block, consuming tx hash,
+        // consuming block, consuming tx index)
+        let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i32)> = Vec::new();
         let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();
 
         for tx_data in &all_tx_data {
@@ -1799,19 +1801,7 @@ impl Indexer {
             }
 
             if !tx_data.is_cellbase {
-                for (input_index, input) in tx_data.inputs.iter().enumerate() {
-                    let input_index_i16 = checked_usize_to_i16(
-                        input_index,
-                        "pipeline sync input index for consumptions",
-                    )
-                    .map_err(|e| {
-                        anyhow!(
-                            "{}: tx_hash=0x{}, block={}",
-                            e,
-                            hex::encode(tx_data.hash),
-                            tx_data.block_number
-                        )
-                    })?;
+                for input in &tx_data.inputs {
                     let key = (
                         input.previous_tx_hash.to_vec(),
                         parsed_input_outpoint_index_i16(
@@ -1840,7 +1830,7 @@ impl Indexer {
                         info.created_at_block,
                         tx_data.hash.as_slice(),
                         tx_data.block_number,
-                        input_index_i16,
+                        tx_data.tx_index,
                     ));
                 }
             }

@@ -2614,19 +2614,24 @@ pub(super) fn collect_nft_item_lifecycle_actions(
         .get_consumed_cell_meta_batch(&outpoint_refs, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let mut consumer_positions = Vec::new();
     for (tx_hash, output_index) in outpoints {
         if let Some(meta) = consumed_meta.get(&(tx_hash.clone(), output_index)) {
-            let consumed_by_tx = meta.consumed_by_tx.clone().ok_or_else(|| {
-                ApiError::internal(format!(
-                    "consumed object outpoint missing consumer tx: nft_id=0x{}, tx_hash=0x{}, output_index={}",
-                    hex::encode(nft_id_bytes),
-                    hex::encode(&tx_hash),
-                    output_index
-                ))
-            })?;
-            consumed_txs.insert(consumed_by_tx);
+            consumer_positions.push(meta.consumer_position());
         }
         created_outputs.insert(tx_hash, output_index);
+    }
+    for consumer in state
+        .store
+        .consumer_tx_hashes(&consumer_positions)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "object lifecycle of 0x{}: {e:#}",
+                hex::encode(nft_id_bytes)
+            ))
+        })?
+    {
+        consumed_txs.insert(consumer.to_vec());
     }
 
     let mut lifecycle_txs: HashSet<Vec<u8>> = created_outputs.keys().cloned().collect();

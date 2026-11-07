@@ -1860,6 +1860,8 @@ async fn dotcell_transaction_app(index_identities: bool) -> (axum::Router, Strin
             &input_cell,
             block_number - 1,
             block_number,
+            // Consumed by this transaction, seeded at tx index 0 above.
+            0,
         );
     }
     for output in 0..4 {

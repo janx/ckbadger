@@ -1694,6 +1694,8 @@ async fn get_transaction_detail(
         )
     };
 
+    // The consumed outputs' consumers are resolved together, after the loop.
+    let mut consumed_outputs = Vec::new();
     for (index, output) in outputs.iter_mut().enumerate() {
         let index =
             i16::try_from(index).map_err(|_| ApiError::internal("output index exceeds i16"))?;
@@ -1711,18 +1713,24 @@ async fn get_transaction_detail(
             .map_err(|e| ApiError::internal(e.to_string()))?
         {
             output.status = Some("consumed".into());
-            output.consumed_by_tx =
-                Some(format!(
-                    "0x{}",
-                    hex::encode(consumed.consumed_by_tx.ok_or_else(|| ApiError::internal(
-                        format!("missing consuming transaction for {tx_hash_hex}:{index}")
-                    ))?)
-                ));
+            consumed_outputs.push((index, consumed.consumer_position()));
         } else {
             return Err(ApiError::internal(format!(
                 "missing canonical output state for {tx_hash_hex}:{index}"
             )));
         }
+    }
+    let consumers = state
+        .store
+        .consumer_tx_hashes(
+            &consumed_outputs
+                .iter()
+                .map(|(_, position)| *position)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| ApiError::internal(format!("{tx_hash_hex}: {e:#}")))?;
+    for ((index, _), consumer) in consumed_outputs.into_iter().zip(consumers) {
+        outputs[index as usize].consumed_by_tx = Some(format!("0x{}", hex::encode(consumer)));
     }
 
     // The fee persisted by the indexer is the single source of truth; the

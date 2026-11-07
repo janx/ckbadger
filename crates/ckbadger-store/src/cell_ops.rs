@@ -341,12 +341,7 @@ impl CkbadgerStore {
                 output_index
             )
         })?;
-        Ok(Some(ConsumedCellInfo {
-            cell,
-            consumed_at_block: meta.consumed_at_block,
-            consumed_by_tx: meta.consumed_by_tx,
-            created_at_block: meta.created_at_block,
-        }))
+        Ok(Some(ConsumedCellInfo::new(&cell, meta)))
     }
 
     pub fn get_consumed_cells_batch(
@@ -502,7 +497,7 @@ impl CkbadgerStore {
             match value_result {
                 Ok(Some(_)) => {
                     let (tx_hash, idx) = outpoints[outpoint_idx];
-                    let meta = metas[outpoint_idx].clone().ok_or_else(|| {
+                    let meta = metas[outpoint_idx].ok_or_else(|| {
                         anyhow::anyhow!(
                             "missing decoded consumed cell meta in get_consumed_cell_meta_batch: outpoint=0x{}",
                             bytes_to_hex(outpoint_key)
@@ -1690,18 +1685,10 @@ mod tests {
         let type_hash = [0x01u8; 32];
         let consumed_cell = make_cell(200_00000000, &type_hash);
         let tx_hash = [0x11u8; 32];
-        let consumed_by_tx = [0x22u8; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, 0, &consumed_cell, 100);
-        batch.put_consumed_cell_with_consumer(
-            &tx_hash,
-            0,
-            &consumed_cell,
-            100,
-            12345,
-            Some(&consumed_by_tx),
-        );
+        batch.put_consumed_cell(&tx_hash, 0, &consumed_cell, 100, 12345, 2);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
@@ -1710,7 +1697,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(info.consumed_at_block, 12345);
-        assert_eq!(info.consumed_by_tx, Some(consumed_by_tx.to_vec()));
+        assert_eq!(info.consumer_position(), (12345, 2));
         assert_eq!(info.cell.capacity, consumed_cell.capacity);
     }
 
@@ -1762,7 +1749,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, 0, &cell, 100);
-        batch.put_consumed_cell_with_consumer(&tx_hash, 0, &cell, 100, 100, None);
+        batch.put_consumed_cell(&tx_hash, 0, &cell, 100, 100, 1);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
         store
@@ -1782,18 +1769,10 @@ mod tests {
         let type_hash = [0x01u8; 32];
         let consumed_cell = make_cell(200_00000000, &type_hash);
         let tx_hash = [0x11u8; 32];
-        let consumed_by_tx = [0x22u8; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, 0, &consumed_cell, 100);
-        batch.put_consumed_cell_with_consumer(
-            &tx_hash,
-            0,
-            &consumed_cell,
-            100,
-            12345,
-            Some(&consumed_by_tx),
-        );
+        batch.put_consumed_cell(&tx_hash, 0, &consumed_cell, 100, 12345, 5);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
@@ -1801,7 +1780,7 @@ mod tests {
         let metas = store.get_consumed_cell_meta_batch(&refs, &store).unwrap();
         let meta = metas.get(&(tx_hash.to_vec(), 0)).unwrap();
         assert_eq!(meta.consumed_at_block, 12345);
-        assert_eq!(meta.consumed_by_tx, Some(consumed_by_tx.to_vec()));
+        assert_eq!(meta.consumer_position(), (12345, 5));
     }
 
     #[test]
@@ -1886,7 +1865,7 @@ mod tests {
         // Cell 2: consumed (created block 10, consumed block 20)
         let mut batch = StoreBatch::new(&store);
         batch.put_cell_payload_by_outpoint(&tx2, 0, &cell).unwrap();
-        batch.put_consumed_cell(&tx2, 0, &cell, 10, 20);
+        batch.put_consumed_cell(&tx2, 0, &cell, 10, 20, 1);
         batch.put_cell_by_data_hash(&data_hash, 10, &tx2, 0);
         batch.commit().unwrap();
 
@@ -2014,7 +1993,7 @@ mod tests {
         batch
             .put_cell_payload_by_outpoint(&consumed_tx, 0, &cell)
             .unwrap();
-        batch.put_consumed_cell(&consumed_tx, 0, &cell, 10, 20);
+        batch.put_consumed_cell(&consumed_tx, 0, &cell, 10, 20, 1);
         batch.put_cell_by_data_hash(&data_hash, 10, &consumed_tx, 0);
         batch.commit().unwrap();
 

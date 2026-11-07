@@ -4973,7 +4973,7 @@ fn build_history_rows_for_block(
                 &ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
-                    consumed_by_tx: Some(tx.hash.to_vec()),
+                    consumed_tx_idx: tx.tx_index,
                 },
             )?;
         }
@@ -6412,7 +6412,7 @@ fn collect_cell_snapshot(
         domain_store.iterator_cf(domain_store.cf_consumed_cells(), IteratorMode::Start);
     for item in consumed_iter {
         let (key, value) = item?;
-        let consumed: ConsumedCellMeta = bincode::deserialize(&value).map_err(|e| {
+        let consumed = ckbadger_store::types::decode_consumed_cell_meta(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize ConsumedCellMeta in bulk artifact snapshot helper: outpoint=0x{} error={}",
                 hex::encode(&key),

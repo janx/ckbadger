@@ -118,6 +118,19 @@ pub struct FiberSettlementOutput {
     pub capacity: String,
 }
 
+/// The outpoints `inputs` spend, in order.
+fn input_outpoints(inputs: &[ckbadger_indexer::rpc::CellInput]) -> Result<Vec<(Vec<u8>, i16)>> {
+    inputs
+        .iter()
+        .map(|input| {
+            Ok((
+                parse_hex(&input.previous_output.tx_hash)?,
+                i16::try_from(parse_u64(&input.previous_output.index)?)?,
+            ))
+        })
+        .collect()
+}
+
 fn parse_hex(value: &str) -> Result<Vec<u8>> {
     hex::decode(
         value
@@ -250,15 +263,12 @@ fn stage(
         id,
         participants,
     } = *channel;
-    use super::super::asset_history::canonical_version_at;
+    use super::super::asset_history::canonical_versions_at;
     let mut total_in = 0u128;
     let mut channel_in = 0u128;
     let mut channel_inputs = 0usize;
     let mut party_in = vec![0u128; participants.len()];
-    for input in &tx.inputs {
-        let prev_hash = parse_hex(&input.previous_output.tx_hash)?;
-        let prev_index = i16::try_from(parse_u64(&input.previous_output.index)?)?;
-        let previous = canonical_version_at(state, id, &prev_hash, prev_index)?;
+    for previous in canonical_versions_at(state, id, &input_outpoints(&tx.inputs)?)? {
         let capacity = u128::try_from(previous.cell.capacity)?;
         total_in = total_in
             .checked_add(capacity)
@@ -440,7 +450,10 @@ fn build_evidence(
     id: &[u8],
     ch: &FiberChannel,
 ) -> Result<FiberChannelEvidenceResponse> {
-    use super::super::{asset_history::canonical_version_at, asset_protocol::raw_transaction};
+    use super::super::{
+        asset_history::{canonical_version_at, canonical_versions_at},
+        asset_protocol::raw_transaction,
+    };
     let index = i16::try_from(ch.funding_output_index)
         .context("Fiber funding output index out of range")?;
     let funding = canonical_version_at(state, id, &ch.funding_tx_hash, index)?;
@@ -472,12 +485,10 @@ fn build_evidence(
         &opening_tx,
     )?];
     let mut flows = Vec::new();
+    let opening_inputs = canonical_versions_at(state, id, &input_outpoints(&opening_tx.inputs)?)?;
     for party in &ch.participants {
         let mut inputs = 0u128;
-        for input in &opening_tx.inputs {
-            let prev_hash = parse_hex(&input.previous_output.tx_hash)?;
-            let prev_index = i16::try_from(parse_u64(&input.previous_output.index)?)?;
-            let previous = canonical_version_at(state, id, &prev_hash, prev_index)?;
+        for previous in &opening_inputs {
             if previous.cell.lock_script_hash().as_slice() == party.as_slice() {
                 inputs = inputs
                     .checked_add(u128::try_from(previous.cell.capacity)?)

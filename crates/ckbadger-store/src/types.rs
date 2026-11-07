@@ -308,12 +308,15 @@ impl Deref for PositionedCellInfo {
 }
 
 /// A consumed cell as readers see it: the `cells` payload joined with its
-/// `consumed_cells` metadata. Built in memory only, never persisted.
+/// `consumed_cells` metadata. Built in memory only, never persisted. The
+/// consuming transaction is its canonical position; a reader that shows its
+/// hash resolves the positions of a whole response at once with
+/// [`crate::store::CkbadgerStore::consumer_tx_hashes`].
 #[derive(Debug, Clone)]
 pub struct ConsumedCellInfo {
     pub cell: LiveCellInfo,
     pub consumed_at_block: i64,
-    pub consumed_by_tx: Option<Vec<u8>>,
+    pub consumed_tx_idx: i32,
     pub created_at_block: i64,
 }
 
@@ -327,11 +330,26 @@ pub struct LockScriptEntry {
     pub args: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A `consumed_cells` value: the block that created the cell and the
+/// canonical position `(consumed_at_block, consumed_tx_idx)` of the
+/// transaction that consumed it. The consuming transaction's hash is not
+/// stored (`docs/prompts/DATA_DESIGN.md` principle 3): it is `tx_index` at
+/// that position. Bincode, fixed [`CONSUMED_CELL_META_SIZE`] bytes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsumedCellMeta {
     pub created_at_block: i64,
     pub consumed_at_block: i64,
-    pub consumed_by_tx: Option<Vec<u8>>,
+    pub consumed_tx_idx: i32,
+}
+
+/// Bytes of an encoded [`ConsumedCellMeta`]: `i64 + i64 + i32`.
+pub const CONSUMED_CELL_META_SIZE: usize = 20;
+
+impl ConsumedCellMeta {
+    /// The consuming transaction's canonical position.
+    pub fn consumer_position(&self) -> (i64, i32) {
+        (self.consumed_at_block, self.consumed_tx_idx)
+    }
 }
 
 /// How an address took part in one transaction, as stored in
@@ -456,26 +474,18 @@ pub struct TokenCellStats {
 }
 
 impl ConsumedCellInfo {
-    pub fn from_live_cell_info(
-        info: &LiveCellInfo,
-        consumed_at_block: i64,
-        created_at_block: i64,
-    ) -> Self {
-        Self::from_live_cell_info_with_consumer(info, consumed_at_block, None, created_at_block)
+    pub fn new(cell: &LiveCellInfo, meta: ConsumedCellMeta) -> Self {
+        Self {
+            cell: cell.clone(),
+            consumed_at_block: meta.consumed_at_block,
+            consumed_tx_idx: meta.consumed_tx_idx,
+            created_at_block: meta.created_at_block,
+        }
     }
 
-    pub fn from_live_cell_info_with_consumer(
-        info: &LiveCellInfo,
-        consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
-        created_at_block: i64,
-    ) -> Self {
-        Self {
-            cell: info.clone(),
-            consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
-            created_at_block,
-        }
+    /// The consuming transaction's canonical position.
+    pub fn consumer_position(&self) -> (i64, i32) {
+        (self.consumed_at_block, self.consumed_tx_idx)
     }
 
     pub fn to_positioned_cell_info(&self) -> PositionedCellInfo {
@@ -483,9 +493,19 @@ impl ConsumedCellInfo {
     }
 }
 
-/// Decode consumed cell metadata from the canonical schema.
-pub fn decode_consumed_cell_meta(value: &[u8]) -> Result<ConsumedCellMeta, bincode::Error> {
-    bincode::deserialize::<ConsumedCellMeta>(value)
+/// Decode a `consumed_cells` value. Anything but the
+/// [`CONSUMED_CELL_META_SIZE`]-byte layout — the earlier one stored the
+/// consuming transaction's hash (17 or 57 bytes), the one before it the whole
+/// cell — was written by an older layout: re-sync required.
+pub fn decode_consumed_cell_meta(value: &[u8]) -> anyhow::Result<ConsumedCellMeta> {
+    anyhow::ensure!(
+        value.len() == CONSUMED_CELL_META_SIZE,
+        "consumed_cells value has {} bytes, expected {} (created_at_block, consumed_at_block, \
+         consumed_tx_idx): written by an older layout, re-sync required",
+        value.len(),
+        CONSUMED_CELL_META_SIZE
+    );
+    Ok(bincode::deserialize::<ConsumedCellMeta>(value)?)
 }
 
 /// Decode created_at_block from the live cell marker value (8 bytes LE).
@@ -3560,20 +3580,43 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_consumed_cell_meta_current_schema() {
-        let info = sample_live_cell_info();
-        let consumed =
-            ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 999, Some(&[0xAA; 32]), 123);
+    fn consumed_cell_meta_is_20_bytes_and_round_trips() {
         let meta = ConsumedCellMeta {
             created_at_block: 123,
-            consumed_at_block: consumed.consumed_at_block,
-            consumed_by_tx: consumed.consumed_by_tx.clone(),
+            consumed_at_block: 999,
+            consumed_tx_idx: 7,
         };
         let bytes = bincode::serialize(&meta).unwrap();
+        assert_eq!(bytes.len(), CONSUMED_CELL_META_SIZE);
+        assert_eq!(
+            hex::encode(&bytes),
+            "7b00000000000000e70300000000000007000000"
+        );
         let decoded = decode_consumed_cell_meta(&bytes).unwrap();
-        assert_eq!(decoded.created_at_block, 123);
-        assert_eq!(decoded.consumed_at_block, 999);
-        assert_eq!(decoded.consumed_by_tx, Some(vec![0xAA; 32]));
+        assert_eq!(decoded, meta);
+        assert_eq!(decoded.consumer_position(), (999, 7));
+    }
+
+    #[test]
+    fn decode_consumed_cell_meta_refuses_the_hash_layout() {
+        /// The layout before the consumer became a position.
+        #[derive(Serialize)]
+        struct HashLayout {
+            created_at_block: i64,
+            consumed_at_block: i64,
+            consumed_by_tx: Option<Vec<u8>>,
+        }
+        for consumed_by_tx in [Some(vec![0xAA; 32]), None] {
+            let bytes = bincode::serialize(&HashLayout {
+                created_at_block: 123,
+                consumed_at_block: 999,
+                consumed_by_tx,
+            })
+            .unwrap();
+            let err = decode_consumed_cell_meta(&bytes).unwrap_err().to_string();
+            assert!(err.contains("re-sync required"), "{err}");
+            assert!(err.contains(&format!("{} bytes", bytes.len())), "{err}");
+        }
     }
 
     #[test]

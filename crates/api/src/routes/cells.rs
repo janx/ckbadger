@@ -2553,6 +2553,22 @@ fn code_cell_upgrade_cohort(
     if tx.is_cellbase() {
         return Ok(Vec::new());
     }
+    // Every input must have been consumed by this transaction: its canonical
+    // position is what each input's consumed marker points at.
+    let position = state
+        .store
+        .get_tx_location(tx_hash)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort transaction: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort transaction 0x{} is not indexed",
+                hex::encode(tx_hash)
+            ))
+        })?;
     let mut inputs = Vec::new();
     for input in tx.inputs() {
         let previous = input.previous_output();
@@ -2580,7 +2596,7 @@ fn code_cell_upgrade_cohort(
                     hex::encode(&previous_hash)
                 ))
             })?;
-        if consumed.consumed_by_tx.as_deref() != Some(tx_hash) {
+        if consumed.consumer_position() != position {
             return Err(ApiError::internal(format!(
                 "cell {outpoint} upgrade cohort input 0x{}:{index} has wrong consumer",
                 hex::encode(&previous_hash)

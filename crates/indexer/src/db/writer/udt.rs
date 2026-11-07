@@ -950,7 +950,7 @@ mod tests {
         let type_hash = consumed_cell.type_script_hash().unwrap().to_vec();
         store.put_token_direct(&type_hash, &token).unwrap();
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 1, 2);
+        batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 1, 2, 1);
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];

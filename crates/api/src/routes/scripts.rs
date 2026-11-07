@@ -1557,9 +1557,53 @@ fn script_version_deployments(
     _info: &ckbadger_store::types::ScriptVersionInfo,
     code_cells: &[VersionCodeCell],
 ) -> Result<Vec<ScriptVersionDeploymentResponse>, ApiRouteError> {
+    let consumed: Vec<Option<ckbadger_store::ConsumedCellInfo>> = code_cells
+        .iter()
+        .map(|(tx_hash, output_index, _, is_live)| {
+            if *is_live {
+                return Ok(None);
+            }
+            state
+                .store
+                .get_consumed_cell_info(tx_hash, *output_index, &state.append_only_store)
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "consumed code cell 0x{}:{}: {e}",
+                        hex::encode(tx_hash),
+                        output_index
+                    ))
+                })?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "indexed dead code cell is missing consumed marker: 0x{}:{}",
+                        hex::encode(tx_hash),
+                        output_index
+                    ))
+                })
+                .map(Some)
+        })
+        .collect::<Result<_, ApiRouteError>>()?;
+    // The consumers of every consumed code cell, resolved together.
+    let mut consumers = state
+        .store
+        .consumer_tx_hashes(
+            &consumed
+                .iter()
+                .flatten()
+                .map(|c| c.consumer_position())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "code cells of version 0x{}: {e:#}",
+                hex::encode(version_hash)
+            ))
+        })?
+        .into_iter();
     code_cells
         .iter()
-        .map(|(tx_hash, output_index, cell, is_live)| {
+        .zip(consumed)
+        .map(|((tx_hash, output_index, cell, is_live), consumed)| {
             let type_script_hash = cell.type_script_hash();
             let hash_type = if type_script_hash.is_some() {
                 "type".to_string()
@@ -1568,29 +1612,11 @@ fn script_version_deployments(
             };
             let type_reference_hash =
                 type_script_hash.map(|hash| format!("0x{}", hex::encode(hash)));
-
-            let consumed = if *is_live {
-                None
-            } else {
-                Some(
-                    state
-                        .store
-                        .get_consumed_cell_info(tx_hash, *output_index, &state.append_only_store)
-                        .map_err(|e| {
-                            ApiError::internal(format!(
-                                "consumed code cell 0x{}:{}: {e}",
-                                hex::encode(tx_hash),
-                                output_index
-                            ))
-                        })?
-                        .ok_or_else(|| {
-                            ApiError::internal(format!(
-                                "indexed dead code cell is missing consumed marker: 0x{}:{}",
-                                hex::encode(tx_hash),
-                                output_index
-                            ))
-                        })?,
-                )
+            let consumer = match consumed {
+                Some(_) => Some(consumers.next().ok_or_else(|| {
+                    ApiError::internal("code cell consumer resolution came up short")
+                })?),
+                None => None,
             };
 
             let mut custody = classify_code_cell_lock(&cell.cell)?;
@@ -1600,7 +1626,7 @@ fn script_version_deployments(
                 tx_hash,
                 *output_index,
                 &cell.cell,
-                consumed.as_ref().and_then(|c| c.consumed_by_tx.as_deref()),
+                consumer.as_ref().map(|hash| hash.as_slice()),
                 &mut custody,
             )?;
 
@@ -1614,10 +1640,7 @@ fn script_version_deployments(
                 created_at_block: cell.created_at_block,
                 status: if *is_live { "live" } else { "consumed" }.to_string(),
                 consumed_at_block: consumed.as_ref().map(|c| c.consumed_at_block),
-                consumed_by_tx: consumed
-                    .as_ref()
-                    .and_then(|c| c.consumed_by_tx.as_ref())
-                    .map(|hash| format!("0x{}", hex::encode(hash))),
+                consumed_by_tx: consumer.map(|hash| format!("0x{}", hex::encode(hash))),
                 custody,
             })
         })
@@ -3800,7 +3823,7 @@ mod tests {
 
         // Write consumed cell metadata (not live — no CF_LIVE_CELLS entry).
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&tx_hash, output_index, &cell_info, block_num, 10);
+        batch.put_consumed_cell(&tx_hash, output_index, &cell_info, block_num, 10, 1);
         batch.commit().unwrap();
 
         // Write CF_CELL_BY_DATA_HASH index entry (preserved on consumption).

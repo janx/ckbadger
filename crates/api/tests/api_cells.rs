@@ -701,7 +701,8 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     let consumed_by_tx = vec![0xcd; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_consumed_cell_with_consumer(
+    // Consumed by `consumed_by_tx`, indexed at (456, 0) below.
+    batch.put_consumed_cell(
         &tx_hash,
         output_index,
         &LiveCellInfo {
@@ -718,7 +719,7 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         },
         123,
         456,
-        Some(&consumed_by_tx),
+        0,
     );
     // graph route requires creating tx location to exist
     batch.put_tx_hash_map(&tx_hash, 123, 0);
@@ -1602,11 +1603,10 @@ async fn get_cell_json(tx_hash: &[u8], cell: LiveCellInfo) -> (StatusCode, serde
 async fn cell_detail_rejects_double_live_and_consumed_markers() {
     let store = test_store();
     let tx = vec![0xd4; 32];
-    let consumer = vec![0xd5; 32];
     let cell = cell_with(1, Some(1));
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(&tx, 0, &cell, 123);
-    batch.put_consumed_cell_with_consumer(&tx, 0, &cell, 123, 456, Some(&consumer));
+    batch.put_consumed_cell(&tx, 0, &cell, 123, 456, 0);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
@@ -1626,19 +1626,23 @@ async fn cell_detail_missing_outpoint_is_not_found() {
 }
 
 #[tokio::test]
-async fn cell_detail_rejects_missing_canonical_consumer() {
+async fn cell_detail_rejects_a_consumer_position_without_a_transaction() {
     let store = test_store();
     let tx = vec![0xd6; 32];
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_consumed_cell_with_consumer(&tx, 0, &cell_with(1, Some(1)), 123, 456, None);
+    // The consumed marker points at (456, 3); no transaction is indexed there.
+    batch.put_consumed_cell(&tx, 0, &cell_with(1, Some(1)), 123, 456, 3);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(body["message"]
-        .as_str()
-        .unwrap()
-        .contains("consumed marker missing consumer"));
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("consumed_cells points at block=456, tx_idx=3, which has no tx_index row"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -1647,14 +1651,8 @@ async fn cell_detail_rejects_same_block_consumer_before_creation() {
     let tx = vec![0xd7; 32];
     let consumer = vec![0xd8; 32];
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_consumed_cell_with_consumer(
-        &tx,
-        0,
-        &cell_with(1, Some(1)),
-        123,
-        123,
-        Some(&consumer),
-    );
+    // Consumed by `consumer` at (123, 0), before the creating tx at (123, 1).
+    batch.put_consumed_cell(&tx, 0, &cell_with(1, Some(1)), 123, 123, 0);
     for (hash, index) in [(&consumer, 0), (&tx, 1)] {
         batch.put_tx_hash_map(hash, 123, index);
         batch.put_tx_index(

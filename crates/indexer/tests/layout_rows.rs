@@ -71,7 +71,7 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     (
         "consumed_cells",
         "02017a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a0000",
-        "0200000000000000060000000000000001200000000000000006017a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+        "0200000000000000060000000000000001000000",
     ),
     (
         "identity_collection_activities",

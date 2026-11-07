@@ -776,6 +776,8 @@ impl<'a> StoreBatch<'a> {
     /// Write consumed cell (payload + metadata) in one batch. Only valid for TestUnified
     /// stores (domain + append-only CFs coexist). Production code should use separate batches:
     /// `put_cell_payload` on append-only batch + `put_consumed_cell_meta` on domain batch.
+    /// `(consumed_at_block, consumed_tx_idx)` is the consuming transaction's canonical
+    /// position; readers resolve its hash through `tx_index`.
     pub fn put_consumed_cell(
         &mut self,
         tx_hash: &[u8],
@@ -783,60 +785,36 @@ impl<'a> StoreBatch<'a> {
         info: &LiveCellInfo,
         created_at_block: i64,
         consumed_at_block: i64,
-    ) {
-        self.put_consumed_cell_with_consumer(
-            tx_hash,
-            output_index,
-            info,
-            created_at_block,
-            consumed_at_block,
-            None,
-        );
-    }
-
-    /// Write consumed cell with consumer tx (payload + metadata) in one batch. Only valid for
-    /// TestUnified stores (domain + append-only CFs coexist). Production code should use
-    /// separate batches: `put_cell_payload` on append-only batch +
-    /// `put_consumed_cell_meta` on domain batch.
-    pub fn put_consumed_cell_with_consumer(
-        &mut self,
-        tx_hash: &[u8],
-        output_index: i16,
-        info: &LiveCellInfo,
-        created_at_block: i64,
-        consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.put_consumed_cell_with_consumer_raw_key(
+        self.put_consumed_cell_raw_key(
             &key,
             info,
             created_at_block,
             consumed_at_block,
-            consumed_by_tx,
+            consumed_tx_idx,
         );
     }
 
-    /// Mark a cell as consumed using pre-encoded outpoint key. Only valid for TestUnified
-    /// stores (domain + append-only CFs coexist). Production code should use separate batches:
-    /// `put_cell_payload` on append-only batch + `put_consumed_cell_meta` on domain batch.
-    pub fn put_consumed_cell_with_consumer_raw_key(
+    /// [`Self::put_consumed_cell`] with a pre-encoded outpoint key. Only valid for TestUnified
+    /// stores.
+    pub fn put_consumed_cell_raw_key(
         &mut self,
         raw_key: &[u8],
         info: &LiveCellInfo,
         created_at_block: i64,
         consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
         self.put_test_store_cell_payload(raw_key, info);
-        let consumed = ConsumedCellMeta {
+        self.put_consumed_cell_meta_raw_key(
+            raw_key,
             created_at_block,
             consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
-        };
-        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
-        self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
+            consumed_tx_idx,
+        );
     }
 
     /// Write consumed cell metadata to CF_CONSUMED_CELLS. Call on domain store batch.
@@ -848,14 +826,14 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
         created_at_block: i64,
         consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         self.put_consumed_cell_meta_raw_key(
             &key,
             created_at_block,
             consumed_at_block,
-            consumed_by_tx,
+            consumed_tx_idx,
         );
     }
 
@@ -866,12 +844,12 @@ impl<'a> StoreBatch<'a> {
         raw_key: &[u8],
         created_at_block: i64,
         consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         let consumed = ConsumedCellMeta {
             created_at_block,
             consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
+            consumed_tx_idx,
         };
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
         self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
@@ -2327,7 +2305,7 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell_with_consumer(&tx_hash, 0, &info, 1, 22, Some(&[0x44; 32]));
+        batch.put_consumed_cell(&tx_hash, 0, &info, 1, 22, 4);
         batch.commit().unwrap();
 
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
@@ -2335,10 +2313,10 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap()
             .unwrap();
-        let decoded: ConsumedCellMeta = bincode::deserialize(&meta).unwrap();
+        let decoded = crate::types::decode_consumed_cell_meta(&meta).unwrap();
         assert_eq!(decoded.created_at_block, 1);
         assert_eq!(decoded.consumed_at_block, 22);
-        assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
+        assert_eq!(decoded.consumed_tx_idx, 4);
     }
 
     #[test]
@@ -2903,7 +2881,7 @@ mod tests {
 
         let tx_hash = [0xCCu8; 32];
         let output_index: i16 = 0;
-        let consumed_by = [0xDDu8; 32];
+        let consumed_tx_idx = 3;
 
         let info = LiveCellInfo {
             capacity: 20000,
@@ -2932,7 +2910,7 @@ mod tests {
 
         // Consume via raw-key methods
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell_with_consumer_raw_key(&raw_key, &info, 5, 10, Some(&consumed_by));
+        batch.put_consumed_cell_raw_key(&raw_key, &info, 5, 10, consumed_tx_idx);
         batch.delete_cell_raw_key(&raw_key);
         batch.commit().unwrap();
 
@@ -2947,10 +2925,10 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &raw_key)
             .unwrap()
             .unwrap();
-        let meta: ConsumedCellMeta = bincode::deserialize(&meta_bytes).unwrap();
+        let meta = crate::types::decode_consumed_cell_meta(&meta_bytes).unwrap();
         assert_eq!(meta.created_at_block, 5);
         assert_eq!(meta.consumed_at_block, 10);
-        assert_eq!(meta.consumed_by_tx, Some(consumed_by.to_vec()));
+        assert_eq!(meta.consumed_tx_idx, consumed_tx_idx);
 
         // Verify canonical cell payload is still present in CF_CELLS
         let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();

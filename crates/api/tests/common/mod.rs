@@ -1122,6 +1122,28 @@ pub async fn refresh_pool_mirror_once(
     refresher.refresh_once().await
 }
 
+/// Index `tx_hash` at its canonical position `(block, tx_idx)` (`tx_index` +
+/// `tx_hash_map`, a minimal non-cellbase entry): what a row that points at
+/// that position (a consumed cell's consumer, an activity) resolves to.
+pub fn seed_tx_at(batch: &mut StoreBatch, tx_hash: &[u8], block: i64, tx_idx: i32) {
+    batch.put_tx_hash_map(tx_hash, block, tx_idx);
+    batch.put_tx_index(
+        block,
+        tx_idx,
+        &TxIndexEntry {
+            tx_hash: tx_hash.try_into().expect("32-byte tx hash"),
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+}
+
 pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(

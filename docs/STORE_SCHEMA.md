@@ -46,7 +46,7 @@ requires re-sync from genesis; there is no migration.
 | -------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cells` **(append-only store)**  | tx_hash + output_index (34B)                                                  | LiveCellInfo v2 (see `cells` payload above)                                    | Immutable cell payload store (write-once, content-addressed)                                                                                                                                                                                               |
 | `live_cells`                     | tx_hash + output_index (34B)                                                  | empty                                                                          | Live UTXO pointer set                                                                                                                                                                                                                                      |
-| `consumed_cells`                 | tx_hash + output_index (34B)                                                  | ConsumedCellMeta                                                               | Consumed pointer + consume metadata                                                                                                                                                                                                                        |
+| `consumed_cells`                 | tx_hash + output_index (34B)                                                  | ConsumedCellMeta (20B: created_at_block, consumed_at_block, consumed_tx_idx)   | Consumed marker; the consuming transaction is a pointer, `tx_index` at `(consumed_at_block, consumed_tx_idx)` (see [Pointers instead of hashes](#pointers-instead-of-hashes))                                                                             |
 | `reorg_undo_log_by_block`        | block (8B BE) + seq (8B BE)                                                   | journal entry: cf name, key, previous value                                    | The block journal: each live block's previous values of the `Journal`-class keys it wrote (see [below](#reorg_undo_log_by_block-the-block-journal))                                                                                                        |
 | `block_headers`                  | block_number (8B)                                                             | CachedBlockHeader                                                              | Block header + DAO field cache                                                                                                                                                                                                                             |
 | `block_hash_index`               | block_hash (32B)                                                              | block_number (8B)                                                              | Reverse lookup: hash -> number                                                                                                                                                                                                                             |
@@ -792,6 +792,21 @@ This serialized schema is not backward compatible. Recreate only the network pri
 secondary (default mainnet paths `work/mainnet/data/network` and
 `work/mainnet/data/network-api-secondary`) and crawl again. Do not delete or re-sync the domain or
 append-only chain stores.
+
+## Pointers instead of hashes
+
+A domain row that names a transaction stores the transaction's canonical position
+`(block_number, tx_idx)`, never its hash (`docs/prompts/DATA_DESIGN.md` principle 3); the hash is
+`tx_index` at that position. Readers resolve the positions of a whole page or response at once
+through `crates/ckbadger-store/src/pointer_ops.rs` — one `multi_get` on `tx_index` per call, never a
+point read per row — and a position with no `tx_index` row is an error naming the row kind, the
+position and the `tx_index` key (an inconsistent pointer, never a skipped row). The layouts below
+are bincode / key changes: a store written before them is refused with "re-sync required", there
+is no migration.
+
+| CF | Pointer | Resolved by |
+| --- | --- | --- |
+| `consumed_cells` | value `ConsumedCellMeta { created_at_block: i64, consumed_at_block: i64, consumed_tx_idx: i32 }`, 20 B (was 57 B with the consumer's hash); `decode_consumed_cell_meta` refuses any other width | `CkbadgerStore::consumer_tx_hashes(positions)` |
 
 ## Key Design
 

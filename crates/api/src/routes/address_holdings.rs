@@ -1187,7 +1187,7 @@ fn identity_held_since(
         outpoints.iter().any(|(h, i)| h == hash && *i == index),
         "identity reverse history lacks current outpoint"
     );
-    let mut predecessors = HashMap::new();
+    let mut consumed = Vec::new();
     for (h, i) in outpoints {
         if h == hash && i == index {
             continue;
@@ -1207,14 +1207,7 @@ fn identity_held_since(
                 "identity reverse history contradicts canonical outpoint index: 0x{}:{i}",
                 hex::encode(&h)
             );
-            let consumer = previous
-                .consumed_by_tx
-                .clone()
-                .context("identity history consumed marker lacks consuming transaction")?;
-            ensure!(
-                predecessors.insert(consumer, (h, i, previous)).is_none(),
-                "identity history has multiple predecessors in one transaction"
-            );
+            consumed.push((h, i, previous));
         } else {
             ensure!(
                 state
@@ -1226,6 +1219,21 @@ fn identity_held_since(
             // Reverted immutable payloads may remain; without a canonical marker
             // they prove no step in the current ownership history.
         }
+    }
+    let consumers = state.store.consumer_tx_hashes(
+        &consumed
+            .iter()
+            .map(|(_, _, previous)| previous.consumer_position())
+            .collect::<Vec<_>>(),
+    )?;
+    let mut predecessors = HashMap::new();
+    for (consumer, (h, i, previous)) in consumers.into_iter().zip(consumed) {
+        ensure!(
+            predecessors
+                .insert(consumer.to_vec(), (h, i, previous))
+                .is_none(),
+            "identity history has multiple predecessors in one transaction"
+        );
     }
     let mut tx = hash.to_vec();
     let mut since = info.created_at_block;

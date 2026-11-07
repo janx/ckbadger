@@ -189,10 +189,18 @@ async fn get_cell_graph(
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let tx_info = store.get_tx_location(&hash_c)?;
             let live_cell = store.get_cell(&hash_c, output_idx, &ao_store)?;
-            let consumed_cell = if live_cell.is_none() {
-                store.get_consumed_cell_info(&hash_c, output_idx, &ao_store)?
-            } else {
-                None
+            let consumed_cell = match live_cell {
+                Some(_) => None,
+                None => match store.get_consumed_cell_info(&hash_c, output_idx, &ao_store)? {
+                    Some(info) => {
+                        let [consumer] = store
+                            .consumer_tx_hashes(&[info.consumer_position()])?
+                            .try_into()
+                            .expect("one consumer position resolves to one hash");
+                        Some((info, consumer))
+                    }
+                    None => None,
+                },
             };
             Ok((tx_info, live_cell, consumed_cell))
         })
@@ -212,10 +220,10 @@ async fn get_cell_graph(
         i64,
     ) = match (live_cell, consumed_cell) {
         (Some(info), _) => (info, "live", None, 0),
-        (None, Some(info)) => (
+        (None, Some((info, consumer))) => (
             info.to_positioned_cell_info(),
             "dead",
-            info.consumed_by_tx,
+            Some(consumer.to_vec()),
             info.consumed_at_block,
         ),
         (None, None) => return Err(ApiError::not_found("Cell not found")),

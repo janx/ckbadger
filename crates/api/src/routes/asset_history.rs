@@ -93,21 +93,37 @@ pub(crate) fn canonical_version_at(
     tx_hash: &[u8],
     index: i16,
 ) -> anyhow::Result<CanonicalCellVersion> {
-    let context = format!(
-        "item=0x{} outpoint=0x{}:{index}",
-        hex::encode(id),
-        hex::encode(tx_hash)
-    );
-    ensure!(tx_hash.len() == 32 && index >= 0, "invalid {context}");
-    let live = state
-        .store
-        .get_cell(tx_hash, index, &state.append_only_store)
-        .with_context(|| context.clone())?;
-    let consumed = state
-        .store
-        .get_consumed_cell_info(tx_hash, index, &state.append_only_store)
-        .with_context(|| context.clone())?;
-    let (cell, block, consumed_by_tx, consumed_at_block, consumer_location, is_live) =
+    let [version] = canonical_versions_at(state, id, &[(tx_hash.to_vec(), index)])?
+        .try_into()
+        .map_err(|_| anyhow!("one outpoint must give one canonical version"))?;
+    Ok(version)
+}
+
+/// [`canonical_version_at`] for every outpoint of a response, in order: the
+/// consuming transactions of the consumed ones are resolved from their
+/// positions with one `tx_index` read for the whole slice.
+pub(crate) fn canonical_versions_at(
+    state: &AppState,
+    id: &[u8],
+    outpoints: &[(Vec<u8>, i16)],
+) -> anyhow::Result<Vec<CanonicalCellVersion>> {
+    let mut markers = Vec::with_capacity(outpoints.len());
+    for (tx_hash, index) in outpoints {
+        let index = *index;
+        let context = format!(
+            "item=0x{} outpoint=0x{}:{index}",
+            hex::encode(id),
+            hex::encode(tx_hash)
+        );
+        ensure!(tx_hash.len() == 32 && index >= 0, "invalid {context}");
+        let live = state
+            .store
+            .get_cell(tx_hash, index, &state.append_only_store)
+            .with_context(|| context.clone())?;
+        let consumed = state
+            .store
+            .get_consumed_cell_info(tx_hash, index, &state.append_only_store)
+            .with_context(|| context.clone())?;
         match (live, consumed) {
             (Some(_), Some(_)) => {
                 return Err(anyhow!(
@@ -119,28 +135,63 @@ pub(crate) fn canonical_version_at(
                     "item reverse index has no canonical marker: {context}"
                 ))
             }
-            (Some(c), None) => (c.cell, c.created_at_block, None, None, None, true),
-            (None, Some(c)) => {
-                let consumer = c
-                    .consumed_by_tx
-                    .ok_or_else(|| anyhow!("consumed marker missing consumer: {context}"))?;
-                let (number, consumer_index, _) = state
-                    .store
-                    .get_tx_by_hash(&consumer)?
-                    .ok_or_else(|| anyhow!("consumer missing canonical transaction: {context}"))?;
+            (Some(live), None) => markers.push((context, Ok(live))),
+            (None, Some(consumed)) => markers.push((context, Err(consumed))),
+        }
+    }
+    let consumer_positions: Vec<(i64, i32)> = markers
+        .iter()
+        .filter_map(|(_, marker)| marker.as_ref().err().map(|c| c.consumer_position()))
+        .collect();
+    let mut consumers = state
+        .store
+        .consumer_tx_hashes(&consumer_positions)?
+        .into_iter();
+    let mut versions = Vec::with_capacity(outpoints.len());
+    for ((tx_hash, index), (context, marker)) in outpoints.iter().zip(markers) {
+        let consumer = match &marker {
+            Ok(_) => None,
+            Err(_) => Some(
+                consumers
+                    .next()
+                    .ok_or_else(|| anyhow!("consumer resolution came up short: {context}"))?,
+            ),
+        };
+        versions.push(canonical_version_from_marker(
+            state, tx_hash, *index, &context, marker, consumer,
+        )?);
+    }
+    Ok(versions)
+}
+
+fn canonical_version_from_marker(
+    state: &AppState,
+    tx_hash: &[u8],
+    index: i16,
+    context: &str,
+    marker: Result<ckbadger_store::PositionedCellInfo, ckbadger_store::ConsumedCellInfo>,
+    consumer: Option<[u8; 32]>,
+) -> anyhow::Result<CanonicalCellVersion> {
+    let context = context.to_string();
+    let (cell, block, consumed_by_tx, consumed_at_block, consumer_location, is_live) =
+        match (marker, consumer) {
+            (Ok(c), None) => (c.cell, c.created_at_block, None, None, None, true),
+            (Err(c), Some(consumer)) => {
                 ensure!(
-                    number == c.consumed_at_block && number >= c.created_at_block,
-                    "consumer block mismatch: {context}"
+                    c.consumed_at_block >= c.created_at_block,
+                    "consumer block before creation block: {context}"
                 );
+                let position = c.consumer_position();
                 (
                     c.cell,
                     c.created_at_block,
                     Some(consumer),
                     Some(c.consumed_at_block),
-                    Some((number, consumer_index)),
+                    Some(position),
                     false,
                 )
             }
+            _ => return Err(anyhow!("consumer resolution out of step: {context}")),
         };
     let (tx_block, tx_index, tx) = state
         .store
@@ -237,7 +288,7 @@ pub(crate) fn canonical_versions(
     id: &[u8],
     standard: NftLifecycleStandard,
 ) -> anyhow::Result<Vec<CanonicalCellVersion>> {
-    let mut versions = Vec::new();
+    let mut outpoints = Vec::new();
     for (tx_hash, index) in item_outpoints(state, id, standard)? {
         let context = format!(
             "item=0x{} outpoint=0x{}:{index}",
@@ -258,8 +309,9 @@ pub(crate) fn canonical_versions(
             forward.as_deref() == Some(id),
             "item reverse history disagrees with forward outpoint index: {context}"
         );
-        versions.push(canonical_version_at(state, id, &tx_hash, index)?);
+        outpoints.push((tx_hash, index));
     }
+    let mut versions = canonical_versions_at(state, id, &outpoints)?;
     versions.sort_by_key(|v| {
         (
             v.response.block_number,
