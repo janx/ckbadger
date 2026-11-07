@@ -394,6 +394,11 @@ pub struct ScriptVersionDeploymentResponse {
     pub consumed_at_block: Option<i64>,
     pub consumed_by_tx: Option<String>,
     pub custody: ScriptCustodyResponse,
+    /// The consuming transaction's index in `consumed_at_block`, from the
+    /// consumed marker's position (the script history orders its events by
+    /// position). Not served.
+    #[serde(skip)]
+    pub consumed_tx_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1688,6 +1688,7 @@ fn script_version_deployments(
                 consumed_at_block: consumed.as_ref().map(|c| c.consumed_at_block),
                 consumed_by_tx: consumer.map(|hash| format!("0x{}", hex::encode(hash))),
                 custody,
+                consumed_tx_index: consumed.as_ref().map(|c| c.consumer_position().1),
             })
         })
         .collect()
@@ -2332,13 +2333,14 @@ fn script_history(
                             deployment.code_cell_tx_hash, deployment.code_cell_output_index
                         ))
                     })?;
-                    let consumed_tx_index = required_script_tx_index(
-                        state,
-                        consuming_tx,
-                        block_number,
-                        "code cell consumption",
-                        None,
-                    )?;
+                    // The consumed marker's own position: the consuming
+                    // transaction's hash was resolved from it.
+                    let consumed_tx_index = deployment.consumed_tx_index.ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "consumed code cell {}:{} lacks its consuming transaction's position",
+                            deployment.code_cell_tx_hash, deployment.code_cell_output_index
+                        ))
+                    })?;
                     if (block_number, consumed_tx_index) <= (deployment.created_at_block, tx_index)
                     {
                         return Err(ApiError::internal(format!("code cell {}:{} consumption at ({block_number},{consumed_tx_index}) does not follow creation at ({},{tx_index})", deployment.code_cell_tx_hash, deployment.code_cell_output_index, deployment.created_at_block)));
