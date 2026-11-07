@@ -955,11 +955,15 @@ impl BatchWriter {
                     let mut old_agg =
                         state.get_cluster_aggregate(self.store.as_ref(), old_cluster_id)?;
                     if old_agg.live_count <= 0 {
-                        bail!(
-                            "spore aggregate live_count underflow on cluster move: cluster_id=0x{}, live_count={}",
-                            hex::encode(old_cluster_id),
-                            old_agg.live_count
-                        );
+                        // The aggregate no longer counts a spore its rows
+                        // say is live here: rebuild-required (B-7, F2).
+                        return Err(anyhow::Error::new(
+                            crate::lifecycle::RebuildRequiredError::new(format!(
+                                "spore aggregate live_count underflow: cluster_id=0x{}, current={}, delta=-1, context=cluster move old cluster",
+                                hex::encode(old_cluster_id),
+                                old_agg.live_count
+                            )),
+                        ));
                     }
                     old_agg.live_count -= 1;
                     self.adjust_cluster_tier_count(
@@ -1298,11 +1302,15 @@ impl BatchWriter {
             if let Some(ref cid) = cluster_id {
                 let mut agg = state.get_cluster_aggregate(self.store.as_ref(), cid)?;
                 if agg.live_count <= 0 {
-                    bail!(
-                        "spore aggregate live_count underflow on consume: cluster_id=0x{}, live_count={}",
-                        hex::encode(cid),
-                        agg.live_count
-                    );
+                    // The aggregate no longer counts a spore its rows say is
+                    // live here: rebuild-required (B-7, F2).
+                    return Err(anyhow::Error::new(
+                        crate::lifecycle::RebuildRequiredError::new(format!(
+                            "spore aggregate live_count underflow: cluster_id=0x{}, current={}, delta=-1, context=consume spore",
+                            hex::encode(cid),
+                            agg.live_count
+                        )),
+                    ));
                 }
                 agg.live_count -= 1;
                 self.adjust_cluster_tier_count(cid, &mut agg, old_tier, -1, "consume spore")?;
@@ -2519,6 +2527,87 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("live_count underflow"));
+    }
+
+    /// B-7 (F2): a cluster's `live_count` going negative is the same
+    /// invariant class as its tier counts: rebuild-required, with the
+    /// cluster, the current count, the delta and the path in the message.
+    fn seed_spore_in_cluster_with_no_live_count(
+        store: &CkbadgerStore,
+        cluster_id: &[u8],
+        spore_id: &[u8],
+        owner: &[u8],
+    ) {
+        let mut seed = StoreBatch::new(store);
+        seed.put_spore(spore_id, &make_spore_entry(cluster_id, owner));
+        seed.put_cluster_aggregate(
+            cluster_id,
+            &ClusterAggregate {
+                total_count: 1,
+                live_count: 0,
+                owner_count: 1,
+                pure_ckb_count: 1,
+                ..Default::default()
+            },
+        );
+        seed.put_cluster_owner_count(cluster_id, owner, 1);
+        seed.commit().unwrap();
+    }
+
+    #[test]
+    fn a_live_count_underflow_on_cluster_move_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let (old_cluster, new_cluster) = (vec![0x81; 32], vec![0x82; 32]);
+        let spore_id = vec![0x83; 32];
+        seed_spore_in_cluster_with_no_live_count(&store, &old_cluster, &spore_id, &[0x84; 32]);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let err = writer
+            .insert_spore_cell(
+                &make_parsed_spore(&spore_id, &new_cluster, &[0x85; 32]),
+                &[0x05; 32],
+                0,
+                12,
+                10_800_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(text.contains("live_count underflow"), "{text}");
+        assert!(text.contains(&hex::encode(&old_cluster)), "{text}");
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains("cluster move"), "{text}");
+    }
+
+    #[test]
+    fn a_live_count_underflow_on_consume_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let cluster_id = vec![0x91; 32];
+        let spore_id = vec![0x92; 32];
+        seed_spore_in_cluster_with_no_live_count(&store, &cluster_id, &spore_id, &[0x93; 32]);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let err = writer
+            .consume_spore(&spore_id, 100, &[0xAA; 32], &mut batch, &mut state)
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(text.contains("live_count underflow"), "{text}");
+        assert!(text.contains(&hex::encode(&cluster_id)), "{text}");
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains("consume spore"), "{text}");
     }
 
     #[test]
