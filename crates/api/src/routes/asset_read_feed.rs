@@ -39,11 +39,17 @@ fn item_feed(
         .iter()
         .map(|row| (format!("0x{}", hex::encode(&row.tx_hash)), row))
         .collect();
-    let scope = asset_feed::canonical_scope(
-        &state.store,
-        lifecycle.iter().map(|row| row.tx_hash.clone()),
-    )
-    .map_err(|e| ApiError::internal(format!("item=0x{}: {e:#}", hex::encode(&id))))?;
+    // The lifecycle rows are located already: the scope is their positions
+    // and entries, newest first.
+    let mut scope: Vec<asset_feed::AssetTransaction> = lifecycle
+        .iter()
+        .map(|row| asset_feed::AssetTransaction {
+            block_number: row.block_number,
+            tx_index: row.tx_index,
+            entry: row.entry.clone(),
+        })
+        .collect();
+    asset_feed::sort_scope(&mut scope);
     // An m-NFT token's class: its mint row names the class cell it carries.
     let mnft_class = match standard {
         NftLifecycleStandard::MnftToken => Some(

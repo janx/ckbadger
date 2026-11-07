@@ -2194,9 +2194,14 @@ fn asset_action_name(action: ckbadger_store::AssetAction) -> &'static str {
 /// What one lifecycle transaction means for one item. Computed once, here, and
 /// shared by the lifecycle action list and every item feed row's
 /// `itemContext`, so readers never re-derive it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) struct NftLifecycleRow {
     pub(super) tx_hash: Vec<u8>,
+    /// The transaction's canonical position and `tx_index` entry, resolved
+    /// once for every lifecycle transaction of the item.
+    pub(super) block_number: i64,
+    pub(super) tx_index: i32,
+    pub(super) entry: ckbadger_store::types::TxIndexEntry,
     /// The collection-level action name ("mint", "transfer", "update", ...).
     pub(super) action: &'static str,
     /// The item's own protocol actions in this transaction, in protocol
@@ -2504,16 +2509,34 @@ fn item_txs_protocol_actions(
     item_id: &[u8],
     tx_hashes: &[Vec<u8>],
 ) -> Result<HashMap<Vec<u8>, Vec<ckbadger_store::types::ProtocolAction>>, ApiRouteError> {
-    let item = |e: anyhow::Error| {
+    let rows = locate_item_txs(state, item_id, tx_hashes)?;
+    item_located_txs_protocol_actions(state, item_id, &rows)
+}
+
+/// A lifecycle transaction of an item: its hash, canonical position and
+/// `tx_index` entry.
+type LocatedItemTx = (Vec<u8>, i64, i32, ckbadger_store::types::TxIndexEntry);
+
+fn item_read_error(item_id: &[u8]) -> impl Fn(anyhow::Error) -> ApiRouteError + Copy + '_ {
+    move |e: anyhow::Error| {
         ApiError::internal(format!(
             "lifecycle transactions of item 0x{}: {e:#}",
             hex::encode(item_id)
         ))
-    };
-    let rows = state
+    }
+}
+
+/// The canonical position and entry of each of item `item_id`'s lifecycle
+/// transactions `tx_hashes`, in order: one `tx_hash_map` + `tx_index` read.
+fn locate_item_txs(
+    state: &AppState,
+    item_id: &[u8],
+    tx_hashes: &[Vec<u8>],
+) -> Result<Vec<LocatedItemTx>, ApiRouteError> {
+    state
         .store
         .get_txs_by_hash_batch(tx_hashes)
-        .map_err(item)?
+        .map_err(item_read_error(item_id))?
         .into_iter()
         .map(|(hash, row)| {
             row.map(|(block, index, entry)| (hash.clone(), block, index, entry))
@@ -2525,7 +2548,17 @@ fn item_txs_protocol_actions(
                     ))
                 })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
+
+/// [`item_txs_protocol_actions`] of transactions already located: one
+/// `block_headers` read and one `activities` read for all of them.
+fn item_located_txs_protocol_actions(
+    state: &AppState,
+    item_id: &[u8],
+    rows: &[LocatedItemTx],
+) -> Result<HashMap<Vec<u8>, Vec<ckbadger_store::types::ProtocolAction>>, ApiRouteError> {
+    let item = item_read_error(item_id);
     let mut blocks: Vec<i64> = rows.iter().map(|(_, block, _, _)| *block).collect();
     blocks.sort_unstable();
     blocks.dedup();
@@ -2640,6 +2673,9 @@ pub(super) fn collect_nft_item_lifecycle_actions(
 
     let mut lifecycle_txs: HashSet<Vec<u8>> = created_outputs.keys().cloned().collect();
     lifecycle_txs.extend(consumed_txs.iter().cloned());
+    // Every lifecycle transaction located once; the feeds use the position.
+    let hashes: Vec<Vec<u8>> = lifecycle_txs.into_iter().collect();
+    let located = locate_item_txs(state, nft_id_bytes, &hashes)?;
 
     // Only `.cell` and `.bit` name items in their protocol actions: one
     // batched read of every lifecycle transaction's actions.
@@ -2648,13 +2684,12 @@ pub(super) fn collect_nft_item_lifecycle_actions(
         NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
     );
     let mut protocol_actions_by_tx = if names_items {
-        let hashes: Vec<Vec<u8>> = lifecycle_txs.iter().cloned().collect();
-        item_txs_protocol_actions(state, nft_id_bytes, &hashes)?
+        item_located_txs_protocol_actions(state, nft_id_bytes, &located)?
     } else {
         HashMap::new()
     };
-    let mut rows = Vec::with_capacity(lifecycle_txs.len());
-    for tx_hash in lifecycle_txs {
+    let mut rows = Vec::with_capacity(located.len());
+    for (tx_hash, block_number, tx_index, entry) in located {
         let protocol_actions = if names_items {
             protocol_actions_by_tx
                 .remove(&tx_hash)
@@ -2673,6 +2708,9 @@ pub(super) fn collect_nft_item_lifecycle_actions(
         )?;
         rows.push(NftLifecycleRow {
             tx_hash,
+            block_number,
+            tx_index,
+            entry,
             action: asset_action_name(meaning.action),
             protocol_actions: meaning.protocol_actions,
             ring_relink: meaning.ring_relink,
@@ -2691,32 +2729,18 @@ pub(super) fn build_nft_item_activities_response(
     cursor: Option<(i64, i32)>,
     action_filter: Option<&str>,
 ) -> Result<CursorPaginatedResponse<MnftItemActivityResponse>, ApiRouteError> {
+    // The lifecycle rows carry each transaction's position and entry.
     let lifecycle_rows =
         collect_nft_item_lifecycle_actions(state, nft_id_bytes, lifecycle_standard)?;
-    let tx_hashes: Vec<Vec<u8>> = lifecycle_rows
-        .iter()
-        .map(|row| row.tx_hash.clone())
-        .collect();
-    let tx_batch_rows = state
-        .store
-        .get_txs_by_hash_batch(&tx_hashes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut tx_rows_by_hash: HashMap<Vec<u8>, (i64, i32, ckbadger_store::types::TxIndexEntry)> =
-        HashMap::with_capacity(tx_batch_rows.len());
-    for (tx_hash, tx_row_opt) in tx_batch_rows {
-        let tx_row = tx_row_opt.ok_or_else(|| {
-            ApiError::internal(format!(
-                "nft lifecycle tx not found in tx index: nft_id=0x{}, tx_hash=0x{}",
-                hex::encode(nft_id_bytes),
-                hex::encode(&tx_hash)
-            ))
-        })?;
-        tx_rows_by_hash.insert(tx_hash, tx_row);
-    }
 
     let mut rows = Vec::with_capacity(lifecycle_rows.len());
     for NftLifecycleRow {
-        tx_hash, action, ..
+        tx_hash,
+        block_number,
+        tx_index,
+        entry: tx_entry,
+        action,
+        ..
     } in lifecycle_rows
     {
         if action_filter
@@ -2725,14 +2749,6 @@ pub(super) fn build_nft_item_activities_response(
         {
             continue;
         }
-        let (block_number, tx_index, tx_entry) =
-            tx_rows_by_hash.get(&tx_hash).cloned().ok_or_else(|| {
-                ApiError::internal(format!(
-                    "nft lifecycle tx lookup missing from batch result: nft_id=0x{}, tx_hash=0x{}",
-                    hex::encode(nft_id_bytes),
-                    hex::encode(&tx_hash)
-                ))
-            })?;
 
         rows.push(MnftItemActivityResponse {
             tx_hash: format!("0x{}", hex::encode(&tx_hash)),
