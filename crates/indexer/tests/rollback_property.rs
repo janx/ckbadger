@@ -1989,26 +1989,27 @@ async fn plain_transfers_single_block_batches_roll_back_byte_equal() {
 }
 
 /// C-3: the activity address rows of the buckets behind the rollback
-/// coverage floor are deleted by the live batch that moves the floor past
-/// them, in its first block's scope, with the hour they are pruned to. A
-/// rollback of that block writes both back; the replay prunes them again and
-/// ends where the first sync did.
+/// coverage floor are deleted by the live batches that move the floor past
+/// them, one bucket a batch (finding 10), each in its batch's first block's
+/// scope with the cursor it moves. A rollback of those blocks writes both
+/// back; the replay prunes them again and ends where the first sync did.
 ///
 /// The floor (and the journal rows its advance pruned) never moves back, so
 /// the journal and the coverage contract are outside the rollback comparison,
-/// and the journal outside the replay one (the replay's first batch, not the
-/// original's second, does the prune).
+/// and the journal outside the replay one.
 #[tokio::test]
 async fn activity_address_rows_behind_the_coverage_floor_are_pruned_and_restored() {
     use keys::ActivityBucketKind::{Daily, Hourly};
     // Ten minutes a block from 2026-09-22 09:00 UTC+8; block 90 opens
-    // 2026-09-23. Batches of 90 to 1079, then 1080-1179 (floor 79, 22:10 on
-    // the first day) and 1180-1199 (floor 179, 14:50 on the second): the last
-    // batch prunes the first day and the hours 22 to 13 between the floors.
+    // 2026-09-23. Batches of 90 to 1079 (no floor yet), then one block a
+    // batch: batch b commits floor b - 1001, and prunes the oldest final
+    // bucket, so the 34 buckets behind the last floor (198, 18:00 on the
+    // second day: the first day's hours 09 to 23 and the day, the second
+    // day's hours 00 to 17) are gone well before the tip. The batches above
+    // the fork 1175 pruned the second day's hours 14 to 17.
     let chain = long_transfer_chain(1_200);
     let mut plan = chunked_plan(1_080, 90);
-    plan.push(1_080..=1_179);
-    plan.push(1_180..=1_199);
+    plan.extend((1_080..=1_199).map(|block| block..=block));
     let (tip, fork) = (1_199usize, 1_175usize);
     let without_journal = |mut dump: Dump| {
         dump.retain(|(cf, key), _| {
@@ -2047,8 +2048,8 @@ async fn activity_address_rows_behind_the_coverage_floor_are_pruned_and_restored
     let rolled = open_stores();
     sync_prefix(&rolled, &chain, &plan, 0, tip).await;
     let at_tip = dump_domain(&rolled.domain);
-    let floor_hour = hour_of(&rolled.domain, 179);
-    assert_eq!(floor_hour, "2026092314");
+    let floor_hour = hour_of(&rolled.domain, 198);
+    assert_eq!(floor_hour, "2026092318");
     assert_eq!(
         rolled
             .domain
@@ -2074,36 +2075,32 @@ async fn activity_address_rows_behind_the_coverage_floor_are_pruned_and_restored
     );
 
     reorg_to(&rolled.indexer, fork as i64).await.unwrap();
-    // The rollback undid block 1180's prune: the first day and the hours
-    // between the two floors have their rows again.
+    // The rollback undid the prunes of blocks 1181, 1187, 1193 and 1199:
+    // the second day's hours 14 to 17 have their rows again (and the rows
+    // blocks 1176 to 1199 wrote are gone), and the cursor is back on hour 14
+    // (block 1175's prune left it there).
     let restored = address_buckets(&rolled.domain);
-    for bucket in [
-        (
-            keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW,
-            "20260922".to_string(),
-        ),
-        (
-            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
-            "2026092222".to_string(),
-        ),
-        (
-            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
-            "2026092313".to_string(),
-        ),
-    ] {
-        assert!(
-            restored.contains(&bucket),
-            "{bucket:?} restored: {restored:?}"
-        );
-        assert!(!kept.contains(&bucket));
-    }
+    let back: Vec<(u8, String)> = restored
+        .iter()
+        .filter(|bucket| !kept.contains(bucket))
+        .cloned()
+        .collect();
+    assert_eq!(
+        back,
+        (14..=17)
+            .map(|hour| (
+                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+                format!("20260923{hour}")
+            ))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         rolled
             .domain
             .get_activity_addr_row_floor()
             .unwrap()
             .as_deref(),
-        Some(hour_of(&rolled.domain, 79).as_str())
+        Some("2026092314")
     );
 
     let reference = open_stores();

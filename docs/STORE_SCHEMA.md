@@ -675,12 +675,15 @@ memory, kept only while a block can still reach the bucket (C-3):
 - **Retention** (`BatchWriter::stage_activity_addr_retention`, every live batch, in its first
   block's scope): every block above the rollback coverage floor has a chain time at or after the
   floor block's, and no rollback goes below the floor, so every bucket before the floor block's
-  UTC+8 hour (and day) is final. The batch deletes those buckets' rows (journaled) and records the
-  hour it pruned to in `sync_meta` → `activity_addr_row_floor` (journaled too; the next batch
-  scans only from there). A rollback of the pruning block restores the rows and the older record;
-  the next batch prunes them again. The floor sits `ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
-  about 2.7 hours) below the committed tip, so steady state is the current UTC+8 day's rows (plus
-  the previous day's for the first ~3 hours after midnight) and the last ~4 hours' rows.
+  UTC+8 hour (and day) is final. Each batch deletes the rows of one such bucket, the oldest
+  (journaled), and moves the cursor `sync_meta` → `activity_addr_row_floor` one bucket on
+  (journaled too; the next batch seeks only from there): a day goes as its own step, the batch
+  after its last hour with rows. So a UTC+8 midnight journals one day's rows in one block, and a
+  store that was offline catches up over many batches. A rollback of a pruning block restores the
+  rows and the older cursor; the next batch prunes them again. The floor sits
+  `ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks, about 2.7 hours) below the committed tip, so
+  steady state is the current UTC+8 day's rows (plus the previous day's for the first ~3 hours
+  after midnight) and the last ~4 hours' rows.
 - **Bulk** keeps each bucket's set in memory and drops it when the bucket seals (its end at or
   below the chain-time watermark: no later block reaches it, and bulk records no journal), writing
   only the count row. At finalize it writes the rows of the buckets still open — the handoff tip's
