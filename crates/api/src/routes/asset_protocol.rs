@@ -328,7 +328,10 @@ fn dotcell_record_edits(
         })?;
         transitions.push((version, previous.manager_hash20, tx_hash));
     }
-    let hashes: Vec<Vec<u8>> = transitions.iter().map(|(_, _, hash)| hash.clone()).collect();
+    let hashes: Vec<Vec<u8>> = transitions
+        .iter()
+        .map(|(_, _, hash)| hash.clone())
+        .collect();
     let own = super::assets::dotcell_own_actions(state, id, &hashes)?;
     let mut edits: Vec<(&DotCellVersionFacts, [u8; 20])> = Vec::new();
     for (version, editor, tx_hash) in transitions {

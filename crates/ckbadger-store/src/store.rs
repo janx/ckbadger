@@ -5877,7 +5877,10 @@ mod tests {
             "hash (32B) + block (8B BE) + outpoint (35B) = 74B",
             74
         ));
-        assert!(!states_total("hash (32B) + block + outpoint (34B) = 74B", 74));
+        assert!(!states_total(
+            "hash (32B) + block + outpoint (34B) = 74B",
+            74
+        ));
         assert!(states_total(
             "block_number (8B BE) + tx_index (4B BE) = 12B, the canonical slot",
             12

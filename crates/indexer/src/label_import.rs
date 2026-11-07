@@ -580,13 +580,14 @@ fn prepare_token_label(
     })?;
     // Metadata, not node data: an unknown label is a collected entry error,
     // checked before the script hash reads it.
-    let hash_type = ckbadger_common::hash_type_from_label(&deployment.hash_type).ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid type script hash_type `{}` for token {}",
-            deployment.hash_type,
-            token.symbol
-        )
-    })?;
+    let hash_type =
+        ckbadger_common::hash_type_from_label(&deployment.hash_type).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid type script hash_type `{}` for token {}",
+                deployment.hash_type,
+                token.symbol
+            )
+        })?;
     Ok(PreparedTokenLabel {
         type_hash: compute_type_hash(deployment)?,
         hash_type,

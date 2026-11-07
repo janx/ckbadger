@@ -629,11 +629,7 @@ impl CkbadgerStore {
                 Ok((
                     block,
                     tx_idx,
-                    ObjectCollectionActivityEntry::from_stored(
-                        actions,
-                        entry,
-                        header.hash.clone(),
-                    ),
+                    ObjectCollectionActivityEntry::from_stored(actions, entry, header.hash.clone()),
                 ))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -1517,7 +1513,10 @@ mod tests {
         assert_eq!(store.read_call_counts(), (0, 2), "tx_index + block_headers");
         assert_eq!(rows.len(), 3);
         assert_eq!(
-            entries.iter().map(|entry| entry.tx_hash).collect::<Vec<_>>(),
+            entries
+                .iter()
+                .map(|entry| entry.tx_hash)
+                .collect::<Vec<_>>(),
             vec![[0x11; 32], [0x10; 32], [0x12; 32]],
             "the page's tx_index entries, in row order"
         );

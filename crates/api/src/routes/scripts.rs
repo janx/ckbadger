@@ -642,11 +642,11 @@ fn reference_custody(
             // A cell whose type script is the consensus Type ID script: the
             // one rule, `keys::is_type_id_script`.
             let is_type_id_cell = |cell: &ckbadger_store::PositionedCellInfo| {
-                cell.type_code_hash
-                    .zip(cell.type_hash_type)
-                    .is_some_and(|(code_hash, hash_type)| {
+                cell.type_code_hash.zip(cell.type_hash_type).is_some_and(
+                    |(code_hash, hash_type)| {
                         ckbadger_store::keys::is_type_id_script(&code_hash, hash_type)
-                    })
+                    },
+                )
             };
             let Some(current) = current else {
                 if cells.iter().any(|(_, _, cell)| is_type_id_cell(cell)) {

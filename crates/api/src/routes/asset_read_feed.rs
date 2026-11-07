@@ -174,25 +174,22 @@ fn collection_feed(
     // headers and each row's `tx_index` entry, so the rows are the page's
     // transactions as they stand (rows keyed by position are canonical by
     // construction) without a second lookup by hash.
-    let (mut rows, headers, mut entries) = assets::nft_collection_activity_page(
-        &state.store,
-        &id,
-        page_size + 1,
-        cursor,
-        None,
-    )
-    .map_err(context)?;
+    let (mut rows, headers, mut entries) =
+        assets::nft_collection_activity_page(&state.store, &id, page_size + 1, cursor, None)
+            .map_err(context)?;
     let more = rows.len() > page_size;
     rows.truncate(page_size);
     entries.truncate(page_size);
     let page: Vec<asset_feed::AssetTransaction> = rows
         .iter()
         .zip(entries)
-        .map(|((block_number, tx_index, _), entry)| asset_feed::AssetTransaction {
-            block_number: *block_number,
-            tx_index: *tx_index,
-            entry,
-        })
+        .map(
+            |((block_number, tx_index, _), entry)| asset_feed::AssetTransaction {
+                block_number: *block_number,
+                tx_index: *tx_index,
+                entry,
+            },
+        )
         .collect();
     let next = if more {
         page.last().map(asset_feed::feed_cursor)
