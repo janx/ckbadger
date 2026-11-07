@@ -1,6 +1,6 @@
 //! Activity query operations.
 
-use crate::global_bucket::{classify_global_bucket, GlobalBucket};
+use crate::global_bucket::GlobalBucket;
 use crate::keys;
 use crate::store::*;
 use crate::types::*;
@@ -379,32 +379,15 @@ impl CkbadgerStore {
         limit: usize,
     ) -> anyhow::Result<Vec<TxActions>> {
         let rows = self.list_stored_tx_actions_page_by_bucket(bucket, cursor, limit)?;
-        self.complete_tx_actions(rows)?
-            .0
-            .into_iter()
-            .map(|actions| {
-                let (block_num, tx_idx) = (actions.block_number, actions.tx_index);
-                let classified = classify_global_bucket(&actions);
-                if classified != Some(bucket) {
-                    anyhow::bail!(
-                        "tx_actions_by_bucket row disagrees with its tx actions: bucket={}, classified={:?}, block_num={}, tx_idx={}, tx_hash=0x{}",
-                        bucket.as_filter(),
-                        classified.map(|b| b.as_filter()),
-                        block_num,
-                        tx_idx,
-                        bytes_to_hex(&actions.tx_hash)
-                    );
-                }
-                Ok(actions)
-            })
-            .collect()
+        Ok(self.complete_tx_actions(rows)?.0)
     }
 
     /// The stored `activities` rows of one page of a global bucket, newest
     /// first, strictly older than `cursor`: what the transactions did, not
     /// completed (no `tx_index` or `block_headers` read), for a reader that
-    /// only counts their actions. A bucket row without its `activities` row
-    /// fails with its position.
+    /// only counts their actions. A bucket row without its `activities` row,
+    /// or whose row does not classify into this bucket, is an index invariant
+    /// violation and fails with its position.
     pub fn list_stored_tx_actions_page_by_bucket(
         &self,
         bucket: GlobalBucket,
@@ -426,6 +409,16 @@ impl CkbadgerStore {
                     tx_idx
                 )
             })?;
+            let classified = crate::global_bucket::classify_stored_global_bucket(&stored);
+            anyhow::ensure!(
+                classified == bucket,
+                "tx_actions_by_bucket row disagrees with its tx actions: bucket={}, classified={}, \
+                 block_num={}, tx_idx={}",
+                bucket.as_filter(),
+                classified.as_filter(),
+                block_num,
+                tx_idx
+            );
             rows.push((block_num, tx_idx, stored));
         }
         Ok(rows)
@@ -1413,6 +1406,43 @@ mod global_bucket_tests {
         );
     }
 
+    /// Delta review N3: the stored bucket page — what the DAO 24 h counts
+    /// read — checks that each row classifies into its bucket, as the
+    /// completed page did.
+    #[test]
+    fn stored_bucket_page_fails_on_a_row_of_another_bucket() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        // A token transaction whose bucket row says DAO.
+        super::tests::seed_activity(&mut batch, &bucket_fixture(77, 3, TAG_TOKEN));
+        batch.commit().unwrap();
+        store
+            .put_cf(
+                store.cf_tx_actions_by_bucket(),
+                &keys::encode_tx_actions_by_bucket_key(GlobalBucket::Dao, 77, 3),
+                &[],
+            )
+            .unwrap();
+        for result in [
+            store
+                .list_stored_tx_actions_page_by_bucket(GlobalBucket::Dao, None, 10)
+                .map(|_| ()),
+            store
+                .list_tx_actions_page_by_bucket(GlobalBucket::Dao, None, 10)
+                .map(|_| ()),
+        ] {
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains(
+                    "tx_actions_by_bucket row disagrees with its tx actions: bucket=dao, \
+                     classified=token, block_num=77, tx_idx=3"
+                ),
+                "{err}"
+            );
+        }
+    }
+
     #[test]
     fn bucket_page_fails_with_position_on_a_row_without_tx_actions() {
         let dir = TempDir::new().unwrap();
@@ -1455,7 +1485,7 @@ mod global_bucket_tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("bucket=object, classified=Some(\"token\"), block_num=12, tx_idx=0"),
+            err.contains("bucket=object, classified=token, block_num=12, tx_idx=0"),
             "{err}"
         );
     }
