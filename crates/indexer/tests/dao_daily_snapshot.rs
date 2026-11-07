@@ -21,9 +21,7 @@ fn rollback_to_100(store: &Arc<CkbadgerStore>, tip: i64) {
 }
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
     // Real consensus secondary_epoch_reward (mainnet and testnet agree). The
     // DAO snapshot recompute needs it for the per-block miner secondary split.
     store

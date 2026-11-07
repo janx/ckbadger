@@ -35,19 +35,12 @@ fn rollback_fixture(
 }
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_domain_temp().unwrap())
 }
 
 fn setup_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
-    let domain_dir = tempfile::tempdir().unwrap();
-    let append_dir = tempfile::tempdir().unwrap();
-    let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-    let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-    std::mem::forget(domain_dir);
-    std::mem::forget(append_dir);
+    let domain = Arc::new(CkbadgerStore::open_domain_temp().unwrap());
+    let append = Arc::new(CkbadgerStore::open_append_only_temp().unwrap());
     (domain, append)
 }
 

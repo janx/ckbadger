@@ -1084,7 +1084,8 @@ async fn fork_rows_and_detail_blocks_name_listed_mining_pools_only() {
         ),
     )
     .unwrap();
-    let (app, _, orphan) = d7_switch_fixture(Some(dir.keep())).await;
+    // `dir` lives to the end of the test, past the router build that reads it.
+    let (app, _, orphan) = d7_switch_fixture(Some(dir.path().to_path_buf())).await;
 
     let (status, json) = get_json(&app, &d7(10, orphan.hash().as_slice())).await;
     assert_eq!(status, StatusCode::OK, "{json}");

@@ -67,10 +67,7 @@ pub async fn mount_consensus_rpc(server: &MockServer, result: serde_json::Value)
 }
 
 pub fn test_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 /// Seed a synced-chain genesis economic baseline into a domain store.
@@ -228,10 +225,7 @@ pub fn seed_sparse_daily_chart_history(store: &Arc<CkbadgerStore>) {
 }
 
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 pub fn split_test_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
@@ -1690,9 +1684,7 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
         CrawlCandidate, DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
         StagedProbeOutcome,
     };
-    let dir = tempfile::tempdir().expect("tmp");
-    let s = std::sync::Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir); // keep the temp dir alive for the store's lifetime (mirrors test_store())
+    let s = std::sync::Arc::new(CkbadgerStore::open_test_network_temp().unwrap());
     let mut node = NodeRecord {
         own_addrs: vec!["/ip4/1.2.3.4/tcp/8115".into()],
         client_version: "0.119.0".into(),
