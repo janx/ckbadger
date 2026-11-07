@@ -5432,14 +5432,32 @@ mod tests {
 
     /// C-5: `docs/STORE_SCHEMA.md`'s "Column Families" table is the reference
     /// for every column family. It lists exactly the CFs of `CF_SPECS`, each
-    /// once; its title states the per-store counts of `CF_SPECS`; and every
-    /// fixed-width key it states is the width the encoder writes.
+    /// once, each marked with its spec's store (`**(append-only store)**`,
+    /// `**(network store)**`, unmarked = domain); its title states the
+    /// per-store counts of `CF_SPECS`; and every fixed-width key states the
+    /// total width the encoder writes (`= NB` after a key of several
+    /// components, `(NB` on a one-component key).
     #[test]
     fn store_schema_cf_table_matches_cf_specs() {
         const DOC: &str = include_str!("../../../docs/STORE_SCHEMA.md");
         let rows = store_schema_cf_table(DOC);
 
-        let mut doc_names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
+        let wrong_store: Vec<String> = rows
+            .iter()
+            .filter_map(|(name, store, _)| {
+                let spec = cf_spec(name)?;
+                (spec.store != *store).then(|| {
+                    format!("{name}: marked {store:?}, CF_SPECS says {:?}", spec.store)
+                })
+            })
+            .collect();
+        assert!(
+            wrong_store.is_empty(),
+            "STORE_SCHEMA.md store markers differ from CF_SPECS:\n{}",
+            wrong_store.join("\n")
+        );
+
+        let mut doc_names: Vec<&str> = rows.iter().map(|(name, _, _)| *name).collect();
         doc_names.sort_unstable();
         let listed = doc_names.len();
         doc_names.dedup();
@@ -5522,15 +5540,16 @@ mod tests {
             (CF_REORG_EVENTS, keys::REORG_EVENT_KEY_SIZE),
             (CF_TX_INDEX, keys::encode_tx_slot_key(0, 0).len()),
             (CF_TX_GROUP_CYCLES, keys::encode_tx_slot_key(0, 0).len()),
+            (CF_OBJECT_OUTPOINTS, keys::SPORE_OUTPOINT_KEY_SIZE),
         ];
         let wrong: Vec<String> = fixed_widths
             .iter()
             .filter_map(|(cf, width)| {
-                let (_, key) = rows
+                let (_, _, key) = rows
                     .iter()
-                    .find(|(name, _)| name == cf)
+                    .find(|(name, _, _)| name == cf)
                     .unwrap_or_else(|| panic!("{cf} is not in the table"));
-                (!states_width(key, *width)).then(|| format!("{cf}: {width}B, table says `{key}`"))
+                (!states_total(key, *width)).then(|| format!("{cf}: {width}B, table says `{key}`"))
             })
             .collect();
         assert!(
@@ -5540,9 +5559,9 @@ mod tests {
         );
     }
 
-    /// `(cf name, key cell)` of every row of STORE_SCHEMA.md's "Column
-    /// Families" table.
-    fn store_schema_cf_table(doc: &str) -> Vec<(&str, &str)> {
+    /// `(cf name, store marker, key cell)` of every row of STORE_SCHEMA.md's
+    /// "Column Families" table.
+    fn store_schema_cf_table(doc: &str) -> Vec<(&str, CfStore, &str)> {
         let mut lines = doc
             .lines()
             .skip_while(|line| *line != "## Column Families")
@@ -5555,13 +5574,19 @@ mod tests {
             .take_while(|line| line.starts_with('|'))
             .map(|line| {
                 let cells: Vec<&str> = line.split(" | ").collect();
-                let name = cells[0]
-                    .trim_start_matches('|')
-                    .trim()
+                let name_cell = cells[0].trim_start_matches('|').trim();
+                let name = name_cell
                     .strip_prefix('`')
                     .and_then(|rest| rest.split('`').next())
                     .unwrap_or_else(|| panic!("a CF table row without a `name`: {line}"));
-                (name, cells.get(1).map_or("", |key| key.trim()))
+                let store = if name_cell.contains("**(append-only store)**") {
+                    CfStore::AppendOnly
+                } else if name_cell.contains("**(network store)**") {
+                    CfStore::Network
+                } else {
+                    CfStore::Domain
+                };
+                (name, store, cells.get(1).map_or("", |key| key.trim()))
             })
             .collect()
     }
@@ -5664,17 +5689,23 @@ mod tests {
     fn store_schema_table_helpers_read_names_key_cells_and_widths() {
         let doc = "# t\n\n## Column Families\n\n| Column Family | Key | Value |\n| --- | --- | --- |\n\
                    | `cells` **(append-only store)** | outpoint (34B) | payload |\n\
+                   | `net_nodes` **(network store)** | peer_id | node |\n\
                    | `addr_txs` | lock(32) + desc(12) = 44B | v |\n\nafter\n| `not_a_row` | x | y |\n";
         assert_eq!(
             store_schema_cf_table(doc),
             vec![
-                ("cells", "outpoint (34B)"),
-                ("addr_txs", "lock(32) + desc(12) = 44B")
+                ("cells", CfStore::AppendOnly, "outpoint (34B)"),
+                ("net_nodes", CfStore::Network, "peer_id"),
+                ("addr_txs", CfStore::Domain, "lock(32) + desc(12) = 44B")
             ]
         );
-        assert!(states_width("outpoint (34B)", 34));
-        assert!(!states_width("key (134B)", 34));
-        assert!(!states_width("block_number + tx_index", 12));
+        assert!(states_total("outpoint (34B)", 34));
+        assert!(!states_total("key (134B)", 34));
+        assert!(!states_total("block_number + tx_index", 12));
+        assert!(states_total("lock(32) + desc(12) = 44B", 44));
+        // A component's width that equals the total is not the total.
+        assert!(!states_total("hash (32B) + block (8B BE) + outpoint (74B)", 74));
+        assert!(states_total("hash (32B) + block (8B BE) + outpoint (34B) = 74B", 74));
         assert_eq!(
             counts_stated_before("74 domain + 1 append-only; the 68 domain CFs", " domain"),
             vec![74, 68]
@@ -5685,15 +5716,16 @@ mod tests {
         );
     }
 
-    /// Whether `cell` states `width` bytes (`74B`, not part of `174B`).
-    fn states_width(cell: &str, width: usize) -> bool {
-        let token = format!("{width}B");
-        cell.match_indices(&token).any(|(at, _)| {
-            !cell[..at]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_ascii_digit())
-        })
+    /// Whether the key cell `cell` states the key's total width `width`: a
+    /// key of several components (`a + b`) as `= NB`, a one-component key as
+    /// `(NB` on its one component — never a component's width that happens to
+    /// equal the total.
+    fn states_total(cell: &str, width: usize) -> bool {
+        if cell.contains(" + ") {
+            cell.contains(&format!("= {width}B"))
+        } else {
+            cell.contains(&format!("({width}B"))
+        }
     }
 
     /// Every OUTSIDE_JOURNAL entry names a `Journal`-class domain CF (the
