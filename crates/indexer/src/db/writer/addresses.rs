@@ -1079,16 +1079,22 @@ impl BatchWriter {
                 );
             }
 
-            let info = updated_map.entry(code_hash).or_insert_with(|| {
-                let mut info = existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    ..Default::default()
-                });
-                if let Ok(Some(fresh)) = self.store.get_script_info(code_hash) {
-                    info = overlay_script_metadata(info, &fresh);
+            let info = match updated_map.entry(code_hash) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let mut info =
+                        existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
+                            code_hash: code_hash.clone(),
+                            ..Default::default()
+                        });
+                    // The label fields as stored now; a row that cannot be
+                    // read fails the batch (the error names the code hash).
+                    if let Some(fresh) = self.store.get_script_info(code_hash)? {
+                        info = overlay_script_metadata(info, &fresh);
+                    }
+                    entry.insert(info)
                 }
-                info
-            });
+            };
 
             if *is_type {
                 let next_type_cells_count = checked_next_script_metric_i64(
@@ -2073,6 +2079,39 @@ mod tests {
         assert!(err
             .to_string()
             .contains("script type owned knowledge exceeds owned capacity"));
+    }
+
+    /// Ruling 6: the label overlay's read of the stored row propagates its
+    /// error — a corrupt `script_info` row fails the batch naming the code
+    /// hash instead of being skipped.
+    #[test]
+    fn a_corrupt_script_info_row_fails_the_usage_update_with_its_code_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let code_hash = vec![0x6c; 32];
+        store
+            .put_cf(store.cf_script_info(), &code_hash, b"garbage")
+            .unwrap();
+        let mut existing = HashMap::new();
+        existing.insert(
+            code_hash.clone(),
+            Some(ScriptInfo {
+                code_hash: code_hash.clone(),
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                ..Default::default()
+            }),
+        );
+        let mut changes = HashMap::new();
+        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains(&hex::encode(&code_hash)), "{text}");
+        assert!(text.contains("script info"), "{text}");
     }
 
     #[test]
