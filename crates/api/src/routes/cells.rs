@@ -6422,7 +6422,6 @@ mod tests {
                 number,
                 &ckbadger_store::types::CachedBlockHeader {
                     hash: vec![number as u8; 32],
-                    parent_hash: vec![0; 32],
                     timestamp: chain_time_ms,
                     chain_time_ms,
                     epoch_number: 0,

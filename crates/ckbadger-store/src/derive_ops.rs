@@ -514,11 +514,7 @@ impl<'a> ReadSnapshot<'a> {
             crate::store::CF_BLOCK_HEADERS,
             &keys::encode_block_num(block_number),
         )?
-        .map(|value| {
-            bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!("cannot decode snapshot block header at block {block_number}: {e}")
-            })
-        })
+        .map(|value| crate::types::decode_block_header(block_number, &value))
         .transpose()
     }
 
@@ -530,9 +526,7 @@ impl<'a> ReadSnapshot<'a> {
                 item.map_err(|e| anyhow::anyhow!("failed to iterate snapshot headers: {e}"))?;
             if key.len() == 8 {
                 let number = keys::decode_block_num(&key);
-                let header = bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!("cannot decode snapshot tip header at block {number}: {e}")
-                })?;
+                let header = crate::types::decode_block_header(number, &value)?;
                 return Ok(Some((number, header)));
             }
         }

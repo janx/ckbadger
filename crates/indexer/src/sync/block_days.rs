@@ -150,7 +150,6 @@ mod tests {
     fn header(chain_time_ms: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![0; 32],
-            parent_hash: vec![0; 32],
             timestamp: chain_time_ms,
             epoch_number: 0,
             epoch_index: 0,

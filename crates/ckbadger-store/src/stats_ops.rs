@@ -2646,7 +2646,6 @@ mod dao_daily_snapshot_recompute_tests {
     fn header_with_dao(block: i64, timestamp: i64, dao: Vec<u8>) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![block as u8; 32],
-            parent_hash: vec![block.saturating_sub(1) as u8; 32],
             timestamp,
             epoch_number: 0,
             epoch_index: 0,

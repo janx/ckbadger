@@ -87,9 +87,11 @@ Returns one event's detail: the fork point height plus the first 8 lowercase hex
 block the switch dropped (height `fork_point + 1` on the abandoned branch). Exactly one event may
 match; two matches are an error naming both events. Every automatic switch persists its first orphan
 (`ReorgEvent.first_orphan_hash`): `execute_reorg` reads it from the indexer's own headers before the
-rollback deletes them, after proving the branch links — its parent is the fork point hash, each later
-header's parent is the header below, and the header at the old tip is the recorded old tip hash; a
-break is an error before anything is rolled back. So every row's address resolves from the store
+rollback deletes them, after proving the stored branch — the stored header at the fork point is the
+fork point hash (a header row stores no parent hash: the parent of block n is the row of block n-1,
+and the live pipeline accepts a block only when its parent is the stored tip), every height up to
+the old tip has a header, and the header at the old tip is the recorded old tip hash; a break is an
+error before anything is rolled back. So every row's address resolves from the store
 alone, without the node reader (`firstOrphanStatus` is `recorded`). A deep detection rolled nothing
 back, so it has no address (`not_observed`). Without the node reader the detail is the persisted
 event with `evidenceStatus: "node_reader_unavailable"` and empty branch evidence; with it, the node's

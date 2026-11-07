@@ -1,6 +1,5 @@
 //! Block header operations.
 
-use anyhow::Context;
 use rocksdb::IteratorMode;
 
 use crate::keys;
@@ -11,9 +10,10 @@ impl CkbadgerStore {
     pub fn get_block_header(&self, block_number: i64) -> anyhow::Result<Option<CachedBlockHeader>> {
         let key = keys::encode_block_num(block_number);
         match self.get_cf(self.cf_block_headers(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value).with_context(|| {
-                format!("cannot decode block header at block {block_number}; re-sync from genesis after the chain-time schema change")
-            })?)),
+            Some(value) => Ok(Some(crate::types::decode_block_header(
+                block_number,
+                &value,
+            )?)),
             None => Ok(None),
         }
     }
@@ -120,7 +120,7 @@ impl CkbadgerStore {
             })?;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
+                let header = crate::types::decode_block_header(block_num, &value)?;
                 return Ok(Some((block_num, header)));
             }
         }
@@ -212,7 +212,7 @@ impl CkbadgerStore {
             })?;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
+                let header = crate::types::decode_block_header(block_num, &value)?;
                 results.push((block_num, header));
                 if results.len() >= limit {
                     break;
@@ -242,10 +242,10 @@ impl CkbadgerStore {
         for (i, value_result) in values.into_iter().enumerate() {
             match value_result {
                 Ok(Some(value)) => {
-                    let header: CachedBlockHeader =
-                        bincode::deserialize(&value).map_err(|e| {
+                    let header = crate::types::decode_block_header(block_numbers[i], &value)
+                        .map_err(|e| {
                             anyhow::anyhow!(
-                                "failed to deserialize block header in get_dao_fields_batch: block_number={}, error={}",
+                                "failed to deserialize block header in get_dao_fields_batch: block_number={}, error={:#}",
                                 block_numbers[i],
                                 e
                             )
@@ -284,10 +284,10 @@ impl CkbadgerStore {
         for (i, value_result) in values.into_iter().enumerate() {
             match value_result {
                 Ok(Some(value)) => {
-                    let header: CachedBlockHeader =
-                        bincode::deserialize(&value).map_err(|e| {
+                    let header = crate::types::decode_block_header(block_numbers[i], &value)
+                        .map_err(|e| {
                             anyhow::anyhow!(
-                                "failed to deserialize block header in get_block_headers_batch: block_number={}, error={}",
+                                "failed to deserialize block header in get_block_headers_batch: block_number={}, error={:#}",
                                 block_numbers[i],
                                 e
                             )
@@ -387,7 +387,6 @@ mod tests {
         hash[..8].copy_from_slice(&block_number.to_le_bytes());
         CachedBlockHeader {
             hash,
-            parent_hash: vec![0u8; 32],
             timestamp: block_number,
             epoch_number: 0,
             epoch_index: 0,
@@ -759,11 +758,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let header = make_header(42);
-        // Bincode serializes structs as ordered fields. This is the exact
-        // pre-chain-time layout, deliberately omitting the appended field.
-        let old_bytes = bincode::serialize(&(
+        // Bincode serializes structs as ordered fields: the layouts before
+        // this one, with the parent hash, with and without `chain_time_ms`.
+        let parent_hash = vec![0x41u8; 32];
+        let pre_chain_time = bincode::serialize(&(
             &header.hash,
-            &header.parent_hash,
+            &parent_hash,
             header.timestamp,
             header.epoch_number,
             header.epoch_index,
@@ -777,17 +777,52 @@ mod tests {
             header.cycles,
         ))
         .unwrap();
-        store
-            .put_cf(
-                store.cf_block_headers(),
-                &keys::encode_block_num(42),
-                &old_bytes,
-            )
-            .unwrap();
+        let with_parent_hash = bincode::serialize(&(
+            &header.hash,
+            &parent_hash,
+            header.timestamp,
+            header.epoch_number,
+            header.epoch_index,
+            header.epoch_length,
+            &header.dao,
+            header.transactions_count,
+            header.uncles_count,
+            header.proposals_count,
+            header.compact_target,
+            &header.miner_lock_hash,
+            header.cycles,
+            header.chain_time_ms,
+        ))
+        .unwrap();
+        for old_bytes in [pre_chain_time, with_parent_hash] {
+            store
+                .put_cf(
+                    store.cf_block_headers(),
+                    &keys::encode_block_num(42),
+                    &old_bytes,
+                )
+                .unwrap();
+            let error = store.get_block_header(42).unwrap_err().to_string();
+            assert!(error.contains("block 42"), "{error}");
+            assert!(error.contains("re-sync"), "{error}");
+        }
+    }
 
-        let error = store.get_block_header(42).unwrap_err().to_string();
-        assert!(error.contains("block 42"), "{error}");
-        assert!(error.contains("re-sync"), "{error}");
+    /// The row holds no parent hash: 40 bytes less than the layout that did
+    /// (32 + its 8-byte length prefix), and it round-trips.
+    #[test]
+    fn block_header_row_has_no_parent_hash_and_round_trips() {
+        let header = make_header(42);
+        let bytes = bincode::serialize(&header).unwrap();
+        let decoded = crate::types::decode_block_header(42, &bytes).unwrap();
+        assert_eq!(bincode::serialize(&decoded).unwrap(), bytes);
+        let with_parent = {
+            let mut b = bincode::serialize(&header.hash).unwrap();
+            b.extend(bincode::serialize(&vec![0u8; 32]).unwrap());
+            b.extend_from_slice(&bytes[bincode::serialize(&header.hash).unwrap().len()..]);
+            b
+        };
+        assert_eq!(with_parent.len() - bytes.len(), 40);
     }
 
     #[test]

@@ -1883,7 +1883,6 @@ mod tests {
         let mut seed = StoreBatch::new(&store);
         let tip_header = CachedBlockHeader {
             hash: vec![0x11; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2088,7 +2087,6 @@ mod tests {
         };
         let header = |number: i64, timestamp: i64, dao: Vec<u8>| CachedBlockHeader {
             hash: vec![u8::try_from(number).unwrap(); 32],
-            parent_hash: vec![0u8; 32],
             timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -2507,7 +2505,6 @@ mod tests {
             dao[24..32].copy_from_slice(&DAO_FREE_FIXTURE_U.to_le_bytes());
             CachedBlockHeader {
                 hash: vec![hash; 32],
-                parent_hash: vec![0u8; 32],
                 timestamp,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -2799,7 +2796,6 @@ mod tests {
                 n,
                 &CachedBlockHeader {
                     hash: vec![n as u8; 32],
-                    parent_hash: vec![0; 32],
                     timestamp: time,
                     chain_time_ms: time,
                     epoch_number: 1,
@@ -2819,7 +2815,6 @@ mod tests {
             100,
             &CachedBlockHeader {
                 hash: vec![0x11; 32],
-                parent_hash: vec![0u8; 32],
                 timestamp: tip_timestamp,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -2840,7 +2835,6 @@ mod tests {
             80,
             &CachedBlockHeader {
                 hash: vec![0x22; 32],
-                parent_hash: vec![0u8; 32],
                 timestamp: tip_timestamp - 86_400_000, // 1 day before tip
                 epoch_number: 0,
                 epoch_index: 0,
@@ -3307,7 +3301,6 @@ mod tests {
             0,
             &CachedBlockHeader {
                 hash: vec![0x11; 32],
-                parent_hash: vec![0u8; 32],
                 timestamp: i64::MAX,
                 epoch_number: 0,
                 epoch_index: 0,

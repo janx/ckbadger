@@ -409,7 +409,6 @@ async fn hardforks_exposes_earliest_indexed_code_cell_per_named_script_version()
         0,
         &CachedBlockHeader {
             hash: vec![0xee; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_573_852_190_812,
             epoch_number: 0,
             epoch_index: 0,
@@ -433,7 +432,6 @@ async fn hardforks_exposes_earliest_indexed_code_cell_per_named_script_version()
             block,
             &CachedBlockHeader {
                 hash: vec![block as u8; 32],
-                parent_hash: vec![0; 32],
                 timestamp,
                 epoch_number: 42,
                 epoch_index: 0,
@@ -595,7 +593,6 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
         0,
         &CachedBlockHeader {
             hash: vec![0xee; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_573_852_190_812,
             epoch_number: 0,
             epoch_index: 0,
@@ -614,7 +611,6 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
         19_000_000,
         &CachedBlockHeader {
             hash: vec![0xaa; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 13_000,
             epoch_index: 100,
@@ -844,7 +840,6 @@ async fn test_recent_blocks_endpoint_empty_db() {
 fn recent_block_header(number: i64, ts_ms: i64) -> CachedBlockHeader {
     CachedBlockHeader {
         hash: vec![(number % 251) as u8; 32],
-        parent_hash: vec![0u8; 32],
         timestamp: ts_ms,
         epoch_number: 1,
         epoch_index: 0,
@@ -947,7 +942,6 @@ async fn test_tx_stats_reads_from_derived_store() {
         0,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 1,
             epoch_index: 10,
@@ -1114,7 +1108,6 @@ async fn test_network_stats_reads_derived_statistics() {
             block_num,
             &CachedBlockHeader {
                 hash: vec![0x20 + i as u8; 32],
-                parent_hash: vec![0u8; 32],
                 timestamp: now_ms - (200 - block_num) * 8_000,
                 epoch_number: 42,
                 epoch_index: 10,
@@ -1202,7 +1195,6 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         200,
         &CachedBlockHeader {
             hash: vec![0x22; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 42,
             epoch_index: 10,
@@ -1369,7 +1361,6 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
         200,
         &CachedBlockHeader {
             hash: vec![0x33; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 42,
             epoch_index: 10,
@@ -1466,7 +1457,6 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
         200,
         &CachedBlockHeader {
             hash: vec![0x44; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 42,
             epoch_index: 10,
@@ -1883,7 +1873,6 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         0,
         &CachedBlockHeader {
             hash: vec![0x55; 32],
-            parent_hash: vec![0x44; 32],
             timestamp: tip_timestamp,
             epoch_number: 0,
             epoch_index: 1,
@@ -1996,7 +1985,6 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
             number,
             &CachedBlockHeader {
                 hash: vec![number as u8; 32],
-                parent_hash: vec![number.saturating_sub(1) as u8; 32],
                 timestamp,
                 epoch_number: 0,
                 epoch_index: number as i32,
@@ -2100,7 +2088,6 @@ async fn test_inflation_rate_rejects_missing_snapshot_on_block_bearing_day() {
             number,
             &CachedBlockHeader {
                 hash: vec![number as u8; 32],
-                parent_hash: vec![number.saturating_sub(1) as u8; 32],
                 timestamp: timestamp(date),
                 epoch_number: 0,
                 epoch_index: number as i32,
@@ -2323,7 +2310,6 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
         200,
         &CachedBlockHeader {
             hash: vec![0x66; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_800_000_000_000,
             epoch_number: 42,
             epoch_index: 10,
@@ -2490,7 +2476,6 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
             number,
             &CachedBlockHeader {
                 hash: vec![number as u8; 32],
-                parent_hash: vec![0; 32],
                 timestamp: raw_time,
                 chain_time_ms: chain_time,
                 epoch_number: 0,
@@ -2654,7 +2639,6 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
         200,
         &CachedBlockHeader {
             hash: vec![0x42; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: tip_ms,
             epoch_number: 42,
             epoch_index: 10,
@@ -2753,7 +2737,6 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
         0,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 1,
             epoch_index: 10,
@@ -3207,7 +3190,6 @@ fn seed_knowledge_size_fixture(store: &Arc<CkbadgerStore>, occupied_capacity: i1
         200,
         &CachedBlockHeader {
             hash: vec![0x77; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: chrono::Utc::now().timestamp_millis(),
             epoch_number: 42,
             epoch_index: 10,

@@ -137,7 +137,6 @@ pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
                 number,
                 &CachedBlockHeader {
                     hash: vec![(number % 251) as u8; 32],
-                    parent_hash: vec![0u8; 32],
                     timestamp,
                     epoch_number: 1,
                     epoch_index: 0,
@@ -1151,7 +1150,6 @@ pub fn put_test_block_header(batch: &mut StoreBatch, block: i64, hash: &[u8], ti
         block,
         &CachedBlockHeader {
             hash: hash.to_vec(),
-            parent_hash: vec![0u8; 32],
             timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -1239,7 +1237,6 @@ pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) 
         321,
         &CachedBlockHeader {
             hash: vec![0x44; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123_456,
             epoch_number: 1,
             epoch_index: 0,
@@ -1344,7 +1341,6 @@ pub fn seed_committed_activity(
         block_number,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -1936,7 +1932,6 @@ fn writer_fixture_header(block_num: i64) -> CachedBlockHeader {
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     CachedBlockHeader {
         hash,
-        parent_hash: vec![0u8; 32],
         timestamp: WRITER_FIXTURE_TS_MS + block_num * 1_000,
         epoch_number: 11,
         epoch_index: (block_num % 1800) as i32,

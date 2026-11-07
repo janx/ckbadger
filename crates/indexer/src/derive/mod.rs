@@ -357,8 +357,8 @@ pub(crate) mod test_support {
                 if key.len() != 8 {
                     continue;
                 }
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
                 let number = ckbadger_store::keys::decode_block_num(&key);
+                let header = ckbadger_store::decode_block_header(number, &value)?;
                 add_delta(out, self.key_of(number, header.epoch_number), &[1])?;
                 if budget.tick(out.len()) {
                     return Ok(Some(key.to_vec()));
@@ -397,7 +397,6 @@ pub(crate) mod test_support {
     pub(crate) fn header(number: i64, epoch: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![(number % 251) as u8; 32],
-            parent_hash: vec![0; 32],
             timestamp: number * 1_000,
             epoch_number: epoch,
             epoch_index: 0,

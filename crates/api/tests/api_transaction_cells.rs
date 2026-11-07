@@ -156,7 +156,6 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
         7,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,

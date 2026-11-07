@@ -27,7 +27,6 @@ async fn dao_calculator_annualizes_using_header_chain_time_not_block_distance() 
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8; 32],
-                    parent_hash: vec![0u8; 32],
                     timestamp: 1_700_000_000_000,
                     epoch_number: 0,
                     epoch_index: 0,
@@ -101,7 +100,6 @@ fn dao_evidence_header(
     dao[24..32].copy_from_slice(&100_000_000u64.to_le_bytes());
     CachedBlockHeader {
         hash: vec![number; 32],
-        parent_hash: vec![number.saturating_sub(1); 32],
         timestamp: raw_ms,
         epoch_number: epoch.0,
         epoch_index: epoch.1,
@@ -537,7 +535,6 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         10,
         &CachedBlockHeader {
             hash: vec![0xAA; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -644,7 +641,6 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         10,
         &CachedBlockHeader {
             hash: vec![0xBB; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -765,7 +761,6 @@ async fn test_dao_stats_fails_fast_when_singleton_missing_at_synced_tip() {
         10,
         &CachedBlockHeader {
             hash: vec![0xCC; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1801,7 +1796,6 @@ fn seed_tip_header(store: &Arc<CkbadgerStore>, block_number: i64) {
         block_number,
         &CachedBlockHeader {
             hash: vec![0xA5; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,

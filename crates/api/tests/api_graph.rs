@@ -112,7 +112,6 @@ fn seed_proposal_fixture(specs: &[FixtureBlock]) -> (std::sync::Arc<CkbadgerStor
             block.number() as i64,
             &CachedBlockHeader {
                 hash: hash.to_vec(),
-                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_000_000 + block.number() as i64,
                 epoch_number: 1,
                 epoch_index: 0,

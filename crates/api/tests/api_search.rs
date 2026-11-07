@@ -30,7 +30,6 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
         123,
         &CachedBlockHeader {
             hash: hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,

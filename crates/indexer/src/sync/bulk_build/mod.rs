@@ -4153,15 +4153,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
                 let number = i64::try_from(number)?;
                 let mut hash = vec![0u8; 32];
                 hash[..8].copy_from_slice(&number.to_le_bytes());
-                let mut parent_hash = vec![0u8; 32];
-                if number > 0 {
-                    parent_hash[..8].copy_from_slice(&(number - 1).to_le_bytes());
-                }
                 prefix.put_block_header(
                     number,
                     &CachedBlockHeader {
                         hash,
-                        parent_hash,
                         timestamp: fixture_genesis_time,
                         chain_time_ms: fixture_genesis_time,
                         epoch_number: 0,
@@ -4828,7 +4823,6 @@ fn build_history_rows_for_block(
     // Block header + hash index (2 rows per block).
     let header = CachedBlockHeader {
         hash: block.hash.to_vec(),
-        parent_hash: block.parent_hash.to_vec(),
         timestamp: block.timestamp_ms,
         epoch_number: block.epoch_number,
         epoch_index: block.epoch_index,
@@ -6149,13 +6143,7 @@ fn collect_history_snapshot(
             );
         }
         let block_number = keys::decode_block_num(&key);
-        let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize CachedBlockHeader in bulk artifact snapshot helper: block_number={} error={}",
-                block_number,
-                e
-            )
-        })?;
+        let header = ckbadger_store::decode_block_header(block_number, &value)?;
         let indexed_block_number = domain_store
             .get_block_number_by_hash(&header.hash)?
             .ok_or_else(|| {
@@ -8894,7 +8882,6 @@ mod tests {
         // Verify presized produces identical output to standard bincode::serialize.
         let header = CachedBlockHeader {
             hash: vec![0xaa; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1710000000000,
             epoch_number: 100,
             epoch_index: 5,
@@ -8935,7 +8922,6 @@ mod tests {
     fn test_bincode_serialize_presized_empty_vec_field() {
         let header = CachedBlockHeader {
             hash: vec![],
-            parent_hash: vec![0u8; 32],
             timestamp: 0,
             epoch_number: 0,
             epoch_index: 0,
@@ -9210,7 +9196,6 @@ mod tests {
                 facts::BlockFacts {
                     number: 100,
                     hash: [0x01; 32],
-                    parent_hash: [0u8; 32],
                     timestamp_ms: ts1,
                     chain_time_ms: ts1,
                     epoch_number: 5,
@@ -9227,7 +9212,6 @@ mod tests {
                 facts::BlockFacts {
                     number: 101,
                     hash: [0x02; 32],
-                    parent_hash: [0u8; 32],
                     timestamp_ms: ts2,
                     chain_time_ms: ts2,
                     epoch_number: 5,

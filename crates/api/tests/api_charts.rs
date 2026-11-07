@@ -1082,7 +1082,6 @@ async fn test_charts_block_time_distribution_with_data() {
             number,
             &CachedBlockHeader {
                 hash: vec![number as u8; 32],
-                parent_hash: vec![0u8; 32],
                 timestamp: ts_ms,
                 epoch_number: epoch,
                 epoch_index: 0,

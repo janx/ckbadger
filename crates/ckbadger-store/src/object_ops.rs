@@ -670,7 +670,6 @@ pub(crate) mod test_support {
             block,
             &CachedBlockHeader {
                 hash: entry.block_hash.clone(),
-                parent_hash: vec![0; 32],
                 timestamp: entry.timestamp_ms,
                 epoch_number: 0,
                 epoch_index: 0,

@@ -869,7 +869,6 @@ mod tests {
             4,
             &crate::types::CachedBlockHeader {
                 hash: vec![4; 32],
-                parent_hash: vec![3; 32],
                 timestamp: 0,
                 epoch_number: 0,
                 epoch_index: 4,

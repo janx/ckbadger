@@ -522,10 +522,13 @@ pub fn encode_live_cell_marker(created_at_block: i64) -> [u8; 8] {
     created_at_block.to_le_bytes()
 }
 
+/// A `block_headers` row. The parent hash is not stored: it is the hash of
+/// the row of the block below (`[0; 32]` for genesis), which the store holds
+/// for every block it holds (`docs/prompts/DATA_DESIGN.md` principle 3).
+/// Decoded strictly by [`decode_block_header`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedBlockHeader {
     pub hash: Vec<u8>,
-    pub parent_hash: Vec<u8>,
     pub timestamp: i64,
     pub epoch_number: i64,
     pub epoch_index: i32,
@@ -560,6 +563,24 @@ pub struct CachedBlockHeader {
     /// consensus header value. This field is intentionally required: an old
     /// bincode header must trigger a full re-sync, not a partial fallback.
     pub chain_time_ms: i64,
+}
+
+/// Decode the `block_headers` row of `block_number`: exactly one
+/// [`CachedBlockHeader`] (bincode, fixed-width integers, no trailing bytes).
+/// An earlier layout — with the parent hash, or without `chain_time_ms` —
+/// does not decode: re-sync from genesis.
+pub fn decode_block_header(block_number: i64, value: &[u8]) -> anyhow::Result<CachedBlockHeader> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<CachedBlockHeader>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "cannot decode block header at block {block_number} ({} bytes: {e}): written by an \
+                 older layout, re-sync from genesis",
+                value.len()
+            )
+        })
 }
 
 // ============================================

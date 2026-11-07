@@ -2332,7 +2332,6 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         older_block,
         &CachedBlockHeader {
             hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: older_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -2351,7 +2350,6 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         newer_earliest_block,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: newer_earliest_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -2370,7 +2368,6 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         newer_block,
         &CachedBlockHeader {
             hash: vec![0x04; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: newer_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -3520,7 +3517,6 @@ async fn test_script_capacity_chart_aggregates_deployments() {
         300,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_705_536_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3634,7 +3630,6 @@ async fn test_script_capacity_history_chart_aggregates_family_member_references(
         300,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_705_536_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3720,7 +3715,6 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0x04; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_705_363_200_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3783,7 +3777,6 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
         200,
         &CachedBlockHeader {
             hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
             // Raw tip time regressed, while its canonical chain day advanced.
             timestamp: 1_705_449_600_000,
             epoch_number: 0,

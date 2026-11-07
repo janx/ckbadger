@@ -711,7 +711,6 @@ mod tests {
     fn since_zero_fraction_normalizes_and_ready_epoch_is_exact() {
         let mut header = CachedBlockHeader {
             hash: vec![],
-            parent_hash: vec![],
             timestamp: 0,
             epoch_number: 100,
             epoch_index: 2,
@@ -753,7 +752,6 @@ mod tests {
         // https://github.com/nervosnetwork/fiber-scripts/blob/main/contracts/commitment-lock/src/main.rs
         let mut header = CachedBlockHeader {
             hash: vec![],
-            parent_hash: vec![],
             timestamp: 0,
             epoch_number: 100,
             epoch_index: 0,

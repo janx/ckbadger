@@ -1898,7 +1898,6 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: day1_ts,
             epoch_number: 0,
             epoch_index: 0,
@@ -1914,7 +1913,6 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: day2_ts,
             epoch_number: 0,
             epoch_index: 0,
@@ -2080,7 +2078,6 @@ mod tests {
             CkbadgerStore::open_domain_with_runtime(domain_path, startup_runtime_config()).unwrap();
         let header = CachedBlockHeader {
             hash: vec![0x7f; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_704_067_200_000,
             epoch_number: 0,
             epoch_index: 0,

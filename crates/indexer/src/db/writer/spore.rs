@@ -1609,7 +1609,6 @@ mod tests {
         fn header(number: i64) -> ckbadger_store::types::CachedBlockHeader {
             ckbadger_store::types::CachedBlockHeader {
                 hash: vec![number as u8; 32],
-                parent_hash: vec![(number - 1) as u8; 32],
                 timestamp: 1_700_000_000_000 + number * 1000,
                 epoch_number: 40,
                 epoch_index: 0,

@@ -566,7 +566,6 @@ mod tests {
             actions.block_number,
             &CachedBlockHeader {
                 hash: actions.block_hash.clone(),
-                parent_hash: vec![0; 32],
                 timestamp: actions.timestamp,
                 epoch_number: 0,
                 epoch_index: 0,

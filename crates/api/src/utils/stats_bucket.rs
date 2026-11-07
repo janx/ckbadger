@@ -424,7 +424,6 @@ mod tests {
 
         let header = |ts: i64| ckbadger_store::types::CachedBlockHeader {
             hash: vec![0; 32],
-            parent_hash: vec![0; 32],
             timestamp: ts,
             epoch_number: 0,
             epoch_index: 0,
@@ -456,7 +455,6 @@ mod tests {
         let after = utc_ms("2026-10-23T16:00:01Z");
         let header = |hash: u8, timestamp: i64| ckbadger_store::types::CachedBlockHeader {
             hash: vec![hash; 32],
-            parent_hash: vec![hash.wrapping_sub(1); 32],
             timestamp,
             chain_time_ms: timestamp,
             epoch_number: 0,

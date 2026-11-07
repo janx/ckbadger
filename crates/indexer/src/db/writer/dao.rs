@@ -762,7 +762,6 @@ mod tests {
                 number,
                 &ckbadger_store::CachedBlockHeader {
                     hash: hash.to_vec(),
-                    parent_hash: vec![0; 32],
                     timestamp: raw,
                     chain_time_ms: chain_time,
                     epoch_number: 0,

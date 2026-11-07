@@ -11,7 +11,6 @@ async fn block_transaction_list_requires_node_proposal_evidence() {
         7,
         &CachedBlockHeader {
             hash: vec![0xB7; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -113,7 +112,6 @@ async fn committed_detail_uses_transaction_output_data_without_cell_data_cf() {
         7,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -204,7 +202,6 @@ async fn committed_detail_rejects_missing_indexed_input_cell() {
         7,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -344,7 +341,6 @@ async fn block_transaction_list_rejects_invalid_stored_timestamp() {
         7,
         &CachedBlockHeader {
             hash: vec![0xB7; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1208,7 +1204,6 @@ fn seed_lifecycle_fixture(
     let mut batch = StoreBatch::new(store.as_ref());
     let header = |hash: Vec<u8>, number: i64| CachedBlockHeader {
         hash,
-        parent_hash: vec![0u8; 32],
         timestamp: 1_700_000_000_000 + number,
         epoch_number: 1,
         epoch_index: 0,
@@ -1795,7 +1790,6 @@ async fn dotcell_transaction_app(index_identities: bool) -> (axum::Router, Strin
         block_number,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -2059,7 +2053,6 @@ fn seed_tx_awaiting_cycles(store: &Arc<CkbadgerStore>, tx_hash: &[u8; 32], cycle
         321,
         &CachedBlockHeader {
             hash: vec![0x44; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123_456,
             epoch_number: 1,
             epoch_index: 0,
@@ -2263,7 +2256,6 @@ async fn redesign_committed_detail_requires_node_transaction_bytes() {
         10,
         &CachedBlockHeader {
             hash: vec![0x41; 32],
-            parent_hash: vec![0x42; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2813,7 +2805,6 @@ async fn genesis_detail_marks_type_groups_as_unexecuted() {
         0,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2966,7 +2957,6 @@ async fn r3_cycles_dispatch_rejects_inconsistent_deep_fork_status() {
 fn detail_fixture_header(hash: [u8; 32], timestamp: i64) -> CachedBlockHeader {
     CachedBlockHeader {
         hash: hash.to_vec(),
-        parent_hash: vec![0; 32],
         timestamp,
         epoch_number: 1,
         epoch_index: 0,
@@ -4062,7 +4052,6 @@ fn seed_code_cell_family(store: &Arc<CkbadgerStore>) -> [Vec<u8>; 3] {
             block,
             &CachedBlockHeader {
                 hash: vec![0xb0 + block as u8; 32],
-                parent_hash: vec![0; 32],
                 timestamp: 1_700_000_000_000 + block * 10_000,
                 epoch_number: 1,
                 epoch_index: 0,

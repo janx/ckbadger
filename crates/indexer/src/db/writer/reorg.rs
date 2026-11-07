@@ -29,10 +29,13 @@ fn next_reorg_event_key() -> Result<String> {
 }
 
 /// The first block a switch drops — height `fork_point + 1` of the branch the
-/// store holds — after proving that branch: the first orphan's parent is
-/// `fork_hash`, every later header's parent is the header below it, and the
-/// header at `old_tip` is `old_tip_hash`. Read before the rollback deletes
-/// these headers; it is the event's D7 address (`ReorgEvent::first_orphan_hash`).
+/// store holds — after proving that branch from the store's own rows: the
+/// stored header at the fork point is `fork_hash` (so it is the first orphan's
+/// parent: a header row stores no parent hash, the parent of block n is the
+/// row of block n-1), the old branch has a header at every height up to
+/// `old_tip`, and the header at `old_tip` is `old_tip_hash`. Read with one
+/// `multi_get` before the rollback deletes these headers; it is the event's
+/// D7 address (`ReorgEvent::first_orphan_hash`).
 fn first_orphan_of_stored_branch(
     store: &CkbadgerStore,
     fork_point: i64,
@@ -44,36 +47,37 @@ fn first_orphan_of_stored_branch(
         old_tip > fork_point,
         "first orphan: old tip {old_tip} is not above fork point {fork_point}"
     );
-    let mut parent = fork_hash.to_vec();
-    let mut first: Option<Vec<u8>> = None;
-    for height in fork_point + 1..=old_tip {
-        let header = store.get_block_header(height)?.ok_or_else(|| {
-            anyhow!(
-                "first orphan: the stored old branch has no header at {height} (fork point {fork_point}, old tip {old_tip})"
-            )
-        })?;
-        ensure!(
-            header.parent_hash == parent,
-            "first orphan: stored header {height} 0x{} has parent 0x{}, not 0x{} (fork point {fork_point}, old tip {old_tip})",
-            hex::encode(&header.hash),
-            hex::encode(&header.parent_hash),
-            hex::encode(&parent),
-        );
-        if first.is_none() {
-            first = Some(header.hash.clone());
-        }
-        parent = header.hash;
-    }
+    let heights: Vec<i64> = (fork_point..=old_tip).collect();
+    let headers = store.get_block_headers_batch(&heights)?;
+    let hash_at = |height: i64| -> Result<&[u8]> {
+        headers
+            .get(&height)
+            .map(|header| header.hash.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "first orphan: the stored chain has no header at {height} (fork point {fork_point}, old tip {old_tip})"
+                )
+            })
+    };
+    let stored_fork = hash_at(fork_point)?;
     ensure!(
-        parent.as_slice() == old_tip_hash,
+        stored_fork == fork_hash,
+        "first orphan: the stored header at fork point {fork_point} (the first orphan's parent) is 0x{}, not 0x{} (old tip {old_tip})",
+        hex::encode(stored_fork),
+        hex::encode(fork_hash),
+    );
+    for height in fork_point + 1..old_tip {
+        hash_at(height)?;
+    }
+    let stored_tip = hash_at(old_tip)?;
+    ensure!(
+        stored_tip == old_tip_hash,
         "first orphan: the stored old branch ends at 0x{}, not the recorded old tip 0x{} (fork point {fork_point}, old tip {old_tip})",
-        hex::encode(&parent),
+        hex::encode(stored_tip),
         hex::encode(old_tip_hash),
     );
-    let first = first.ok_or_else(|| {
-        anyhow!("first orphan: empty old branch (fork point {fork_point}, old tip {old_tip})")
-    })?;
-    first.as_slice().try_into().map_err(|_| {
+    let first = hash_at(fork_point + 1)?;
+    first.try_into().map_err(|_| {
         anyhow!(
             "first orphan: stored header {} hash has {} bytes (fork point {fork_point}, old tip {old_tip})",
             fork_point + 1,
@@ -502,7 +506,6 @@ mod tests {
                 height,
                 &CachedBlockHeader {
                     hash,
-                    parent_hash: vec![9; 32],
                     timestamp: 0,
                     epoch_number: 1,
                     epoch_index: 0,
@@ -620,13 +623,11 @@ mod tests {
                 keys::sync_meta_keys::REORG_RECONCILE_PENDING,
                 second_key.as_bytes(),
             );
-            let mut parent = vec![6; 32];
             for (index, hash) in canonical_a.iter().enumerate() {
                 batch.put_block_header(
                     7 + index as i64,
                     &CachedBlockHeader {
                         hash: vec![*hash; 32],
-                        parent_hash: parent,
                         timestamp: 0,
                         epoch_number: 1,
                         epoch_index: 0,
@@ -641,7 +642,6 @@ mod tests {
                         chain_time_ms: 0,
                     },
                 );
-                parent = vec![*hash; 32];
             }
             batch.commit().unwrap();
             store.update_sync_tip(12, &[0xd2; 32], 0).unwrap();
@@ -715,7 +715,6 @@ mod tests {
         };
         let header = |hash| CachedBlockHeader {
             hash,
-            parent_hash: vec![8; 32],
             timestamp: 0,
             epoch_number: 1,
             epoch_index: 0,
@@ -787,7 +786,6 @@ mod tests {
         };
         let header = |hash| CachedBlockHeader {
             hash,
-            parent_hash: vec![9; 32],
             timestamp: 0,
             epoch_number: 1,
             epoch_index: 0,
@@ -896,7 +894,6 @@ mod tests {
             9,
             &ckbadger_store::types::CachedBlockHeader {
                 hash: vec![9; 32],
-                parent_hash: vec![8; 32],
                 timestamp: 0,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -990,7 +987,6 @@ mod tests {
                 height,
                 &CachedBlockHeader {
                     hash,
-                    parent_hash: vec![9; 32],
                     timestamp: 0,
                     epoch_number: 1,
                     epoch_index: 0,

@@ -2181,7 +2181,6 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         let header = CachedBlockHeader {
             hash: vec![1u8; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1000,
             epoch_number: 1,
             epoch_index: 0,
@@ -3103,7 +3102,6 @@ mod tests {
         // Batch a: block header
         let header = CachedBlockHeader {
             hash: vec![0xAA; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 9999,
             epoch_number: 1,
             epoch_index: 0,

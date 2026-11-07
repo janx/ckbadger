@@ -2850,7 +2850,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0xB1; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_100,
             epoch_number: 0,
             epoch_index: 0,
@@ -2869,7 +2868,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         200,
         &CachedBlockHeader {
             hash: vec![0xB2; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -2888,7 +2886,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         &CachedBlockHeader {
             hash: vec![0xB3; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_300,
             epoch_number: 0,
             epoch_index: 0,
@@ -4207,7 +4204,6 @@ fn seed_dotcell_name(
         20_518_306,
         &CachedBlockHeader {
             hash: vec![0xB0; 32],
-            parent_hash: vec![0xB1; 32],
             timestamp: tip_timestamp_ms,
             epoch_number: 10,
             epoch_index: 0,
@@ -4972,7 +4968,6 @@ async fn dotcell_collection_activities_are_served_from_the_identity_cf() {
             700,
             &CachedBlockHeader {
                 hash: block_hash.clone(),
-                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_700,
                 epoch_number: 0,
                 epoch_index: 0,

@@ -28,7 +28,6 @@ async fn test_address_activities_reads_from_store() {
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -109,7 +108,6 @@ async fn address_activities_response(
         88,
         &CachedBlockHeader {
             hash: actions.block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123,
             epoch_number: 0,
             epoch_index: 0,
@@ -480,7 +478,6 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         88,
         &CachedBlockHeader {
             hash: block_hash,
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_888_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -596,7 +593,6 @@ async fn test_latest_activities_return_type_calls() {
         99,
         &CachedBlockHeader {
             hash: block_hash,
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_999,
             epoch_number: 0,
             epoch_index: 0,
@@ -668,7 +664,6 @@ async fn test_global_activities_basic() {
         200,
         &CachedBlockHeader {
             hash: block_hash,
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -746,7 +741,6 @@ async fn test_address_transactions_reads_from_derived_store() {
         10,
         &CachedBlockHeader {
             hash: vec![0xba; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -847,7 +841,6 @@ fn seed_activity_with_txs_count(
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -950,7 +943,6 @@ async fn test_address_activities_total_contradicting_page_one_is_an_error() {
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1406,7 +1398,6 @@ fn seed_named_tx(
         block_number,
         &CachedBlockHeader {
             hash: actions.block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2833,7 +2824,6 @@ async fn block_and_direct_cellbase_activity_derive_the_exact_paid_outputs() {
         100,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -2957,7 +2947,6 @@ fn seed_sparse_object_chain(
             block,
             &CachedBlockHeader {
                 hash: block_hash.clone(),
-                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_000_000 + block,
                 epoch_number: 0,
                 epoch_index: 0,

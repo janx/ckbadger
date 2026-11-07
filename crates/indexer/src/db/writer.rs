@@ -203,7 +203,6 @@ pub(crate) mod journal_test_support {
             hash[..8].copy_from_slice(&block.to_be_bytes());
             let header = ckbadger_store::CachedBlockHeader {
                 hash,
-                parent_hash: vec![0; 32],
                 timestamp: 1_700_000_000_000 + block * 1_000,
                 epoch_number: 0,
                 epoch_index: 0,

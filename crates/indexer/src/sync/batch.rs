@@ -6601,11 +6601,6 @@ mod tests {
                     number,
                     &ckbadger_store::types::CachedBlockHeader {
                         hash: block_hash(number as u64).to_vec(),
-                        parent_hash: if number == 0 {
-                            vec![0; 32]
-                        } else {
-                            block_hash((number - 1) as u64).to_vec()
-                        },
                         timestamp: 1_699_900_000_000,
                         epoch_number: 39,
                         epoch_index: 1700 + number as i32,
@@ -6681,11 +6676,6 @@ mod tests {
                         number,
                         &ckbadger_store::types::CachedBlockHeader {
                             hash: block_hash(number as u64).to_vec(),
-                            parent_hash: if number == 0 {
-                                vec![0; 32]
-                            } else {
-                                block_hash((number - 1) as u64).to_vec()
-                            },
                             timestamp: 1_699_900_000_000,
                             epoch_number: 39,
                             epoch_index: number as i32,
@@ -6705,7 +6695,6 @@ mod tests {
                     99,
                     &ckbadger_store::types::CachedBlockHeader {
                         hash: parent_hash.to_vec(),
-                        parent_hash: block_hash(98).to_vec(),
                         timestamp: 1_699_999_999_000,
                         epoch_number: 39,
                         epoch_index: 1799,
@@ -8632,7 +8621,6 @@ mod tests {
             for number in 0i64..99 {
                 let mut header = parent.clone();
                 header.hash = vec![number as u8; 32];
-                header.parent_hash = vec![if number == 0 { 0 } else { (number - 1) as u8 }; 32];
                 earlier.put_block_header(number, &header);
             }
             earlier.commit().unwrap();

@@ -2239,7 +2239,6 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
         11,
         &ckbadger_store::CachedBlockHeader {
             hash: vec![0xbc; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_011,
             epoch_number: 0,
             epoch_index: 0,
