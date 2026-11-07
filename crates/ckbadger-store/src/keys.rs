@@ -332,13 +332,25 @@ pub fn encode_desc_block_num(block_num: i64) -> [u8; 8] {
     (i64::MAX - block_num).to_be_bytes()
 }
 
-fn decode_desc_block_num(bytes: &[u8]) -> i64 {
-    assert!(
-        bytes.len() == 8,
-        "decode_desc_block_num: expected 8 bytes, got {}",
-        bytes.len()
-    );
-    i64::MAX - i64::from_be_bytes(bytes.try_into().unwrap())
+/// The block number of a newest-first key component (`i64::MAX - block`,
+/// BE). [`encode_desc_block_num`] writes only `block >= 0`, so a component
+/// with the top bit set encodes no block: a corrupt key, re-sync required.
+fn decode_desc_block_num(bytes: &[u8]) -> anyhow::Result<i64> {
+    let raw: [u8; 8] = bytes.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "newest-first block component has {} bytes, expected 8",
+            bytes.len()
+        )
+    })?;
+    i64::MAX
+        .checked_sub(i64::from_be_bytes(raw))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "newest-first block component 0x{} encodes no block: a corrupt key, re-sync \
+                 required",
+                hex::encode(bytes)
+            )
+        })
 }
 
 fn encode_desc_tx_idx(tx_idx: i32) -> [u8; 4] {
@@ -350,13 +362,25 @@ fn encode_desc_tx_idx(tx_idx: i32) -> [u8; 4] {
     (i32::MAX - tx_idx).to_be_bytes()
 }
 
-fn decode_desc_tx_idx(bytes: &[u8]) -> i32 {
-    assert!(
-        bytes.len() == 4,
-        "decode_desc_tx_idx: expected 4 bytes, got {}",
-        bytes.len()
-    );
-    i32::MAX - i32::from_be_bytes(bytes.try_into().unwrap())
+/// The transaction index of a newest-first key component (`i32::MAX -
+/// tx_idx`, BE); like [`decode_desc_block_num`], a component with the top bit
+/// set is a corrupt key, re-sync required.
+fn decode_desc_tx_idx(bytes: &[u8]) -> anyhow::Result<i32> {
+    let raw: [u8; 4] = bytes.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "newest-first tx_idx component has {} bytes, expected 4",
+            bytes.len()
+        )
+    })?;
+    i32::MAX
+        .checked_sub(i32::from_be_bytes(raw))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "newest-first tx_idx component 0x{} encodes no transaction index: a corrupt key, \
+                 re-sync required",
+                hex::encode(bytes)
+            )
+        })
 }
 
 fn encode_desc_token_balance(value: &TokenBalance) -> [u8; TokenBalance::ENCODED_LEN] {
@@ -596,8 +620,8 @@ pub fn decode_addr_tx_key(key: &[u8]) -> anyhow::Result<([u8; 32], i64, i32)> {
     lock_hash.copy_from_slice(&key[..32]);
     Ok((
         lock_hash,
-        decode_desc_block_num(&key[32..40]),
-        decode_desc_tx_idx(&key[40..44]),
+        decode_desc_block_num(&key[32..40])?,
+        decode_desc_tx_idx(&key[40..44])?,
     ))
 }
 
@@ -656,8 +680,8 @@ pub fn decode_addr_tx_by_prefix_key(key: &[u8]) -> anyhow::Result<([u8; 20], i64
     prefix.copy_from_slice(&key[..LOCK_PREFIX_LEN]);
     Ok((
         prefix,
-        decode_desc_block_num(&key[20..28]),
-        decode_desc_tx_idx(&key[28..32]),
+        decode_desc_block_num(&key[20..28])?,
+        decode_desc_tx_idx(&key[28..32])?,
     ))
 }
 
@@ -1904,8 +1928,8 @@ pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32)> {
         TX_ACTIONS_KEY_SIZE
     );
     Ok((
-        decode_desc_block_num(&key[0..8]),
-        decode_desc_tx_idx(&key[8..12]),
+        decode_desc_block_num(&key[0..8])?,
+        decode_desc_tx_idx(&key[8..12])?,
     ))
 }
 
@@ -1941,8 +1965,8 @@ pub fn decode_tx_actions_by_bucket_key(
     let bucket = crate::global_bucket::GlobalBucket::from_byte(key[0])?;
     Ok((
         bucket,
-        decode_desc_block_num(&key[1..9]),
-        decode_desc_tx_idx(&key[9..13]),
+        decode_desc_block_num(&key[1..9])?,
+        decode_desc_tx_idx(&key[9..13])?,
     ))
 }
 
@@ -2168,8 +2192,8 @@ pub fn decode_object_collection_activity_key(key: &[u8]) -> anyhow::Result<([u8;
     collection_id.copy_from_slice(&key[..32]);
     Ok((
         collection_id,
-        decode_desc_block_num(&key[32..40]),
-        decode_desc_tx_idx(&key[40..44]),
+        decode_desc_block_num(&key[32..40])?,
+        decode_desc_tx_idx(&key[40..44])?,
     ))
 }
 
@@ -3556,6 +3580,54 @@ mod tests {
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
         assert_eq!(decoded_block, 100);
+    }
+
+    /// Review 20: a newest-first component with the top bit set encodes no
+    /// position (the encoders write only non-negative ones); every decoder
+    /// of such a key fails "re-sync required" instead of overflowing.
+    #[test]
+    fn newest_first_keys_with_the_top_bit_set_are_refused() {
+        let mut activities = encode_tx_actions_key(5, 1);
+        activities[0] = 0x80;
+        let mut addr_tx = encode_addr_tx_key(&[0xAA; 32], 5, 1);
+        addr_tx[32] = 0x80;
+        let mut by_prefix = encode_addr_tx_by_prefix_key(&[0xAA; 20], 5, 1);
+        by_prefix[28] = 0x80;
+        let mut collection = encode_object_collection_activity_key(&[0xCC; 32], 5, 1).to_vec();
+        collection[40] = 0x80;
+        let mut bucket = encode_tx_actions_by_bucket_key(
+            crate::global_bucket::GlobalBucket::Token,
+            5,
+            1,
+        )
+        .to_vec();
+        bucket[1] = 0x80;
+        let errors = [
+            decode_stored_tx_actions_key(&activities).unwrap_err(),
+            decode_addr_tx_key(&addr_tx).unwrap_err(),
+            decode_addr_tx_by_prefix_key(&by_prefix).unwrap_err(),
+            decode_object_collection_activity_key(&collection).unwrap_err(),
+            decode_tx_actions_by_bucket_key(&bucket).unwrap_err(),
+        ];
+        for (i, error) in errors.iter().enumerate() {
+            let error = error.to_string();
+            assert!(
+                error.contains("a corrupt key, re-sync required"),
+                "decoder {i}: {error}"
+            );
+        }
+        assert!(decode_desc_tx_idx(&[0x80, 0, 0, 0])
+            .unwrap_err()
+            .to_string()
+            .contains("encodes no transaction index"));
+        assert!(decode_desc_block_num(&[0x80, 0, 0, 0, 0, 0, 0, 0])
+            .unwrap_err()
+            .to_string()
+            .contains("encodes no block"));
+        // The extremes of a valid component still decode.
+        assert_eq!(decode_desc_block_num(&i64::MAX.to_be_bytes()).unwrap(), 0);
+        assert_eq!(decode_desc_block_num(&0i64.to_be_bytes()).unwrap(), i64::MAX);
+        assert_eq!(decode_desc_tx_idx(&0i32.to_be_bytes()).unwrap(), i32::MAX);
     }
 
     #[test]
