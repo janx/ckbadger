@@ -822,6 +822,32 @@ mod tests {
         }
     }
 
+    /// Delta review N6: `activities` holds no cellbase row (the writers skip
+    /// cellbases); the feeds that read exactly their page refuse one, naming
+    /// its position, instead of serving it.
+    #[test]
+    fn a_cellbase_row_in_activities_is_an_error() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        seed_activity(&mut batch, &make_tx_actions(100, 1, 0x55));
+        let mut cellbase = make_tx_actions(101, 0, 0x66);
+        cellbase.is_cellbase = true;
+        seed_activity(&mut batch, &cellbase);
+        batch.commit().unwrap();
+        let err = store.get_latest_activities().unwrap_err().to_string();
+        assert!(
+            err.contains(&format!(
+                "activities holds a cellbase row at block=101, tx_idx=0 (tx 0x{})",
+                "66".repeat(32)
+            )),
+            "{err}"
+        );
+        let rows = store.list_tx_actions_recent(10, None).unwrap();
+        assert!(ensure_no_cellbase_activity(&rows).is_err());
+        assert!(ensure_no_cellbase_activity(&rows[1..]).is_ok());
+    }
+
     /// Review 27: a caller that names the hash it expects at a position gets
     /// an error when the position holds another transaction.
     #[test]
