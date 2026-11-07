@@ -639,16 +639,17 @@ fn reference_custody(
                         hex::encode(reference_hash)
                     ))
                 })?;
-            let native_type_id_hash =
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).map_err(|e| {
-                    ApiError::internal(format!("invalid native Type ID code hash: {e}"))
-                })?;
+            // A cell whose type script is the consensus Type ID script: the
+            // one rule, `keys::is_type_id_script`.
+            let is_type_id_cell = |cell: &ckbadger_store::PositionedCellInfo| {
+                cell.type_code_hash
+                    .zip(cell.type_hash_type)
+                    .is_some_and(|(code_hash, hash_type)| {
+                        ckbadger_store::keys::is_type_id_script(&code_hash, hash_type)
+                    })
+            };
             let Some(current) = current else {
-                if cells.iter().any(|(_, _, cell)| {
-                    cell.type_hash_type == Some(1)
-                        && cell.type_code_hash.as_ref().map(|hash| hash.as_slice())
-                            == Some(native_type_id_hash.as_slice())
-                }) {
+                if cells.iter().any(|(_, _, cell)| is_type_id_cell(cell)) {
                     return Ok(custody_without_witness("retired", None));
                 }
                 let unique: HashSet<[u8; 32]> = cells
@@ -682,11 +683,7 @@ fn reference_custody(
                         hex::encode(reference_hash)
                     ))
                 })?;
-                if cell.type_code_hash.as_ref().map(|hash| hash.as_slice())
-                    == Some(native_type_id_hash.as_slice())
-                    && cell.type_hash_type == Some(1)
-                    && current != *data_hash
-                {
+                if is_type_id_cell(&cell) && current != *data_hash {
                     return Err(ApiError::internal(format!(
                         "persisted binding 0x{} for type reference 0x{} conflicts with live native Type ID code 0x{} at 0x{}:{}",
                         hex::encode(&current), hex::encode(reference_hash),
