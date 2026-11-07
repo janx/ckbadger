@@ -488,7 +488,7 @@ impl CkbadgerStore {
                 }
             }
             for actions in self.tx_actions_from_stored(kept_rows, kept_entries)? {
-                if Self::matches_activity_filter(&actions, lock_hash, filter) {
+                if Self::matches_activity_filter(&actions, lock_hash, filter)? {
                     results.push(actions);
                     if results.len() >= limit {
                         return Ok(results);
@@ -510,27 +510,42 @@ impl CkbadgerStore {
 
     /// Check whether a TxActions matches the given activity filter for a specific participant.
     ///
-    /// Finds the participant matching `lock_hash`, then checks the `tags` bitmask.
+    /// Finds the participant matching `lock_hash`, then checks the `tags`
+    /// bitmask. The address's rows (`addr_txs` / `addr_txs_by_prefix`) name
+    /// only transactions it takes part in, and their keys are positions, so a
+    /// transaction without the address as a participant is a stale row of
+    /// another transaction once at that position: an error naming the
+    /// address and the position, for every filter — never a row to skip.
     pub fn matches_activity_filter(
         actions: &TxActions,
         lock_hash: &[u8],
         filter: Option<&str>,
-    ) -> bool {
-        match filter {
+    ) -> anyhow::Result<bool> {
+        let lock = <&[u8; 32]>::try_from(lock_hash).map_err(|_| {
+            anyhow::anyhow!(
+                "activity filter expects a 32-byte lock hash, got {} bytes",
+                lock_hash.len()
+            )
+        })?;
+        // One matcher for both participant identities: a full lock hash
+        // compares whole, a protocol-named 20-byte prefix its first 20 bytes.
+        let p = actions
+            .participants
+            .iter()
+            .find(|p| p.id.matches(lock))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "activity of address 0x{} at block={}, tx_idx={} (tx 0x{}) has no participant \
+                     for the address: a stale addr_txs row",
+                    bytes_to_hex(lock_hash),
+                    actions.block_number,
+                    actions.tx_index,
+                    bytes_to_hex(&actions.tx_hash)
+                )
+            })?;
+        Ok(match filter {
             None | Some("all") => true,
             Some(f) => {
-                // Find the participant matching this lock_hash. One matcher for
-                // both participant identities: a full lock hash compares whole,
-                // a protocol-named 20-byte prefix compares its first 20 bytes.
-                let Ok(lock) = <&[u8; 32]>::try_from(lock_hash) else {
-                    return false;
-                };
-                let participant = actions.participants.iter().find(|p| p.id.matches(lock));
-                let Some(p) = participant else {
-                    // No matching participant — should not happen if data is consistent,
-                    // but don't match any filter if participant is missing.
-                    return false;
-                };
                 let tags = p.tags;
                 match f {
                     "ckb" => {
@@ -554,19 +569,17 @@ impl CkbadgerStore {
                     // for this participant (BA-35's single "Script" chip).
                     "script" => tags & (TAG_TYPE_CALL | TAG_LOCK_CALL) != 0,
                     proto if proto.starts_with("protocol:") => {
-                        if tags & TAG_PROTOCOL == 0 {
-                            return false;
-                        }
                         let protocol_name = &proto["protocol:".len()..];
-                        actions
-                            .protocol_actions
-                            .iter()
-                            .any(|a| a.protocol == protocol_name)
+                        tags & TAG_PROTOCOL != 0
+                            && actions
+                                .protocol_actions
+                                .iter()
+                                .any(|a| a.protocol == protocol_name)
                     }
                     _ => false,
                 }
             }
-        }
+        })
     }
 }
 
@@ -721,12 +734,14 @@ mod tests {
         let lock_hash = vec![0xAA; 32];
         assert!(CkbadgerStore::matches_activity_filter(
             &actions, &lock_hash, None
-        ));
+        )
+            .unwrap());
         assert!(CkbadgerStore::matches_activity_filter(
             &actions,
             &lock_hash,
             Some("all")
-        ));
+        )
+            .unwrap());
     }
 
     #[test]
@@ -738,7 +753,8 @@ mod tests {
             &actions,
             &lock_hash,
             Some("ckb")
-        ));
+        )
+            .unwrap());
     }
 
     #[test]
@@ -750,24 +766,65 @@ mod tests {
             &actions,
             &lock_hash,
             Some("token")
-        ));
+        )
+            .unwrap());
         assert!(!CkbadgerStore::matches_activity_filter(
             &actions,
             &lock_hash,
             Some("ckb")
-        ));
+        )
+            .unwrap());
     }
 
+    /// Review P1-3: with position keys, a transaction in which the address
+    /// takes no part is the only sign of a stale address row — an error
+    /// naming the address and the position, for every filter.
     #[test]
-    fn test_matches_activity_filter_missing_participant() {
+    fn test_matches_activity_filter_missing_participant_is_an_error() {
         let actions = make_tx_actions(100, 0, 0xAA);
         let unknown_lock = vec![0xFF; 32];
-        // No matching participant -> false for any filter
-        assert!(!CkbadgerStore::matches_activity_filter(
-            &actions,
-            &unknown_lock,
-            Some("token")
-        ));
+        for filter in [None, Some("all"), Some("token")] {
+            let err = CkbadgerStore::matches_activity_filter(&actions, &unknown_lock, filter)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(&format!(
+                    "activity of address 0x{} at block=100, tx_idx=0",
+                    "ff".repeat(32)
+                )) && err.contains("a stale addr_txs row"),
+                "{filter:?}: {err}"
+            );
+        }
+    }
+
+    /// Review P1-3: a stale `addr_txs` row (its position now holds a
+    /// transaction the address takes no part in) fails the address feed
+    /// instead of shortening the page.
+    #[test]
+    fn list_activities_fails_on_an_addr_txs_row_of_a_transaction_without_the_address() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = [0xFE; 32];
+        let mut batch = StoreBatch::new(&store);
+        // The transaction at 100:0 names only 0xAA..; the address's row there
+        // is stale.
+        seed_activity(&mut batch, &make_tx_actions(100, 0, 0xAA));
+        batch.put_addr_tx(&lock, 100, 0, &AddrTxValue::new(1, false, true, 0));
+        batch.commit().unwrap();
+
+        for filter in [None, Some("ckb")] {
+            let err = store
+                .list_activities(&lock, 10, None, filter)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(&format!(
+                    "activity of address 0x{} at block=100, tx_idx=0",
+                    "fe".repeat(32)
+                )),
+                "{filter:?}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -783,7 +840,8 @@ mod tests {
             let mut actions = make_tx_actions(100, 0, 0xAA);
             actions.participants[0].tags = tags;
             assert_eq!(
-                CkbadgerStore::matches_activity_filter(&actions, &lock, Some("script")),
+                CkbadgerStore::matches_activity_filter(&actions, &lock, Some("script"))
+            .unwrap(),
                 expected,
                 "tags {tags:#b}"
             );
@@ -805,12 +863,14 @@ mod tests {
             &actions,
             &lock_hash,
             Some("protocol:rgbpp")
-        ));
+        )
+            .unwrap());
         assert!(!CkbadgerStore::matches_activity_filter(
             &actions,
             &lock_hash,
             Some("protocol:fiber")
-        ));
+        )
+            .unwrap());
     }
 
     #[test]
@@ -951,12 +1011,14 @@ mod prefix_participant_filter_tests {
             &actions,
             &lock,
             Some("identity")
-        ));
+        )
+            .unwrap());
         assert!(!CkbadgerStore::matches_activity_filter(
             &actions,
             &lock,
             Some("token")
-        ));
+        )
+            .unwrap());
     }
 }
 

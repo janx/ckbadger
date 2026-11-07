@@ -1200,10 +1200,6 @@ pub(crate) fn build_pool_activity_rows(
                 hex::encode(record.tx_hash)
             )
         })?;
-        // The same filter → tag-bitmap mapping the committed index uses.
-        if !CkbadgerStore::matches_activity_filter(actions, lock_hash, filter) {
-            continue;
-        }
         let participant = actions
             .participants
             .iter()
@@ -1215,6 +1211,10 @@ pub(crate) fn build_pool_activity_rows(
                     hex::encode(record.tx_hash)
                 )
             })?;
+        // The same filter → tag-bitmap mapping the committed index uses.
+        if !CkbadgerStore::matches_activity_filter(actions, lock_hash, filter)? {
+            continue;
+        }
 
         rows.push(build_activity_response(
             store,
@@ -1336,10 +1336,23 @@ async fn get_address_activities(
             };
 
             for actions in &page {
-                let Some(participant) = actions.participants.iter().find(|p| p.id.matches(&lock32))
-                else {
-                    continue;
-                };
+                // `list_activities` serves only transactions the address
+                // takes part in (`matches_activity_filter` fails on a stale
+                // row); a row without its participant here is a bug, never a
+                // row to drop from the page.
+                let participant = actions
+                    .participants
+                    .iter()
+                    .find(|p| p.id.matches(&lock32))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "activity of address 0x{} at block={}, tx_idx={} has no participant \
+                             for the address",
+                            hex::encode(lock32),
+                            actions.block_number,
+                            actions.tx_index
+                        )
+                    })?;
                 activities.push(build_activity_response(
                     store.as_ref(),
                     &network,
