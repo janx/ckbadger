@@ -4482,17 +4482,6 @@ fn collect_script_daily_deltas_snapshot(
     Ok(script_daily_deltas)
 }
 
-/// The most blocks one rayon leaf of the history `par_iter` runs. Without a
-/// bound rayon cuts a batch into 32 leaves (the power of two above its
-/// 24-thread split count) and never splits a leaf once it runs, so a 12M-21M
-/// batch (35-53k blocks) gets leaves of 1,100-1,650 blocks and the last of
-/// them run on 2-3 threads while the rest of the pool has nothing to steal
-/// (B-5f: that tail is 35-45 % of the history wall). With 64 the same batch
-/// becomes 1,024 leaves of 34-52 blocks (about 190-290 cells at 5.6 cells per
-/// block): each leaf is still hundreds of microseconds of work against about a
-/// microsecond of split cost. A single block stays one indivisible item.
-const HISTORY_LEAF_MAX_BLOCKS: usize = 64;
-
 #[allow(clippy::too_many_arguments)]
 fn build_history_batches(
     arena: &facts::FactsArena,
@@ -4512,12 +4501,10 @@ fn build_history_batches(
 
     let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
 
-    // par_iter over the blocks, in leaves of at most HISTORY_LEAF_MAX_BLOCKS
-    // blocks so idle workers can still take the tail; no WriteBatch overhead.
+    // par_iter: one rayon task per block — maximum parallelism, no WriteBatch overhead.
     let block_results: Vec<Result<BlockHistoryRows>> = arena
         .blocks
         .par_iter()
-        .with_max_len(HISTORY_LEAF_MAX_BLOCKS)
         .map(|block| {
             let block_txs = &arena.txs[block.tx_range.clone()];
             let block_resolved = &resolved[block.tx_range.clone()];
