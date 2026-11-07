@@ -9,7 +9,9 @@ use ckbadger_store::{
 use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
-use crate::db::writer::{build_script_reference_rollup_state_with_lineage, TypeIdCodeChange};
+use crate::db::writer::{
+    build_script_reference_rollup_state_with_lineage, reference_binary, TypeIdCodeChange,
+};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::interner::IdentityInterner;
@@ -304,15 +306,13 @@ impl ScriptOwner {
         mapping_keys.dedup();
         let mut reference_mappings = Vec::with_capacity(mapping_keys.len());
         for (reference_hash, hash_type) in mapping_keys {
-            let version_hash = match hash_type {
-                0 | 2 | 4 => Some(reference_hash.clone()),
-                1 => self.type_id_reference_versions.get(&reference_hash).cloned().flatten(),
-                _ => bail!(
-                    "unsupported script reference hash_type during bulk-build materialization: reference_hash=0x{}, hash_type={}",
-                    hex::encode(&reference_hash),
-                    hash_type
-                ),
-            };
+            let version_hash = reference_binary(&reference_hash, hash_type, || {
+                Ok(self
+                    .type_id_reference_versions
+                    .get(&reference_hash)
+                    .cloned()
+                    .flatten())
+            })?;
             reference_mappings.push(((reference_hash, hash_type), version_hash));
         }
         for ((reference_hash, hash_type), version_hash) in &reference_mappings {
@@ -367,12 +367,26 @@ impl ScriptOwner {
             &lineage,
         )?;
 
-        for (version_hash, info) in rollups.versions {
-            let previous = rollups.existing_versions.get(&version_hash);
+        // The labels each version row had before the rollup: those of the
+        // rows it changed are reported, every other row kept its labels.
+        let labels_before: HashMap<&[u8], &Option<crate::db::writer::VersionLabels>> = rollups
+            .changed_versions
+            .iter()
+            .map(|(hash, labels)| (hash.as_slice(), labels))
+            .collect();
+        let mut versions: Vec<(Vec<u8>, ckbadger_store::ScriptVersionInfo)> =
+            rollups.versions.into_iter().collect();
+        versions.sort_by(|left, right| left.0.cmp(&right.0));
+        for (version_hash, info) in versions {
+            let (prev_family, prev_name) = match labels_before.get(version_hash.as_slice()) {
+                Some(Some(labels)) => (labels.family_id.clone(), labels.name.clone()),
+                Some(None) => (None, None),
+                None => (info.family_id.clone(), info.name.clone()),
+            };
             // Same as the live writer: a family/name rebind must tombstone the
             // previous index key. Final snapshot puts only; deletes are staged
             // as empty-value rows on a delete CF path via materializer helpers.
-            let prev_family = previous.and_then(|v| v.family_id.as_deref());
+            let prev_family = prev_family.as_deref();
             let new_family = info.family_id.as_deref();
             if let (Some(old), Some(new)) = (prev_family, new_family) {
                 if old != new {
@@ -394,7 +408,7 @@ impl ScriptOwner {
                     Vec::new(),
                 ));
             }
-            let prev_name = previous.and_then(|v| v.name.as_deref());
+            let prev_name = prev_name.as_deref();
             let new_name = info.name.as_deref();
             if let (Some(old), Some(new)) = (prev_name, new_name) {
                 if old != new {
@@ -423,7 +437,10 @@ impl ScriptOwner {
             ));
         }
 
-        for (family_id, info) in rollups.families {
+        let mut families: Vec<(String, ckbadger_store::ScriptFamilyInfo)> =
+            rollups.families.into_iter().collect();
+        families.sort_by(|left, right| left.0.cmp(&right.0));
+        for (family_id, info) in families {
             all_rows.push(MaterializedRow::new(
                 ckbadger_store::CF_SCRIPT_FAMILIES,
                 family_id.into_bytes(),

@@ -107,6 +107,9 @@ fn type_code_index_hash_type(info: &LiveCellInfo, tx_hash: &[u8], output_index: 
 }
 
 impl BatchWriter {
+    /// Stage the batch's created cells: each payload into `cells_batch`
+    /// (append-only) and its live marker, lock script and index rows into
+    /// `domain_batch` in the scope of the block that created the cell.
     pub fn insert_cells_batch(
         &self,
         cells: &[(&[u8], i16, &ParsedCell, i64)],
@@ -119,7 +122,7 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (tx_hash, output_index, cell, _created_at_block) in cells {
+        for (tx_hash, output_index, cell, created_at_block) in cells {
             let lookup_key = (tx_hash.to_vec(), *output_index);
             let info = precomputed_infos.get(&lookup_key).cloned().ok_or_else(|| {
                 anyhow!(
@@ -129,6 +132,17 @@ impl BatchWriter {
                     precomputed_infos.len()
                 )
             })?;
+            if info.created_at_block != *created_at_block {
+                bail!(
+                    "precomputed cell info names another creation block: outpoint=0x{}:{}, created_at_block={}, info_created_at_block={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    created_at_block,
+                    info.created_at_block
+                );
+            }
+            // Every domain row of the cell belongs to the block that created it.
+            let mut domain_batch = domain_batch.at(*created_at_block);
             let raw_key = keys::encode_outpoint(tx_hash, *output_index);
             // Cell payload -> append-only batch
             cells_batch.put_cell_payload(&raw_key, &info.cell)?;
@@ -322,6 +336,9 @@ impl BatchWriter {
         Ok(result)
     }
 
+    /// Stage the batch's consumed cells into `domain_batch`, each consumed
+    /// marker, live-marker delete and index-row delete in the scope of the
+    /// block whose transaction consumed the cell.
     pub fn consume_cells_batch_preloaded(
         &self,
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
@@ -356,6 +373,8 @@ impl BatchWriter {
             };
 
             let raw_key = keys::encode_outpoint(tx_hash, *output_index);
+            // Every domain row the consumption moves belongs to the consuming block.
+            let mut domain_batch = domain_batch.at(*consumed_at_block);
             // Write consumed metadata to domain (NOT the cell payload -- already in append-only)
             domain_batch.put_consumed_cell_meta_raw_key(
                 &raw_key,

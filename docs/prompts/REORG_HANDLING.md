@@ -40,10 +40,14 @@ For reorgs up to 36 blocks deep, the indexer:
 
 1. Records a reorg event in `CF_SYNC_META` (`reorg:<timestamp_ms>`), including the first block it
    drops (`first_orphan_hash`, read from the stored headers before the rollback)
-2. Calls `rollback_to_block(fork_point)` for atomic multi-CF rollback
-3. Removes rolled-back entries from all domain CFs: `block_headers`, `tx_index`, `live_cells`, `token_transfers`, `activities`, `addr_txs`, collection activity CFs, mutable aggregates, etc.
-4. Activity/addr_txs/collection activity entries are directly deleted via range scan (no ghost entries, no canonical filtering needed)
-5. Rebuilds `addr_balance` and collection activity counts from remaining canonical state
+2. Calls `rollback_to_block(fork_point)` for atomic multi-CF rollback (through
+   `BatchWriter::rollback_to`, see [Rollback Mechanisms](#rollback-mechanisms))
+3. Range-deletes the rolled-back blocks' `block_headers`, `tx_index`, `activities` and journal rows
+4. Writes every other domain row the rolled-back blocks changed — `live_cells`, `addr_txs`,
+   `addr_balance`, `token_transfers`, collection activities and their counts, aggregates — back to
+   its value at the end of the fork point from the block journal, in the same atomic write; nothing
+   is scanned, reversed from deleted rows or rebuilt from canonical state
+5. Recomputes the DAO tip summary at the new tip
 6. Clears deep-fork flag if it was set
 7. Updates sync cache status and continues syncing
 8. Notifies pipeline fetcher via `reorg_notify_flag` and drains stale batches
@@ -144,203 +148,224 @@ With ~10s block time, 36 blocks is about 6 minutes.
 
 ## Rollback Mechanisms
 
-Every column family (and every stats prefix within one) is rolled back by exactly **one** of
-these mechanisms. Two owners for the same rows means one of them silently loses data:
+There is one: **the block journal**. Every column family has exactly one rollback class, the
+`rollback_class` column of `CF_SPECS` (`crates/ckbadger-store/src/store.rs`), and a rollback treats
+each class one way:
 
-### Undo-Log Replay (for stateful CFs)
+| Class          | Column families                                                                                            | Rollback                                                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `Journal`      | every domain CF not listed below, `dob_decoded` included (the live writer applies a DOB decode, with the spore's media profile and its cluster's tier counts, in a batch's last block's scope; a rollback of that block undoes all three; the worker makes one pass per indexer process, so the spore is decoded again at the next indexer start, and a shutdown drops outcomes still queued, whose spores are decoded again at that start too) | each rolled-back block's journal entries write the key's previous value back; an absent previous value deletes the key                |
+| `RangeByBlock` | `block_headers`, `tx_index`, `tx_group_cycles` (the lazy cycles records, keyed by the tx slot), `activities` (block-descending keys), `reorg_undo_log_by_block` (the journal) | the rolled-back blocks' key range is deleted; nothing is journaled                                                                    |
+| `Never`        | `cells` (append-only store); `pending_proposals`; `net_nodes`, `net_stats`, `net_crawl` (network store)    | not rolled back: an orphaned cell payload is unreachable once its live / consumed marker is gone; the proposal cache writes `pending_proposals` out of band from mempool snapshots with no block context, so a proposal of an orphaned block stays until it is committed or expires (pre-existing); the network store is not chain data |
 
-CFs with delta-based state (e.g. `addr_balance`, `script_info`, `token_holders`, cell indexes) use undo-log replay:
+`RangeByBlock` is only for CFs whose key opens with the block number;
+`rollback_classes_follow_the_key_layout_rule` pins the table.
 
-- Write path records undo entries into `reorg_undo_log_by_block`
-- Key: `block_number + seq`
-- Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
-- Rollback replays entries for `block > rollback_to` in reverse order
+### Write side: one overlay per live batch
 
-The **outpoint reverse indexes** belong to this column too: `outpoint -> id` and
-`id -> outpoint` in `CF_STATS_SPORE` (written by Spore, did:ckb, `.bit Cell` and `.cell`
-through `BatchWriter::put_object_outpoint_rows`) and the mNFT class/token outpoint rows in
-`CF_STATS_MNFT` (written through `put_mnft_outpoint_row`). Each write reads its pre-image first,
-and a failed read is an error, never "the row did not exist". No other stage can clean these
-rows: a rolled-back mint's entry is already gone when anything after undo replay runs, and a
-rolled-back TRANSFER leaves the item alive with its stale outpoint row. See POSTMORTEM PROTO-010
-and PROTO-012.
+A live batch spans many blocks and a fork can land on any of them, so the journal is kept per
+block. `BlockOverlay` (`crates/ckbadger-store/src/block_overlay.rs`), one per live batch, sees every
+write the batch makes to a `Journal`-class CF. The first time block N writes a key it records a
+journal entry `(cf, key, previous)`: the key's value **at the end of block N-1** — which an earlier
+block of the same batch may have written — or absent when the key did not exist.
 
-**Undo replay is the only owner of entity rows.** Identity (`identity_data`), Spore
-(`spore_data`) and mNFT (`mnft_data`) rows, together with their owner-index and outpoint
-reverse-index rows, are restored only by undo replay, which runs before `rollback_to_block` at
-every entry point (`execute_reorg`, `init_sync_start`, partial-batch cleanup). Stage 10
-(`repair_spore_object_domain`) only rebuilds derived indexes and aggregates from the entities that
-survive — the `identity_by_collection` sentinel rows and `.cell` parent→child rows, and the owner
-counts, keyed by `ParticipantId` (a `Lock` or a `LockPrefix` picks the key encoder) — and never
-deletes an entity. An entry with `created_at_block > rollback_to` that is still present at that
-point means the writer that created it recorded no undo pre-image, so the rollback fails with
-`… missing undo pre-image from writer` (naming the CF, id, standard, `created_at_block` and
-`rollback_to`) and commits nothing. The fix is always to add the pre-image in the writer, never
-to delete in the repair scan. A crashed bulk build cannot reach this path, because startup fails
-fast on an incomplete bulk-session marker.
+- **One entry per (block, key)**, holding the pre-block value. A block that leaves a key at the
+  value it found (a `lock_scripts` row of a known lock, a key created and deleted in one block)
+  journals nothing.
+- **One write per key**: each key is staged into the commit once, with its final value.
+- A previous value the batch did not read is resolved by one `multi_get` per CF when the overlay
+  is staged.
 
-**Token rows** (`CF_TOKENS`) are split between two owners by field, never by row. Undo replay
-owns a token's **existence and metadata** (`name`, `symbol`, `decimals`, `max_supply`,
-`metadata_source`, `chain_metadata`): the live UDT writer
-(`TokenRowThroughBatch` in `crates/indexer/src/db/writer/udt.rs`) records, under
-`UndoSeqScope::Object`, one pre-image per token per block that creates the row or changes one of
-those fields — the row as of the end of the previous block, or "absent" for the creating block. A
-live batch spans many blocks and applies its metadata observations batch-flat, so each
-observation keeps the block that carried it (`MaxSupplyObservation`, `OnchainTokenInfoTimeline`)
-and `row_through(block)` is the one rule for both the stored row (`row_through(last block)`) and
-every pre-image (`row_through(block - 1)`). A block that only moves the token records nothing.
-Stage 9d owns the **transfer count**: it reverses the `CF_STATS_TOKEN` transfer counter by the
-deleted `token_transfers` rows and writes the result into the row as well (the forward writer
-stores the same copy). A pre-image carries the count of its own block, so 9d never subtracts from
-the row's count; it fails when that count lies outside `[surviving, current]`, and when a row is
-absent after replay while transfers survive (a writer created the row without a pre-image). A row
-removed by replay has its counter deleted. Label import is not block-scoped: a pre-image recorded
-before a restart that changed a label restores the earlier label until the next start re-imports
-it.
+The writers reach it through `StoreBatch`: `StoreBatch::journaled(store, &overlay, origin)` makes
+each sub-batch of the live batch route its `Journal`-class writes into the overlay (every other
+class goes to the `WriteBatch` as before), and `StoreBatch::at(block)` attributes the writes made
+through it to one block. A writer whose rows are batch aggregates applies them **block by block**
+(the parser keeps per-block deltas, `PerBlock`) with the same per-row function, so every block's
+end state is journaled exactly; a writer that reads back a key the batch already wrote reads it
+through the overlay (`StoreBatch::get_stats`, `StoreBatch::get_current_many`). `write_parsed_batch`
+stages the overlay (`stage_journal`) right before the atomic domain commit, so a block's rows and
+its journal rows land in one write; `Live batch journal staged` (debug) logs `journal_entries`,
+`journal_bytes` and `journal_keys_written`. Row layout: `docs/STORE_SCHEMA.md` →
+`reorg_undo_log_by_block`.
 
-**Cell index rows** follow the cell rollback (tx-contexts, or the full-scan fallback), in the same
-batch as the live-marker change. `cell_by_lock` / `cell_by_type` / the code indexes are deleted with
-a rolled-back live output and re-put with a restored consumed cell. `cell_by_data_hash` survives
-consumption (code-cell resolution reads consumed deployments), so the rollback deletes it only when
-the cell ceases to exist — a live output of a rolled-back tx, or a cell created **and** consumed in
-the rolled-back range — and never re-puts it for a restored cell (it was never deleted; re-putting
-would fabricate a row for an empty-data cell the live writer does not index). Rollback fails on a
-`token_transfers` key whose width is not 44 instead of stepping over it.
+Fail fast — each of these is an error that fails the batch before anything is committed:
 
-### Direct Deletion (for activity/event CFs)
+- a `Journal`-class write without a block scope (`StoreBatch::at`);
+- a write to a key from an older block than the key's last one (blocks reach a key in ascending
+  order);
+- a key written from two sub-batches, whose merge order would decide the committed value;
+- a range delete on a `Journal`-class CF of a journaled batch (the journal needs every key);
+- a commit before `stage_journal`;
+- a write of a never-journaled key straight to the overlay (a journaled batch stages such a key —
+  see the outside-journal table below — straight into its commit instead).
 
-Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
+Bulk sync records no journal and never builds an overlay (`docs/prompts/BULK_SYNC.md` rule 12): an
+overlay on a store in bulk mode is an error, never an overlay that silently stops journaling.
+`StoreBatch::into_write_batch` refuses a journaled batch (its writes live in the overlay).
 
-- `CF_ACTIVITIES`, `CF_ADDR_TXS` — scan all keys, delete where `block_num > rollback_to`
-- `CF_ADDR_TXS_BY_PREFIX` — same, and with tx-contexts available the exact keys are derived from
-  the rolled-back `TxActions` rows' `LockPrefix` participants (cells cannot enumerate a party that
-  holds none); a missing row aborts the rollback
-- `CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES` — same approach
-- Stats CFs (`ACTIVITY_DAILY`, `ACTIVITY_HOURLY` prefixes in `CF_STATS_CHAIN`) — deleted via `should_delete_stats_for_replay`
+### `rollback_to_block(target)`
 
-No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
+`CkbadgerStore::rollback_to_block` (`crates/ckbadger-store/src/reorg_ops.rs`) rolls the domain store
+back to the end of block `target` (`-1`: before genesis). For the blocks from the tip (the highest
+stored header) down to `target + 1` it stages, into **one** `WriteBatch`:
 
-### Prefix Participation Counters (reversed by deleted rows)
+1. the deletion of their `RangeByBlock` rows: one range delete per `RangeByBlock` CF of
+   `CF_SPECS` covering every rolled-back block — `block_headers`, `tx_index`, `tx_group_cycles` and
+   `reorg_undo_log_by_block` from `target + 1` up, and `activities`, whose keys open with the block
+   number descending, from the tip's key through `target + 1`'s;
+2. their journal entries' previous values, written back block by block from the tip down, each
+   block's entries in reverse sequence order (an absent previous value deletes the key).
 
-`addr_prefix_stats` counts the transactions a protocol named a 20-byte lock-hash prefix in without
-that party holding a cell. It carries **no** undo pre-image. Stage 8c' counts the
-`addr_txs_by_prefix` rows it deletes per prefix, subtracts that from the counter, and asserts the
-result **equals** the rows that survive; a counter reaching zero has its row deleted, and a prefix
-with deleted rows but no counter row aborts the rollback. This is the same contract
-`addr_balance.txs_count` uses against `addr_txs`, and it is the only exact one: a live batch spans
-many blocks, so a pre-image recorded on one block of the batch is not replayed when the fork point
-lands on a later block of that same batch, while the rows written after it are still deleted.
+Each key has one entry per block holding its value at the end of the previous block, so the last
+write of every key is its value at the end of `target`. There is no other stage: nothing is
+reversed from deleted rows, rebuilt from surviving rows, or found by scanning a column family.
+Because the rollback is one atomic write it is either committed or absent; there is no
+in-progress marker and nothing to resume after a crash.
 
-### Collection Daily Activity Counts (reversed by deleted rows)
+The core proves its own preconditions. Errors, with nothing written: a target below -1 or above the
+tip; a row of any `RangeByBlock` CF above the tip (checked first, even when `target` equals the tip,
+which is when startup cleanup runs); a target below the journal coverage floor (below); a block in
+`(target, tip]` with no journal row (every live block journals at least its `block_hash_index`
+creation, so a block without one was pruned or never journaled); an undo-log row of a scope other
+than `Journal`, or one that cannot be decoded; a journal row that names an unknown CF, a CF that is
+not `Journal` (`cells` included — the append-only invariant on this path) or a never-journaled key
+such as the coverage contract. The result counts the headers
+and `tx_index` rows removed, the `live_cells` markers removed and restored, and the journal entries
+written back (`Rollback committed`, info).
 
-`collection_activity_daily` (a collection's mint / transfer / burn transactions per UTC+8 day)
-carries **no** undo pre-image either. Stage 8e' takes the contribution of every collection
-activity row stages 8d/8e delete off its day (the deleted block's header gives the day): a day
-reaching zero is deleted, and a day that would go below zero — or that has no row — aborts the
-rollback naming the collection and the day. Same reason as the prefix counters: a live batch
-writes each `(collection, day)` once, so a per-block pre-image could not restore a fork point
-inside the batch.
+### One entry point
 
-### Entity Statistics (undo-log owned, never swept)
+The three callers — `execute_reorg` (automatic reorg, target = the fork point), startup cleanup
+(`init_sync_start_with_options`, target = the startup tip, or -1 when its header is missing) and
+partial-batch cleanup (`cleanup_batch_range`, target = the batch's first block - 1) — share
+`BatchWriter::rollback_to` (`crates/indexer/src/db/writer/reorg.rs`), which runs, in order:
 
-The eight per-entity daily/hourly stats families are restored **only** by undo replay. They are
-not in `STATS_REPLAY_CANDIDATE_PREFIXES`, and `should_delete_stats_for_replay` answers `false` for
-them at any date or hour:
+1. the coverage-floor check (below);
+2. the caller's reads of the store as it is — `execute_reorg` proves the stored orphaned branch and
+   reads its first orphan here, before the headers are deleted;
+3. `derive::invalidate_for_rollback(target)` (below);
+4. `begin_rollback`, which marks a pending fork reconciliation interrupted unless the rollback is a
+   cleanup that keeps its fork point;
+5. `rollback_to_block(target)`;
+6. `refresh_latest_dao_statistics`, the DAO tip summary at the new tip (below).
 
-- `SCRIPT_DAILY`, `TOKEN_DAILY`, `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`
-- `TOKEN_HOURLY`, `SPORE_HOURLY`, `OBJECT_HOURLY`
+None of them touches the append-only store.
 
-These rows are keyed `(entity, time bucket)`, so one bucket carries contributions from **both**
-sides of the fork point. Deleting the bucket threw away the surviving main-chain part for good,
-because replay only re-applies blocks after the fork point (POSTMORTEM STATS-010). The forward
-path records a per-block pre-image instead: `EntityStatsOverlay`
-(`crates/indexer/src/db/writer/entity_stats.rs`) records the value at the end of the previous
-block the first time a block touches a key, under `UndoSeqScope::EntityStats`, and writes each key
-exactly once per batch. Rollback replays those entries and gets the exact bytes back.
+### Tip summaries and the counters journaled per block
 
-Undo replay runs **before** canonical rollback at every entry point (`execute_reorg`,
-`init_sync_start`, partial-batch cleanup), so the stages that recompute aggregates from surviving
-rows — cluster capacity, for instance — already see restored values.
+Rows that are a function of the tip are recomputed, not journaled. `refresh_latest_dao_statistics`
+(`crates/indexer/src/db/writer/statistics.rs`) writes the DAO singletons (`stats_dao`
+`DAO_LATEST_STATS` 0x1B, `DAO_TOP_DEPOSITORS` 0x20) and the daily snapshot of the tip's still-open
+UTC+8 day (`DAO_DAILY_SNAPSHOT` 0x08) outside the journal, from one `dao_deposits` scan, and removes
+every 0x08 row of a day after the tip's (only a former tip's open-day row, which a rollback can
+write back as the previous value of a sealed write). It runs after every tip change: each forward
+live batch, every rollback, startup and bulk finalize. A sealed day's row (a later day's block
+exists) is the forward writer's, journaled at its sealer block, the first block of the next UTC+8
+day.
 
-### Derived Aggregates (undo-log owned, or reset)
+`sync_status` (`SyncChainStatus`: the tip number and hash, and the running totals
+`total_transactions`, `total_cells_created`, `total_cells_consumed`) and `live_cell_summary:current`
+(the tip and its four live-cell class counters) are **journaled per block** instead of recomputed at
+the new tip: their counters cannot be derived from headers. The live writer writes both at every
+block of a batch, and the rollback writes the target block's values back like any other row. The
+sync status's runtime part (`sync_runtime`, `SyncRuntimeStatus`: last sync time, rate, run start,
+bulk completion, deep-fork state) is the running process's, written outside the journal, so a
+rollback never restores a previous run's values.
 
-`dao_live_agg`, `object_collection_activity_count` and `bit_cell_by_account` are the indexer's
-background-derived aggregates (`docs/STORE_SCHEMA.md` → Derived Aggregates). Their live
-maintenance records a per-block end-of-previous-block pre-image of every row it touches
-(`UndoSeqScope::Derived`), so undo replay restores them exactly at any fork point — including one
-inside a multi-block live batch — and nothing else rolls them back.
+### Outside the journal: one table, checked
 
-Undo replay is exact only for rows that were exact when the pre-images were recorded, so
-**before** every rollback (`execute_reorg`, startup cleanup, partial-batch cleanup) the indexer
-calls `derive::invalidate_for_rollback(rollback_to)`:
+Some `Journal`-class keys are legitimately written outside the journal. Every one is listed, with
+its owner and why a rollback need not restore it, in `OUTSIDE_JOURNAL` beside `CF_SPECS`
+(`crates/ckbadger-store/src/store.rs`): the coverage contract; the sync status's runtime part;
+process telemetry (`runtime_status`, `sync_progress`, `memory_stats`, `background_tasks`); the bulk
+session marker; `network_identity`, `genesis_baseline`, `secondary_epoch_reward`; derive state
+(`derive:*`) and the three derived aggregates' rows (derive scheduler and reset); reorg events
+(`reorg:*`, `reorg_reconcile_pending`) and the deep-fork withdrawal of `live_cell_summary:current`;
+the DAO tip summary's rows; and label import's rows (`tokens`,
+`script_info`, `script_versions` with their label / family indexes, `script_families`,
+`script_family_by_name`). Label metadata is not chain state: a rollback through a block journaled
+before a label change restores that block's pre-change rows until the next import. An entry marked
+never-journaled is staged straight into the commit even by a journaled batch; the others are also
+journaled by live batches in their block's scope.
 
-- a derivation still **running** is reset by any rollback that removes a block (its rows mix
-  snapshot contributions with live deltas, and chunk writes are not undo-logged);
-- a **complete** derivation is reset when `rollback_to` is below `completed_at_tip`, the tip at
-  which its last rebuild chunk committed; at or above it, undo replay owns the rollback.
+The indexer turns on the **journal discipline** on its domain store before its first write
+(`CkbadgerStore::enforce_journal_discipline`, `entry.rs`): from then on, outside bulk sync, an
+unjournaled commit that writes a `Journal`-class key no entry covers fails with the CF and key, on
+every commit path — `StoreBatch` (each write is checked as it is staged; the refused batch writes
+nothing), the store's direct `put_cf` / `delete_cf`, and range deletes. A raw `WriteBatch` cannot be
+checked, so it is refused under the discipline; the rollback core's own write (the rollback itself)
+is the one raw write it allows. The rollback property suite drives every path under the discipline.
 
-A reset (`NotStarted` + range delete of the CF) commits before the undo replay, together with
-the deletion of that aggregate's `Derived` undo entries above the target — and so do the entries
-of any aggregate that is not maintained (not started, or left `Failed`) — so the replay cannot
-write stale pre-images back into a cleared CF, and a crash anywhere in the rollback leaves the
-aggregate reset and empty, never half-restored; the scheduler derives it
-again; meanwhile the API serves the fields it feeds as unknown (`null`, or `503 derive_pending`
-for `/dao/evidence` and `/dao/depositors`). `Derived` undo entries are pruned behind
-the same coverage floor as `EntityStats`, so the floor's rebuild-required rule covers them too.
+### Coverage floor (rebuild-required below it)
 
-### Stats Prefix Rollback Ownership
-
-Every stats prefix the rollback path can reach has exactly one owner. The table is executable:
-`test_stats_prefix_rollback_owner_table` in `crates/ckbadger-store/src/reorg_ops.rs` asserts it
-prefix by prefix.
-
-| Prefix                                                                         | Owner              | Mechanism                                                                                |
-| ------------------------------------------------------------------------------ | ------------------ | ---------------------------------------------------------------------------------------- |
-| `DAILY`, `HOURLY`, `ACTIVITY_DAILY`, `ACTIVITY_HOURLY`, `DAILY_BLOCK`, `MINER` | Cutoff sweep       | Cutoff bucket delta-repaired, later buckets deleted and regenerated by replay            |
-| `ACTIVITY_DAILY_ADDR_SET`, `ACTIVITY_HOURLY_ADDR_SET`                          | Cutoff sweep       | Strict `>` deletion; the cutoff bucket's address set is rebuilt from the surviving chain |
-| `DAO_DAILY_SNAPSHOT`                                                           | Cutoff sweep       | Cutoff day recomputed forward (`recompute_dao_daily_snapshots`)                          |
-| `EPOCH`                                                                        | Cutoff sweep       | Boundary epoch truncated to the fork point; epochs beginning inside the range deleted    |
-| `HODL_WAVE`, `CELL_DISTRIBUTION`, `ADDR_COHORT`                                | Cutoff sweep       | Day-boundary snapshots; the cutoff day's row does not exist yet when the fork happens    |
-| `SCRIPT_DAILY`, `TOKEN_DAILY`, `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`  | `EntityStats` undo | Per-block pre-image replay; never deleted by the sweep                                   |
-| `TOKEN_HOURLY`, `SPORE_HOURLY`, `OBJECT_HOURLY`                                | `EntityStats` undo | Per-block pre-image replay; expiry is the separate forward-only retention sweep          |
-
-The three day-boundary snapshot families are sweep-owned and correct as such: a day's snapshot is
-sealed on the **first block of the next day** and keyed by the **previous** day, so the cutoff
-day's row does not exist yet at fork time and the previous day's row sorts below the cutoff. This
-is pinned by `test_day_boundary_snapshots_survive_same_day_and_sealer_rollback`.
-
-### Coverage Floor (rebuild-required below it)
-
-`EntityStats` undo entries are pruned behind a moving floor, so the store states how far back it
-can still roll these families: `sync_meta` → `entity_stats_undo_contract`
-(`EntityStatsUndoContract { version, coverage_floor_block, updated_at_block }`).
+The journal is pruned behind a moving floor, and the store states how far back it can still roll:
+`sync_meta` → `entity_stats_undo_contract` (`EntityStatsUndoContract { version,
+coverage_floor_block, updated_at_block }`).
 
 - Every live commit advances `coverage_floor_block` to
-  `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000) and stages the matching deletions (of
-  `EntityStats` and `Derived` entries) into
-  the same batch, so the floor and its deletions are never separately durable. `committed_tip` is
-  the durable tip the batch builds on (the block before its first block), because the prune sees
-  only committed rows; a batch longer than 1000 blocks leaves its own below-floor entries to the
-  next batch (POSTMORTEM IDX-012).
+  `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000) and deletes every journal row of the
+  blocks it leaves behind (one range delete) in the same batch, so the floor and its deletions are
+  never separately durable. `committed_tip` is the durable tip the batch builds on (the block before
+  its first block), because the prune sees only committed rows; a batch longer than 1000 blocks
+  leaves its own below-floor rows to the next batch (POSTMORTEM IDX-012). The floor never moves
+  down.
+- The contract describes which journal rows exist, so it is written **outside** the journal
+  (`StoreBatch::put_entity_stats_undo_contract` stages it straight into the commit; the overlay
+  refuses the key and the rollback refuses a journal row that names it): rolling back the block
+  that advanced the floor leaves the floor where the prune put it.
 - A rollback target **below** the floor fails with a rebuild-required error at **all three** entry
-  points — `execute_reorg` (fork point), `init_sync_start` (startup cleanup target), and
-  partial-batch cleanup — rather than rolling back blocks, cells and indexes while leaving these
-  buckets in place, which would have the re-sync add the same deltas a second time, undetectably.
+  points rather than deleting the rolled-back blocks' headers and transactions while every
+  journaled row keeps their effects, which the re-sync would then apply a second time.
 - A live reorg on a store with **no** contract at all is likewise refused; startup already rejects
   any non-empty store without one.
 
-There is no repair path here on purpose: fabricating a bucket the store cannot reconstruct is
-exactly the silent repair this design removes.
+There is no repair path here on purpose: fabricating a row the store cannot reconstruct is exactly
+the silent repair this design removes.
 
-**Bulk → live handoff.** Bulk sync records no undo entries, so the first floor is the **handoff
-tip** — the last block bulk actually wrote, not the chain tip it was racing. Live sync then has
+**Bulk → live handoff.** Bulk sync records no journal, so the first floor is the **handoff tip** —
+the last block bulk actually wrote, not the chain tip it was racing. Live sync then has
 `bulk_sync_threshold` blocks in which to build coverage before a legal shallow fork could reach
 below the floor, which is why `indexer.bulk_sync_threshold >= DEEP_FORK_DEPTH` (36) is validated at
 config load (`test_bulk_sync_threshold_below_deep_fork_depth_is_rejected`). The generated
 `config.toml` writes 1000. See `docs/prompts/BULK_SYNC.md` rule 12.
 
+### Derived aggregates (journaled, or reset)
+
+`dao_live_agg`, `object_collection_activity_count` and `bit_cell_by_account` are the indexer's
+background-derived aggregates (`docs/STORE_SCHEMA.md` → Derived Aggregates). Their live maintenance
+writes every row per block through the journal like any `Journal` CF, so a rollback restores them
+exactly — but only rows that were exact when their entries were recorded. Before every rollback
+`derive::invalidate_for_rollback(target)` therefore resets:
+
+- a derivation still **running**, by any rollback that removes a block (its rows mix snapshot
+  contributions with live deltas, and rebuild chunks are not journaled);
+- a **complete** derivation when `target` is below `completed_at_tip`, the tip at which its last
+  rebuild chunk committed; at or above it, the journal owns the rollback.
+
+A reset (`NotStarted` + range delete of the CF) commits before the journal rollback, together with
+the deletion of the journal entries above the target of every aggregate the journal does not own —
+the reset ones and any that are not maintained (not started, or left `Failed`) — so the rollback
+cannot write stale rows into a cleared CF, and a crash anywhere in the rollback leaves the
+aggregate reset and empty, never half-restored. The scheduler derives it again; meanwhile the API
+serves the fields it feeds as unknown (`null`, or `503 derive_pending` for `/dao/evidence` and
+`/dao/depositors`).
+
+### The pin: the rollback property suite
+
+`crates/indexer/tests/rollback_property.rs` writes one chain through the real live path — Spore
+cluster and Spore, xUDT, mNFT, did:ckb, `.bit`, `.cell`, NervosDAO deposit / request / completion,
+Fiber open / close, UTC+8 day and UTC hour boundaries, a data cell created and consumed above the
+fork — rolls it back through `execute_reorg`, and requires every domain CF to be byte-equal, key by
+key, to a store that synced only to the fork point with the same batch boundaries: single-block
+batches, forks inside multi-block batches, 36 blocks deep, derived aggregates `Running` or
+`Complete` above and below the target, the open-day DAO snapshot at forks inside batches, and plain
+transfer chains. The rolled-back store must then replay to the tip byte-equal. The suite does not
+know which mechanism restores a row, only that every row is restored; a change to any writer or to
+the rollback is checked against it.
+
 ### Key Insights
 
-1. CF ownership isolation alone is not enough; write semantics must also be isolated.
+1. One mechanism, chosen per CF by its key layout: a new `Journal` CF needs no rollback code — its
+   live writer only has to write in a block scope, which the batch enforces.
 2. The append-only store contains only `CF_CELLS` (immutable cell payloads). All other CFs (activities, addr_txs, collection activities, indexes, stats) are in the domain store.
 3. In normal sync, append-store keys (`CF_CELLS`) are expected to be first-write-only; if a key already exists, that is an upstream bug signal. Duplicate append key writes are treated as correctness violations and should fail immediately.

@@ -451,6 +451,18 @@ pub const CF_STATS_IDENTITY: &str = "stats_identity";
 pub const CF_STATS_CHAIN: &str = "stats_chain";
 pub const CF_STATS_DAO: &str = "stats_dao";
 pub const CF_STATS_HODL: &str = "stats_hodl";
+/// The HODL wave tracker's live capacity per cell creation day (B-4): key the
+/// UTC+8 day `YYYYMMDD` (8 ASCII bytes), value the live capacity in shannons
+/// (i128, 16 bytes little-endian, always > 0: a day whose cells are all
+/// consumed has no row). The tracker's scalars are the `sync_meta` row
+/// `hodl_cursor`.
+pub const CF_HODL_CAPACITY_BY_DATE: &str = "hodl_capacity_by_date";
+/// The cell-distribution tracker's address cohort accumulator (B-4): key the
+/// cohort month `YYYY-MM` (7 ASCII bytes) of the addresses' first-seen block,
+/// value `(used_capacity, balance)` in shannons (two i128, 32 bytes
+/// little-endian, both >= 0). The tracker's scalars are the `sync_meta` row
+/// `cell_dist_cursor`.
+pub const CF_CELL_DIST_COHORT_BY_MONTH: &str = "cell_dist_cohort_by_month";
 pub const CF_STATS_SCRIPT: &str = "stats_script";
 pub const CF_STATS_TOKEN: &str = "stats_token";
 pub const CF_STATS_SPORE: &str = "stats_spore";
@@ -497,6 +509,10 @@ pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
 pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
+/// A transaction's lazy script-group cycles (`TxGroupCyclesRecord`), keyed by
+/// its canonical slot (`block ‖ tx_idx`): written by the on-demand cycles
+/// worker after the block committed, removed with the block on rollback.
+pub const CF_TX_GROUP_CYCLES: &str = "tx_group_cycles";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 /// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
@@ -520,107 +536,513 @@ pub enum CfWritePolicy {
     SealedAggregate,
     BulkDisabled,
 }
-const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
-    CF_CELLS,
-    CF_BLOCK_HEADERS,
-    CF_BLOCK_HASH_INDEX,
-    CF_TX_INDEX,
-    CF_TX_HASH_MAP,
-    CF_CONSUMED_CELLS,
-    CF_CELL_BY_DATA_HASH,
-    CF_ADDR_TXS,
-    CF_ADDR_TXS_BY_PREFIX,
-    CF_TOKEN_TRANSFERS,
-    CF_TX_ACTIONS,
-    CF_TX_ACTIONS_BY_BUCKET,
-    CF_OBJECT_COLLECTION_ACTIVITIES,
-    CF_IDENTITY_COLLECTION_ACTIVITIES,
-    CF_LOCK_SCRIPTS,
-];
+/// Where a column family lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CfStore {
+    Domain,
+    AppendOnly,
+    Network,
+}
 
-const CF_WRITE_POLICY_SEALED_AGGREGATE: &[&str] = &[
-    CF_COLLECTION_ACTIVITY_DAILY,
-    CF_STATS_CHAIN,
-    CF_STATS_DAO,
-    CF_STATS_HODL,
-    CF_STATS_SCRIPT,
-    CF_STATS_TOKEN,
-    CF_STATS_SPORE,
-    CF_STATS_MNFT,
-];
+/// Live write-buffer tier: `MemoryProfile::write_buffer_{mega,high,low}_bytes`
+/// with 4 / 4 / 2 buffers live and 12 / 8 / 6 during bulk sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferTier {
+    Mega,
+    High,
+    Low,
+}
 
-const CF_WRITE_POLICY_BULK_DISABLED: &[&str] = &[
-    CF_REORG_UNDO_LOG_BY_BLOCK,
-    CF_PENDING_PROPOSALS,
-    CF_DOB_DECODED,
-    // Derived aggregates: written only by the indexer's background
-    // derivation and its live maintenance, never by bulk build.
-    CF_DAO_LIVE_AGG,
-    CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-    CF_BIT_CELL_BY_ACCOUNT,
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CfCompression {
+    Lz4,
+    None,
+}
 
-const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
-    CF_LIVE_CELLS,
-    CF_CELL_BY_LOCK,
-    CF_CELL_BY_TYPE,
-    CF_ADDR_BALANCE,
-    CF_ADDR_PREFIX_STATS,
-    CF_DOTCELL_NAME_BY_OWNER,
-    CF_DOTCELL_RING,
-    CF_DAO_DEPOSITS,
-    CF_DAO_BY_WITHDRAW_TX,
-    CF_DAO_BY_BLOCK,
-    CF_DAO_BY_LOCK_BLOCK,
-    CF_DAO_BY_STATUS_BLOCK,
-    CF_TOKENS,
-    CF_TOKEN_HOLDERS,
-    CF_TOKEN_HOLDERS_BY_BALANCE,
-    CF_ADDR_TOKENS_BY_BALANCE,
-    CF_SPORE_DATA,
-    CF_MNFT_DATA,
-    CF_MNFT_BY_COLLECTION,
-    CF_IDENTITY_DATA,
-    CF_IDENTITY_BY_COLLECTION,
-    CF_STATS_IDENTITY,
-    CF_SCRIPT_INFO,
-    CF_SCRIPT_VERSIONS,
-    CF_SCRIPT_VERSIONS_BY_LABEL,
-    CF_SCRIPT_FAMILIES,
-    CF_SCRIPT_VERSIONS_BY_FAMILY,
-    CF_SCRIPT_REFERENCE_INFO,
-    CF_SCRIPT_REFERENCE_TO_VERSION,
-    CF_SCRIPT_FAMILY_BY_NAME,
-    CF_SYNC_META,
-    CF_SPORE_BY_CLUSTER,
-    CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE_CODE,
-    CF_CLUSTER_AGG,
-    CF_MNFT_COLLECTION_AGG,
-    CF_IDENTITY_AGG,
-    CF_FIBER_CHANNELS,
-    CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_ADDR_FIBER_CHANNELS,
-    // Network crawler CFs use the normal mutable (final-snapshot) write policy,
-    // never append-only. They live in the separate network store.
-    CF_NET_NODES,
-    CF_NET_STATS,
-    CF_NET_CRAWL,
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CfCompaction {
+    /// Leveled with dynamic level bytes.
+    Leveled,
+    /// Universal (size ratio 10, size amplification 100 %): append-heavy history.
+    Universal,
+}
 
-pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
-    if CF_WRITE_POLICY_APPEND_ONLY.contains(&cf_name) {
-        CfWritePolicy::AppendOnly
-    } else if CF_WRITE_POLICY_SEALED_AGGREGATE.contains(&cf_name) {
-        CfWritePolicy::SealedAggregate
-    } else if CF_WRITE_POLICY_BULK_DISABLED.contains(&cf_name) {
-        CfWritePolicy::BulkDisabled
-    } else if CF_WRITE_POLICY_FINAL_SNAPSHOT.contains(&cf_name) {
-        CfWritePolicy::FinalSnapshot
-    } else {
-        panic!("unknown column family write policy: {}", cf_name)
+/// How a rollback restores a column family. Every CF has exactly one
+/// (`docs/prompts/REORG_HANDLING.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollbackClass {
+    /// Every live write records the key's value at the end of the previous
+    /// block in the block's journal; rollback writes those values back.
+    Journal,
+    /// The key starts with the block number: rollback deletes the block's key
+    /// range, nothing is journaled.
+    RangeByBlock,
+    /// Never rolled back: the append-only `cells` payloads (orphaned payloads
+    /// are unreachable once their markers are gone), the network store, and
+    /// `pending_proposals` (the proposal cache writes it out of band from
+    /// mempool snapshots, with no block context; a committed proposal is
+    /// removed after its batch commits and an expired one by the cache's
+    /// expiry sweep, so a proposal of an orphaned block stays until it is
+    /// committed or expires).
+    Never,
+}
+
+/// One row of the column-family table. Every CF list and every per-CF option
+/// in this module is a projection of [`CF_SPECS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CfSpec {
+    pub name: &'static str,
+    pub store: CfStore,
+    pub write_policy: CfWritePolicy,
+    pub buffer_tier: BufferTier,
+    /// Bulk sync gives the CF `MemoryProfile::write_buffer_hot_cf_bytes`.
+    pub bulk_hot_memtable: bool,
+    pub compression: CfCompression,
+    pub compaction: CfCompaction,
+    pub rollback_class: RollbackClass,
+}
+
+const HOT: bool = true;
+const COLD: bool = false;
+
+#[allow(clippy::too_many_arguments)]
+const fn cf(
+    name: &'static str,
+    store: CfStore,
+    write_policy: CfWritePolicy,
+    buffer_tier: BufferTier,
+    bulk_hot_memtable: bool,
+    compression: CfCompression,
+    compaction: CfCompaction,
+    rollback_class: RollbackClass,
+) -> CfSpec {
+    CfSpec {
+        name,
+        store,
+        write_policy,
+        buffer_tier,
+        bulk_hot_memtable,
+        compression,
+        compaction,
+        rollback_class,
     }
 }
+
+/// Every column family of the three store classes: chain stores first (`cells`,
+/// then the domain store in open order), then the network store.
+///
+/// `RangeByBlock` is only for CFs whose key starts with the block number;
+/// `cells` and `pending_proposals` are `Never`, every other domain CF
+/// (`dob_decoded` included) `Journal`. The network store is not chain data and
+/// is never rolled back.
+pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
+
+mod cf_table {
+    use super::BufferTier::{High, Low, Mega};
+    use super::CfCompaction::{Leveled, Universal};
+    use super::CfCompression::Lz4;
+    use super::CfStore::{AppendOnly as AppendStore, Domain, Network};
+    use super::CfWritePolicy::{AppendOnly, BulkDisabled, FinalSnapshot, SealedAggregate};
+    use super::RollbackClass::{Journal, Never, RangeByBlock};
+    use super::*;
+
+    #[rustfmt::skip]
+    pub(super) const CF_SPECS: &[CfSpec] = &[
+        //  name                                    store        write policy     tier  bulk  comp. compaction rollback
+        cf(CF_CELLS,                                  AppendStore, AppendOnly,      Mega, HOT,  Lz4,  Universal, Never),
+        cf(CF_LIVE_CELLS,                             Domain,      FinalSnapshot,   Mega, HOT,  Lz4,  Leveled,   Journal),
+        cf(CF_CONSUMED_CELLS,                         Domain,      AppendOnly,      Mega, HOT,  Lz4,  Leveled,   Journal),
+        cf(CF_REORG_UNDO_LOG_BY_BLOCK,                Domain,      BulkDisabled,    Mega, COLD, Lz4,  Leveled,   RangeByBlock),
+        cf(CF_BLOCK_HEADERS,                          Domain,      AppendOnly,      High, COLD, Lz4,  Leveled,   RangeByBlock),
+        cf(CF_BLOCK_HASH_INDEX,                       Domain,      AppendOnly,      High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_CELL_BY_LOCK,                           Domain,      FinalSnapshot,   Mega, HOT,  Lz4,  Leveled,   Journal),
+        cf(CF_CELL_BY_TYPE,                           Domain,      FinalSnapshot,   Mega, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_CELL_BY_LOCK_CODE,                      Domain,      FinalSnapshot,   Mega, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_CELL_BY_TYPE_CODE,                      Domain,      FinalSnapshot,   Mega, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_CELL_BY_DATA_HASH,                      Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TX_INDEX,                               Domain,      AppendOnly,      Mega, HOT,  Lz4,  Leveled,   RangeByBlock),
+        cf(CF_TX_HASH_MAP,                            Domain,      AppendOnly,      Mega, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_ADDR_BALANCE,                           Domain,      FinalSnapshot,   Mega, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_ADDR_TXS,                               Domain,      AppendOnly,      Mega, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DAO_DEPOSITS,                           Domain,      FinalSnapshot,   High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DAO_BY_WITHDRAW_TX,                     Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DAO_BY_BLOCK,                           Domain,      FinalSnapshot,   High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DAO_BY_LOCK_BLOCK,                      Domain,      FinalSnapshot,   High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DAO_BY_STATUS_BLOCK,                    Domain,      FinalSnapshot,   High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TOKENS,                                 Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TOKEN_HOLDERS,                          Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TOKEN_HOLDERS_BY_BALANCE,               Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_ADDR_TOKENS_BY_BALANCE,                 Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SPORE_DATA,                             Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_MNFT_DATA,                              Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_MNFT_BY_COLLECTION,                     Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_IDENTITY_DATA,                          Domain,      FinalSnapshot,   High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_IDENTITY_BY_COLLECTION,                 Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_CHAIN,                            Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_DAO,                              Domain,      SealedAggregate, Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_HODL,                             Domain,      SealedAggregate, Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_HODL_CAPACITY_BY_DATE,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_CELL_DIST_COHORT_BY_MONTH,              Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_SCRIPT,                           Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_TOKEN,                            Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_SPORE,                            Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_MNFT,                             Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_STATS_IDENTITY,                         Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_INFO,                            Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_VERSIONS,                        Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_VERSIONS_BY_LABEL,               Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_FAMILIES,                        Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_VERSIONS_BY_FAMILY,              Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_REFERENCE_INFO,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_REFERENCE_TO_VERSION,            Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SCRIPT_FAMILY_BY_NAME,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SYNC_META,                              Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_SPORE_BY_CLUSTER,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TOKEN_TRANSFERS,                        Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TX_ACTIONS,                             Domain,      AppendOnly,      Mega, HOT,  Lz4,  Leveled,   RangeByBlock),
+        cf(CF_CLUSTER_AGG,                            Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_MNFT_COLLECTION_AGG,                    Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_OBJECT_COLLECTION_ACTIVITIES,           Domain,      AppendOnly,      High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_IDENTITY_AGG,                           Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_IDENTITY_COLLECTION_ACTIVITIES,         Domain,      AppendOnly,      High, COLD, Lz4,  Leveled,   Journal),
+        cf(CF_PENDING_PROPOSALS,                      Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
+        cf(CF_FIBER_CHANNELS,                         Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_FIBER_CHANNEL_BY_COMMITMENT,            Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_ADDR_FIBER_CHANNELS,                    Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DOB_DECODED,                            Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_LOCK_SCRIPTS,                           Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_ADDR_TXS_BY_PREFIX,                     Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_ADDR_PREFIX_STATS,                      Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DOTCELL_NAME_BY_OWNER,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DOTCELL_RING,                           Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TX_ACTIONS_BY_BUCKET,                   Domain,      AppendOnly,      Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_COLLECTION_ACTIVITY_DAILY,              Domain,      SealedAggregate, Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_DAO_LIVE_AGG,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_OBJECT_COLLECTION_ACTIVITY_COUNT,       Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_BIT_CELL_BY_ACCOUNT,                    Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TX_GROUP_CYCLES,                        Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   RangeByBlock),
+        cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
+        cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
+        cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
+    ];
+}
+
+/// The spec of `name`, if it names a column family.
+pub fn cf_spec(name: &str) -> Option<&'static CfSpec> {
+    CF_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// One range of `Journal`-class keys that is legitimately written outside
+/// the block journal (an unjournaled commit), with its owner and why a
+/// rollback need not restore it. [`OUTSIDE_JOURNAL`] lists every one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutsideJournal {
+    pub cf: &'static str,
+    /// Every key starting with this prefix (empty: the whole column family).
+    pub key_prefix: &'static [u8],
+    /// Who writes it outside the journal.
+    pub owner: &'static str,
+    /// Why a rollback need not restore it, and what that leaves.
+    pub reason: &'static str,
+    /// Never journaled, on any batch: a journaled batch stages it straight
+    /// into its commit and the block overlay refuses it. Otherwise live
+    /// batches journal it in their block's scope and only the owner writes it
+    /// unjournaled.
+    pub never_journaled: bool,
+}
+
+const fn outside(
+    cf: &'static str,
+    key_prefix: &'static [u8],
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix,
+        owner,
+        reason,
+        never_journaled,
+    }
+}
+
+const NEVER: bool = true;
+const ALSO_JOURNALED: bool = false;
+const LABEL_IMPORT: &str = "label import (indexer startup, `ckbadger label-import`)";
+const LABELS_REASON: &str =
+    "label metadata, not chain state; a rollback through a block journaled \
+    before a label change restores that block's pre-change rows until the next import";
+const DERIVE: &str = "background derivation (derive scheduler, rollback reset)";
+const DERIVE_REASON: &str =
+    "a derived aggregate is rebuilt from canonical rows; a rollback resets \
+    an aggregate whose rows the journal does not own (the reset rule)";
+const TELEMETRY: &str = "process telemetry, not chain state";
+
+/// Every `Journal`-class key range written outside the block journal. With
+/// journal discipline on (the indexer), an unjournaled commit outside bulk
+/// sync that writes a `Journal`-class key not covered here is an error.
+pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+        "live batch commit (prune), bulk completion",
+        "describes which journal rows exist; the prune that advances it deletes rows no rollback \
+         restores, so a rollback must never write an older floor back",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::SYNC_RUNTIME,
+        "indexer runtime: live batch, startup, deep-fork record, reorg, bulk completion",
+        "run telemetry, bulk completion and deep-fork state belong to the running process",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::RUNTIME_STATUS,
+        "indexer heartbeat and shutdown record",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::SYNC_PROGRESS,
+        "indexer progress loop",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::MEMORY_STATS,
+        "indexer memory sampler",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::BACKGROUND_TASKS,
+        "background task progress mirror",
+        TELEMETRY,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+        "bulk build engine",
+        "marks an unfinished bulk session of a fresh store, which is rebuilt, never rolled back",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::NETWORK_IDENTITY,
+        "network guard (first start)",
+        "the network the store is built for; constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::GENESIS_BASELINE,
+        "indexer at block 0",
+        "derived from the genesis block; constant per network",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::SECONDARY_EPOCH_REWARD,
+        "indexer startup",
+        "a consensus constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::DERIVE_META_PREFIX,
+        DERIVE,
+        DERIVE_REASON,
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::REORG_EVENT_KEY_PREFIX,
+        "reorg handling (event record, reconciliation links)",
+        "the history of reorgs, not undo state",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+        "reorg handling",
+        "names the reorg event awaiting canonical replay",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        "deep-fork record (withdraws it)",
+        "a deep fork withdraws the summary until an operator resolves the fork; live batches \
+         journal it per block",
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_STATS_DAO,
+        &[keys::STATS_PREFIX_DAO_LATEST_STATS],
+        "DAO tip summary (refresh_latest_dao_statistics)",
+        "a function of the sync tip, recomputed after every tip change",
+        NEVER,
+    ),
+    outside(
+        CF_STATS_DAO,
+        &[keys::STATS_PREFIX_DAO_TOP_DEPOSITORS],
+        "DAO tip summary (refresh_latest_dao_statistics)",
+        "a function of the sync tip, recomputed after every tip change",
+        NEVER,
+    ),
+    outside(
+        CF_STATS_DAO,
+        &[keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT],
+        "DAO tip summary (refresh_latest_dao_statistics)",
+        "the open day's row is a function of the tip, recomputed after every tip change; a \
+         sealed day's row is journaled at its sealer block",
+        ALSO_JOURNALED,
+    ),
+    outside(CF_DAO_LIVE_AGG, b"", DERIVE, DERIVE_REASON, ALSO_JOURNALED),
+    outside(
+        CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+        b"",
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_BIT_CELL_BY_ACCOUNT,
+        b"",
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_VERSIONS,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_VERSIONS_BY_LABEL,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_VERSIONS_BY_FAMILY,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_FAMILIES,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_FAMILY_BY_NAME,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(
+        CF_SCRIPT_INFO,
+        b"",
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
+    outside(CF_TOKENS, b"", LABEL_IMPORT, LABELS_REASON, ALSO_JOURNALED),
+];
+
+/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any.
+pub fn outside_journal_entry(cf: &str, key: &[u8]) -> Option<&'static OutsideJournal> {
+    OUTSIDE_JOURNAL
+        .iter()
+        .find(|entry| entry.cf == cf && key.starts_with(entry.key_prefix))
+}
+
+pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
+    match cf_spec(cf_name) {
+        Some(spec) => spec.write_policy,
+        None => panic!("unknown column family write policy: {}", cf_name),
+    }
+}
+
+/// A projection of [`CF_SPECS`].
+#[derive(Clone, Copy)]
+enum CfSelect {
+    /// The two chain stores (domain + append-only).
+    Chain,
+    Store(CfStore),
+    Tier(BufferTier),
+    BulkHot,
+    Compaction(CfCompaction),
+}
+
+impl CfSpec {
+    const fn selected(&self, select: CfSelect) -> bool {
+        match select {
+            CfSelect::Chain => !matches!(self.store, CfStore::Network),
+            CfSelect::Store(store) => self.store as u8 == store as u8,
+            CfSelect::Tier(tier) => self.buffer_tier as u8 == tier as u8,
+            CfSelect::BulkHot => self.bulk_hot_memtable,
+            CfSelect::Compaction(compaction) => self.compaction as u8 == compaction as u8,
+        }
+    }
+}
+
+const fn cf_count(select: CfSelect) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < CF_SPECS.len() {
+        if CF_SPECS[i].selected(select) {
+            count += 1;
+        }
+        i += 1;
+    }
+    count
+}
+
+const fn cf_names<const N: usize>(select: CfSelect) -> [&'static str; N] {
+    let mut names = [""; N];
+    let mut count = 0;
+    let mut i = 0;
+    while i < CF_SPECS.len() {
+        if CF_SPECS[i].selected(select) {
+            names[count] = CF_SPECS[i].name;
+            count += 1;
+        }
+        i += 1;
+    }
+    assert!(count == N);
+    names
+}
+
+const ALL_CF_NAMES: [&str; cf_count(CfSelect::Chain)] = cf_names(CfSelect::Chain);
+const DOMAIN_CF_NAMES: [&str; cf_count(CfSelect::Store(CfStore::Domain))] =
+    cf_names(CfSelect::Store(CfStore::Domain));
+const APPEND_CF_NAMES: [&str; cf_count(CfSelect::Store(CfStore::AppendOnly))] =
+    cf_names(CfSelect::Store(CfStore::AppendOnly));
+const NETWORK_CF_NAMES: [&str; cf_count(CfSelect::Store(CfStore::Network))] =
+    cf_names(CfSelect::Store(CfStore::Network));
+const MEGA_CF_NAMES: [&str; cf_count(CfSelect::Tier(BufferTier::Mega))] =
+    cf_names(CfSelect::Tier(BufferTier::Mega));
+const HIGH_CF_NAMES: [&str; cf_count(CfSelect::Tier(BufferTier::High))] =
+    cf_names(CfSelect::Tier(BufferTier::High));
+const BULK_HOT_CF_NAMES: [&str; cf_count(CfSelect::BulkHot)] = cf_names(CfSelect::BulkHot);
+const UNIVERSAL_CF_NAMES: [&str; cf_count(CfSelect::Compaction(CfCompaction::Universal))] =
+    cf_names(CfSelect::Compaction(CfCompaction::Universal));
 
 pub fn is_append_only_cf_name(cf_name: &str) -> bool {
     APPEND_CFS.contains(&cf_name)
@@ -645,157 +1067,18 @@ pub(crate) enum StoreWriteIntent {
     BulkSyncAppendValidated,
 }
 
-/// All column family names, used during DB open.
-pub const ALL_CFS: &[&str] = &[
-    CF_CELLS,
-    CF_LIVE_CELLS,
-    CF_CONSUMED_CELLS,
-    CF_REORG_UNDO_LOG_BY_BLOCK,
-    CF_BLOCK_HEADERS,
-    CF_BLOCK_HASH_INDEX,
-    CF_CELL_BY_LOCK,
-    CF_CELL_BY_TYPE,
-    CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE_CODE,
-    CF_CELL_BY_DATA_HASH,
-    CF_TX_INDEX,
-    CF_TX_HASH_MAP,
-    CF_ADDR_BALANCE,
-    CF_ADDR_TXS,
-    CF_DAO_DEPOSITS,
-    CF_DAO_BY_WITHDRAW_TX,
-    CF_DAO_BY_BLOCK,
-    CF_DAO_BY_LOCK_BLOCK,
-    CF_DAO_BY_STATUS_BLOCK,
-    CF_TOKENS,
-    CF_TOKEN_HOLDERS,
-    CF_TOKEN_HOLDERS_BY_BALANCE,
-    CF_ADDR_TOKENS_BY_BALANCE,
-    CF_SPORE_DATA,
-    CF_MNFT_DATA,
-    CF_MNFT_BY_COLLECTION,
-    CF_IDENTITY_DATA,
-    CF_IDENTITY_BY_COLLECTION,
-    CF_STATS_CHAIN,
-    CF_STATS_DAO,
-    CF_STATS_HODL,
-    CF_STATS_SCRIPT,
-    CF_STATS_TOKEN,
-    CF_STATS_SPORE,
-    CF_STATS_MNFT,
-    CF_STATS_IDENTITY,
-    CF_SCRIPT_INFO,
-    CF_SCRIPT_VERSIONS,
-    CF_SCRIPT_VERSIONS_BY_LABEL,
-    CF_SCRIPT_FAMILIES,
-    CF_SCRIPT_VERSIONS_BY_FAMILY,
-    CF_SCRIPT_REFERENCE_INFO,
-    CF_SCRIPT_REFERENCE_TO_VERSION,
-    CF_SCRIPT_FAMILY_BY_NAME,
-    CF_SYNC_META,
-    CF_SPORE_BY_CLUSTER,
-    CF_TOKEN_TRANSFERS,
-    CF_TX_ACTIONS,
-    CF_CLUSTER_AGG,
-    CF_MNFT_COLLECTION_AGG,
-    CF_OBJECT_COLLECTION_ACTIVITIES,
-    CF_IDENTITY_AGG,
-    CF_IDENTITY_COLLECTION_ACTIVITIES,
-    CF_PENDING_PROPOSALS,
-    CF_FIBER_CHANNELS,
-    CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_ADDR_FIBER_CHANNELS,
-    CF_DOB_DECODED,
-    CF_LOCK_SCRIPTS,
-    CF_ADDR_TXS_BY_PREFIX,
-    CF_ADDR_PREFIX_STATS,
-    CF_DOTCELL_NAME_BY_OWNER,
-    CF_DOTCELL_RING,
-    CF_TX_ACTIONS_BY_BUCKET,
-    CF_COLLECTION_ACTIVITY_DAILY,
-    CF_DAO_LIVE_AGG,
-    CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-    CF_BIT_CELL_BY_ACCOUNT,
-];
+/// All chain-store column family names (domain + append-only), used during DB
+/// open of a test-unified store.
+pub const ALL_CFS: &[&str] = &ALL_CF_NAMES;
 
-/// Column families intended for the domain mutable store.
-pub const DOMAIN_CFS: &[&str] = &[
-    // CF_CELLS removed — now in APPEND_CFS (content-addressed, hash-keyed)
-    CF_LIVE_CELLS,
-    CF_CONSUMED_CELLS,
-    CF_REORG_UNDO_LOG_BY_BLOCK,
-    CF_BLOCK_HEADERS,
-    CF_BLOCK_HASH_INDEX,
-    CF_CELL_BY_LOCK,
-    CF_CELL_BY_TYPE,
-    CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE_CODE,
-    CF_CELL_BY_DATA_HASH,
-    CF_TX_INDEX,
-    CF_TX_HASH_MAP,
-    CF_ADDR_BALANCE,
-    CF_ADDR_TXS,
-    CF_DAO_DEPOSITS,
-    CF_DAO_BY_WITHDRAW_TX,
-    CF_DAO_BY_BLOCK,
-    CF_DAO_BY_LOCK_BLOCK,
-    CF_DAO_BY_STATUS_BLOCK,
-    CF_TOKENS,
-    CF_TOKEN_HOLDERS,
-    CF_TOKEN_HOLDERS_BY_BALANCE,
-    CF_ADDR_TOKENS_BY_BALANCE,
-    CF_SPORE_DATA,
-    CF_MNFT_DATA,
-    CF_MNFT_BY_COLLECTION,
-    CF_IDENTITY_DATA,
-    CF_IDENTITY_BY_COLLECTION,
-    CF_STATS_CHAIN,
-    CF_STATS_DAO,
-    CF_STATS_HODL,
-    CF_STATS_SCRIPT,
-    CF_STATS_TOKEN,
-    CF_STATS_SPORE,
-    CF_STATS_MNFT,
-    CF_STATS_IDENTITY,
-    CF_SCRIPT_INFO,
-    CF_SCRIPT_VERSIONS,
-    CF_SCRIPT_VERSIONS_BY_LABEL,
-    CF_SCRIPT_FAMILIES,
-    CF_SCRIPT_VERSIONS_BY_FAMILY,
-    CF_SCRIPT_REFERENCE_INFO,
-    CF_SCRIPT_REFERENCE_TO_VERSION,
-    CF_SCRIPT_FAMILY_BY_NAME,
-    CF_SYNC_META,
-    CF_SPORE_BY_CLUSTER,
-    CF_TOKEN_TRANSFERS,
-    CF_TX_ACTIONS,
-    CF_CLUSTER_AGG,
-    CF_MNFT_COLLECTION_AGG,
-    CF_OBJECT_COLLECTION_ACTIVITIES,
-    CF_IDENTITY_AGG,
-    CF_IDENTITY_COLLECTION_ACTIVITIES,
-    CF_PENDING_PROPOSALS,
-    CF_FIBER_CHANNELS,
-    CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_ADDR_FIBER_CHANNELS,
-    CF_DOB_DECODED,
-    CF_LOCK_SCRIPTS,
-    CF_ADDR_TXS_BY_PREFIX,
-    CF_ADDR_PREFIX_STATS,
-    CF_DOTCELL_NAME_BY_OWNER,
-    CF_DOTCELL_RING,
-    CF_TX_ACTIONS_BY_BUCKET,
-    CF_COLLECTION_ACTIVITY_DAILY,
-    CF_DAO_LIVE_AGG,
-    CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-    CF_BIT_CELL_BY_ACCOUNT,
-];
+/// Column families of the domain mutable store.
+pub const DOMAIN_CFS: &[&str] = &DOMAIN_CF_NAMES;
 
-/// Column families for the append-only store (immutable, hash-keyed cell payloads).
-pub const APPEND_CFS: &[&str] = &[CF_CELLS];
+/// Column families of the append-only store (immutable, hash-keyed cell payloads).
+pub const APPEND_CFS: &[&str] = &APPEND_CF_NAMES;
 
-/// Column families for the standalone network crawler store (mutable, domain-like).
-pub const NETWORK_CFS: &[&str] = &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL];
+/// Column families of the standalone network crawler store (mutable, domain-like).
+pub const NETWORK_CFS: &[&str] = &NETWORK_CF_NAMES;
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -889,11 +1172,17 @@ pub struct CkbadgerStore {
     /// exceeds the budget, giving the indexer predictable flush behavior.
     write_buffer_manager: WriteBufferManager,
     bulk_sync_mode: AtomicBool,
+    /// Set by the indexer: outside bulk sync, an unjournaled commit may write
+    /// a `Journal`-class key only where [`OUTSIDE_JOURNAL`] covers it.
+    journal_discipline: AtomicBool,
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
     /// `(measured_at, files)` for [`Self::sst_files_total_cached`].
     sst_file_count_cache: Mutex<Option<(Instant, u64)>>,
+    /// Column family name by handle address, built on first use. Handles
+    /// live in the DB's own map for the store's lifetime.
+    cf_names_by_handle: std::sync::OnceLock<std::collections::HashMap<usize, &'static str>>,
     /// Test-only read-call counters, so a test can prove a hot path issues one
     /// batched read instead of N point reads. Never compiled into the binary.
     #[cfg(any(test, feature = "read-call-counters"))]
@@ -1110,10 +1399,12 @@ impl CkbadgerStore {
             domain_write_gate: Mutex::new(()),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
+            journal_discipline: AtomicBool::new(false),
             is_secondary: false,
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
+            cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -1208,10 +1499,12 @@ impl CkbadgerStore {
             domain_write_gate: Mutex::new(()),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
+            journal_discipline: AtomicBool::new(false),
             is_secondary: true,
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
+            cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -1388,70 +1681,33 @@ impl CkbadgerStore {
         Ok(())
     }
 
-    /// Mega-write CFs with the heaviest per-batch write volume.
-    /// 256MB write buffers prevent memtable flush stalls during mega-blocks
-    /// (block 12M has ~1.31M txs → ~162MB per CF).
-    const MEGA_WRITE_CFS: &'static [&'static str] = &[
-        CF_CELLS,
-        CF_LIVE_CELLS,
-        CF_CONSUMED_CELLS,
-        CF_REORG_UNDO_LOG_BY_BLOCK,
-        CF_CELL_BY_LOCK,
-        CF_CELL_BY_TYPE,
-        CF_CELL_BY_LOCK_CODE,
-        CF_CELL_BY_TYPE_CODE,
-        CF_TX_INDEX,
-        CF_TX_HASH_MAP,
-        CF_ADDR_BALANCE,
-        CF_ADDR_TXS,
-        CF_TX_ACTIONS,
-    ];
+    /// Mega-tier CFs: the heaviest per-batch write volume (block 12M has
+    /// ~1.31M txs → ~162MB per CF), so their memtables are the largest.
+    const MEGA_WRITE_CFS: &'static [&'static str] = &MEGA_CF_NAMES;
 
-    /// High-write column families that benefit from large write buffers (128 MB).
-    const HIGH_WRITE_CFS: &'static [&'static str] = &[
-        CF_CELLS,
-        CF_LIVE_CELLS,
-        CF_CONSUMED_CELLS,
-        CF_REORG_UNDO_LOG_BY_BLOCK,
-        CF_BLOCK_HEADERS,
-        CF_BLOCK_HASH_INDEX,
-        CF_CELL_BY_LOCK,
-        CF_CELL_BY_TYPE,
-        CF_TX_INDEX,
-        CF_TX_HASH_MAP,
-        CF_ADDR_BALANCE,
-        CF_ADDR_TXS,
-        CF_DAO_DEPOSITS,
-        CF_DAO_BY_BLOCK,
-        CF_DAO_BY_LOCK_BLOCK,
-        CF_DAO_BY_STATUS_BLOCK,
-        CF_TX_ACTIONS,
-        CF_OBJECT_COLLECTION_ACTIVITIES,
-        CF_IDENTITY_COLLECTION_ACTIVITIES,
-        CF_STATS_CHAIN,
-        CF_STATS_SCRIPT,
-        CF_STATS_TOKEN,
-        CF_STATS_SPORE,
-        CF_STATS_MNFT,
-        CF_IDENTITY_DATA,
-    ];
+    /// High-tier CFs: large write buffers.
+    const HIGH_WRITE_CFS: &'static [&'static str] = &HIGH_CF_NAMES;
 
-    /// Historical append-heavy CFs.
-    ///
-    /// These indexes are primarily append writes during sync and large range scans on reads.
-    /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
-    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[CF_CELLS];
+    /// Historical append-heavy CFs: append writes during sync and large range
+    /// scans on reads. Universal compaction reduces cross-level rewrite
+    /// amplification for this write pattern.
+    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &UNIVERSAL_CF_NAMES;
+
+    fn spec(name: &str) -> &'static CfSpec {
+        cf_spec(name).unwrap_or_else(|| panic!("unknown column family: {name}"))
+    }
 
     fn is_mega_write_cf(name: &str) -> bool {
-        Self::MEGA_WRITE_CFS.contains(&name)
+        Self::spec(name).buffer_tier == BufferTier::Mega
     }
 
     fn is_high_write_cf(name: &str) -> bool {
-        Self::HIGH_WRITE_CFS.contains(&name)
+        Self::spec(name).buffer_tier == BufferTier::High
     }
 
+    #[cfg(test)]
     fn is_historical_append_cf(name: &str) -> bool {
-        Self::HISTORICAL_APPEND_CFS.contains(&name)
+        Self::spec(name).compaction == CfCompaction::Universal
     }
 
     /// Per-CF write buffer for the live profile: `(max_write_buffer_number,
@@ -1476,14 +1732,7 @@ impl CkbadgerStore {
     }
 
     /// CFs whose bulk-sync memtable is `MemoryProfile::write_buffer_hot_cf_bytes`.
-    const BULK_HOT_WRITE_CFS: &'static [&'static str] = &[
-        CF_TX_INDEX,
-        CF_CELLS,
-        CF_LIVE_CELLS,
-        CF_CONSUMED_CELLS,
-        CF_CELL_BY_LOCK,
-        CF_TX_ACTIONS,
-    ];
+    const BULK_HOT_WRITE_CFS: &'static [&'static str] = &BULK_HOT_CF_NAMES;
 
     /// Per-CF option overrides applied by
     /// [`Self::set_bulk_sync_compaction_options`], as `(option, value)` pairs.
@@ -1678,13 +1927,12 @@ impl CkbadgerStore {
         opts.set_level_zero_slowdown_writes_trigger(12);
         opts.set_level_zero_stop_writes_trigger(24);
         opts.set_max_bytes_for_level_base(profile.normal_max_bytes_for_level_base);
-        // Every CF, `cells` included, is lz4 (the bottommost level follows
-        // this type). `cells` was uncompressed until 2026-11-04: a 16 KB-block
-        // trial on its mainnet SSTs gave lz4 0.38 against zstd-1 0.345, and
-        // zstd's extra CPU would land on the flush thread that the bulk build
-        // already overlaps with (store refactor plan J3).
-        opts.set_compression_type(DBCompressionType::Lz4);
-        if Self::is_historical_append_cf(name) {
+        let spec = Self::spec(name);
+        opts.set_compression_type(match spec.compression {
+            CfCompression::Lz4 => DBCompressionType::Lz4,
+            CfCompression::None => DBCompressionType::None,
+        });
+        if spec.compaction == CfCompaction::Universal {
             opts.set_compaction_style(DBCompactionStyle::Universal);
             let mut uco = UniversalCompactOptions::default();
             uco.set_size_ratio(10);
@@ -1817,6 +2065,12 @@ impl CkbadgerStore {
     pub fn cf_stats_hodl(&self) -> &ColumnFamily {
         self.cf(CF_STATS_HODL)
     }
+    pub fn cf_hodl_capacity_by_date(&self) -> &ColumnFamily {
+        self.cf(CF_HODL_CAPACITY_BY_DATE)
+    }
+    pub fn cf_cell_dist_cohort_by_month(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_DIST_COHORT_BY_MONTH)
+    }
     pub fn cf_stats_script(&self) -> &ColumnFamily {
         self.cf(CF_STATS_SCRIPT)
     }
@@ -1904,6 +2158,9 @@ impl CkbadgerStore {
     pub fn cf_dob_decoded(&self) -> &ColumnFamily {
         self.cf(CF_DOB_DECODED)
     }
+    pub fn cf_tx_group_cycles(&self) -> &ColumnFamily {
+        self.cf(CF_TX_GROUP_CYCLES)
+    }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
     }
@@ -1988,6 +2245,29 @@ impl CkbadgerStore {
             .unwrap_or(0)
     }
 
+    /// The name of the column family `cf` is a handle of.
+    pub(crate) fn cf_name_for_handle(&self, cf: &ColumnFamily) -> anyhow::Result<&'static str> {
+        let names = self.cf_names_by_handle.get_or_init(|| {
+            Self::cfs_for_class(self.store_class)
+                .iter()
+                .filter_map(|name| {
+                    self.db
+                        .cf_handle(name)
+                        .map(|handle| (handle as *const ColumnFamily as usize, *name))
+                })
+                .collect()
+        });
+        names
+            .get(&(cf as *const ColumnFamily as usize))
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "column family handle does not belong to this {:?} store",
+                    self.store_class
+                )
+            })
+    }
+
     /// The name of the column family `cf` is a handle of (test counters only).
     #[cfg(any(test, feature = "read-call-counters"))]
     fn cf_name_of(&self, cf: &ColumnFamily) -> &'static str {
@@ -2032,6 +2312,8 @@ impl CkbadgerStore {
         if self.is_append_only_store() {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
+        } else if self.journal_discipline_applies() {
+            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
         }
         let _guard = self
             .domain_write_gate
@@ -2044,6 +2326,8 @@ impl CkbadgerStore {
         if self.is_append_only_store() {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
+        } else if self.journal_discipline_applies() {
+            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
         }
         let _guard = self
             .domain_write_gate
@@ -2191,11 +2475,20 @@ impl CkbadgerStore {
     }
 
     pub fn write_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_with_intent(batch, StoreWriteIntent::Normal)
     }
 
     pub fn write_batch_synced(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_with_intent_synced(batch, StoreWriteIntent::Normal)
+    }
+
+    /// The rollback core's one atomic write: the journal's previous values
+    /// written back and the rolled-back blocks' ranges deleted. It is the
+    /// rollback itself, so the journal discipline does not apply to it.
+    pub(crate) fn write_rollback_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.write_batch_with_intent(batch, StoreWriteIntent::Normal)
     }
 
     /// Write a batch with WAL disabled. Use during bulk sync where crash recovery
@@ -2220,6 +2513,7 @@ impl CkbadgerStore {
     /// - Keys must target CFs that belong to this store instance.
     /// - Caller must be in bulk-sync mode (no WAL, crash = rebuild).
     pub fn write_batch_no_wal_bulk(&self, batch: rocksdb::WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_no_wal_unchecked(batch)
     }
 
@@ -2244,53 +2538,8 @@ impl CkbadgerStore {
     }
 
     pub fn write_batch_no_wal(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.check_raw_write_batch()?;
         self.write_batch_no_wal_with_intent(batch, StoreWriteIntent::Normal)
-    }
-
-    pub(crate) fn apply_batch_op_by_cf_name(
-        &self,
-        batch: &mut WriteBatch,
-        cf_name: &str,
-        key: &[u8],
-        value: Option<&[u8]>,
-    ) -> anyhow::Result<()> {
-        self.apply_batch_op_by_cf_name_with_intent(
-            batch,
-            cf_name,
-            key,
-            value,
-            StoreWriteIntent::Normal,
-        )
-    }
-
-    pub(crate) fn apply_batch_op_by_cf_name_with_intent(
-        &self,
-        batch: &mut WriteBatch,
-        cf_name: &str,
-        key: &[u8],
-        value: Option<&[u8]>,
-        intent: StoreWriteIntent,
-    ) -> anyhow::Result<()> {
-        if !Self::cf_allowed(self.store_class, cf_name) {
-            anyhow::bail!(
-                "CF '{}' is not allowed in {:?} store",
-                cf_name,
-                self.store_class
-            );
-        }
-
-        let cf = self
-            .db
-            .cf_handle(cf_name)
-            .ok_or_else(|| anyhow::anyhow!("CF '{}' not found", cf_name))?;
-        if let Some(v) = value {
-            self.validate_append_put_by_cf_name(cf_name, key, v, intent)?;
-            batch.put_cf(cf, key, v);
-        } else {
-            self.validate_append_delete_by_cf_name(cf_name, key, intent)?;
-            batch.delete_cf(cf, key);
-        }
-        Ok(())
     }
 
     /// Resolve the target stats CF by stats key prefix.
@@ -2306,7 +2555,9 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => Ok(self.cf_stats_chain()),
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
+            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(self.cf_stats_chain()),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
             | keys::STATS_PREFIX_DAO_LATEST_STATS
             | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(self.cf_stats_dao()),
@@ -2337,20 +2588,18 @@ impl CkbadgerStore {
         }
     }
 
-    /// Resolve a column family handle by its name, the way
-    /// `rollback_via_undo_log` does when replaying a `KeyMutation` entry.
+    /// Resolve a column family handle by its name.
     pub fn cf_handle_by_name(&self, cf_name: &str) -> Option<&ColumnFamily> {
         self.db.cf_handle(cf_name)
     }
 
     /// Resolve the stats CF **name** for a stats key prefix.
     ///
-    /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which an
-    /// undo-log entry cannot carry: `UndoLogEntry::KeyMutation` is CF-name
-    /// addressed so `rollback_via_undo_log` can re-resolve the handle in
-    /// whichever process replays it. Both must stay in step — a prefix that
-    /// resolves to a handle here but not to a name would silently lose its
-    /// pre-images.
+    /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which a
+    /// block journal row cannot carry: journal rows are CF-name addressed so
+    /// the rollback can re-resolve the handle in whichever process replays
+    /// them. Both must stay in step — a prefix that resolves to a handle here
+    /// but not to a name would silently lose its journal entries.
     pub fn stats_cf_name_by_prefix(prefix: u8) -> anyhow::Result<&'static str> {
         match prefix {
             keys::STATS_PREFIX_DAILY
@@ -2363,7 +2612,9 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => Ok(CF_STATS_CHAIN),
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
+            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(CF_STATS_CHAIN),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
             | keys::STATS_PREFIX_DAO_LATEST_STATS
             | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(CF_STATS_DAO),
@@ -2475,6 +2726,81 @@ impl CkbadgerStore {
 
     pub fn is_bulk_sync_mode(&self) -> bool {
         self.bulk_sync_mode.load(Ordering::Relaxed)
+    }
+
+    // ---- Journal discipline ----
+
+    /// Turn the journal discipline on for this store handle (the indexer does,
+    /// before its first write): from now on, outside bulk sync, an unjournaled
+    /// commit that writes a `Journal`-class key not covered by
+    /// [`OUTSIDE_JOURNAL`] fails, and so does a raw `WriteBatch` commit.
+    pub fn enforce_journal_discipline(&self) {
+        self.journal_discipline.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn journal_discipline_applies(&self) -> bool {
+        self.journal_discipline.load(Ordering::Relaxed) && !self.is_bulk_sync_mode()
+    }
+
+    /// Check one unjournaled write (a direct put / delete, or a write of an
+    /// unjournaled `StoreBatch`) against the journal discipline.
+    pub(crate) fn check_unjournaled_write(&self, cf: &str, key: &[u8]) -> anyhow::Result<()> {
+        if !self.journal_discipline_applies() {
+            return Ok(());
+        }
+        let journaled =
+            cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        if !journaled || outside_journal_entry(cf, key).is_some() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf} \
+             key=0x{}; a live write goes through a journaled batch in its block's scope, and a \
+             write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner \
+             and reason",
+            crate::bytes_to_hex(key)
+        )
+    }
+
+    /// [`Self::check_unjournaled_write`] for a range delete `[start, end)`:
+    /// covered only when one entry's prefix holds both bounds (or the entry
+    /// is the whole column family).
+    pub(crate) fn check_unjournaled_range_delete(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> anyhow::Result<()> {
+        if !self.journal_discipline_applies() {
+            return Ok(());
+        }
+        let journaled =
+            cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        let covered = OUTSIDE_JOURNAL.iter().any(|entry| {
+            entry.cf == cf
+                && (entry.key_prefix.is_empty()
+                    || (start.starts_with(entry.key_prefix) && end.starts_with(entry.key_prefix)))
+        });
+        if !journaled || covered {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "unjournaled range delete on a Journal-class CF outside the OUTSIDE_JOURNAL table: \
+             cf={cf} start=0x{} end=0x{}",
+            crate::bytes_to_hex(start),
+            crate::bytes_to_hex(end)
+        )
+    }
+
+    fn check_raw_write_batch(&self) -> anyhow::Result<()> {
+        if self.journal_discipline_applies() {
+            anyhow::bail!(
+                "raw WriteBatch commit on a store under journal discipline outside bulk sync: \
+                 its writes cannot be checked against OUTSIDE_JOURNAL; commit through a \
+                 StoreBatch"
+            );
+        }
+        Ok(())
     }
 
     pub fn memory_profile(&self) -> &MemoryProfile {
@@ -3481,7 +3807,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 68);
+        assert_eq!(DOMAIN_CFS.len(), 71);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -3588,15 +3914,8 @@ mod tests {
         let cf = store.cf_cells();
         store.put_cf(cf, b"k1", b"v1").unwrap();
 
-        let mut batch = WriteBatch::default();
         let err = store
-            .apply_batch_op_by_cf_name_with_intent(
-                &mut batch,
-                CF_CELLS,
-                b"k1",
-                None,
-                StoreWriteIntent::AppendValidated,
-            )
+            .validate_append_delete_by_cf_name(CF_CELLS, b"k1", StoreWriteIntent::AppendValidated)
             .unwrap_err();
         assert!(err.to_string().contains("append-only delete blocked"));
     }
@@ -4832,4 +5151,389 @@ mod tests {
              the per-process SHARED_BUDGET is not being shared across opens"
         );
     }
+
+    /// Every CF's effective RocksDB options and write policy, as one line each:
+    /// `name policy live(tier,n) compression compaction bulk(n,buffer)`. Tier
+    /// and buffer are symbols of the store's own `MemoryProfile`, so the table
+    /// does not depend on the host's RAM.
+    fn cf_option_snapshot() -> Vec<String> {
+        fn symbol(bytes: &str, profile: &MemoryProfile) -> &'static str {
+            let bytes: usize = bytes.parse().unwrap();
+            if bytes == profile.write_buffer_mega_bytes {
+                "mega"
+            } else if bytes == profile.write_buffer_high_bytes {
+                "high"
+            } else if bytes == profile.write_buffer_low_bytes {
+                "low"
+            } else if bytes == profile.write_buffer_hot_cf_bytes {
+                "hot"
+            } else {
+                panic!("write buffer {bytes} is none of the profile's tiers")
+            }
+        }
+        let mut lines = Vec::new();
+        for (network, cfs) in [(false, ALL_CFS), (true, NETWORK_CFS)] {
+            let dir = TempDir::new().unwrap();
+            let store = if network {
+                CkbadgerStore::open_network(dir.path()).unwrap()
+            } else {
+                CkbadgerStore::open_test_unified(dir.path()).unwrap()
+            };
+            let profile = store.memory_profile.clone();
+            let tiers = [
+                profile.write_buffer_mega_bytes,
+                profile.write_buffer_high_bytes,
+                profile.write_buffer_low_bytes,
+                profile.write_buffer_hot_cf_bytes,
+            ];
+            for (i, a) in tiers.iter().enumerate() {
+                for b in &tiers[i + 1..] {
+                    assert_ne!(a, b, "profile tiers must be distinct for the snapshot");
+                }
+            }
+            let live: Vec<_> = cfs
+                .iter()
+                .map(|cf| persisted_cf_options(dir.path(), cf))
+                .collect();
+            store.set_bulk_sync_compaction_options();
+            for (cf, live) in cfs.iter().zip(live) {
+                let bulk = persisted_cf_options(dir.path(), cf);
+                let bulk_options = CkbadgerStore::bulk_cf_options(cf, &profile)
+                    .into_iter()
+                    .map(|(name, value)| {
+                        let value = if value == profile.bulk_max_bytes_for_level_base.to_string() {
+                            "bulk_level_base".to_string()
+                        } else if value == profile.bulk_target_file_size_base.to_string() {
+                            "bulk_file_size".to_string()
+                        } else if value == profile.write_buffer_hot_cf_bytes.to_string() {
+                            "hot".to_string()
+                        } else {
+                            value
+                        };
+                        format!("{name}={value}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                lines.push(format!(
+                    "{cf} {:?} live({},{}) {} {} bulk({},{}) [{bulk_options}]",
+                    cf_write_policy(cf),
+                    symbol(&live["write_buffer_size"], &profile),
+                    live["max_write_buffer_number"],
+                    live["compression"],
+                    live["compaction_style"],
+                    bulk["max_write_buffer_number"],
+                    symbol(&bulk["write_buffer_size"], &profile),
+                ));
+            }
+        }
+        lines
+    }
+
+    /// `CF_SPECS` is the one CF table: every name once, and every list and
+    /// lookup in this module agrees with it.
+    #[test]
+    fn cf_specs_name_every_cf_exactly_once_and_projections_agree() {
+        let mut names: Vec<&str> = CF_SPECS.iter().map(|spec| spec.name).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
+        assert_eq!(CF_SPECS.len(), 75);
+        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(APPEND_CFS, &[CF_CELLS]);
+        assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
+        assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
+        for spec in CF_SPECS {
+            let in_domain = DOMAIN_CFS.contains(&spec.name);
+            let in_append = APPEND_CFS.contains(&spec.name);
+            let in_network = NETWORK_CFS.contains(&spec.name);
+            assert_eq!(
+                (in_domain, in_append, in_network),
+                (
+                    spec.store == CfStore::Domain,
+                    spec.store == CfStore::AppendOnly,
+                    spec.store == CfStore::Network
+                ),
+                "{}: store lists disagree with its spec",
+                spec.name
+            );
+            assert_eq!(ALL_CFS.contains(&spec.name), !in_network, "{}", spec.name);
+            assert_eq!(
+                cf_write_policy(spec.name),
+                spec.write_policy,
+                "{}",
+                spec.name
+            );
+            assert_eq!(cf_spec(spec.name), Some(spec));
+        }
+        assert_eq!(cf_spec("no_such_cf"), None);
+    }
+
+    /// Every OUTSIDE_JOURNAL entry names a `Journal`-class domain CF (the
+    /// table is about keys the journal would otherwise own), and no two
+    /// entries cover the same key.
+    #[test]
+    fn outside_journal_entries_name_journal_class_cfs_once() {
+        for entry in OUTSIDE_JOURNAL {
+            assert_eq!(
+                cf_spec(entry.cf).map(|spec| spec.rollback_class),
+                Some(RollbackClass::Journal),
+                "{} {:?}",
+                entry.cf,
+                entry.key_prefix
+            );
+            assert!(!entry.owner.is_empty() && !entry.reason.is_empty());
+            let overlapping = OUTSIDE_JOURNAL
+                .iter()
+                .filter(|other| {
+                    other.cf == entry.cf
+                        && (other.key_prefix.starts_with(entry.key_prefix)
+                            || entry.key_prefix.starts_with(other.key_prefix))
+                })
+                .count();
+            assert_eq!(
+                overlapping, 1,
+                "{} {:?} overlaps",
+                entry.cf, entry.key_prefix
+            );
+        }
+    }
+
+    /// Under the journal discipline an unjournaled commit may write a
+    /// `Journal`-class key only where OUTSIDE_JOURNAL covers it; the refusal
+    /// writes nothing. Non-Journal CFs, bulk mode and a store without the
+    /// discipline are not checked; raw `WriteBatch` commits are refused.
+    #[test]
+    fn journal_discipline_refuses_unlisted_unjournaled_writes() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        // Without the discipline: a fixture store, written freely.
+        store
+            .put_cf(store.cf_addr_balance(), b"fixture", b"1")
+            .unwrap();
+        store.enforce_journal_discipline();
+
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_sync_meta(keys::sync_meta_keys::RUNTIME_STATUS, b"listed");
+        batch
+            .put_raw_cf_by_name(CF_ADDR_BALANCE, b"unlisted", b"2")
+            .unwrap();
+        let error = batch.commit().unwrap_err().to_string();
+        assert!(error.contains("cf=addr_balance"), "{error}");
+        assert!(
+            !error.contains("  "),
+            "the message reads as one line: {error}"
+        );
+        assert_eq!(
+            store
+                .get_cf(store.cf_sync_meta(), keys::sync_meta_keys::RUNTIME_STATUS)
+                .unwrap(),
+            None,
+            "a refused batch writes nothing"
+        );
+        let error = store
+            .put_cf(store.cf_addr_balance(), b"unlisted", b"2")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("OUTSIDE_JOURNAL"), "{error}");
+        assert!(store
+            .delete_cf(store.cf_addr_balance(), b"fixture")
+            .is_err());
+
+        // Listed keys, and a RangeByBlock CF, pass.
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_sync_meta(keys::sync_meta_keys::RUNTIME_STATUS, b"listed");
+        batch
+            .put_raw_cf_by_name(CF_TX_INDEX, b"tx", b"row")
+            .unwrap();
+        batch.commit().unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::SYNC_PROGRESS,
+                b"p",
+            )
+            .unwrap();
+
+        // A raw WriteBatch cannot be checked, so it is refused.
+        let error = store
+            .write_batch(WriteBatch::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("raw WriteBatch"), "{error}");
+        assert!(
+            !error.contains("  "),
+            "the message reads as one line: {error}"
+        );
+
+        // Bulk sync is not checked.
+        store.set_bulk_sync_mode(true);
+        store
+            .put_cf(store.cf_addr_balance(), b"bulk", b"3")
+            .unwrap();
+        store
+            .write_batch_no_wal_bulk(WriteBatch::default())
+            .unwrap();
+        store.set_bulk_sync_mode(false);
+        assert!(store
+            .write_batch_no_wal_bulk(WriteBatch::default())
+            .is_err());
+    }
+
+    /// A never-journaled key written through a journaled batch goes straight
+    /// into the commit, with no journal entry; an also-journaled one is
+    /// journaled in its block.
+    #[test]
+    fn a_journaled_batch_writes_never_journaled_keys_outside_the_journal() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        crate::commit_journaled_block(&store, 3, |batch| {
+            batch.put_sync_meta(keys::sync_meta_keys::RUNTIME_STATUS, b"telemetry");
+            batch.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, b"summary");
+        })
+        .unwrap();
+        let journaled: Vec<Vec<u8>> = store
+            .journal_entries(3)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        assert_eq!(
+            journaled,
+            vec![keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT.to_vec()]
+        );
+        assert_eq!(
+            store
+                .get_cf(store.cf_sync_meta(), keys::sync_meta_keys::RUNTIME_STATUS)
+                .unwrap(),
+            Some(b"telemetry".to_vec())
+        );
+    }
+
+    /// `RangeByBlock` only where the key starts with the block number;
+    /// `cells`, `pending_proposals` (written out of band by the proposal
+    /// cache) and the network store never roll back; every other domain CF,
+    /// `dob_decoded` included (B-5h: the live writer applies a decode in a
+    /// block's scope), is journaled.
+    #[test]
+    fn rollback_classes_follow_the_key_layout_rule() {
+        for spec in CF_SPECS {
+            let expected = match spec.name {
+                CF_BLOCK_HEADERS
+                | CF_TX_INDEX
+                | CF_TX_ACTIONS
+                | CF_REORG_UNDO_LOG_BY_BLOCK
+                | CF_TX_GROUP_CYCLES => RollbackClass::RangeByBlock,
+                CF_CELLS | CF_PENDING_PROPOSALS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => {
+                    RollbackClass::Never
+                }
+                _ => RollbackClass::Journal,
+            };
+            assert_eq!(spec.rollback_class, expected, "{}", spec.name);
+        }
+    }
+
+    /// B-1 pin: the `CfSpec` table must reproduce, for every CF, exactly the
+    /// options and write policy the hand-maintained tables produced before it
+    /// (main @8f8404da), plus Lane A's one measured change merged from main
+    /// @b2409d4c: `cells` is lz4 (store refactor plan J3). Changing any value
+    /// here is an option change, which needs its own paired bulk run. B-4
+    /// adds two rows (`hodl_capacity_by_date`, `cell_dist_cohort_by_month`,
+    /// the trackers' rows) and B-5c one (`tx_group_cycles`, the lazy cycles
+    /// record moved out of `sync_meta`); every other row is unchanged.
+    #[test]
+    fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
+        let actual = cf_option_snapshot();
+        let expected: Vec<String> = CF_OPTION_SNAPSHOT.iter().map(|s| s.to_string()).collect();
+        if actual != expected {
+            panic!(
+                "CF option snapshot changed:\n{}",
+                actual
+                    .iter()
+                    .map(|line| format!("    \"{line}\","))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+    }
+
+    #[rustfmt::skip]
+    const CF_OPTION_SNAPSHOT: &[&str] = &[
+    "cells AppendOnly live(mega,4) kLZ4Compression kCompactionStyleUniversal bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "live_cells FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "consumed_cells AppendOnly live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "reorg_undo_log_by_block BulkDisabled live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "block_headers AppendOnly live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "block_hash_index AppendOnly live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "cell_by_lock FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "cell_by_type FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "cell_by_lock_code FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "cell_by_type_code FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "cell_by_data_hash AppendOnly live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "tx_index AppendOnly live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "tx_hash_map AppendOnly live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "addr_balance FinalSnapshot live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "addr_txs AppendOnly live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,mega) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dao_deposits FinalSnapshot live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dao_by_withdraw_tx FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dao_by_block FinalSnapshot live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dao_by_lock_block FinalSnapshot live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dao_by_status_block FinalSnapshot live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "tokens FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "token_holders FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "token_holders_by_balance FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "addr_tokens_by_balance FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "spore_data FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "mnft_data FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "mnft_by_collection FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "identity_data FinalSnapshot live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "identity_by_collection FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_chain SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_dao SealedAggregate live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_hodl SealedAggregate live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "hodl_capacity_by_date FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "cell_dist_cohort_by_month FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_script SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_token SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_spore SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_mnft SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "stats_identity FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_info FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_versions FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_versions_by_label FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_families FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_versions_by_family FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_reference_info FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_reference_to_version FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "script_family_by_name FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "sync_meta FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "spore_by_cluster FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "token_transfers AppendOnly live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "activities AppendOnly live(mega,4) kLZ4Compression kCompactionStyleLevel bulk(12,hot) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=12,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size,write_buffer_size=hot]",
+    "cluster_agg FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "mnft_collection_agg FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_collection_activities AppendOnly live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "identity_agg FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "identity_collection_activities AppendOnly live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "pending_proposals BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "fiber_channels FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "fiber_channel_by_commitment FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "addr_fiber_channels FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dob_decoded BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "lock_scripts AppendOnly live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "addr_txs_by_prefix AppendOnly live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "addr_prefix_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dotcell_name_by_owner FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dotcell_ring FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "tx_actions_by_bucket AppendOnly live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "collection_activity_daily SealedAggregate live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "dao_live_agg BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_collection_activity_count BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "bit_cell_by_account BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "tx_group_cycles BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    ];
 }

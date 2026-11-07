@@ -45,14 +45,14 @@ fn fixture_header(number: u64, hash_byte: u8, timestamp_ms: u64) -> HeaderView {
     }
 }
 
-fn encode_molecule_bytes(data: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_molecule_bytes(data: &[u8]) -> Vec<u8> {
     let len = data.len() as u32;
     let mut result = len.to_le_bytes().to_vec();
     result.extend_from_slice(data);
     result
 }
 
-fn encode_molecule_table(fields: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn encode_molecule_table(fields: &[Vec<u8>]) -> Vec<u8> {
     let header_size = 4 + fields.len() * 4;
     let total_size = header_size + fields.iter().map(Vec::len).sum::<usize>();
     let mut result = Vec::with_capacity(total_size);
@@ -69,7 +69,7 @@ fn encode_molecule_table(fields: &[Vec<u8>]) -> Vec<u8> {
     result
 }
 
-fn encode_molecule_dynvec(items: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn encode_molecule_dynvec(items: &[Vec<u8>]) -> Vec<u8> {
     if items.is_empty() {
         return 4u32.to_le_bytes().to_vec();
     }
@@ -77,7 +77,7 @@ fn encode_molecule_dynvec(items: &[Vec<u8>]) -> Vec<u8> {
     encode_molecule_table(items)
 }
 
-fn encode_dotbit_account_cell_witness(account_id: &[u8; 20], account: &str) -> String {
+pub(crate) fn encode_dotbit_account_cell_witness(account_id: &[u8; 20], account: &str) -> String {
     let account_items = account
         .strip_suffix(".bit")
         .unwrap_or(account)
@@ -114,7 +114,7 @@ fn encode_dotbit_account_cell_witness(account_id: &[u8; 20], account: &str) -> S
     format!("0x{}", hex::encode(witness))
 }
 
-fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
+pub(crate) fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
     Script {
         code_hash: SPORE_CODE_HASH_MAINNET_V2.to_string(),
         hash_type: "data1".to_string(),
@@ -122,7 +122,7 @@ fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_bit_cell_type_script() -> Script {
+pub(crate) fn create_bit_cell_type_script() -> Script {
     Script {
         code_hash: BIT_CELL_CODE_HASH_TESTNET.to_string(),
         hash_type: "type".to_string(),
@@ -138,7 +138,7 @@ fn create_testnet_dotbit_account_type_script() -> Script {
     }
 }
 
-fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
+pub(crate) fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
     Script {
         code_hash: CLUSTER_CODE_HASH_MAINNET_V2.to_string(),
         hash_type: "data1".to_string(),
@@ -146,7 +146,11 @@ fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_spore_data(content_type: &str, content: &[u8], cluster_id: Option<&[u8; 32]>) -> Vec<u8> {
+pub(crate) fn create_spore_data(
+    content_type: &str,
+    content: &[u8],
+    cluster_id: Option<&[u8; 32]>,
+) -> Vec<u8> {
     let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
     let content_bytes = encode_molecule_bytes(content);
     let cluster_id_bytes = cluster_id.map(|id| encode_molecule_bytes(id));
@@ -173,7 +177,7 @@ fn create_spore_data(content_type: &str, content: &[u8], cluster_id: Option<&[u8
     data
 }
 
-fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
+pub(crate) fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
     let name_bytes = encode_molecule_bytes(name.as_bytes());
     let description_bytes = encode_molecule_bytes(description.as_bytes());
     let offset_name = 16u32;
@@ -190,7 +194,7 @@ fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
     data
 }
 
-fn create_mnft_issuer_type_script(type_id_hex: &str) -> Script {
+pub(crate) fn create_mnft_issuer_type_script(type_id_hex: &str) -> Script {
     Script {
         code_hash: MNFT_ISSUER_CODE_HASH.to_string(),
         hash_type: "type".to_string(),
@@ -198,7 +202,7 @@ fn create_mnft_issuer_type_script(type_id_hex: &str) -> Script {
     }
 }
 
-fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Script {
+pub(crate) fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Script {
     let mut args = issuer_id.to_vec();
     args.extend_from_slice(&class_index.to_le_bytes());
     Script {
@@ -208,7 +212,7 @@ fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Scri
     }
 }
 
-fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
+pub(crate) fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
     let mut args = class_id.to_vec();
     args.extend_from_slice(&token_index.to_le_bytes());
     Script {
@@ -218,7 +222,11 @@ fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
     }
 }
 
-fn create_mnft_issuer_data(class_count: u32, set_count: u32, info: Option<&str>) -> Vec<u8> {
+pub(crate) fn create_mnft_issuer_data(
+    class_count: u32,
+    set_count: u32,
+    info: Option<&str>,
+) -> Vec<u8> {
     let mut data = vec![0u8];
     data.extend_from_slice(&class_count.to_be_bytes());
     data.extend_from_slice(&set_count.to_be_bytes());
@@ -229,7 +237,7 @@ fn create_mnft_issuer_data(class_count: u32, set_count: u32, info: Option<&str>)
     data
 }
 
-fn create_mnft_class_data(
+pub(crate) fn create_mnft_class_data(
     total: u32,
     issued: u32,
     configure: u8,
@@ -248,7 +256,11 @@ fn create_mnft_class_data(
     data
 }
 
-fn create_mnft_token_data(characteristic: &[u8; 8], configure: u8, state: u8) -> Vec<u8> {
+pub(crate) fn create_mnft_token_data(
+    characteristic: &[u8; 8],
+    configure: u8,
+    state: u8,
+) -> Vec<u8> {
     let mut data = vec![0u8];
     data.extend_from_slice(characteristic);
     data.push(configure);

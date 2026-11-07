@@ -45,8 +45,9 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    fold_tx_address_deltas, AddressBalanceDelta, EntityDailyChanges, InputScriptHashes,
-    ReorgAction, TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
+    fold_tx_address_deltas, AddressBalanceChanges, BlockIndexChanges, CachedCellInfo,
+    EntityDailyChanges, InputScriptHashes, ReorgAction, TokenDailyChanges, TxAddressEffects,
+    TxData, UndatedEntityKey, UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -149,12 +150,18 @@ struct ParserBatchPerfSample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BatchWriteFailurePolicy {
     FailFastPreCommitInvariant,
+    /// The store's derived state no longer matches the chain
+    /// (`RebuildRequiredError`): no retry can repair it (B-7, F1).
+    FailFastRebuildRequired,
     CleanupAndRetry,
 }
 
 pub(super) fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
     if error.downcast_ref::<PreCommitInvariantError>().is_some() {
         BatchWriteFailurePolicy::FailFastPreCommitInvariant
+    } else if crate::lifecycle::is_rebuild_required(error) {
+        // An error the chain cannot repair is never transient (B-7, F1).
+        BatchWriteFailurePolicy::FailFastRebuildRequired
     } else {
         BatchWriteFailurePolicy::CleanupAndRetry
     }
@@ -928,6 +935,714 @@ pub(crate) fn consumed_object_collection_id(
     classify_object_collection_id(type_code_hash, type_args.unwrap_or(&[]))
 }
 
+/// Everything the parser stage precomputes for one live batch from the parsed
+/// transactions and their resolved inputs: the batch's own cell infos (Pass 1),
+/// input capacities and fees (Pass 2), the parser cell cache, and every
+/// address / script / token / entity delta the writer applies (Pass 3).
+///
+/// One function for the pipeline's parser task and for tests that drive the
+/// real parser path into `write_parsed_batch`.
+pub(crate) struct LiveBatchPrecompute {
+    pub(crate) input_script_hashes: InputScriptHashes,
+    pub(crate) batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    pub(crate) address_balance_changes: AddressBalanceChanges,
+    pub(crate) script_usage_changes: ScriptUsageChanges,
+    pub(crate) script_reference_usage_changes: ScriptReferenceUsageChanges,
+    pub(crate) script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
+    pub(crate) token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
+    pub(crate) spore_type_index_changes: BlockIndexChanges<SporeTypeIndex>,
+    pub(crate) spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+    pub(crate) cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+    pub(crate) object_type_index_changes: BlockIndexChanges<MnftTypeIndex>,
+    pub(crate) object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+    phase_metrics: ParserPrecomputePhaseMetrics,
+}
+
+pub(crate) fn precompute_live_batch(
+    store: &ckbadger_store::CkbadgerStore,
+    cell_cache: &dashmap::DashMap<([u8; 32], i16), CachedCellInfo>,
+    all_tx_data: &mut [TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    start_block: u64,
+    end_block: u64,
+) -> Result<LiveBatchPrecompute> {
+    let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
+
+    let mut precompute_phase_metrics = ParserPrecomputePhaseMetrics::default();
+
+    // Pass 1: Build batch_cell_infos
+    let build_batch_cell_infos_started = Instant::now();
+    let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+    for tx_data in all_tx_data.iter() {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
+            let output_index_i16 = match checked_usize_to_i16(
+                output_index,
+                "pipeline parser batch cell output index",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        block_number = tx_data.block_number,
+                        tx_hash = %hex::encode(tx_data.hash),
+                        output_index,
+                        "Parser: {}",
+                        e
+                    );
+                    return Err(anyhow!(
+                            "invalid output index while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
+                            tx_data.block_number,
+                            hex::encode(tx_data.hash),
+                            output_index,
+                            e
+                    ));
+                }
+            };
+            let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref() {
+                if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
+                    cached.clone()
+                } else {
+                    let looked_up = match store.get_token(type_hash) {
+                        Ok(token) => token.map(|info| info.standard),
+                        Err(e) => {
+                            error!(
+                                block_number = tx_data.block_number,
+                                tx_hash = %hex::encode(tx_data.hash),
+                                output_index,
+                                type_script_hash = %hex::encode(type_hash),
+                                "Parser: token metadata lookup failed while parsing UDT output hint: {}",
+                                e
+                            );
+                            return Err(anyhow!(
+                                    "token metadata lookup failed while parsing UDT output hint: block={}, tx=0x{}, output_index={}, error={}",
+                                    tx_data.block_number,
+                                    hex::encode(tx_data.hash),
+                                    output_index,
+                                    e
+                            ));
+                        }
+                    };
+                    udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                    looked_up
+                }
+            } else {
+                None
+            };
+            let udt_amount = match parse_parsed_cell_udt_amount(
+                cell,
+                &tx_data.hash,
+                output_index_i16,
+                standard_hint.as_deref(),
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        block_number = tx_data.block_number,
+                        tx_hash = %hex::encode(tx_data.hash),
+                        output_index,
+                        "Parser: {}",
+                        e
+                    );
+                    return Err(anyhow!(
+                            "failed to parse UDT amount while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
+                            tx_data.block_number,
+                            hex::encode(tx_data.hash),
+                            output_index,
+                            e
+                    ));
+                }
+            };
+            let live_cell_info = cell.to_live_cell_info(udt_amount).map_err(|e| {
+                anyhow!(
+                    "invalid output cell while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
+                    tx_data.block_number,
+                    hex::encode(tx_data.hash),
+                    output_index,
+                    e
+                )
+            })?;
+            batch_cell_infos.insert(
+                (tx_data.hash.to_vec(), output_index_i16),
+                PositionedCellInfo::new(live_cell_info, tx_data.block_number),
+            );
+        }
+    }
+    precompute_phase_metrics.build_batch_cell_infos_ms =
+        build_batch_cell_infos_started.elapsed().as_secs_f64() * 1000.0;
+
+    // Pass 2: Compute input capacity + fee
+    let compute_fee_started = Instant::now();
+    if let Err(err) =
+        compute_parser_input_capacities_and_fees(all_tx_data, input_cell_info, &batch_cell_infos)
+    {
+        error!(
+            start_block,
+            end_block, "Parser: invalid tx fee accounting: {}", err
+        );
+        return Err(anyhow!(
+            "invalid tx fee accounting: range {}-{}, error={}",
+            start_block,
+            end_block,
+            err
+        ));
+    }
+    precompute_phase_metrics.compute_fee_ms = compute_fee_started.elapsed().as_secs_f64() * 1000.0;
+
+    // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
+    let cache_balance_and_script_started = Instant::now();
+    let mut address_balance_changes = AddressBalanceChanges::new();
+    let mut script_usage_changes = ScriptUsageChanges::new();
+    let mut script_reference_usage_changes = ScriptReferenceUsageChanges::new();
+    // Entity daily deltas are accumulated PER BLOCK: a committed
+    // batch spans many blocks, and a shallow fork can land in the
+    // middle of one. Flattening them loses the block identity the
+    // block journal needs to restore a key's end-of-block-N value.
+    let mut script_daily_changes = EntityDailyChanges::<UndatedScriptKey>::new();
+    let mut token_daily_changes = TokenDailyChanges::<UndatedEntityKey>::new();
+    let mut spore_type_index_changes: BlockIndexChanges<SporeTypeIndex> = BlockIndexChanges::new();
+    let mut spore_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
+    let mut cluster_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
+    let mut object_type_index_changes: BlockIndexChanges<MnftTypeIndex> = BlockIndexChanges::new();
+    let mut object_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
+    let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> = HashMap::new();
+    let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
+
+    // `EntityDailyChanges::add` fails fast on out-of-order blocks
+    // and on i128 overflow; the parser closure returns `()`, so it
+    // reports the reason and exits the worker like every other
+    // parser invariant violation.
+    macro_rules! accumulate_daily {
+        ($changes:expr, $block:expr, $key:expr, $cap:expr, $know:expr) => {
+            $changes.add($block, $key, $cap, $know).map_err(|e| {
+                anyhow!(
+                    "failed to accumulate entity daily delta for range {}-{}: {}",
+                    start_block,
+                    end_block,
+                    e
+                )
+            })?
+        };
+    }
+
+    // Each input's lock / type script hash, derived here once and shipped to
+    // the writer, which reads them instead of deriving.
+    let mut input_script_hashes = InputScriptHashes::new();
+
+    for tx_data in all_tx_data.iter() {
+        // cell_cache update
+        for (output_index, _cell) in tx_data.cells.iter().enumerate() {
+            let output_index_i16 = match checked_usize_to_i16(
+                output_index,
+                "pipeline parser cache update output index",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        block_number = tx_data.block_number,
+                        tx_hash = %hex::encode(tx_data.hash),
+                        output_index,
+                        "Parser: {}",
+                        e
+                    );
+                    return Err(anyhow!(
+                            "invalid output index while updating parser cache: block={}, tx=0x{}, output_index={}, error={}",
+                            tx_data.block_number,
+                            hex::encode(tx_data.hash),
+                            output_index,
+                            e
+                    ));
+                }
+            };
+            let key = (tx_data.hash.to_vec(), output_index_i16);
+            let info = match batch_cell_infos.get(&key) {
+                Some(info) => info,
+                None => {
+                    error!(
+                        block_number = tx_data.block_number,
+                        tx_hash = %hex::encode(tx_data.hash),
+                        output_index,
+                        "Parser: missing precomputed cell info while updating parser cache"
+                    );
+                    return Err(anyhow!(
+                            "missing precomputed cell info while updating parser cache: block={}, tx=0x{}, output_index={}",
+                            tx_data.block_number,
+                            hex::encode(tx_data.hash),
+                            output_index
+                    ));
+                }
+            };
+            cell_cache.insert((tx_data.hash, output_index_i16), info.clone());
+        }
+
+        // This tx's TOKEN_DAILY member cells, outputs then inputs;
+        // `add_token_daily_tx` turns them into one contribution
+        // (and one transaction) per token once both sides are seen.
+        let mut tx_token_daily_members: Vec<TokenDailyMember> = Vec::new();
+        // script_usage_changes - outputs
+        for cell in &tx_data.cells {
+            let lock_key = (cell.lock_code_hash.clone(), false);
+            let lock_hash_type = match parse_script_reference_hash_type(
+                cell.lock_hash_type,
+                "lock",
+                tx_data.block_number,
+                &tx_data.hash,
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(anyhow!(
+                        "invalid output lock hash_type for range {}-{}: {}",
+                        start_block,
+                        end_block,
+                        e
+                    ));
+                }
+            };
+            let cell_occupied = occupied_capacity_shannons_i64(
+                cell.lock_args.len(),
+                cell.type_args.as_ref().map(|args| args.len()),
+                cell.data_size,
+            );
+            let reference_entry = script_reference_usage_changes
+                .block_mut(tx_data.block_number)?
+                .entry((cell.lock_code_hash.clone(), lock_hash_type, false))
+                .or_insert((0, 0, 0, 0, 0, 0));
+            reference_entry.0 += 1;
+            reference_entry.1 += 1;
+            reference_entry.2 += i128::from(cell.capacity);
+            reference_entry.3 += i128::from(cell.capacity);
+            reference_entry.4 += i128::from(cell_occupied);
+            reference_entry.5 += i128::from(cell_occupied);
+            let entry = script_usage_changes
+                .block_mut(tx_data.block_number)?
+                .entry(lock_key)
+                .or_insert((0, 0, 0, 0, 0, 0));
+            entry.0 += 1;
+            entry.1 += 1;
+            entry.2 += i128::from(cell.capacity);
+            entry.3 += i128::from(cell.capacity);
+            entry.4 += i128::from(cell_occupied);
+            entry.5 += i128::from(cell_occupied);
+            accumulate_daily!(
+                script_daily_changes,
+                tx_data.block_number,
+                (cell.lock_code_hash.clone(), lock_hash_type, false),
+                i128::from(cell.capacity),
+                i128::from(cell_occupied)
+            );
+            if let Some(ref type_code_hash) = cell.type_code_hash {
+                let type_hash_type = match cell.type_hash_type {
+                    Some(hash_type) => match parse_script_reference_hash_type(
+                        hash_type,
+                        "type",
+                        tx_data.block_number,
+                        &tx_data.hash,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(anyhow!(
+                                "invalid output type hash_type for range {}-{}: {}",
+                                start_block,
+                                end_block,
+                                e
+                            ));
+                        }
+                    },
+                    None => {
+                        return Err(anyhow!(
+                            "missing output type hash_type for range {}-{}: block={}, tx=0x{}",
+                            start_block,
+                            end_block,
+                            tx_data.block_number,
+                            hex::encode(tx_data.hash)
+                        ));
+                    }
+                };
+                let type_key = (type_code_hash.clone(), true);
+                let reference_entry = script_reference_usage_changes
+                    .block_mut(tx_data.block_number)?
+                    .entry((type_code_hash.clone(), type_hash_type, true))
+                    .or_insert((0, 0, 0, 0, 0, 0));
+                reference_entry.0 += 1;
+                reference_entry.1 += 1;
+                reference_entry.2 += i128::from(cell.capacity);
+                reference_entry.3 += i128::from(cell.capacity);
+                reference_entry.4 += i128::from(cell_occupied);
+                reference_entry.5 += i128::from(cell_occupied);
+                let entry = script_usage_changes
+                    .block_mut(tx_data.block_number)?
+                    .entry(type_key)
+                    .or_insert((0, 0, 0, 0, 0, 0));
+                entry.0 += 1;
+                entry.1 += 1;
+                entry.2 += i128::from(cell.capacity);
+                entry.3 += i128::from(cell.capacity);
+                entry.4 += i128::from(cell_occupied);
+                entry.5 += i128::from(cell_occupied);
+                accumulate_daily!(
+                    script_daily_changes,
+                    tx_data.block_number,
+                    (type_code_hash.clone(), type_hash_type, true),
+                    i128::from(cell.capacity),
+                    i128::from(cell_occupied)
+                );
+            }
+            if let Some(type_script_hash) = token_daily_member(
+                cell.type_script_hash.as_deref(),
+                cell.type_code_hash.as_deref(),
+                cell.type_hash_type,
+            ) {
+                tx_token_daily_members.push(token_daily_created(
+                    type_script_hash,
+                    cell.capacity,
+                    cell_occupied,
+                ));
+            }
+            if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+                cell.type_script_hash.as_ref(),
+                cell.type_code_hash.as_ref(),
+                cell.type_args.as_ref(),
+            ) {
+                if type_args.len() >= 32 && SporeParser::is_spore_nft_type_script(type_code_hash) {
+                    let spore_id = type_args[..32].to_vec();
+                    let cluster_id = SporeParser::parse_spore_cluster_id_from_data(&cell.data);
+                    let index = SporeTypeIndex {
+                        spore_id: spore_id.clone(),
+                        cluster_id: cluster_id.clone(),
+                    };
+                    spore_type_index_cache.insert(type_script_hash.clone(), Some(index.clone()));
+                    spore_type_index_changes
+                        .entry(tx_data.block_number)
+                        .or_default()
+                        .insert(type_script_hash.clone(), index);
+
+                    accumulate_daily!(
+                        spore_daily_changes,
+                        tx_data.block_number,
+                        spore_id,
+                        i128::from(cell.capacity),
+                        i128::from(cell_occupied)
+                    );
+
+                    {
+                        let effective_cluster_id =
+                            cluster_id.unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+                        accumulate_daily!(
+                            cluster_daily_changes,
+                            tx_data.block_number,
+                            effective_cluster_id,
+                            i128::from(cell.capacity),
+                            i128::from(cell_occupied)
+                        );
+                    }
+                }
+            }
+            if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+                cell.type_script_hash.as_ref(),
+                cell.type_code_hash.as_ref(),
+                cell.type_args.as_ref(),
+            ) {
+                let collection_id = classify_object_collection_id(type_code_hash, type_args);
+                if let Some(collection_id) = collection_id {
+                    let index = MnftTypeIndex {
+                        collection_id: collection_id.clone(),
+                    };
+                    object_type_index_cache.insert(type_script_hash.clone(), Some(index.clone()));
+                    object_type_index_changes
+                        .entry(tx_data.block_number)
+                        .or_default()
+                        .insert(type_script_hash.clone(), index);
+
+                    accumulate_daily!(
+                        object_daily_changes,
+                        tx_data.block_number,
+                        collection_id,
+                        i128::from(cell.capacity),
+                        i128::from(cell_occupied)
+                    );
+                }
+            }
+        }
+
+        // Per-tx balance/consumption tracking
+        let mut tx_balance_changes: HashMap<Vec<u8>, i128> = HashMap::new();
+        let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
+        let mut tx_occupied_changes: HashMap<Vec<u8>, i128> = HashMap::new();
+
+        if !tx_data.is_cellbase {
+            for input in &tx_data.inputs {
+                let output_index = match parsed_input_outpoint_index_i16(
+                    input.previous_output_index,
+                    "sync_indexer",
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(anyhow!(
+                            "parsed_input_outpoint_index_i16 failed for range {}-{}: {}",
+                            start_block,
+                            end_block,
+                            e
+                        ));
+                    }
+                };
+                let key = (input.previous_tx_hash.to_vec(), output_index);
+                let info = match resolve_parsed_input(
+                    input_cell_info,
+                    &batch_cell_infos,
+                    &key,
+                    &tx_data.hash,
+                    tx_data.block_number,
+                ) {
+                    Ok(info) => info,
+                    Err(e) => {
+                        error!(start_block, end_block, "Parser: {e}");
+                        return Err(anyhow!(
+                            "unresolved input in pass 3 for range {start_block}-{end_block}: {e}"
+                        ));
+                    }
+                };
+                {
+                    // The payload does not store script hashes: derive them
+                    // once per input cell, for this pass and for the writer.
+                    let lock_script_hash = info.lock_script_hash();
+                    let type_script_hash = info.type_script_hash();
+                    input_script_hashes.insert(key.clone(), (lock_script_hash, type_script_hash));
+                    let lock_script_hash = lock_script_hash.to_vec();
+                    *tx_balance_changes
+                        .entry(lock_script_hash.clone())
+                        .or_default() -= i128::from(info.capacity);
+                    *tx_cells_consumed
+                        .entry(lock_script_hash.clone())
+                        .or_default() += 1;
+                    *tx_occupied_changes.entry(lock_script_hash).or_default() -=
+                        i128::from(info.occupied_capacity());
+                    // script usage - inputs
+                    let lock_key = (info.lock_code_hash.to_vec(), false);
+                    let lock_hash_type = match parse_script_reference_hash_type(
+                        info.lock_hash_type,
+                        "lock",
+                        tx_data.block_number,
+                        &tx_data.hash,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(anyhow!(
+                                "invalid input lock hash_type for range {}-{}: {}",
+                                start_block,
+                                end_block,
+                                e
+                            ));
+                        }
+                    };
+                    let reference_entry = script_reference_usage_changes
+                        .block_mut(tx_data.block_number)?
+                        .entry((info.lock_code_hash.to_vec(), lock_hash_type, false))
+                        .or_insert((0, 0, 0, 0, 0, 0));
+                    reference_entry.1 -= 1;
+                    reference_entry.3 -= i128::from(info.capacity);
+                    reference_entry.5 -= i128::from(info.occupied_capacity());
+                    let entry = script_usage_changes
+                        .block_mut(tx_data.block_number)?
+                        .entry(lock_key)
+                        .or_insert((0, 0, 0, 0, 0, 0));
+                    entry.1 -= 1;
+                    entry.3 -= i128::from(info.capacity);
+                    entry.5 -= i128::from(info.occupied_capacity());
+                    accumulate_daily!(
+                        script_daily_changes,
+                        tx_data.block_number,
+                        (info.lock_code_hash.to_vec(), lock_hash_type, false),
+                        -i128::from(info.capacity),
+                        -i128::from(info.occupied_capacity())
+                    );
+                    if let Some(ref type_code_hash) = info.type_code_hash {
+                        let type_hash_type = match info.type_hash_type {
+                            Some(hash_type) => match parse_script_reference_hash_type(
+                                hash_type,
+                                "type",
+                                tx_data.block_number,
+                                &tx_data.hash,
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    return Err(anyhow!(
+                                        "invalid input type hash_type for range {}-{}: {}",
+                                        start_block,
+                                        end_block,
+                                        e
+                                    ));
+                                }
+                            },
+                            None => {
+                                return Err(anyhow!(
+                                        "missing input type hash_type for range {}-{}: block={}, tx=0x{}",
+                                        start_block,
+                                        end_block,
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash)
+                                ));
+                            }
+                        };
+                        let type_key = (type_code_hash.to_vec(), true);
+                        let reference_entry = script_reference_usage_changes
+                            .block_mut(tx_data.block_number)?
+                            .entry((type_code_hash.to_vec(), type_hash_type, true))
+                            .or_insert((0, 0, 0, 0, 0, 0));
+                        reference_entry.1 -= 1;
+                        reference_entry.3 -= i128::from(info.capacity);
+                        reference_entry.5 -= i128::from(info.occupied_capacity());
+                        let entry = script_usage_changes
+                            .block_mut(tx_data.block_number)?
+                            .entry(type_key)
+                            .or_insert((0, 0, 0, 0, 0, 0));
+                        entry.1 -= 1;
+                        entry.3 -= i128::from(info.capacity);
+                        entry.5 -= i128::from(info.occupied_capacity());
+                        accumulate_daily!(
+                            script_daily_changes,
+                            tx_data.block_number,
+                            (type_code_hash.to_vec(), type_hash_type, true),
+                            -i128::from(info.capacity),
+                            -i128::from(info.occupied_capacity())
+                        );
+                    }
+                    if let Some(type_script_hash) = token_daily_member(
+                        type_script_hash.as_ref().map(|hash| hash.as_slice()),
+                        info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
+                        info.type_hash_type,
+                    ) {
+                        tx_token_daily_members.push(token_daily_consumed(
+                            type_script_hash,
+                            info.capacity,
+                            info.occupied_capacity(),
+                        ));
+                    }
+                    if let (Some(type_script_hash), Some(type_code_hash)) =
+                        (type_script_hash.as_ref(), info.type_code_hash.as_ref())
+                    {
+                        if SporeParser::is_spore_nft_type_script(type_code_hash) {
+                            let spore_index = match load_optional_index_from_store(
+                                &mut spore_type_index_cache,
+                                type_script_hash,
+                                "spore_type",
+                                || store.get_spore_type_index(type_script_hash),
+                            ) {
+                                Ok(index) => index,
+                                Err(e) => {
+                                    error!(
+                                        start_block,
+                                        end_block, "Parser: failed to load spore type index: {}", e
+                                    );
+                                    return Err(anyhow!(
+                                        "failed to load spore type index for range {}-{}: {}",
+                                        start_block,
+                                        end_block,
+                                        e
+                                    ));
+                                }
+                            };
+                            if let Some(index) = spore_index {
+                                accumulate_daily!(
+                                    spore_daily_changes,
+                                    tx_data.block_number,
+                                    index.spore_id.clone(),
+                                    -i128::from(info.capacity),
+                                    -i128::from(info.occupied_capacity())
+                                );
+
+                                {
+                                    let effective_cluster_id =
+                                        index.cluster_id.unwrap_or_else(|| {
+                                            SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
+                                        });
+                                    accumulate_daily!(
+                                        cluster_daily_changes,
+                                        tx_data.block_number,
+                                        effective_cluster_id,
+                                        -i128::from(info.capacity),
+                                        -i128::from(info.occupied_capacity())
+                                    );
+                                }
+                            }
+                        }
+                        if let Some(collection_id) =
+                            consumed_object_collection_id(type_code_hash, info.type_args.as_deref())
+                        {
+                            accumulate_daily!(
+                                object_daily_changes,
+                                tx_data.block_number,
+                                collection_id,
+                                -i128::from(info.capacity),
+                                -i128::from(info.occupied_capacity())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Err(e) = add_token_daily_tx(
+            &mut token_daily_changes,
+            tx_data.block_number,
+            &tx_token_daily_members,
+        ) {
+            return Err(anyhow!(
+                "failed to accumulate token daily changes for range {}-{}: tx=0x{}: {}",
+                start_block,
+                end_block,
+                hex::encode(tx_data.hash),
+                e
+            ));
+        }
+
+        // address_balance_changes - outputs + merge
+        let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
+        for cell in &tx_data.cells {
+            *tx_balance_changes
+                .entry(cell.lock_script_hash.clone())
+                .or_default() += i128::from(cell.capacity);
+            *tx_cells_created
+                .entry(cell.lock_script_hash.clone())
+                .or_default() += 1;
+            let cell_occupied = occupied_capacity_shannons_i128(
+                cell.lock_args.len(),
+                cell.type_args.as_ref().map(|args| args.len()),
+                cell.data_size,
+            );
+            *tx_occupied_changes
+                .entry(cell.lock_script_hash.clone())
+                .or_default() += cell_occupied;
+        }
+        fold_tx_address_deltas(
+            address_balance_changes.block_mut(tx_data.block_number)?,
+            tx_data.block_number,
+            &tx_data.hash,
+            tx_data.is_cellbase,
+            TxAddressEffects {
+                balance: &tx_balance_changes,
+                cells_created: &tx_cells_created,
+                cells_consumed: &tx_cells_consumed,
+                occupied: &tx_occupied_changes,
+            },
+        );
+    }
+    precompute_phase_metrics.cache_balance_and_script_ms =
+        cache_balance_and_script_started.elapsed().as_secs_f64() * 1000.0;
+    Ok(LiveBatchPrecompute {
+        input_script_hashes,
+        batch_cell_infos,
+        address_balance_changes,
+        script_usage_changes,
+        script_reference_usage_changes,
+        script_daily_changes,
+        token_daily_changes,
+        spore_type_index_changes,
+        spore_daily_changes,
+        cluster_daily_changes,
+        object_type_index_changes,
+        object_daily_changes,
+        phase_metrics: precompute_phase_metrics,
+    })
+}
+
 impl Indexer {
     pub(crate) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
@@ -946,15 +1661,15 @@ impl Indexer {
             input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             input_script_hashes: InputScriptHashes,
-            address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
+            address_balance_changes: AddressBalanceChanges,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
             script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
             token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
-            spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+            spore_type_index_changes: BlockIndexChanges<SporeTypeIndex>,
             spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
-            object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
+            object_type_index_changes: BlockIndexChanges<MnftTypeIndex>,
             object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             parser_perf_sample: ParserBatchPerfSample,
         }
@@ -1440,36 +2155,8 @@ impl Indexer {
                         break Some((attempt_input_cell_info, attempt_cache_hits, db_lookups));
                     }
 
-                    // A reorg rollback stages its writes and commits them
-                    // atomically at the end, so until it lands the store still
-                    // shows the orphaned view these inputs are missing from.
-                    // Waiting it out is expected; see
-                    // `advance_unresolved_retry_budget`.
-                    let rollback_in_progress = match writer_for_parser
-                        .store()
-                        .is_rollback_cleanup_in_progress()
-                    {
-                        Ok(flag) => flag,
-                        Err(e) => {
-                            error!(
-                                start_block,
-                                end_block,
-                                error = %e,
-                                "Parser: cannot read rollback-cleanup marker; stopping parser task"
-                            );
-                            record_worker_exit_reason(
-                                &parser_exit_reason_for_parser,
-                                format!(
-                                    "failed to read rollback-cleanup marker while resolving inputs for range {start_block}-{end_block}: {e}"
-                                ),
-                            );
-                            return;
-                        }
-                    };
-                    let retry_decision = advance_unresolved_retry_budget(
-                        &mut unresolved_retry_count,
-                        rollback_in_progress,
-                    );
+                    let retry_decision =
+                        advance_unresolved_retry_budget(&mut unresolved_retry_count);
                     unresolved_attempts += 1;
                     if should_log_unresolved_retry(unresolved_attempts) {
                         let unresolved_local_probe = classify_unresolved_local_probe(
@@ -1499,7 +2186,6 @@ impl Indexer {
                             end_block,
                             attempt = unresolved_attempts,
                             retry = unresolved_retry_count,
-                            rollback_in_progress,
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,
@@ -1568,736 +2254,40 @@ impl Indexer {
                 // Pre-compute batch_cell_infos, fees, cell_cache, balance/script changes
                 // (moved from writer to overlap with pipeline buffering)
                 let t_precompute_parser = Instant::now();
-                let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
-
-                let mut precompute_phase_metrics = ParserPrecomputePhaseMetrics::default();
-
-                // Pass 1: Build batch_cell_infos
-                let build_batch_cell_infos_started = Instant::now();
-                let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> =
-                    HashMap::new();
-                for tx_data in &all_tx_data {
-                    for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                        let output_index_i16 = match checked_usize_to_i16(
-                            output_index,
-                            "pipeline parser batch cell output index",
-                        ) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                error!(
-                                    block_number = tx_data.block_number,
-                                    tx_hash = %hex::encode(tx_data.hash),
-                                    output_index,
-                                    "Parser: {}",
-                                    e
-                                );
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "invalid output index while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        output_index,
-                                        e
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref()
-                        {
-                            if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                                cached.clone()
-                            } else {
-                                let looked_up = match writer_for_parser.store().get_token(type_hash)
-                                {
-                                    Ok(token) => token.map(|info| info.standard),
-                                    Err(e) => {
-                                        error!(
-                                            block_number = tx_data.block_number,
-                                            tx_hash = %hex::encode(tx_data.hash),
-                                            output_index,
-                                            type_script_hash = %hex::encode(type_hash),
-                                            "Parser: token metadata lookup failed while parsing UDT output hint: {}",
-                                            e
-                                        );
-                                        record_worker_exit_reason(
-                                            &parser_exit_reason_for_parser,
-                                            format!(
-                                                "token metadata lookup failed while parsing UDT output hint: block={}, tx=0x{}, output_index={}, error={}",
-                                                tx_data.block_number,
-                                                hex::encode(tx_data.hash),
-                                                output_index,
-                                                e
-                                            ),
-                                        );
-                                        return;
-                                    }
-                                };
-                                udt_standard_hint_cache
-                                    .insert(type_hash.clone(), looked_up.clone());
-                                looked_up
-                            }
-                        } else {
-                            None
-                        };
-                        let udt_amount = match parse_parsed_cell_udt_amount(
-                            cell,
-                            &tx_data.hash,
-                            output_index_i16,
-                            standard_hint.as_deref(),
-                        ) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                error!(
-                                    block_number = tx_data.block_number,
-                                    tx_hash = %hex::encode(tx_data.hash),
-                                    output_index,
-                                    "Parser: {}",
-                                    e
-                                );
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "failed to parse UDT amount while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        output_index,
-                                        e
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        let live_cell_info = match cell.to_live_cell_info(udt_amount) {
-                            Ok(info) => info,
-                            Err(e) => {
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "invalid output cell while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        output_index,
-                                        e
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        batch_cell_infos.insert(
-                            (tx_data.hash.to_vec(), output_index_i16),
-                            PositionedCellInfo::new(live_cell_info, tx_data.block_number),
-                        );
-                    }
-                }
-                precompute_phase_metrics.build_batch_cell_infos_ms =
-                    build_batch_cell_infos_started.elapsed().as_secs_f64() * 1000.0;
-
-                // Pass 2: Compute input capacity + fee
-                let compute_fee_started = Instant::now();
-                if let Err(err) = compute_parser_input_capacities_and_fees(
+                let precomputed = match precompute_live_batch(
+                    writer_for_parser.store(),
+                    cell_cache_for_parser.as_ref(),
                     &mut all_tx_data,
                     &input_cell_info,
-                    &batch_cell_infos,
+                    start_block,
+                    end_block,
                 ) {
-                    error!(
-                        start_block,
-                        end_block, "Parser: invalid tx fee accounting: {}", err
-                    );
-                    record_worker_exit_reason(
-                        &parser_exit_reason_for_parser,
-                        format!(
-                            "invalid tx fee accounting: range {}-{}, error={}",
-                            start_block, end_block, err
-                        ),
-                    );
-                    return;
-                }
-                precompute_phase_metrics.compute_fee_ms =
-                    compute_fee_started.elapsed().as_secs_f64() * 1000.0;
-
-                // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
-                let cache_balance_and_script_started = Instant::now();
-                let mut address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta> =
-                    HashMap::new();
-                // Each input's lock / type script hash, derived here once and
-                // shipped to the writer, which reads them instead of deriving.
-                let mut input_script_hashes = InputScriptHashes::new();
-                let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
-                let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
-                    HashMap::new();
-                // Entity daily deltas are accumulated PER BLOCK: a committed
-                // batch spans many blocks, and a shallow fork can land in the
-                // middle of one. Flattening them loses the block identity the
-                // undo log needs to restore a key's end-of-block-N value.
-                let mut script_daily_changes = EntityDailyChanges::<UndatedScriptKey>::new();
-                let mut token_daily_changes = TokenDailyChanges::<UndatedEntityKey>::new();
-                let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
-                let mut spore_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
-                let mut cluster_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
-                let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
-                let mut object_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
-                let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
-                    HashMap::new();
-                let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> =
-                    HashMap::new();
-
-                // `EntityDailyChanges::add` fails fast on out-of-order blocks
-                // and on i128 overflow; the parser closure returns `()`, so it
-                // reports the reason and exits the worker like every other
-                // parser invariant violation.
-                macro_rules! accumulate_daily {
-                    ($changes:expr, $block:expr, $key:expr, $cap:expr, $know:expr) => {
-                        if let Err(e) = $changes.add($block, $key, $cap, $know) {
-                            record_worker_exit_reason(
-                                &parser_exit_reason_for_parser,
-                                format!(
-                                    "failed to accumulate entity daily delta for range {}-{}: {}",
-                                    start_block, end_block, e
-                                ),
-                            );
-                            return;
-                        }
-                    };
-                }
-
-                for tx_data in &all_tx_data {
-                    // cell_cache update
-                    for (output_index, _cell) in tx_data.cells.iter().enumerate() {
-                        let output_index_i16 = match checked_usize_to_i16(
-                            output_index,
-                            "pipeline parser cache update output index",
-                        ) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                error!(
-                                    block_number = tx_data.block_number,
-                                    tx_hash = %hex::encode(tx_data.hash),
-                                    output_index,
-                                    "Parser: {}",
-                                    e
-                                );
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "invalid output index while updating parser cache: block={}, tx=0x{}, output_index={}, error={}",
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        output_index,
-                                        e
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        let key = (tx_data.hash.to_vec(), output_index_i16);
-                        let info = match batch_cell_infos.get(&key) {
-                            Some(info) => info,
-                            None => {
-                                error!(
-                                    block_number = tx_data.block_number,
-                                    tx_hash = %hex::encode(tx_data.hash),
-                                    output_index,
-                                    "Parser: missing precomputed cell info while updating parser cache"
-                                );
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "missing precomputed cell info while updating parser cache: block={}, tx=0x{}, output_index={}",
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        output_index
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        cell_cache_for_parser
-                            .insert((tx_data.hash, output_index_i16), info.clone());
-                    }
-
-                    // This tx's TOKEN_DAILY member cells, outputs then inputs;
-                    // `add_token_daily_tx` turns them into one contribution
-                    // (and one transaction) per token once both sides are seen.
-                    let mut tx_token_daily_members: Vec<TokenDailyMember> = Vec::new();
-                    // script_usage_changes - outputs
-                    for cell in &tx_data.cells {
-                        let lock_key = (cell.lock_code_hash.clone(), false);
-                        let lock_hash_type = match parse_script_reference_hash_type(
-                            cell.lock_hash_type,
-                            "lock",
-                            tx_data.block_number,
-                            &tx_data.hash,
-                        ) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "invalid output lock hash_type for range {}-{}: {}",
-                                        start_block, end_block, e
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        let cell_occupied = occupied_capacity_shannons_i64(
-                            cell.lock_args.len(),
-                            cell.type_args.as_ref().map(|args| args.len()),
-                            cell.data_size,
-                        );
-                        let reference_entry = script_reference_usage_changes
-                            .entry((cell.lock_code_hash.clone(), lock_hash_type, false))
-                            .or_insert((0, 0, 0, 0, 0, 0));
-                        reference_entry.0 += 1;
-                        reference_entry.1 += 1;
-                        reference_entry.2 += i128::from(cell.capacity);
-                        reference_entry.3 += i128::from(cell.capacity);
-                        reference_entry.4 += i128::from(cell_occupied);
-                        reference_entry.5 += i128::from(cell_occupied);
-                        let entry = script_usage_changes
-                            .entry(lock_key)
-                            .or_insert((0, 0, 0, 0, 0, 0));
-                        entry.0 += 1;
-                        entry.1 += 1;
-                        entry.2 += i128::from(cell.capacity);
-                        entry.3 += i128::from(cell.capacity);
-                        entry.4 += i128::from(cell_occupied);
-                        entry.5 += i128::from(cell_occupied);
-                        accumulate_daily!(
-                            script_daily_changes,
-                            tx_data.block_number,
-                            (cell.lock_code_hash.clone(), lock_hash_type, false),
-                            i128::from(cell.capacity),
-                            i128::from(cell_occupied)
-                        );
-                        if let Some(ref type_code_hash) = cell.type_code_hash {
-                            let type_hash_type = match cell.type_hash_type {
-                                Some(hash_type) => match parse_script_reference_hash_type(
-                                    hash_type,
-                                    "type",
-                                    tx_data.block_number,
-                                    &tx_data.hash,
-                                ) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        record_worker_exit_reason(
-                                            &parser_exit_reason_for_parser,
-                                            format!(
-                                                "invalid output type hash_type for range {}-{}: {}",
-                                                start_block, end_block, e
-                                            ),
-                                        );
-                                        return;
-                                    }
-                                },
-                                None => {
-                                    record_worker_exit_reason(
-                                        &parser_exit_reason_for_parser,
-                                        format!(
-                                            "missing output type hash_type for range {}-{}: block={}, tx=0x{}",
-                                            start_block,
-                                            end_block,
-                                            tx_data.block_number,
-                                            hex::encode(tx_data.hash)
-                                        ),
-                                    );
-                                    return;
-                                }
-                            };
-                            let type_key = (type_code_hash.clone(), true);
-                            let reference_entry = script_reference_usage_changes
-                                .entry((type_code_hash.clone(), type_hash_type, true))
-                                .or_insert((0, 0, 0, 0, 0, 0));
-                            reference_entry.0 += 1;
-                            reference_entry.1 += 1;
-                            reference_entry.2 += i128::from(cell.capacity);
-                            reference_entry.3 += i128::from(cell.capacity);
-                            reference_entry.4 += i128::from(cell_occupied);
-                            reference_entry.5 += i128::from(cell_occupied);
-                            let entry = script_usage_changes
-                                .entry(type_key)
-                                .or_insert((0, 0, 0, 0, 0, 0));
-                            entry.0 += 1;
-                            entry.1 += 1;
-                            entry.2 += i128::from(cell.capacity);
-                            entry.3 += i128::from(cell.capacity);
-                            entry.4 += i128::from(cell_occupied);
-                            entry.5 += i128::from(cell_occupied);
-                            accumulate_daily!(
-                                script_daily_changes,
-                                tx_data.block_number,
-                                (type_code_hash.clone(), type_hash_type, true),
-                                i128::from(cell.capacity),
-                                i128::from(cell_occupied)
-                            );
-                        }
-                        if let Some(type_script_hash) = token_daily_member(
-                            cell.type_script_hash.as_deref(),
-                            cell.type_code_hash.as_deref(),
-                            cell.type_hash_type,
-                        ) {
-                            tx_token_daily_members.push(token_daily_created(
-                                type_script_hash,
-                                cell.capacity,
-                                cell_occupied,
-                            ));
-                        }
-                        if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
-                            cell.type_script_hash.as_ref(),
-                            cell.type_code_hash.as_ref(),
-                            cell.type_args.as_ref(),
-                        ) {
-                            if type_args.len() >= 32
-                                && SporeParser::is_spore_nft_type_script(type_code_hash)
-                            {
-                                let spore_id = type_args[..32].to_vec();
-                                let cluster_id =
-                                    SporeParser::parse_spore_cluster_id_from_data(&cell.data);
-                                let index = SporeTypeIndex {
-                                    spore_id: spore_id.clone(),
-                                    cluster_id: cluster_id.clone(),
-                                };
-                                spore_type_index_cache
-                                    .insert(type_script_hash.clone(), Some(index.clone()));
-                                spore_type_index_changes.insert(type_script_hash.clone(), index);
-
-                                accumulate_daily!(
-                                    spore_daily_changes,
-                                    tx_data.block_number,
-                                    spore_id,
-                                    i128::from(cell.capacity),
-                                    i128::from(cell_occupied)
-                                );
-
-                                {
-                                    let effective_cluster_id = cluster_id.unwrap_or_else(|| {
-                                        SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
-                                    });
-                                    accumulate_daily!(
-                                        cluster_daily_changes,
-                                        tx_data.block_number,
-                                        effective_cluster_id,
-                                        i128::from(cell.capacity),
-                                        i128::from(cell_occupied)
-                                    );
-                                }
-                            }
-                        }
-                        if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
-                            cell.type_script_hash.as_ref(),
-                            cell.type_code_hash.as_ref(),
-                            cell.type_args.as_ref(),
-                        ) {
-                            let collection_id =
-                                classify_object_collection_id(type_code_hash, type_args);
-                            if let Some(collection_id) = collection_id {
-                                let index = MnftTypeIndex {
-                                    collection_id: collection_id.clone(),
-                                };
-                                object_type_index_cache
-                                    .insert(type_script_hash.clone(), Some(index.clone()));
-                                object_type_index_changes.insert(type_script_hash.clone(), index);
-
-                                accumulate_daily!(
-                                    object_daily_changes,
-                                    tx_data.block_number,
-                                    collection_id,
-                                    i128::from(cell.capacity),
-                                    i128::from(cell_occupied)
-                                );
-                            }
-                        }
-                    }
-
-                    // Per-tx balance/consumption tracking
-                    let mut tx_balance_changes: HashMap<Vec<u8>, i128> = HashMap::new();
-                    let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-                    let mut tx_occupied_changes: HashMap<Vec<u8>, i128> = HashMap::new();
-
-                    if !tx_data.is_cellbase {
-                        for input in &tx_data.inputs {
-                            let output_index = match parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    record_worker_exit_reason(
-                                        &parser_exit_reason_for_parser,
-                                        format!(
-                                            "parsed_input_outpoint_index_i16 failed for range {}-{}: {}",
-                                            start_block, end_block, e
-                                        ),
-                                    );
-                                    return;
-                                }
-                            };
-                            let key = (input.previous_tx_hash.to_vec(), output_index);
-                            let info = match resolve_parsed_input(
-                                &input_cell_info,
-                                &batch_cell_infos,
-                                &key,
-                                &tx_data.hash,
-                                tx_data.block_number,
-                            ) {
-                                Ok(info) => info,
-                                Err(e) => {
-                                    error!(start_block, end_block, "Parser: {e}");
-                                    record_worker_exit_reason(
-                                        &parser_exit_reason_for_parser,
-                                        format!(
-                                            "unresolved input in pass 3 for range {start_block}-{end_block}: {e}"
-                                        ),
-                                    );
-                                    return;
-                                }
-                            };
-                            {
-                                // The payload does not store script hashes:
-                                // derive them once per input cell, for this
-                                // pass and for the writer.
-                                let lock_script_hash = info.lock_script_hash();
-                                let type_script_hash = info.type_script_hash();
-                                input_script_hashes
-                                    .insert(key.clone(), (lock_script_hash, type_script_hash));
-                                let lock_script_hash = lock_script_hash.to_vec();
-                                *tx_balance_changes
-                                    .entry(lock_script_hash.clone())
-                                    .or_default() -= i128::from(info.capacity);
-                                *tx_cells_consumed
-                                    .entry(lock_script_hash.clone())
-                                    .or_default() += 1;
-                                *tx_occupied_changes.entry(lock_script_hash).or_default() -=
-                                    i128::from(info.occupied_capacity());
-                                // script usage - inputs
-                                let lock_key = (info.lock_code_hash.to_vec(), false);
-                                let lock_hash_type = match parse_script_reference_hash_type(
-                                    info.lock_hash_type,
-                                    "lock",
-                                    tx_data.block_number,
-                                    &tx_data.hash,
-                                ) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        record_worker_exit_reason(
-                                            &parser_exit_reason_for_parser,
-                                            format!(
-                                                "invalid input lock hash_type for range {}-{}: {}",
-                                                start_block, end_block, e
-                                            ),
-                                        );
-                                        return;
-                                    }
-                                };
-                                let reference_entry = script_reference_usage_changes
-                                    .entry((info.lock_code_hash.to_vec(), lock_hash_type, false))
-                                    .or_insert((0, 0, 0, 0, 0, 0));
-                                reference_entry.1 -= 1;
-                                reference_entry.3 -= i128::from(info.capacity);
-                                reference_entry.5 -= i128::from(info.occupied_capacity());
-                                let entry = script_usage_changes
-                                    .entry(lock_key)
-                                    .or_insert((0, 0, 0, 0, 0, 0));
-                                entry.1 -= 1;
-                                entry.3 -= i128::from(info.capacity);
-                                entry.5 -= i128::from(info.occupied_capacity());
-                                accumulate_daily!(
-                                    script_daily_changes,
-                                    tx_data.block_number,
-                                    (info.lock_code_hash.to_vec(), lock_hash_type, false),
-                                    -i128::from(info.capacity),
-                                    -i128::from(info.occupied_capacity())
-                                );
-                                if let Some(ref type_code_hash) = info.type_code_hash {
-                                    let type_hash_type = match info.type_hash_type {
-                                        Some(hash_type) => match parse_script_reference_hash_type(
-                                            hash_type,
-                                            "type",
-                                            tx_data.block_number,
-                                            &tx_data.hash,
-                                        ) {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                record_worker_exit_reason(
-                                                    &parser_exit_reason_for_parser,
-                                                    format!(
-                                                        "invalid input type hash_type for range {}-{}: {}",
-                                                        start_block, end_block, e
-                                                    ),
-                                                );
-                                                return;
-                                            }
-                                        },
-                                        None => {
-                                            record_worker_exit_reason(
-                                                &parser_exit_reason_for_parser,
-                                                format!(
-                                                    "missing input type hash_type for range {}-{}: block={}, tx=0x{}",
-                                                    start_block,
-                                                    end_block,
-                                                    tx_data.block_number,
-                                                    hex::encode(tx_data.hash)
-                                                ),
-                                            );
-                                            return;
-                                        }
-                                    };
-                                    let type_key = (type_code_hash.to_vec(), true);
-                                    let reference_entry = script_reference_usage_changes
-                                        .entry((type_code_hash.to_vec(), type_hash_type, true))
-                                        .or_insert((0, 0, 0, 0, 0, 0));
-                                    reference_entry.1 -= 1;
-                                    reference_entry.3 -= i128::from(info.capacity);
-                                    reference_entry.5 -= i128::from(info.occupied_capacity());
-                                    let entry = script_usage_changes
-                                        .entry(type_key)
-                                        .or_insert((0, 0, 0, 0, 0, 0));
-                                    entry.1 -= 1;
-                                    entry.3 -= i128::from(info.capacity);
-                                    entry.5 -= i128::from(info.occupied_capacity());
-                                    accumulate_daily!(
-                                        script_daily_changes,
-                                        tx_data.block_number,
-                                        (type_code_hash.to_vec(), type_hash_type, true),
-                                        -i128::from(info.capacity),
-                                        -i128::from(info.occupied_capacity())
-                                    );
-                                }
-                                if let Some(type_script_hash) = token_daily_member(
-                                    type_script_hash.as_ref().map(|hash| hash.as_slice()),
-                                    info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
-                                    info.type_hash_type,
-                                ) {
-                                    tx_token_daily_members.push(token_daily_consumed(
-                                        type_script_hash,
-                                        info.capacity,
-                                        info.occupied_capacity(),
-                                    ));
-                                }
-                                if let (Some(type_script_hash), Some(type_code_hash)) =
-                                    (type_script_hash.as_ref(), info.type_code_hash.as_ref())
-                                {
-                                    if SporeParser::is_spore_nft_type_script(type_code_hash) {
-                                        let spore_index = match load_optional_index_from_store(
-                                            &mut spore_type_index_cache,
-                                            type_script_hash,
-                                            "spore_type",
-                                            || {
-                                                writer_for_parser
-                                                    .store()
-                                                    .get_spore_type_index(type_script_hash)
-                                            },
-                                        ) {
-                                            Ok(index) => index,
-                                            Err(e) => {
-                                                error!(
-                                                    start_block,
-                                                    end_block,
-                                                    "Parser: failed to load spore type index: {}",
-                                                    e
-                                                );
-                                                record_worker_exit_reason(
-                                                    &parser_exit_reason_for_parser,
-                                                    format!(
-                                                        "failed to load spore type index for range {}-{}: {}",
-                                                        start_block, end_block, e
-                                                    ),
-                                                );
-                                                return;
-                                            }
-                                        };
-                                        if let Some(index) = spore_index {
-                                            accumulate_daily!(
-                                                spore_daily_changes,
-                                                tx_data.block_number,
-                                                index.spore_id.clone(),
-                                                -i128::from(info.capacity),
-                                                -i128::from(info.occupied_capacity())
-                                            );
-
-                                            {
-                                                let effective_cluster_id =
-                                                    index.cluster_id.unwrap_or_else(|| {
-                                                        SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
-                                                    });
-                                                accumulate_daily!(
-                                                    cluster_daily_changes,
-                                                    tx_data.block_number,
-                                                    effective_cluster_id,
-                                                    -i128::from(info.capacity),
-                                                    -i128::from(info.occupied_capacity())
-                                                );
-                                            }
-                                        }
-                                    }
-                                    if let Some(collection_id) = consumed_object_collection_id(
-                                        type_code_hash,
-                                        info.type_args.as_deref(),
-                                    ) {
-                                        accumulate_daily!(
-                                            object_daily_changes,
-                                            tx_data.block_number,
-                                            collection_id,
-                                            -i128::from(info.capacity),
-                                            -i128::from(info.occupied_capacity())
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if let Err(e) = add_token_daily_tx(
-                        &mut token_daily_changes,
-                        tx_data.block_number,
-                        &tx_token_daily_members,
-                    ) {
+                    Ok(precomputed) => precomputed,
+                    Err(e) => {
+                        error!(start_block, end_block, "Parser: {:#}", e);
                         record_worker_exit_reason(
                             &parser_exit_reason_for_parser,
-                            format!(
-                                "failed to accumulate token daily changes for range {}-{}: tx=0x{}: {}",
-                                start_block,
-                                end_block,
-                                hex::encode(tx_data.hash),
-                                e
-                            ),
+                            format!("{:#}", e),
                         );
                         return;
                     }
-
-                    // address_balance_changes - outputs + merge
-                    let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
-                    for cell in &tx_data.cells {
-                        *tx_balance_changes
-                            .entry(cell.lock_script_hash.clone())
-                            .or_default() += i128::from(cell.capacity);
-                        *tx_cells_created
-                            .entry(cell.lock_script_hash.clone())
-                            .or_default() += 1;
-                        let cell_occupied = occupied_capacity_shannons_i128(
-                            cell.lock_args.len(),
-                            cell.type_args.as_ref().map(|args| args.len()),
-                            cell.data_size,
-                        );
-                        *tx_occupied_changes
-                            .entry(cell.lock_script_hash.clone())
-                            .or_default() += cell_occupied;
-                    }
-                    fold_tx_address_deltas(
-                        &mut address_balance_changes,
-                        tx_data.block_number,
-                        &tx_data.hash,
-                        tx_data.is_cellbase,
-                        TxAddressEffects {
-                            balance: &tx_balance_changes,
-                            cells_created: &tx_cells_created,
-                            cells_consumed: &tx_cells_consumed,
-                            occupied: &tx_occupied_changes,
-                        },
-                    );
-                }
+                };
+                let LiveBatchPrecompute {
+                    input_script_hashes,
+                    batch_cell_infos,
+                    address_balance_changes,
+                    script_usage_changes,
+                    script_reference_usage_changes,
+                    script_daily_changes,
+                    token_daily_changes,
+                    spore_type_index_changes,
+                    spore_daily_changes,
+                    cluster_daily_changes,
+                    object_type_index_changes,
+                    object_daily_changes,
+                    phase_metrics: mut precompute_phase_metrics,
+                } = precomputed;
+                let cache_evict_started = Instant::now();
                 // NOTE: Do NOT clear cell_cache here. In pipeline mode, parser
                 // runs ahead of writer. We only evict entries guaranteed to be
                 // committed in DB according to writer-reported committed tip.
@@ -2309,8 +2299,8 @@ impl Indexer {
                         committed_tip,
                     );
                 }
-                precompute_phase_metrics.cache_balance_and_script_ms =
-                    cache_balance_and_script_started.elapsed().as_secs_f64() * 1000.0;
+                precompute_phase_metrics.cache_balance_and_script_ms +=
+                    cache_evict_started.elapsed().as_secs_f64() * 1000.0;
 
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
@@ -2854,6 +2844,9 @@ impl Indexer {
                                 BatchWriteFailurePolicy::FailFastPreCommitInvariant => {
                                     "pipeline_precommit_invariant_failed"
                                 }
+                                BatchWriteFailurePolicy::FailFastRebuildRequired => {
+                                    "pipeline_rebuild_required"
+                                }
                                 BatchWriteFailurePolicy::CleanupAndRetry => {
                                     "pipeline_batch_write_failed"
                                 }
@@ -2874,6 +2867,14 @@ impl Indexer {
                                 error = ?e,
                                 "Sync error while writing parsed batch"
                             );
+                            if failure_policy == BatchWriteFailurePolicy::FailFastRebuildRequired {
+                                return Err(e).with_context(|| {
+                                    format!(
+                                        "live sync fail-fast: the store's derived state no longer matches the chain in range {}-{} (chain_tip={}); rollback cleanup and retry are disabled, the store needs a rebuild",
+                                        start_block, end_block, chain_tip
+                                    )
+                                });
+                            }
                             if failure_policy == BatchWriteFailurePolicy::FailFastPreCommitInvariant
                             {
                                 return Err(e).with_context(|| {
@@ -2899,7 +2900,6 @@ impl Indexer {
                             });
                             }
                             if let Err(cleanup_err) = self.writer.cleanup_batch_range(
-                                self.append_only_store.as_ref(),
                                 i64::try_from(start_block).map_err(|_| {
                                     anyhow!(
                                         "batch cleanup start_block exceeds i64: {}",
@@ -3598,6 +3598,22 @@ mod tests {
         assert_eq!(
             classify_batch_write_failure(&error),
             BatchWriteFailurePolicy::FailFastPreCommitInvariant
+        );
+    }
+
+    /// B-7 (F1): an error the chain cannot repair is never transient. A
+    /// `RebuildRequiredError` from the writer (e.g. `apply_dob_outcome`'s
+    /// store invariants), even under a context layer, stops live sync at once
+    /// instead of three cleanup-and-retry rounds.
+    #[test]
+    fn a_rebuild_required_failure_is_fail_fast_under_context() {
+        let error = anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(
+            "missing cluster aggregate while applying a DOB decode outcome",
+        ))
+        .context("atomic domain commit failed for blocks 100-101");
+        assert_eq!(
+            classify_batch_write_failure(&error),
+            BatchWriteFailurePolicy::FailFastRebuildRequired
         );
     }
 

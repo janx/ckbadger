@@ -9,7 +9,8 @@ use crate::sync::types::TxData;
 use super::BatchWriter;
 
 impl BatchWriter {
-    /// Insert multiple blocks into the RocksDB store.
+    /// Insert multiple blocks into the RocksDB store, each header (and its
+    /// `block_hash_index` row) in its own block's scope of `batch`.
     pub fn insert_blocks_batch(
         &self,
         blocks: &[&ParsedBlock],
@@ -51,12 +52,16 @@ impl BatchWriter {
                 cycles: None,
                 chain_time_ms,
             };
-            batch.put_block_header(block.number, &header);
+            batch
+                .at(block.number)
+                .put_block_header(block.number, &header);
         }
 
         Ok(())
     }
 
+    /// Index every transaction (`tx_index` and its `tx_hash_map` row) in its
+    /// own block's scope of `batch`.
     pub(crate) fn insert_transactions_batch(
         &self,
         txs: &[&TxData],
@@ -78,6 +83,7 @@ impl BatchWriter {
                 cycles: tx.cycles,
                 semantic_tags: tx.semantic_tags,
             };
+            let mut batch = batch.at(tx.block_number);
             batch.put_tx_index(tx.block_number, tx.tx_index, &entry);
             batch.put_tx_hash_map(&tx.hash, tx.block_number, tx.tx_index);
         }

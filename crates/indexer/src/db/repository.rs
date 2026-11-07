@@ -4,30 +4,17 @@ use anyhow::Result;
 
 use ckbadger_store::CkbadgerStore;
 
-use crate::cache::CacheInvalidator;
-
 // Re-export DeepForkInfo from ckbadger_store
 pub use ckbadger_store::types::DeepForkInfo;
 
 #[derive(Clone)]
 pub struct Repository {
     store: Arc<CkbadgerStore>,
-    cache_invalidator: Option<CacheInvalidator>,
 }
 
 impl Repository {
     pub fn new(store: Arc<CkbadgerStore>) -> Self {
-        Self {
-            store,
-            cache_invalidator: None,
-        }
-    }
-
-    pub fn with_cache(store: Arc<CkbadgerStore>, cache_invalidator: CacheInvalidator) -> Self {
-        Self {
-            store,
-            cache_invalidator: Some(cache_invalidator),
-        }
+        Self { store }
     }
 
     pub fn store(&self) -> &Arc<CkbadgerStore> {
@@ -42,31 +29,6 @@ impl Repository {
         }
 
         Ok((0, None))
-    }
-
-    pub async fn update_sync_tip(
-        &self,
-        block_number: i64,
-        block_hash: &[u8],
-        tx_count_delta: i64,
-    ) -> Result<()> {
-        // Update store
-        self.store
-            .update_sync_tip(block_number, block_hash, tx_count_delta)?;
-
-        // Update cache
-        if let Some(cache) = &self.cache_invalidator {
-            let hash_hex = format!("0x{}", hex::encode(block_hash));
-            cache
-                .update_sync_status(|status| {
-                    status.tip_block_number = block_number;
-                    status.tip_block_hash = hash_hex;
-                    status.total_transactions += tx_count_delta;
-                    status.last_synced_at = chrono::Utc::now().timestamp();
-                })
-                .await;
-        }
-        Ok(())
     }
 
     pub fn get_block_hash_at_height(&self, height: i64) -> Result<Option<Vec<u8>>> {

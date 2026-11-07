@@ -5047,9 +5047,10 @@ mod tests {
                 },
             );
             // The row's day count, as the indexer stages it beside the row.
-            let mut daily = ckbadger_store::CollectionActivityDailyDeltas::new();
+            let mut daily = ckbadger_store::types::CollectionActivityDailyBlockDeltas::new();
             daily
                 .add_row(
+                    number,
                     collection,
                     ckbadger_store::keys::stats_day_yyyymmdd(ms).unwrap(),
                     &[action],

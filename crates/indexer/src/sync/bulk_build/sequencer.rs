@@ -1,9 +1,8 @@
 use std::borrow::Cow;
-use std::collections::VecDeque;
 
 use anyhow::{anyhow, Context, Result};
 
-use ckbadger_store::types::{LiveCellSummary, LIVE_CELL_SUMMARY_HISTORY_BLOCKS};
+use ckbadger_store::types::LiveCellSummary;
 
 use super::facts::{
     DaoCellState, DaoCompensationArs, FactsArena, ResolvedInputFacts, ResolvedTxFacts,
@@ -11,22 +10,11 @@ use super::facts::{
 use super::interner::IdentityLiveness;
 use super::live_cells::{ConsumeContext, LiveCellExtras, LiveCellOwner, LiveCellSlot};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct BulkSequencer {
     live_cells: LiveCellOwner,
-    live_cell_summaries: VecDeque<LiveCellSummary>,
-}
-
-impl Default for BulkSequencer {
-    fn default() -> Self {
-        Self {
-            live_cells: LiveCellOwner::default(),
-            live_cell_summaries: VecDeque::with_capacity(
-                usize::try_from(LIVE_CELL_SUMMARY_HISTORY_BLOCKS)
-                    .expect("live-cell summary history window must fit usize"),
-            ),
-        }
-    }
+    /// The block-end live-cell summary of the last block resolved.
+    last_live_cell_summary: Option<LiveCellSummary>,
 }
 
 impl BulkSequencer {
@@ -50,7 +38,7 @@ impl BulkSequencer {
         arena: &'a FactsArena,
         mut liveness: Option<&mut IdentityLiveness>,
     ) -> Result<Vec<ResolvedTxFacts<'a>>> {
-        validate_block_partition(arena, self.live_cell_summaries.back())?;
+        validate_block_partition(arena, self.last_live_cell_summary.as_ref())?;
         let mut resolved_txs = Vec::with_capacity(arena.txs.len());
         let mut next_block_index = 0usize;
 
@@ -172,25 +160,8 @@ impl BulkSequencer {
                 )
             })?;
             if processed_txs == block.tx_range.end {
-                let summary = self.live_cells.summary(block.number, &block.hash)?;
-                let history_blocks =
-                    usize::try_from(LIVE_CELL_SUMMARY_HISTORY_BLOCKS).map_err(|_| {
-                        anyhow!(
-                            "live-cell summary history window is not a usize: blocks={}",
-                            LIVE_CELL_SUMMARY_HISTORY_BLOCKS
-                        )
-                    })?;
-                if self.live_cell_summaries.len() > history_blocks {
-                    return Err(anyhow!(
-                        "bulk live-cell summary window exceeded its fixed bound: len={} bound={}",
-                        self.live_cell_summaries.len(),
-                        history_blocks,
-                    ));
-                }
-                if self.live_cell_summaries.len() == history_blocks {
-                    self.live_cell_summaries.pop_front();
-                }
-                self.live_cell_summaries.push_back(summary);
+                self.last_live_cell_summary =
+                    Some(self.live_cells.summary(block.number, &block.hash)?);
                 next_block_index = next_block_index.checked_add(1).ok_or_else(|| {
                     anyhow!(
                         "bulk sequencer block index overflow: block_index={}",
@@ -223,14 +194,11 @@ impl BulkSequencer {
     }
 
     pub(crate) fn live_cells_bytes(&self) -> u64 {
-        self.live_cells.estimated_bytes()
-            + std::mem::size_of::<VecDeque<LiveCellSummary>>() as u64
-            + self.live_cell_summaries.capacity() as u64
-                * std::mem::size_of::<LiveCellSummary>() as u64
+        self.live_cells.estimated_bytes() + std::mem::size_of::<Option<LiveCellSummary>>() as u64
     }
 
-    pub(crate) fn live_cell_summaries(&self) -> impl Iterator<Item = &LiveCellSummary> {
-        self.live_cell_summaries.iter()
+    pub(crate) fn last_live_cell_summary(&self) -> Option<&LiveCellSummary> {
+        self.last_live_cell_summary.as_ref()
     }
 }
 
@@ -561,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn sequencer_retains_only_fixed_reorg_window_of_block_end_summaries() {
+    fn sequencer_keeps_the_last_block_end_summary() {
         let mut sequencer = BulkSequencer::default();
         let base_block = 14_000_321i64;
         let mut previous_hash = [0u8; 32];
@@ -592,19 +560,10 @@ mod tests {
             previous_hash = block_hash;
         }
 
-        let summaries = sequencer.live_cell_summaries().copied().collect::<Vec<_>>();
-        assert_eq!(
-            summaries.len(),
-            usize::try_from(LIVE_CELL_SUMMARY_HISTORY_BLOCKS).unwrap()
-        );
-        assert_eq!(
-            sequencer.live_cell_summaries.capacity(),
-            usize::try_from(LIVE_CELL_SUMMARY_HISTORY_BLOCKS).unwrap()
-        );
-        assert_eq!(summaries.first().unwrap().tip_block_number, base_block + 3);
-        assert_eq!(summaries.last().unwrap().tip_block_number, base_block + 39);
-        assert_eq!(summaries.last().unwrap().live_cells().unwrap(), 40);
-        assert_eq!(summaries.last().unwrap().plain, 40);
+        let last = sequencer.last_live_cell_summary().unwrap();
+        assert_eq!(last.tip_block_number, base_block + 39);
+        assert_eq!(last.live_cells().unwrap(), 40);
+        assert_eq!(last.plain, 40);
     }
 
     #[test]

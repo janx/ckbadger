@@ -285,7 +285,6 @@ fn read_hourly_retention(
 pub struct ExportState {
     /// A bulk-build session that has not been closed out.
     pub bulk_session_in_progress: bool,
-    pub rollback_cleanup_in_progress: bool,
     pub live_cell_summary_initialized: bool,
     pub deep_fork_detected: bool,
     pub entity_stats_undo_contract: Option<EntityStatsUndoContract>,
@@ -298,9 +297,7 @@ impl ExportState {
     /// `live_cell_summary_initialized` is reported but does not gate: it says
     /// the first block-end publish has happened, not that one is running.
     fn mid_write(&self) -> bool {
-        self.bulk_session_in_progress
-            || self.rollback_cleanup_in_progress
-            || self.deep_fork_detected
+        self.bulk_session_in_progress || self.deep_fork_detected
     }
 }
 
@@ -633,7 +630,6 @@ async fn export_entity_statistics(
 
         let export_state = ExportState {
             bulk_session_in_progress: store.get_bulk_build_session_marker()?.is_some(),
-            rollback_cleanup_in_progress: store.is_rollback_cleanup_in_progress()?,
             live_cell_summary_initialized: store.is_live_cell_summary_initialized()?,
             deep_fork_detected: sync.deep_fork_detected,
             // Both come from the same pin as the rows they qualify: a coverage
@@ -876,7 +872,6 @@ mod tests {
     fn mid_write_states_are_exactly_the_in_progress_ones() {
         let base = || ExportState {
             bulk_session_in_progress: false,
-            rollback_cleanup_in_progress: false,
             live_cell_summary_initialized: false,
             deep_fork_detected: false,
             entity_stats_undo_contract: None,
@@ -888,11 +883,6 @@ mod tests {
         assert!(!base().mid_write());
         assert!(ExportState {
             bulk_session_in_progress: true,
-            ..base()
-        }
-        .mid_write());
-        assert!(ExportState {
-            rollback_cleanup_in_progress: true,
             ..base()
         }
         .mid_write());

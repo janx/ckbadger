@@ -1509,21 +1509,21 @@ fn bulk_build_materializes_hodl_tracker_state_without_db_reads() {
     let snapshot = materialize_bulk_artifacts_for_test(&hodl_tracker_fixture())
         .expect("hodl tracker snapshot");
 
-    let state = snapshot
-        .hodl_tracker_state
+    // B-4: the tracker persists as rows plus a cursor; the block → day map is
+    // the canonical headers, not tracker state.
+    let cursor = snapshot
+        .hodl_cursor
         .as_ref()
-        .expect("persisted hodl tracker state");
-    assert_eq!(state.holder_count, 2);
-    assert_eq!(state.last_processed_block, Some(14_002_001));
-    assert_eq!(state.capacity_by_date.len(), 1);
+        .expect("persisted hodl tracker cursor");
+    assert_eq!(cursor.holder_count, 2);
+    assert_eq!(cursor.last_processed_block, 14_002_001);
+    assert_eq!(cursor.last_snapshot_date, "20240115");
     assert_eq!(
-        state.capacity_by_date[0],
-        ("20240115".to_string(), 140_00000000)
-    );
-    assert_eq!(state.date_transitions.len(), 1);
-    assert_eq!(
-        state.date_transitions[0],
-        (14_002_000, "20240115".to_string())
+        snapshot.hodl_capacity_by_date,
+        vec![(
+            chrono::NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            140_00000000
+        )]
     );
 }
 
@@ -1532,25 +1532,20 @@ fn bulk_build_materializes_cell_distribution_tracker_state_without_db_reads() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&hodl_tracker_fixture()).expect("cell dist snapshot");
 
-    let state = snapshot
-        .cell_dist_tracker_state
+    let cursor = snapshot
+        .cell_dist_cursor
         .as_ref()
-        .expect("persisted cell distribution tracker state");
-    assert_eq!(state.count_by_bucket, [2, 0, 0, 0, 0, 0]);
+        .expect("persisted cell distribution tracker cursor");
+    assert_eq!(cursor.count_by_bucket, [2, 0, 0, 0, 0, 0]);
     assert_eq!(
-        state.total_capacity_by_bucket,
+        cursor.total_capacity_by_bucket,
         [122_00000000, 0, 0, 0, 0, 0]
     );
-    assert_eq!(state.last_processed_block, Some(14_002_001));
-    assert_eq!(state.date_transitions.len(), 1);
+    assert_eq!(cursor.last_processed_block, 14_002_001);
+    assert_eq!(cursor.last_snapshot_date, "20240115");
     assert_eq!(
-        state.date_transitions[0],
-        (14_002_000, "20240115".to_string())
-    );
-    assert_eq!(state.cohort_accum.len(), 1);
-    assert_eq!(
-        state.cohort_accum[0],
-        ("2024-01".to_string(), 122_00000000, 140_00000000)
+        snapshot.cell_dist_cohorts,
+        vec![("2024-01".to_string(), 122_00000000, 140_00000000)]
     );
 }
 

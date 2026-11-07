@@ -3,8 +3,6 @@
 //! These tests verify that partial writes (e.g., block header written but txs missing)
 //! can be detected and corrected by rolling back to the last consistent block.
 
-use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{CachedBlockHeader, RollbackResult, TxIndexEntry};
 use std::sync::Arc;
@@ -69,37 +67,39 @@ fn insert_complete_block(store: &CkbadgerStore, block_num: i64) {
     let tx1 = make_tx_entry(false);
     let tx2 = make_tx_entry(false);
 
-    let mut batch = StoreBatch::new(store);
-    batch.put_block_header(block_num, &header);
-    batch.put_tx_index(block_num, 0, &cellbase);
-    batch.put_tx_index(block_num, 1, &tx1);
-    batch.put_tx_index(block_num, 2, &tx2);
+    // The block's rows in its journaled scope, as the live writer commits them.
+    ckbadger_store::commit_journaled_block(store, block_num, |batch| {
+        batch.put_block_header(block_num, &header);
+        batch.put_tx_index(block_num, 0, &cellbase);
+        batch.put_tx_index(block_num, 1, &tx1);
+        batch.put_tx_index(block_num, 2, &tx2);
 
-    // Also store tx hash mappings so they can be looked up
-    let mut cb_hash = vec![0u8; 32];
-    cb_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
-    cb_hash[8] = 0xC0;
-    batch.put_tx_hash_map(&cb_hash, block_num, 0);
+        // Also store tx hash mappings so they can be looked up
+        let mut cb_hash = vec![0u8; 32];
+        cb_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
+        cb_hash[8] = 0xC0;
+        batch.put_tx_hash_map(&cb_hash, block_num, 0);
 
-    let mut tx1_hash = vec![0u8; 32];
-    tx1_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
-    tx1_hash[8] = 0x01;
-    batch.put_tx_hash_map(&tx1_hash, block_num, 1);
+        let mut tx1_hash = vec![0u8; 32];
+        tx1_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
+        tx1_hash[8] = 0x01;
+        batch.put_tx_hash_map(&tx1_hash, block_num, 1);
 
-    let mut tx2_hash = vec![0u8; 32];
-    tx2_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
-    tx2_hash[8] = 0x02;
-    batch.put_tx_hash_map(&tx2_hash, block_num, 2);
-
-    batch.commit().unwrap();
+        let mut tx2_hash = vec![0u8; 32];
+        tx2_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
+        tx2_hash[8] = 0x02;
+        batch.put_tx_hash_map(&tx2_hash, block_num, 2);
+    })
+    .unwrap();
 }
 
 /// Insert only a block header (simulates a crash mid-write).
 fn insert_header_only(store: &CkbadgerStore, block_num: i64) {
     let header = make_header(block_num);
-    let mut batch = StoreBatch::new(store);
-    batch.put_block_header(block_num, &header);
-    batch.commit().unwrap();
+    ckbadger_store::commit_journaled_block(store, block_num, |batch| {
+        batch.put_block_header(block_num, &header)
+    })
+    .unwrap();
     seed_epoch_row_through(store, block_num);
 }
 
@@ -162,7 +162,7 @@ fn test_detect_partial_block_header_only() {
 
 #[test]
 fn test_rollback_restores_consistency() {
-    let (store, append_store) = setup_split_stores();
+    let (store, _append_store) = setup_split_stores();
 
     // Insert complete blocks 1-5
     for i in 1..=5 {
@@ -171,22 +171,13 @@ fn test_rollback_restores_consistency() {
 
     // Insert partial block 6 (header only)
     insert_header_only(&store, 6);
-    // The synthetic forward chain has five 8-second inter-block intervals
-    // (1→2 through 5→6). Rollback must subtract the actual persisted bucket.
-    let histogram_key =
-        keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &8i32.to_be_bytes());
-    store
-        .put_cf(store.cf_stats_chain(), &histogram_key, &5i32.to_le_bytes())
-        .unwrap();
 
     // Confirm inconsistency
     assert!(store.get_block_header(6).unwrap().is_some());
     assert!(store.list_block_txs(6).unwrap().is_empty());
 
     // Rollback to block 5 to restore consistency
-    let result: RollbackResult = store
-        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
-        .unwrap();
+    let result: RollbackResult = store.rollback_to_block(5).unwrap();
     assert_eq!(
         result.blocks_removed, 1,
         "only block 6 header should be removed"

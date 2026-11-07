@@ -1440,24 +1440,6 @@ async fn test_daily_chart_cache_drops_a_day_that_a_rollback_reopened() {
         .collect();
     blocks.extend((37..=73).map(|n| (n, utc_ms("2024-01-16T04:00:00Z") + n * 1_000)));
     seed_block_headers_at(&store, &blocks);
-    // The forward writer emits a histogram contribution for every gap.
-    // Rollback requires those real rows in order to subtract orphaned gaps.
-    let mut histogram = StoreBatch::new(store.as_ref());
-    histogram.put_stats(
-        &ckbadger_store::keys::encode_stats_key(
-            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
-            &1i32.to_be_bytes(),
-        ),
-        &72i32.to_le_bytes(),
-    );
-    histogram.put_stats(
-        &ckbadger_store::keys::encode_stats_key(
-            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
-            &30i32.to_be_bytes(),
-        ),
-        &1i32.to_le_bytes(),
-    );
-    histogram.commit().unwrap();
     let app = create_router(test_config(store.clone())).await;
 
     let (status, json) = get_json(&app, "/charts/average-block-time").await;

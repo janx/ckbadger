@@ -2,14 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-// ── UndoSeqScope: the store's one table ────────────────────────────────
-
-#[cfg(any(test, debug_assertions))]
-pub(crate) use ckbadger_store::keys::UNDO_SEQ_SCOPE_SHIFT;
-/// Undo sequence scopes are composed here and read back by the store's
-/// retention prune, so both sides use the store's single definition.
-pub(crate) use ckbadger_store::keys::{UndoSeqScope, UNDO_SEQ_LOCAL_MAX};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub(crate) struct InternId(u32);
 
@@ -222,7 +214,7 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) finalize_ms: f64,
     // ── commit window, split into five non-overlapping parts ────────────
     /// Batch merge + address-balance prefetch + HODL and cell-distribution
-    /// tracker preparation (both stage their whole state into the batch).
+    /// tracker preparation (each block stages the tracker rows it moved).
     pub(crate) commit_prepare_ms: f64,
     /// `materialize_script_versions_and_families`.
     pub(crate) script_rollup_ms: f64,
@@ -232,10 +224,9 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) domain_commit_ms: f64,
     /// The whole window, from the first merge to the domain commit returning.
     pub(crate) commit_phase_total_ms: f64,
-    /// Bytes the HODL and cell-distribution trackers serialized into
-    /// `sync_meta` in this batch. Both write their WHOLE state every batch, so
-    /// this is the fixed per-batch cost of the "tracker state matches the
-    /// committed tip" recovery rule.
+    /// Value bytes of the HODL and cell-distribution tracker rows this batch
+    /// staged: per block, the creation-day / cohort-month rows the block
+    /// moved and the two cursor rows (store refactor lane B, B-4).
     pub(crate) tracker_state_bytes: usize,
     pub(crate) txs: u64,
     pub(crate) cells: u64,
@@ -333,9 +324,86 @@ pub type UndatedEntityKey = Vec<u8>;
 /// Fail fast on out-of-order blocks: the parser walks `all_tx_data`, which is
 /// built block by block in ascending order. A block going backwards means that
 /// invariant broke upstream, and silently re-opening an earlier block's map
-/// would attribute its deltas to the wrong undo entry.
+/// would attribute its deltas to the wrong journal entry.
 /// One block's contributions: entity key → `(capacity_delta, knowledge_delta)`.
 pub type EntityDailyBlockMap<K> = std::collections::HashMap<K, (i128, i128)>;
+
+/// A live batch's per-key changes, one map per block, blocks ascending.
+///
+/// A live batch spans many blocks and a shallow fork can land on any of them,
+/// so a writer applies these block by block (each block scoped in the block
+/// overlay) instead of one batch-flattened total.
+#[derive(Debug, Clone)]
+pub struct PerBlock<K: Eq + std::hash::Hash, V> {
+    by_block: Vec<(i64, HashMap<K, V>)>,
+}
+
+impl<K: Eq + std::hash::Hash, V> Default for PerBlock<K, V> {
+    fn default() -> Self {
+        Self {
+            by_block: Vec::new(),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V> PerBlock<K, V> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The map of `block`, which must not be below the last block added.
+    pub fn block_mut(&mut self, block: i64) -> anyhow::Result<&mut HashMap<K, V>> {
+        match self.by_block.last() {
+            Some((last, _)) if *last == block => {}
+            Some((last, _)) if *last > block => anyhow::bail!(
+                "per-block changes must arrive in ascending block order: last_block={last}, block={block}"
+            ),
+            _ => self.by_block.push((block, HashMap::new())),
+        }
+        Ok(&mut self.by_block.last_mut().expect("just pushed").1)
+    }
+
+    pub fn by_block(&self) -> &[(i64, HashMap<K, V>)] {
+        &self.by_block
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_block.iter().all(|(_, changes)| changes.is_empty())
+    }
+
+    /// Every key any block changes, once.
+    pub fn keys(&self) -> Vec<&K> {
+        let mut seen = HashSet::new();
+        self.by_block
+            .iter()
+            .flat_map(|(_, changes)| changes.keys())
+            .filter(|key| seen.insert(*key))
+            .collect()
+    }
+
+    /// A batch whose changes all belong to `block`.
+    pub fn single_block(block: i64, changes: HashMap<K, V>) -> Self {
+        Self {
+            by_block: vec![(block, changes)],
+        }
+    }
+}
+
+/// A live batch's per-block address deltas.
+pub type AddressBalanceChanges = PerBlock<Vec<u8>, AddressBalanceDelta>;
+
+/// Per-block script usage by `(code_hash, is_type)`: `(cells, live, capacity,
+/// owned capacity, used, owned knowledge)` deltas.
+pub type ScriptUsageChanges = PerBlock<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+
+/// Per-block script reference usage by `(reference_hash, hash_type, is_type)`.
+pub type ScriptReferenceUsageChanges =
+    PerBlock<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;
+
+/// Per-block index rows a live batch writes (a type script hash's protocol
+/// index), so each row is written at the block whose output carried it.
+pub type BlockIndexChanges<V> =
+    std::collections::BTreeMap<i64, std::collections::HashMap<Vec<u8>, V>>;
 
 #[derive(Debug, Clone)]
 pub struct EntityDailyChanges<K: Eq + std::hash::Hash> {
@@ -401,7 +469,7 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
     }
 
     /// Reassign every per-block contribution to its canonical stats key.
-    /// Preserve block boundaries so the entity-stats undo log can restore
+    /// Preserve block boundaries so the block journal can restore
     /// exact pre-images across a mid-batch reorg.
     pub fn remap_keys<M: Eq + std::hash::Hash + Clone>(
         self,
@@ -565,7 +633,7 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
     }
 
     /// Reassign every per-block contribution to its canonical stats key,
-    /// keeping block boundaries for the entity-stats undo log.
+    /// keeping block boundaries for the block journal.
     pub fn remap_keys<M: Eq + std::hash::Hash + Clone>(
         self,
         mut map_key: impl FnMut(i64, K) -> anyhow::Result<M>,

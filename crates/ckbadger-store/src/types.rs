@@ -1968,18 +1968,6 @@ pub struct DailyHodlWave {
     pub holder_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HodlTrackerState {
-    pub capacity_by_date: Vec<(String, i128)>,
-    pub date_transitions: Vec<(i64, String)>,
-    pub holder_count: i64,
-    pub last_snapshot_date: Option<String>,
-    /// The last block number processed by this tracker.
-    /// Distinct from `date_transitions.last()` which only records date boundary changes.
-    #[serde(default)]
-    pub last_processed_block: Option<i64>,
-}
-
 // ============================================
 // Group G3: Cell Distribution & Address Cohort
 // ============================================
@@ -2006,21 +1994,32 @@ pub struct AddressCohortEntry {
     pub total_balance: i128,
 }
 
-/// Serializable state for the cell distribution tracker.
-/// Persisted to sync_meta for crash recovery.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CellDistributionTrackerState {
+/// The HODL wave tracker's scalars, one `sync_meta` row (`hodl_cursor`). With
+/// the `hodl_capacity_by_date` rows it is the tracker's whole persisted state
+/// at `last_processed_block`; both are written in the scope of every block
+/// that moves them, so the block journal restores them on a rollback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HodlTrackerCursor {
+    /// Addresses holding at least one live cell.
+    pub holder_count: i64,
+    /// UTC+8 day (`YYYYMMDD`) of `last_processed_block`: the open day, whose
+    /// snapshot the first block of the next day seals.
+    pub last_snapshot_date: String,
+    pub last_processed_block: i64,
+}
+
+/// The cell-distribution tracker's scalars, one `sync_meta` row
+/// (`cell_dist_cursor`); its cohort accumulator is the
+/// `cell_dist_cohort_by_month` rows. See [`HodlTrackerCursor`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellDistTrackerCursor {
+    /// Live cell count per size bucket.
     pub count_by_bucket: [i64; 6],
+    /// Live occupied capacity (shannons) per size bucket.
     pub total_capacity_by_bucket: [i128; 6],
-    pub date_transitions: Vec<(i64, String)>,
-    pub last_snapshot_date: Option<String>,
-    /// Incremental address cohort accumulator: (YYYY-MM, used_capacity, balance).
-    #[serde(default)]
-    pub cohort_accum: Vec<(String, i128, i128)>,
-    /// The last block number processed by this tracker.
-    /// Distinct from `date_transitions.last()` which only records date boundary changes.
-    #[serde(default)]
-    pub last_processed_block: Option<i64>,
+    /// UTC+8 day (`YYYYMMDD`) of `last_processed_block`.
+    pub last_snapshot_date: String,
+    pub last_processed_block: i64,
 }
 
 // ============================================
@@ -2054,9 +2053,6 @@ pub struct SyncStatus {
 /// `live_cells` is deliberately not persisted: it is the checked sum of the
 /// three mutually-exclusive classes, so a stored total can never drift from
 /// its partition. Every field has a fixed-width binary representation.
-pub const LIVE_CELL_SUMMARY_HISTORY_BLOCKS: i64 =
-    ckbadger_common::MAX_SHALLOW_REORG_DEPTH as i64 + 1;
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LiveCellSummary {
     pub tip_block_number: i64,
@@ -2156,7 +2152,35 @@ impl LiveCellSummary {
     }
 }
 
-impl SyncStatus {
+/// The chain part of [`SyncStatus`]: the store's tip and its running totals,
+/// journaled per block under `sync_meta` `sync_status`, so a rollback
+/// restores it with the blocks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncChainStatus {
+    pub tip_block_number: i64,
+    pub tip_block_hash: Vec<u8>,
+    pub total_transactions: i64,
+    pub total_cells_created: i64,
+    pub total_cells_consumed: i64,
+}
+
+/// The runtime part of [`SyncStatus`]: the running process's telemetry, the
+/// bulk-completion record and the deep-fork state, written outside the
+/// journal under `sync_meta` `sync_runtime`. None of it is chain state, so a
+/// rollback never restores it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncRuntimeStatus {
+    pub last_synced_at: i64,
+    pub sync_started_at: Option<i64>,
+    pub sync_started_block: i64,
+    pub sync_ema_rate: Option<f64>,
+    pub bulk_sync_completed_at: Option<i64>,
+    pub bulk_sync_completed_block: Option<i64>,
+    pub deep_fork_detected: bool,
+    pub deep_fork_info: Option<DeepForkInfo>,
+}
+
+impl SyncRuntimeStatus {
     pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
         if is_bulk_sync {
             let should_start_new_bulk_session = self.sync_started_at.is_none()
@@ -2182,6 +2206,67 @@ impl SyncStatus {
             self.bulk_sync_completed_at = Some(chrono::Utc::now().timestamp());
             self.bulk_sync_completed_block = Some(chain_tip);
         }
+    }
+}
+
+impl SyncStatus {
+    /// The journaled chain part.
+    pub fn chain(&self) -> SyncChainStatus {
+        SyncChainStatus {
+            tip_block_number: self.tip_block_number,
+            tip_block_hash: self.tip_block_hash.clone(),
+            total_transactions: self.total_transactions,
+            total_cells_created: self.total_cells_created,
+            total_cells_consumed: self.total_cells_consumed,
+        }
+    }
+
+    /// The unjournaled runtime part.
+    pub fn runtime(&self) -> SyncRuntimeStatus {
+        SyncRuntimeStatus {
+            last_synced_at: self.last_synced_at,
+            sync_started_at: self.sync_started_at,
+            sync_started_block: self.sync_started_block,
+            sync_ema_rate: self.sync_ema_rate,
+            bulk_sync_completed_at: self.bulk_sync_completed_at,
+            bulk_sync_completed_block: self.bulk_sync_completed_block,
+            deep_fork_detected: self.deep_fork_detected,
+            deep_fork_info: self.deep_fork_info.clone(),
+        }
+    }
+
+    pub fn from_parts(chain: SyncChainStatus, runtime: SyncRuntimeStatus) -> Self {
+        Self {
+            tip_block_number: chain.tip_block_number,
+            tip_block_hash: chain.tip_block_hash,
+            total_transactions: chain.total_transactions,
+            total_cells_created: chain.total_cells_created,
+            total_cells_consumed: chain.total_cells_consumed,
+            last_synced_at: runtime.last_synced_at,
+            sync_started_at: runtime.sync_started_at,
+            sync_started_block: runtime.sync_started_block,
+            sync_ema_rate: runtime.sync_ema_rate,
+            bulk_sync_completed_at: runtime.bulk_sync_completed_at,
+            bulk_sync_completed_block: runtime.bulk_sync_completed_block,
+            deep_fork_detected: runtime.deep_fork_detected,
+            deep_fork_info: runtime.deep_fork_info,
+        }
+    }
+
+    /// [`SyncRuntimeStatus::init_sync_start`] on this status's runtime part
+    /// (the one rule).
+    pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
+        let mut runtime = self.runtime();
+        runtime.init_sync_start(start_block, is_bulk_sync);
+        *self = Self::from_parts(self.chain(), runtime);
+    }
+
+    /// [`SyncRuntimeStatus::mark_bulk_sync_completed`] on this status's
+    /// runtime part (the one rule).
+    pub fn mark_bulk_sync_completed(&mut self, chain_tip: i64) {
+        let mut runtime = self.runtime();
+        runtime.mark_bulk_sync_completed(chain_tip);
+        *self = Self::from_parts(self.chain(), runtime);
     }
 
     pub fn bulk_sync_total_seconds(&self) -> Option<i64> {
@@ -2309,51 +2394,22 @@ pub struct ReorgEventRecord {
     pub event: ReorgEvent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum UndoLogStoreTarget {
-    Domain,
-    AppendOnly,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UndoInputOutPoint {
-    pub tx_hash: Vec<u8>,
-    pub output_index: i16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UndoTxContext {
-    pub tx_hash: Vec<u8>,
-    pub outputs_count: i16,
-    pub inputs: Vec<UndoInputOutPoint>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum UndoLogEntry {
-    /// Previous value before the forward write.
-    /// `None` means the key did not exist and rollback should delete it.
-    KeyMutation {
-        target_store: UndoLogStoreTarget,
-        cf_name: String,
-        key: Vec<u8>,
-        previous_value: Option<Vec<u8>>,
-    },
-    /// Transaction context for deriving cell/consumed rollback from canonical tx data.
-    TxContext(UndoTxContext),
-}
-
-/// What this store guarantees about rolling entity daily/hourly stats back.
+/// What this store guarantees about rolling the chain view back.
 ///
 /// `coverage_floor_block` is the lowest block a shallow reorg can still be
-/// undone to: `EntityStats` undo entries at or below it have been pruned. A
-/// rollback target below the floor is a hard error — there is no honest way to
-/// reconstruct those buckets, and fabricating one would be exactly the silent
+/// undone to: block journal rows at or below it have been pruned. A rollback
+/// target below the floor is a hard error — there is no honest way to
+/// reconstruct those rows, and fabricating one would be exactly the silent
 /// repair this whole change removes.
+///
+/// The contract describes which journal rows exist, so it is written outside
+/// the journal (`StoreBatch::put_entity_stats_undo_contract`): a rollback never
+/// restores an older floor over rows the prune already deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntityStatsUndoContract {
     /// Format version of the entity-stats undo contract.
     pub version: u32,
-    /// Lowest block still coverable by `EntityStats` undo entries.
+    /// Lowest block still coverable by the block journal.
     pub coverage_floor_block: i64,
     /// Committed tip when the floor was last advanced.
     pub updated_at_block: i64,
@@ -3179,6 +3235,48 @@ impl CollectionActivityDailyDeltas {
     }
 }
 
+/// A live batch's [`CollectionActivityDailyDeltas`], kept per block (blocks
+/// ascending), so each block's contributions land in that block's scope of
+/// the batch's block journal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollectionActivityDailyBlockDeltas {
+    by_block: BTreeMap<i64, CollectionActivityDailyDeltas>,
+}
+
+impl CollectionActivityDailyBlockDeltas {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fold one collection activity row of `collection_id`, written by
+    /// `block`, into `day` (the UTC+8 day of that block).
+    pub fn add_row(
+        &mut self,
+        block: i64,
+        collection_id: &[u8],
+        day: u32,
+        actions: &[AssetAction],
+    ) -> anyhow::Result<()> {
+        self.by_block
+            .entry(block)
+            .or_default()
+            .add_row(collection_id, day, actions)
+            .map_err(|e| e.context(format!("collection activity row of block {block}")))
+    }
+
+    /// Each block's contributions, blocks ascending. A block whose rows all
+    /// contribute nothing yields an empty map.
+    pub fn iter(&self) -> impl Iterator<Item = (i64, &CollectionActivityDailyDeltas)> {
+        self.by_block.iter().map(|(block, deltas)| (*block, deltas))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_block
+            .values()
+            .all(CollectionActivityDailyDeltas::is_empty)
+    }
+}
+
 // ============================================
 // Group I-c: Token Activities (derived at read time from token_transfers CF)
 // ============================================
@@ -3503,53 +3601,6 @@ mod tests {
         let info = sample_live_cell_info();
         let bytes = info.encode().unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
-    }
-
-    #[test]
-    fn test_undo_log_entry_roundtrip() {
-        let entry = UndoLogEntry::KeyMutation {
-            target_store: UndoLogStoreTarget::AppendOnly,
-            cf_name: "addr_txs".to_string(),
-            key: vec![0xAA; 12],
-            previous_value: Some(vec![0xBB; 8]),
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, entry);
-    }
-
-    #[test]
-    fn test_undo_log_entry_none_previous_value_roundtrip() {
-        let entry = UndoLogEntry::KeyMutation {
-            target_store: UndoLogStoreTarget::Domain,
-            cf_name: "sync_meta".to_string(),
-            key: b"new_key".to_vec(),
-            previous_value: None,
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, entry);
-    }
-
-    #[test]
-    fn test_undo_log_tx_context_roundtrip() {
-        let entry = UndoLogEntry::TxContext(UndoTxContext {
-            tx_hash: vec![0x11; 32],
-            outputs_count: 2,
-            inputs: vec![
-                UndoInputOutPoint {
-                    tx_hash: vec![0x22; 32],
-                    output_index: 0,
-                },
-                UndoInputOutPoint {
-                    tx_hash: vec![0x33; 32],
-                    output_index: 1,
-                },
-            ],
-        });
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, entry);
     }
 
     // ---- TxActions / ItemDelta / ParticipantDelta ----

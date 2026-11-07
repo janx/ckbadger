@@ -102,7 +102,7 @@ impl Config {
         if self.bulk_memory_budget_gb == Some(0) {
             bail!("config: indexer.bulk_memory_budget_gb must be > 0 when set");
         }
-        // Bulk build records no undo entries and stops once it is within this
+        // Bulk build records no journal entries and stops once it is within this
         // threshold of the chain tip, so the entity-stats coverage floor lands
         // at the last block it wrote. Live sync then has `bulk_sync_threshold`
         // blocks in which to build undo coverage before a legal shallow fork

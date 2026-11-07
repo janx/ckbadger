@@ -228,7 +228,7 @@ pub enum DeriveState {
         rows_done: u64,
     },
     /// The rows equal a from-scratch derivation at the sync tip. They became
-    /// exact at `completed_at_tip`: undo entries recorded at or below it were
+    /// exact at `completed_at_tip`: journal entries recorded at or below it were
     /// recorded while rebuild chunks still wrote, so a rollback below it
     /// restarts the derivation instead of replaying them.
     Complete {

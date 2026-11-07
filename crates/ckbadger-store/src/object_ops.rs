@@ -10,7 +10,8 @@ use crate::types::{
 pub(crate) type MnftBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
 use crate::bytes_to_hex;
-use crate::types::{CollectionActivityDailyCounts, CollectionActivityDailyDeltas};
+use crate::types::{CollectionActivityDailyBlockDeltas, CollectionActivityDailyCounts};
+use std::collections::HashMap;
 
 /// Decode a `collection_activity_daily` value, naming the row on failure.
 fn decode_collection_activity_daily(
@@ -82,25 +83,61 @@ impl CkbadgerStore {
     }
 
     /// Stage a live batch's `collection_activity_daily` contributions into
-    /// `batch`: each touched `(collection, day)` row read once (one
-    /// `multi_get`) and written once with its committed counts plus the
-    /// batch's. The batch carries the collection activity rows themselves,
-    /// so rows and counts commit together.
+    /// `batch`, block by block: each touched `(collection, day)` row is read
+    /// once through the batch (its block overlay on a live batch, one
+    /// `multi_get`) and written in the scope of every block that adds to it,
+    /// with the value it has at the end of that block, so the block journal
+    /// restores it at any block of the batch. The batch carries the
+    /// collection activity rows themselves, so rows and counts commit
+    /// together.
     pub fn stage_collection_activity_daily(
         &self,
-        deltas: &CollectionActivityDailyDeltas,
+        deltas: &CollectionActivityDailyBlockDeltas,
         batch: &mut crate::batch::StoreBatch,
     ) -> anyhow::Result<()> {
-        let days: Vec<([u8; 32], u32)> = deltas.iter().map(|(key, _)| *key).collect();
-        let stored = self.get_collection_activity_daily_batch(&days)?;
-        for (((collection_id, day), added), previous) in deltas.iter().zip(stored) {
-            let next = previous.unwrap_or_default().checked_add(added).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "collection_activity_daily overflow: collection=0x{} day={day} stored={previous:?} added={added:?}",
-                    bytes_to_hex(collection_id)
-                )
-            })?;
-            batch.put_collection_activity_daily(collection_id, *day, &next);
+        let mut days: Vec<([u8; 32], u32)> = deltas
+            .iter()
+            .flat_map(|(_, block_deltas)| block_deltas.iter().map(|(key, _)| *key))
+            .collect();
+        days.sort_unstable();
+        days.dedup();
+        let row_keys: Vec<Vec<u8>> = days
+            .iter()
+            .map(|(collection_id, day)| {
+                keys::encode_collection_activity_daily_key(collection_id, *day).to_vec()
+            })
+            .collect();
+        let stored =
+            batch.get_current_many(crate::store::CF_COLLECTION_ACTIVITY_DAILY, &row_keys)?;
+        let mut current: HashMap<([u8; 32], u32), Option<CollectionActivityDailyCounts>> =
+            HashMap::with_capacity(days.len());
+        for ((collection_id, day), value) in days.into_iter().zip(stored) {
+            let counts = value
+                .map(|bytes| decode_collection_activity_daily(&collection_id, day, &bytes))
+                .transpose()?;
+            current.insert((collection_id, day), counts);
+        }
+        for (block, block_deltas) in deltas.iter() {
+            let mut scope = batch.at(block);
+            for ((collection_id, day), added) in block_deltas.iter() {
+                let previous = current.get_mut(&(*collection_id, *day)).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "collection_activity_daily row not read before staging: collection=0x{} day={day} block={block}",
+                        bytes_to_hex(collection_id)
+                    )
+                })?;
+                let next = match previous {
+                    Some(stored) => stored.checked_add(added).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "collection_activity_daily overflow: collection=0x{} day={day} block={block} stored={stored:?} added={added:?}",
+                            bytes_to_hex(collection_id)
+                        )
+                    })?,
+                    None => *added,
+                };
+                scope.put_collection_activity_daily(collection_id, *day, &next);
+                *previous = Some(next);
+            }
         }
         Ok(())
     }
@@ -578,7 +615,9 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use crate::batch::StoreBatch;
-    use crate::types::{MnftDailyDelta, MnftTypeIndex, ObjectStandard};
+    use crate::types::{
+        CollectionActivityDailyDeltas, MnftDailyDelta, MnftTypeIndex, ObjectStandard,
+    };
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -674,7 +713,8 @@ mod tests {
     }
 
     /// The live writer's staging adds a batch's contributions to the
-    /// committed day rows (one read per touched day) and the reader lists a
+    /// committed day rows (one read per touched day, two blocks of one batch
+    /// adding to the same day thread through it) and the reader lists a
     /// collection's days ascending, other collections excluded.
     #[test]
     fn test_stage_collection_activity_daily_adds_to_committed_rows() {
@@ -682,14 +722,14 @@ mod tests {
         let (_dir, store) = test_domain_store();
         let collection = [0x5au8; 32];
         for batch_rows in [
-            vec![(20261006, vec![Mint]), (20261013, vec![Transfer])],
-            vec![(20261006, vec![Mint, Burn])],
+            vec![(10, 20261006, vec![Mint]), (11, 20261013, vec![Transfer])],
+            vec![(12, 20261006, vec![Mint, Burn]), (13, 20261006, vec![Burn])],
         ] {
-            let mut deltas = CollectionActivityDailyDeltas::new();
-            for (day, actions) in &batch_rows {
-                deltas.add_row(&collection, *day, actions).unwrap();
+            let mut deltas = CollectionActivityDailyBlockDeltas::new();
+            for (block, day, actions) in &batch_rows {
+                deltas.add_row(*block, &collection, *day, actions).unwrap();
             }
-            deltas.add_row(&[0x5b; 32], 20261006, &[Mint]).unwrap();
+            deltas.add_row(12, &[0x5b; 32], 20261006, &[Mint]).unwrap();
             let mut batch = StoreBatch::new(&store);
             store
                 .stage_collection_activity_daily(&deltas, &mut batch)
@@ -703,11 +743,79 @@ mod tests {
         };
         assert_eq!(
             store.list_collection_activity_daily(&collection).unwrap(),
-            vec![(20261006, counts(2, 0, 1)), (20261013, counts(0, 1, 0))]
+            vec![(20261006, counts(2, 0, 2)), (20261013, counts(0, 1, 0))]
         );
         assert_eq!(
             store.list_collection_activity_daily(&[0x5b; 32]).unwrap(),
             vec![(20261006, counts(2, 0, 0))]
+        );
+    }
+
+    /// On a live (journaled) batch every block that adds to a day writes the
+    /// row in its own scope, so the journal holds the row's value at the end
+    /// of the previous block for each of them.
+    #[test]
+    fn test_stage_collection_activity_daily_journals_each_block() {
+        use crate::types::{AssetAction::*, CollectionActivityDailyCounts};
+        let (_dir, store) = test_domain_store();
+        let collection = [0x5au8; 32];
+        let committed = CollectionActivityDailyCounts {
+            mint_transactions: 4,
+            transfer_transactions: 0,
+            burn_transactions: 0,
+        };
+        let mut seed = StoreBatch::new(&store);
+        seed.put_collection_activity_daily(&collection, 20261006, &committed);
+        seed.commit().unwrap();
+
+        let mut deltas = CollectionActivityDailyBlockDeltas::new();
+        deltas.add_row(20, &collection, 20261006, &[Mint]).unwrap();
+        deltas.add_row(21, &collection, 20261006, &[Burn]).unwrap();
+        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        store
+            .stage_collection_activity_daily(&deltas, &mut batch)
+            .unwrap();
+        let mut counters = std::collections::HashMap::new();
+        batch
+            .stage_journal(&mut |block| crate::block_overlay::journal_seq(&mut counters, block))
+            .unwrap();
+        batch.commit().unwrap();
+
+        let key = keys::encode_collection_activity_daily_key(&collection, 20261006).to_vec();
+        let journal: Vec<(i64, Option<Vec<u8>>)> = store
+            .iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            )
+            .map(|row| {
+                let (row_key, value) = row.unwrap();
+                let (block, _) = keys::decode_reorg_undo_log_key(&row_key);
+                let entry = crate::block_overlay::decode_journal_value(&value).unwrap();
+                assert_eq!(entry.key, key.as_slice());
+                (block, entry.previous.map(<[u8]>::to_vec))
+            })
+            .collect();
+        let after_20 = CollectionActivityDailyCounts {
+            mint_transactions: 5,
+            ..committed
+        };
+        assert_eq!(
+            journal,
+            vec![
+                (20, Some(bincode::serialize(&committed).unwrap())),
+                (21, Some(bincode::serialize(&after_20).unwrap())),
+            ]
+        );
+        assert_eq!(
+            store.list_collection_activity_daily(&collection).unwrap(),
+            vec![(
+                20261006,
+                CollectionActivityDailyCounts {
+                    burn_transactions: 1,
+                    ..after_20
+                }
+            )]
         );
     }
 

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use rocksdb::{Direction, IteratorMode};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ckbadger_common::dao::{calculate_estimated_apc, extract_s_from_dao};
 use ckbadger_store::batch::StoreBatch;
@@ -146,6 +146,32 @@ impl ExactDaoSnapshotCompensation {
     }
 }
 
+/// The bulk-written unique-address blobs (`ACTIVITY_*_ADDR_SET`) of the
+/// activity buckets one live batch touches, each read and decoded once per
+/// batch. Live sync never rewrites a blob (it records new addresses as rows,
+/// see [`BatchWriter::update_activity_bucket_stats`]), so the committed value
+/// is the batch's value throughout.
+#[derive(Debug, Default)]
+pub struct FrozenActivityAddrSets {
+    sets: HashMap<(keys::ActivityBucketKind, String), HashSet<[u8; 32]>>,
+}
+
+impl FrozenActivityAddrSets {
+    fn get(
+        &mut self,
+        store: &ckbadger_store::CkbadgerStore,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+    ) -> Result<&HashSet<[u8; 32]>> {
+        match self.sets.entry((kind, bucket.to_string())) {
+            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                Ok(entry.insert(store.get_activity_addr_set_blob(kind, bucket)?))
+            }
+        }
+    }
+}
+
 /// Outcome of one bounded hourly retention step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HourlyRetentionStepResult {
@@ -178,7 +204,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_HOURLY,
             hour.format("%Y%m%d%H").to_string().as_bytes(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -263,7 +289,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let (new_block_time_sum_ms, new_block_time_count) = block_time.unwrap_or((0, 0));
 
@@ -330,8 +356,8 @@ impl BatchWriter {
                         keys::STATS_PREFIX_DAILY,
                         prev_date.format("%Y%m%d").to_string().as_bytes(),
                     );
-                    self.store
-                            .get_stats_key(&prev_key)?
+                    batch
+                            .get_stats(&prev_key)?
                             .map(|v| deserialize_stats::<DailyStats>(&v, "previous day stats"))
                             .transpose()?
                             .map(|p| {
@@ -415,7 +441,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY_BLOCK,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats =
             match existing {
@@ -464,7 +490,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_MINER,
             &[date_key.as_bytes(), lock_script_hash].concat(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -498,7 +524,7 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch_number.to_be_bytes());
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats = if is_new {
             let blocks_count = (end_block - start_block + 1) as i32;
@@ -559,7 +585,7 @@ impl BatchWriter {
             anyhow::bail!("invalid {kind} histogram delta: bucket={bucket} count={count}");
         }
         let key = keys::encode_stats_key(prefix, &bucket.to_be_bytes());
-        let previous = match self.store.get_stats_key(&key)? {
+        let previous = match batch.get_stats(&key)? {
             Some(bytes) => {
                 let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
                     anyhow!(
@@ -680,102 +706,74 @@ impl BatchWriter {
         accumulate_tx_actions_stats(tx_actions, stats);
     }
 
-    /// Write accumulated daily activity stats for a date.
-    /// Reads existing stats for the date, merges with accumulated, writes back.
-    /// Uses a persistent address set to correctly dedup unique addresses across batches.
-    pub fn update_daily_activity_stats(
-        &self,
-        date: &str,
-        accumulated: &DailyActivityStats,
-        batch_addrs: &HashSet<[u8; 32]>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let unique_address_count = self.merge_persistent_addr_set(
-            keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            date.as_bytes(),
-            batch_addrs,
-            batch,
-        )?;
-        let existing = self.store.get_daily_activity_stats(date)?;
-        let merged = match existing {
-            Some(mut e) => {
-                e.add_counts(accumulated)
-                    .with_context(|| format!("merging daily activity stats for date {date}"))?;
-                e.unique_address_count = unique_address_count;
-                e
-            }
-            None => {
-                let mut s = accumulated.clone();
-                s.unique_address_count = unique_address_count;
-                s
-            }
-        };
-        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
-        let value = bincode::serialize(&merged)?;
-        batch.put_stats(&key, &value);
-        Ok(())
-    }
-
-    /// Write accumulated hourly activity stats for an hour key.
-    /// Reads existing stats for the hour, merges with accumulated, writes back.
-    /// Uses a persistent address set to correctly dedup unique addresses across batches.
-    pub fn update_hourly_activity_stats(
-        &self,
-        hour_key: &str,
-        accumulated: &DailyActivityStats,
-        batch_addrs: &HashSet<[u8; 32]>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let unique_address_count = self.merge_persistent_addr_set(
-            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
-            hour_key.as_bytes(),
-            batch_addrs,
-            batch,
-        )?;
-        let existing = self.store.get_hourly_activity_stats(hour_key)?;
-        let merged = match existing {
-            Some(mut e) => {
-                e.add_counts(accumulated).with_context(|| {
-                    format!("merging hourly activity stats for hour {hour_key}")
-                })?;
-                e.unique_address_count = unique_address_count;
-                e
-            }
-            None => {
-                let mut s = accumulated.clone();
-                s.unique_address_count = unique_address_count;
-                s
-            }
-        };
-        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
-        let value = bincode::serialize(&merged)?;
-        batch.put_stats(&key, &value);
-        Ok(())
-    }
-
-    /// Load an existing persistent address set from CF_STATS_CHAIN, merge in
-    /// new addresses from the current batch, store back, and return the total
-    /// unique address count as u32.
+    /// Apply one block's activity counts to its bucket of `kind` (the
+    /// block's UTC+8 day or hour) on top of the row the previous block left,
+    /// and record the block's addresses the bucket has not seen yet.
     ///
-    /// Row encoding and count derivation come from the shared store-level
-    /// helpers, so reorg rollback repair rebuilds byte-identical rows.
-    fn merge_persistent_addr_set(
+    /// A bucket's unique addresses are its bulk-written address-set blob
+    /// (frozen: live sync never rewrites it) plus one `ACTIVITY_*_ADDR_ROW`
+    /// row per address live sync saw first in it. An address is new iff it is
+    /// in neither; each new one gets its row in this block's scope and raises
+    /// `unique_address_count` by one. So a block journals one small entry per
+    /// new address and its bucket row, never the bucket-wide set.
+    pub fn update_activity_bucket_stats(
         &self,
-        prefix: u8,
-        bucket: &[u8],
-        batch_addrs: &HashSet<[u8; 32]>,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+        block_stats: &DailyActivityStats,
+        block_addrs: &BTreeSet<[u8; 32]>,
+        frozen: &mut FrozenActivityAddrSets,
         batch: &mut StoreBatch,
-    ) -> Result<u32> {
-        let set_key = keys::encode_stats_key(prefix, bucket);
-        let bucket_label = String::from_utf8_lossy(bucket).into_owned();
-        let mut addrs: HashSet<[u8; 32]> = match self.store.get_stats_key(&set_key)? {
-            Some(raw) => ckbadger_store::decode_activity_addr_set(&raw, &bucket_label)?,
-            None => HashSet::new(),
+    ) -> Result<()> {
+        let key = kind.stats_key(bucket)?;
+        let existing: Option<DailyActivityStats> = batch
+            .get_stats(&key)?
+            .map(|raw| deserialize_stats(&raw, "activity bucket stats"))
+            .transpose()
+            .with_context(|| format!("{kind:?} activity bucket {bucket}"))?;
+        let blob = frozen.get(&self.store, kind, bucket)?;
+        if existing.is_none() && !blob.is_empty() {
+            bail!(
+                "{kind:?} activity bucket {bucket} has an address-set blob of {} addresses but no stats row",
+                blob.len()
+            );
+        }
+        let mut new_addrs = 0u32;
+        for lock_hash in block_addrs {
+            if blob.contains(lock_hash) {
+                continue;
+            }
+            let row_key = kind.addr_row_key(bucket, lock_hash)?;
+            if batch.get_stats(&row_key)?.is_some() {
+                continue;
+            }
+            batch.put_stats(&row_key, &[]);
+            new_addrs = new_addrs.checked_add(1).ok_or_else(|| {
+                anyhow!("{kind:?} activity bucket {bucket}: new address count overflow")
+            })?;
+        }
+        let merged = match existing {
+            Some(mut row) => {
+                let previous_unique = row.unique_address_count;
+                row.add_counts(block_stats).with_context(|| {
+                    format!("merging {kind:?} activity stats for bucket {bucket}")
+                })?;
+                row.unique_address_count =
+                    previous_unique.checked_add(new_addrs).ok_or_else(|| {
+                        anyhow!(
+                            "{kind:?} activity bucket {bucket}: unique_address_count overflow: {previous_unique} + {new_addrs}"
+                        )
+                    })?;
+                row
+            }
+            None => {
+                let mut row = block_stats.clone();
+                row.unique_address_count = new_addrs;
+                row
+            }
         };
-        addrs.extend(batch_addrs);
-        let flat = ckbadger_store::encode_activity_addr_set(addrs.iter().copied());
-        batch.put_stats(&set_key, &flat);
-        ckbadger_store::activity_addr_set_count(addrs.len(), &bucket_label)
+        batch.put_stats(&key, &bincode::serialize(&merged)?);
+        Ok(())
     }
 
     /// Hours of per-entity hourly transfer counters the read path relies on.
@@ -1189,16 +1187,45 @@ impl BatchWriter {
         ExactDaoSnapshotCompensation::from_breakdown(breakdown, secondary_pool, observation_block)
     }
 
-    /// Refresh the DAO singleton statistics and verify the tip daily row.
-    /// The forward writer owns every daily snapshot, including the incomplete
-    /// tip; refresh must never repair a row after its sync-tip commit.
+    /// Refresh the DAO tip summary: the singleton statistics (latest stats,
+    /// top depositors) and the daily snapshot of the tip's still-open UTC+8
+    /// day, every one a function of the sync tip, from one `dao_deposits`
+    /// scan. It runs after every tip change — each forward live batch, every
+    /// rollback (reorg, startup cleanup, batch-range cleanup), startup and
+    /// bulk finalize — and writes outside the block journal: a rollback
+    /// replays the journal, then recomputes these rows at its new tip.
+    ///
+    /// The daily rows are split by ownership: a sealed day (a later day's
+    /// block exists) is the forward writer's, written in its sealer block's
+    /// scope and never revisited here; the open day's row is this summary's,
+    /// and no row may exist for a day after the tip's (such a row can only be
+    /// the open-day row of a former tip, which a journal replay restores as
+    /// the previous value of a sealed write), so they are removed.
+    ///
+    /// Each call logs one debug line, [`DAO_TIP_SUMMARY_LOG`], with its
+    /// elapsed time, the open day's headers walked and the live DAO cells
+    /// scanned (the 24 h run's sampler reads it; keep the text and fields).
     pub fn refresh_latest_dao_statistics(&self) -> Result<()> {
-        self.refresh_dao_statistics()
+        let started = std::time::Instant::now();
+        let work = self.refresh_dao_statistics()?;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+            tip_block = work.tip_block,
+            open_day_headers = work.open_day_headers,
+            live_dao_cells = work.live_dao_cells,
+            "{}",
+            DAO_TIP_SUMMARY_LOG
+        );
+        Ok(())
     }
 
-    fn refresh_dao_statistics(&self) -> Result<()> {
+    fn refresh_dao_statistics(&self) -> Result<DaoTipSummaryWork> {
         let Some((tip_block_number, header)) = self.store.get_sync_tip_block()? else {
-            return Ok(());
+            return Ok(DaoTipSummaryWork {
+                tip_block: -1,
+                open_day_headers: 0,
+                live_dao_cells: 0,
+            });
         };
 
         let tip_ar = extract_ar_from_dao_field(&header.dao).ok_or_else(|| {
@@ -1224,6 +1251,11 @@ impl BatchWriter {
                 header.dao.len()
             )
         })?;
+        let estimated_apc = estimated_apc_from_header(&header, self.genesis_total_issuance()?)
+            .ok_or_else(|| anyhow!(
+                "invalid estimated APC inputs at tip block {tip_block_number}: epoch={}:{}/{}, genesis issuance unavailable or nonpositive APC",
+                header.epoch_number, header.epoch_index, header.epoch_length
+            ))?;
 
         let mut total_deposited: i128 = 0;
         let mut pending_withdrawal_capacity: i128 = 0;
@@ -1364,24 +1396,32 @@ impl BatchWriter {
                 Some((block_number, ar))
             }
         };
-        let (breakdown, baseline_state) = match baseline_observation {
-            Some((block_number, ar)) => {
-                let (current, historical) = self
-                    .store
-                    .compute_dao_compensation_and_historical_state_at(
-                        tip_block_number,
-                        tip_ar,
-                        block_number,
-                        ar,
-                    )?;
-                (current, Some(historical))
-            }
-            None => (
-                self.store
-                    .compute_dao_compensation_breakdown_at(tip_block_number, tip_ar)?,
-                None,
-            ),
-        };
+        // The open day: the tip's UTC+8 day, from its first block to the tip.
+        let tip_day = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
+        let (open_day_start, open_day_end) = self
+            .store
+            .dao_day_block_range(tip_day, tip_block_number)?
+            .ok_or_else(|| {
+                anyhow!("the sync tip block {tip_block_number} is not on its own day {tip_day}")
+            })?;
+        if open_day_end != tip_block_number {
+            bail!(
+                "the open DAO day {tip_day} ends at block {open_day_end}, not at the sync tip {tip_block_number}"
+            );
+        }
+        let mut open_day =
+            ckbadger_store::DaoDayFacts::new(tip_day, open_day_start, tip_block_number)?;
+        // One lifecycle scan: the exact partition at the tip, the 24 h
+        // baseline's state, and the open day's lifecycle facts.
+        let (breakdown, baseline_state) = self.store.scan_dao_tip_observations(
+            tip_block_number,
+            tip_ar,
+            baseline_observation,
+            &mut |entry| {
+                open_day.observe(entry);
+                Ok(())
+            },
+        )?;
         let exact_tip = ExactDaoSnapshotCompensation::from_breakdown(
             breakdown,
             i128::from(tip_s),
@@ -1409,35 +1449,12 @@ impl BatchWriter {
             );
         }
 
-        let latest_snapshot = match self.store.get_latest_dao_daily_snapshot()? {
-            Some(snapshot) => snapshot,
-            None if tip_block_number == 0 => {
-                // Startup cleanup can leave only the canonical genesis header.
-                // No post-genesis DAO snapshot exists yet; the first forward
-                // batch creates it before this refresh is required.
-                return Ok(());
-            }
-            None => {
-                bail!(
-                    "missing DAO daily snapshot while refreshing latest statistics: tip_block={}",
-                    tip_block_number
-                );
-            }
-        };
-        let estimated_apc = estimated_apc_from_header(&header, self.genesis_total_issuance()?)
-            .ok_or_else(|| anyhow!(
-                "invalid estimated APC inputs at tip block {tip_block_number}: epoch={}:{}/{}, genesis issuance unavailable or nonpositive APC",
-                header.epoch_number, header.epoch_index, header.epoch_length
-            ))?;
-        if latest_snapshot.cum_miner_secondary < 0 {
-            bail!(
-                "negative cum_miner_secondary in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
-                latest_snapshot.date,
-                latest_snapshot.cum_miner_secondary
-            );
-        }
+        // The open day's snapshot: the last sealed day's row plus the open
+        // day's own facts, observed at the tip with the exact partition the
+        // scan above computed.
+        let open_day_snapshot = self.store.reduce_dao_day_snapshot(open_day, breakdown)?;
         let burnt = exact_tip.treasury;
-        let mining_reward = latest_snapshot.cum_miner_secondary;
+        let mining_reward = open_day_snapshot.cum_miner_secondary;
         let deposit_compensation = deposit_compensation_total;
 
         let average_deposit_days =
@@ -1532,31 +1549,59 @@ impl BatchWriter {
             dao_batch.put_stats(&top_key, &top_value);
         }
 
-        // The forward writer has already persisted the exact snapshot in the
-        // same commit as the sync tip. A disagreement is a writer bug, never
-        // a reason to patch the historical row after the fact.
-        if latest_snapshot.compensation != exact_tip.breakdown.claimed
-            || latest_snapshot.unclaimed_compensation != exact_tip.breakdown.unclaimed
-            || latest_snapshot.cum_dao_compensation != exact_tip.total
-            || latest_snapshot.cum_treasury != exact_tip.treasury
-            || latest_snapshot.frozen_phase1_compensation != exact_tip.frozen_phase1
-            || latest_snapshot.secondary_pool != exact_tip.secondary_pool
-        {
-            bail!(
-                "DAO tip daily snapshot disagrees with exact lifecycle at block {} date {}: snapshot claimed={} unclaimed={} total={} treasury={} frozen={} S={}, exact claimed={} unclaimed={} total={} treasury={} frozen={} S={}",
-                tip_block_number, latest_snapshot.date,
-                latest_snapshot.compensation, latest_snapshot.unclaimed_compensation,
-                latest_snapshot.cum_dao_compensation, latest_snapshot.cum_treasury,
-                latest_snapshot.frozen_phase1_compensation, latest_snapshot.secondary_pool,
-                exact_tip.breakdown.claimed, exact_tip.breakdown.unclaimed,
-                exact_tip.total, exact_tip.treasury, exact_tip.frozen_phase1, exact_tip.secondary_pool,
+        // The open day's row, and none for a later day.
+        let open_day_key = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            tip_day.format("%Y%m%d").to_string().as_bytes(),
+        );
+        dao_batch.put_stats(&open_day_key, &bincode::serialize(&open_day_snapshot)?);
+        let mut later_days = 0usize;
+        for item in self.store.iterator_cf(
+            self.store.cf_stats_dao(),
+            IteratorMode::From(&open_day_key, Direction::Forward),
+        ) {
+            let (key, _) = item.map_err(|e| {
+                anyhow!("failed to iterate DAO daily snapshots after the open day {tip_day}: {e}")
+            })?;
+            if key.first() != Some(&keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT) {
+                break;
+            }
+            if key.as_ref() != open_day_key.as_slice() {
+                dao_batch.delete_stats(&key);
+                later_days += 1;
+            }
+        }
+        if later_days > 0 {
+            tracing::info!(
+                tip_block_number,
+                %tip_day,
+                later_days,
+                "DAO tip summary removed the open-day rows of former tips after the tip's day"
             );
         }
 
         dao_batch.commit()?;
 
-        Ok(())
+        Ok(DaoTipSummaryWork {
+            tip_block: tip_block_number,
+            open_day_headers: tip_block_number - open_day_start + 1,
+            live_dao_cells: i64::from(active_deposits),
+        })
     }
+}
+
+/// The debug message of one DAO tip summary refresh
+/// (`refresh_latest_dao_statistics`); a sampler matches it verbatim.
+pub const DAO_TIP_SUMMARY_LOG: &str = "DAO tip summary refreshed";
+
+/// What one DAO tip summary refresh walked, for its debug line.
+struct DaoTipSummaryWork {
+    tip_block: i64,
+    /// The open day's blocks, `open_day_start ..= tip`, whose headers the
+    /// open-day snapshot walks.
+    open_day_headers: i64,
+    /// Live DAO cells (deposits and withdraw requests) the summary scanned.
+    live_dao_cells: i64,
 }
 
 fn extract_ar_from_dao_field(dao: &[u8]) -> Option<u64> {
@@ -1659,30 +1704,38 @@ mod tests {
             .unwrap();
     }
 
-    /// Singleton refresh tests seed synthetic DAO lifecycles directly. Their
-    /// daily tip row must already contain the exact lifecycle partition,
-    /// because production writes it atomically before singleton refresh.
-    fn seed_exact_tip_daily_partition(store: &Arc<CkbadgerStore>) {
-        let (tip_block, header) = store.get_sync_tip_block().unwrap().unwrap();
-        let ar = extract_ar_from_dao_field(&header.dao).unwrap();
-        let s = extract_s_from_dao(&header.dao).unwrap();
-        let breakdown = store
-            .compute_dao_compensation_breakdown_at(tip_block, ar)
+    /// The real consensus `secondary_epoch_reward`, which the indexer
+    /// persists at startup; the open day's miner series needs it.
+    const TEST_SECONDARY_EPOCH_REWARD: u64 = 61_369_863_013_698;
+
+    /// Singleton refresh tests seed synthetic DAO lifecycles directly. The
+    /// DAO tip summary computes the open day's row on top of the last sealed
+    /// day's, so seal every day before the tip's with the store's one day
+    /// calculation, as the forward writer would have.
+    fn seal_dao_days_before_tip(store: &Arc<CkbadgerStore>) {
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
             .unwrap();
-        let mut snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
-        snapshot.compensation = breakdown.claimed;
-        snapshot.unclaimed_compensation = breakdown.unclaimed;
-        snapshot.cum_dao_compensation = breakdown.total().unwrap();
-        snapshot.cum_treasury = breakdown.treasury(i128::from(s)).unwrap();
-        snapshot.frozen_phase1_compensation = breakdown.frozen_phase1().unwrap();
-        snapshot.secondary_pool = i128::from(s);
-        let key = keys::encode_stats_key(
-            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
-            snapshot.date.replace('-', "").as_bytes(),
-        );
-        let mut batch = StoreBatch::new(store);
-        batch.put_stats(&key, &bincode::serialize(&snapshot).unwrap());
-        batch.commit().unwrap();
+        let (tip_block, header) = store.get_sync_tip_block().unwrap().unwrap();
+        let tip_day = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms).unwrap();
+        let genesis = store.get_block_header(0).unwrap().unwrap();
+        let mut day = ckbadger_common::stats_bucket::stats_day(genesis.chain_time_ms).unwrap();
+        while day < tip_day {
+            let mut batch = StoreBatch::new(store);
+            store
+                .recompute_dao_daily_snapshot_for_date(day, tip_block, &mut batch)
+                .unwrap();
+            batch.commit().unwrap();
+            day += Duration::days(1);
+        }
+    }
+
+    /// `floor(s * U / C)` for one block of a one-block epoch (RFC-0023).
+    fn one_block_epoch_miner_secondary(c: u64, u: u64) -> i128 {
+        let s = ckbadger_common::dao::secondary_block_issuance(0, 1, TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+        ckbadger_common::dao::calculate_miner_secondary_issuance(s, i128::from(c), i128::from(u))
+            .unwrap()
     }
 
     #[test]
@@ -1817,12 +1870,16 @@ mod tests {
         seed_test_genesis_baseline(&store);
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        // AR = 2, S = 130 CKB.
+        // AR = 2, S = 130 CKB, C = 9e9 CKB, U = C / 10.
         // unmade_comp for status-0 deposit: (200-102)*2/1 - (200-102) = 98 CKB
         // treasury = S - unmade_comp = 130 - 98 = 32 CKB
+        const C: u64 = 9_000_000_000 * 100_000_000;
+        const U: u64 = C / 10;
         let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&C.to_le_bytes());
         dao[8..16].copy_from_slice(&2u64.to_le_bytes());
         dao[16..24].copy_from_slice(&130_00000000u64.to_le_bytes());
+        dao[24..32].copy_from_slice(&U.to_le_bytes());
         let mut seed = StoreBatch::new(&store);
         let tip_header = CachedBlockHeader {
             hash: vec![0x11; 32],
@@ -1892,10 +1949,13 @@ mod tests {
             },
         );
 
+        // A stale row for the open day (every block is on 2023-11-15 UTC+8):
+        // the open day's row is the tip summary's, so the refresh replaces it
+        // with the exact one rather than trusting or rejecting it.
         let snapshot_key =
-            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260101");
-        let snapshot = DaoDailySnapshot {
-            date: "2026-01-01".to_string(),
+            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20231115");
+        let stale = DaoDailySnapshot {
+            date: "2023-11-15".to_string(),
             total_deposited: 200_00000000,
             depositors_count: 1,
             new_deposits: 2,
@@ -1914,19 +1974,42 @@ mod tests {
             daily_depositor_addresses: 0,
             protocol_deposited: None,
         };
-        let snapshot_val = bincode::serialize(&snapshot).unwrap();
-        seed.put_stats(&snapshot_key, &snapshot_val);
+        seed.put_stats(&snapshot_key, &bincode::serialize(&stale).unwrap());
+        // And the open-day row of a former tip on a later day, as a journal
+        // replay to this tip restores it: no row may outlive the tip's day.
+        let later_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20231116");
+        seed.put_stats(
+            &later_key,
+            &bincode::serialize(&DaoDailySnapshot {
+                date: "2023-11-16".to_string(),
+                ..stale.clone()
+            })
+            .unwrap(),
+        );
         seed.commit().unwrap();
 
-        let mismatch = writer.refresh_latest_dao_statistics().unwrap_err();
+        seal_dao_days_before_tip(&store);
+        let (refreshed, logs) =
+            crate::label_import::test_log_capture::capture_logs(tracing::Level::DEBUG, || {
+                writer.refresh_latest_dao_statistics()
+            });
+        refreshed.unwrap();
+        // One debug line per call, the 24 h run's sampler reads it: the open
+        // day is blocks 0..=10 (one UTC+8 day), one live DAO cell (the other
+        // deposit is withdrawn).
+        let line = logs
+            .lines()
+            .find(|line| line.contains(super::DAO_TIP_SUMMARY_LOG))
+            .unwrap_or_else(|| panic!("no DAO tip summary line in: {logs}"));
+        assert!(line.contains("DEBUG"), "{line}");
+        assert!(line.contains("elapsed_ms="), "{line}");
+        assert!(line.contains("tip_block=10"), "{line}");
+        assert!(line.contains("open_day_headers=11"), "{line}");
+        assert!(line.contains("live_dao_cells=1"), "{line}");
         assert!(
-            mismatch
-                .to_string()
-                .contains("snapshot disagrees with exact lifecycle"),
-            "{mismatch:#}"
+            store.get_dao_daily_snapshot("20231116").unwrap().is_none(),
+            "the refresh removes the rows of days after the tip's"
         );
-        seed_exact_tip_daily_partition(&store);
-        writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
         assert_eq!(latest.tip_block_number, 10);
@@ -1941,17 +2024,43 @@ mod tests {
         assert_eq!(latest.unclaimed_compensation, 98_00000000);
         assert_eq!(latest.average_deposit_days.as_deref(), Some("0 days"));
         assert!(!latest.estimated_apc.is_empty());
-        assert_eq!(latest.mining_reward, 10_00000000);
+        // The day starts at genesis: blocks 1-10 each split one one-block
+        // epoch's secondary issuance against their parent's C/U.
+        let per_block_miner = one_block_epoch_miner_secondary(C, U);
+        assert!(per_block_miner > 0);
+        assert_eq!(latest.mining_reward, 10 * per_block_miner);
         assert_eq!(latest.deposit_compensation, 296_00000000);
         assert_eq!(latest.burnt, 32_00000000);
 
-        // Refresh only verifies the already exact daily row; it must leave
-        // the chart's snapshot unchanged.
-        let exact_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
-        assert_eq!(exact_snapshot.compensation, 198_00000000);
-        assert_eq!(exact_snapshot.cum_dao_compensation, 296_00000000);
-        assert_eq!(exact_snapshot.unclaimed_compensation, 98_00000000);
-        assert_eq!(exact_snapshot.secondary_pool, 130_00000000); // tip_s
+        // The open day's row is the tip summary's exact row, the stale one
+        // replaced: deposits at 5 and 10, the request at 8, the completion
+        // at 9, the partition at the tip.
+        let open_day = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(open_day.date, "2023-11-15");
+        assert_ne!(
+            bincode::serialize(&open_day).unwrap(),
+            bincode::serialize(&stale).unwrap()
+        );
+        assert_eq!(open_day.total_deposited, 200_00000000);
+        assert_eq!(open_day.protocol_deposited, Some(200_00000000));
+        assert_eq!(open_day.cumulative_deposit_amount, 500_00000000);
+        assert_eq!(open_day.new_deposits, 2);
+        assert_eq!(open_day.withdrawals, 1);
+        assert_eq!(open_day.depositors_count, 1);
+        assert_eq!(open_day.cumulative_depositors, 2);
+        assert_eq!(open_day.daily_depositor_addresses, 2);
+        assert_eq!(open_day.cum_miner_secondary, latest.mining_reward);
+        assert_eq!(open_day.compensation, 198_00000000);
+        assert_eq!(open_day.cum_dao_compensation, 296_00000000);
+        assert_eq!(open_day.unclaimed_compensation, 98_00000000);
+        assert_eq!(open_day.secondary_pool, 130_00000000); // tip_s
+
+        // A second refresh at the same tip writes the same bytes.
+        writer.refresh_latest_dao_statistics().unwrap();
+        assert_eq!(
+            bincode::serialize(&store.get_latest_dao_daily_snapshot().unwrap().unwrap()).unwrap(),
+            bincode::serialize(&open_day).unwrap()
+        );
     }
 
     #[test]
@@ -1972,6 +2081,7 @@ mod tests {
 
         let dao_field = |ar: u64, secondary_pool: u64| {
             let mut dao = vec![0u8; 32];
+            dao[0..8].copy_from_slice(&(9_000_000_000u64 * 100_000_000).to_le_bytes());
             dao[8..16].copy_from_slice(&ar.to_le_bytes());
             dao[16..24].copy_from_slice(&secondary_pool.to_le_bytes());
             dao
@@ -2055,7 +2165,9 @@ mod tests {
         seed.commit().unwrap();
 
         // Exercise a staged completed-day observation and an intentionally
-        // stale tip row; refresh must reject the stale row rather than patch it.
+        // stale tip row: the open day's row is the tip summary's, so the
+        // refresh replaces it; the completed day is the forward writer's and
+        // stays as it is.
         let mut batch = StoreBatch::new(&store);
         let mut completed_input = placeholder_snapshot_input();
         writer
@@ -2090,21 +2202,23 @@ mod tests {
         assert_eq!(previous.cum_treasury, 200_00000000);
         assert_eq!(previous.secondary_pool, 300_00000000);
 
-        let stale = writer.refresh_latest_dao_statistics().unwrap_err();
-        assert!(
-            stale
-                .to_string()
-                .contains("snapshot disagrees with exact lifecycle"),
-            "{stale:#}"
+        let stale = store.get_dao_daily_snapshot("20260725").unwrap().unwrap();
+        assert_eq!(
+            stale.cum_dao_compensation, 0,
+            "sanity: the tip row is stale"
         );
-        seed_exact_tip_daily_partition(&store);
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
         writer.refresh_latest_dao_statistics().unwrap();
 
         let latest = store.get_dao_daily_snapshot("20260725").unwrap().unwrap();
         assert_eq!(
             latest.cum_dao_compensation, 200_00000000,
-            "the current day must already be exact before singleton refresh"
+            "the tip summary computes the open day exactly"
         );
+        assert_eq!(latest.unclaimed_compensation, 200_00000000);
+        assert_eq!(latest.secondary_pool, 500_00000000);
 
         let previous_after_refresh = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
         assert_eq!(
@@ -2381,8 +2495,9 @@ mod tests {
     const DAO_FREE_FIXTURE_S: u64 = 30_000_000_000_000_000;
     const DAO_FREE_FIXTURE_U: u64 = 519_967_746_700_000_000;
 
-    /// Seed a tip (block 100, AR 2) plus the block-80 request header and the
-    /// tip-day DAO snapshot the refresh requires, then the given entries.
+    /// Seed a tip (block 100, AR 2) plus the block-80 request header, then the
+    /// given entries. A test whose refresh succeeds seals the days before
+    /// the tip's (`seal_dao_days_before_tip`).
     fn seed_dao_free_fixture(store: &Arc<CkbadgerStore>, entries: &[DaoDepositCacheEntry]) {
         let header = |hash: u8, timestamp: i64| {
             let mut dao = vec![0u8; 32];
@@ -2422,30 +2537,6 @@ mod tests {
         for (i, entry) in entries.iter().enumerate() {
             seed.put_dao_deposit(&keys::encode_outpoint(&[0xA0 + i as u8; 32], 0), entry);
         }
-        let snapshot = DaoDailySnapshot {
-            date: "2023-11-15".to_string(),
-            total_deposited: 0,
-            depositors_count: 0,
-            new_deposits: 0,
-            withdrawals: 0,
-            compensation: 0,
-            cumulative_deposit_amount: 0,
-            total_issuance: 9_000_000_000i128 * 100_000_000i128,
-            secondary_pool: 0,
-            occupied_capacity: 0,
-            cum_miner_secondary: 0,
-            cum_dao_compensation: 0,
-            cum_treasury: 0,
-            unclaimed_compensation: 0,
-            frozen_phase1_compensation: 0,
-            cumulative_depositors: 0,
-            daily_depositor_addresses: 0,
-            protocol_deposited: None,
-        };
-        seed.put_stats(
-            &keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20231115"),
-            &bincode::serialize(&snapshot).unwrap(),
-        );
         seed.commit().unwrap();
     }
 
@@ -2471,7 +2562,7 @@ mod tests {
         );
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        seed_exact_tip_daily_partition(&store);
+        seal_dao_days_before_tip(&store);
         writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
@@ -2533,7 +2624,7 @@ mod tests {
         );
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        seed_exact_tip_daily_partition(&store);
+        seal_dao_days_before_tip(&store);
         writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
@@ -2648,7 +2739,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(80, &request);
         batch.commit().unwrap();
-        seed_exact_tip_daily_partition(&store);
+        seal_dao_days_before_tip(&store);
         BatchWriter::new(store.clone(), store.clone())
             .refresh_latest_dao_statistics()
             .unwrap();
@@ -2677,9 +2768,10 @@ mod tests {
         seed_test_genesis_baseline(&store);
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        // Tip block: AR=4, S=200 CKB, timestamp = day 10
+        // Tip block: AR=4, S=200 CKB, C=9e9 CKB, timestamp = day 10
         let tip_timestamp: i64 = 1_700_000_000_000;
         let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&(9_000_000_000u64 * 100_000_000).to_le_bytes());
         dao[8..16].copy_from_slice(&4u64.to_le_bytes());
         dao[16..24].copy_from_slice(&200_00000000u64.to_le_bytes());
         let mut seed = StoreBatch::new(&store);
@@ -2847,34 +2939,9 @@ mod tests {
             },
         );
 
-        // Required: a dao daily snapshot
-        let snapshot_key =
-            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260101");
-        let snapshot = DaoDailySnapshot {
-            date: "2026-01-01".to_string(),
-            total_deposited: 500_00000000,
-            depositors_count: 2,
-            new_deposits: 3,
-            withdrawals: 1,
-            compensation: 0,
-            cumulative_deposit_amount: 650_00000000,
-            total_issuance: 9_000_000_000i128 * 100_000_000i128,
-            secondary_pool: 0,
-            occupied_capacity: 0,
-            cum_miner_secondary: 10_00000000,
-            cum_dao_compensation: 20_00000000,
-            cum_treasury: 30_00000000,
-            unclaimed_compensation: 0,
-            frozen_phase1_compensation: 0,
-            cumulative_depositors: 0,
-            daily_depositor_addresses: 0,
-            protocol_deposited: None,
-        };
-        let snapshot_val = bincode::serialize(&snapshot).unwrap();
-        seed.put_stats(&snapshot_key, &snapshot_val);
         seed.commit().unwrap();
 
-        seed_exact_tip_daily_partition(&store);
+        seal_dao_days_before_tip(&store);
         writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
@@ -4046,7 +4113,7 @@ mod activity_stats_tests {
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
-        let addrs: HashSet<[u8; 32]> = (0..3u8)
+        let addrs: BTreeSet<[u8; 32]> = (0..3u8)
             .map(|i| {
                 let mut h = [0u8; 32];
                 h[0] = i;
@@ -4054,7 +4121,14 @@ mod activity_stats_tests {
             })
             .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &stats, &addrs, &mut batch)
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030912",
+                &stats,
+                &addrs,
+                &mut FrozenActivityAddrSets::default(),
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -4079,7 +4153,7 @@ mod activity_stats_tests {
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
-        let addrs1: HashSet<[u8; 32]> = (0..3u8)
+        let addrs1: BTreeSet<[u8; 32]> = (0..3u8)
             .map(|i| {
                 let mut h = [0u8; 32];
                 h[0] = i;
@@ -4087,7 +4161,14 @@ mod activity_stats_tests {
             })
             .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &s1, &addrs1, &mut batch)
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030912",
+                &s1,
+                &addrs1,
+                &mut FrozenActivityAddrSets::default(),
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -4099,7 +4180,7 @@ mod activity_stats_tests {
             total_ckb_moved: 100_00000000,
             ..Default::default()
         };
-        let addrs2: HashSet<[u8; 32]> = (1..8u8)
+        let addrs2: BTreeSet<[u8; 32]> = (1..8u8)
             .map(|i| {
                 let mut h = [0u8; 32];
                 h[0] = i;
@@ -4107,7 +4188,14 @@ mod activity_stats_tests {
             })
             .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &s2, &addrs2, &mut batch2)
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030912",
+                &s2,
+                &addrs2,
+                &mut FrozenActivityAddrSets::default(),
+                &mut batch2,
+            )
             .unwrap();
         batch2.commit().unwrap();
 
@@ -4120,6 +4208,178 @@ mod activity_stats_tests {
         assert_eq!(got.total_ckb_moved, 150_00000000);
         // Cross-batch dedup: {0,1,2} ∪ {1,2,3,4,5,6,7} = 8 unique addresses
         assert_eq!(got.unique_address_count, 8);
+    }
+
+    fn addr(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    /// One block's write to one daily bucket through a journaled batch of a
+    /// live batch overlay; returns the bucket row after it.
+    fn write_block_bucket(
+        writer: &BatchWriter,
+        batch: &mut StoreBatch,
+        frozen: &mut FrozenActivityAddrSets,
+        block: i64,
+        addrs: &[[u8; 32]],
+    ) -> DailyActivityStats {
+        let block_stats = DailyActivityStats {
+            transfer_count: 1,
+            ..Default::default()
+        };
+        let addrs: BTreeSet<[u8; 32]> = addrs.iter().copied().collect();
+        writer
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Daily,
+                "20260309",
+                &block_stats,
+                &addrs,
+                frozen,
+                &mut batch.at(block),
+            )
+            .unwrap();
+        let key = keys::ActivityBucketKind::Daily
+            .stats_key("20260309")
+            .unwrap();
+        bincode::deserialize(&batch.get_stats(&key).unwrap().unwrap()).unwrap()
+    }
+
+    /// The four shapes of a bucket's address set when live sync writes to
+    /// it: a new bucket, a bulk blob only, live rows only, and both. An
+    /// address is new iff it is in neither part; only new addresses get a
+    /// row and raise `unique_address_count`, and the blob is never rewritten.
+    #[test]
+    fn activity_bucket_addresses_merge_blob_and_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let kind = keys::ActivityBucketKind::Daily;
+        let bucket_addrs =
+            |store: &CkbadgerStore| store.get_activity_bucket_addrs(kind, "20260309").unwrap();
+        let rows = |store: &CkbadgerStore| {
+            store
+                .prefix_iterator_cf(
+                    store.cf_stats_chain(),
+                    &kind.addr_row_bucket_prefix("20260309").unwrap(),
+                )
+                .count()
+        };
+        let commit = |mut batch: StoreBatch| {
+            let mut counters = HashMap::new();
+            batch
+                .stage_journal(&mut |block| {
+                    ckbadger_store::block_overlay::journal_seq(&mut counters, block)
+                })
+                .unwrap();
+            batch.commit().unwrap();
+        };
+
+        // 1. A new bucket: blocks 10 and 11 of one batch; 11 repeats an
+        //    address of 10 (seen through the overlay, not the store).
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        let mut frozen = FrozenActivityAddrSets::default();
+        let row = write_block_bucket(&writer, &mut batch, &mut frozen, 10, &[addr(1), addr(2)]);
+        assert_eq!(row.unique_address_count, 2);
+        let row = write_block_bucket(&writer, &mut batch, &mut frozen, 11, &[addr(2), addr(3)]);
+        assert_eq!(row.unique_address_count, 3);
+        assert_eq!(row.transfer_count, 2);
+        commit(batch);
+        assert_eq!(
+            bucket_addrs(&store),
+            HashSet::from([addr(1), addr(2), addr(3)])
+        );
+        assert_eq!(rows(&store), 3);
+
+        // 2. Rows present (a later batch): only addresses without a row count.
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        let mut frozen = FrozenActivityAddrSets::default();
+        let row = write_block_bucket(&writer, &mut batch, &mut frozen, 12, &[addr(3), addr(4)]);
+        assert_eq!(row.unique_address_count, 4);
+        commit(batch);
+        assert_eq!(rows(&store), 4);
+
+        // 3. A bulk blob only (another day, bulk-built): the blob's addresses
+        //    are not new and the blob is left as it was.
+        let blob_dir = tempfile::tempdir().unwrap();
+        let bulk_store = Arc::new(CkbadgerStore::open_domain(blob_dir.path()).unwrap());
+        let bulk_writer = BatchWriter::new(bulk_store.clone(), bulk_store.clone());
+        let blob = ckbadger_store::encode_activity_addr_set([addr(1), addr(2)]);
+        bulk_store
+            .put_stats_key(&kind.addr_set_key("20260309").unwrap(), &blob)
+            .unwrap();
+        let bulk_row = DailyActivityStats {
+            transfer_count: 7,
+            unique_address_count: 2,
+            ..Default::default()
+        };
+        bulk_store
+            .put_stats_key(
+                &kind.stats_key("20260309").unwrap(),
+                &bincode::serialize(&bulk_row).unwrap(),
+            )
+            .unwrap();
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&bulk_store).unwrap();
+        let mut batch = StoreBatch::journaled(&bulk_store, &overlay, 0);
+        let mut frozen = FrozenActivityAddrSets::default();
+        let row = write_block_bucket(&bulk_writer, &mut batch, &mut frozen, 20, &[addr(2)]);
+        assert_eq!(row.unique_address_count, 2, "a blob address is not new");
+        assert_eq!(row.transfer_count, 8);
+        // 4. Both: a new address beside the blob gets a row.
+        let row = write_block_bucket(
+            &bulk_writer,
+            &mut batch,
+            &mut frozen,
+            21,
+            &[addr(1), addr(5)],
+        );
+        assert_eq!(row.unique_address_count, 3);
+        commit(batch);
+        assert_eq!(rows(&bulk_store), 1);
+        assert_eq!(
+            bulk_store
+                .get_stats_key(&kind.addr_set_key("20260309").unwrap())
+                .unwrap(),
+            Some(blob),
+            "live sync never rewrites the bulk blob"
+        );
+        assert_eq!(
+            bulk_store
+                .get_activity_bucket_addrs(kind, "20260309")
+                .unwrap(),
+            HashSet::from([addr(1), addr(2), addr(5)])
+        );
+        let next = DailyActivityStats::default();
+        bulk_writer
+            .update_activity_bucket_stats(
+                kind,
+                "20260310",
+                &next,
+                &BTreeSet::new(),
+                &mut FrozenActivityAddrSets::default(),
+                &mut StoreBatch::new(&bulk_store),
+            )
+            .expect("a new bucket without a blob is valid");
+        // A blob without its stats row is a broken invariant.
+        bulk_store
+            .put_stats_key(
+                &kind.addr_set_key("20260311").unwrap(),
+                &ckbadger_store::encode_activity_addr_set([addr(9)]),
+            )
+            .unwrap();
+        let err = bulk_writer
+            .update_activity_bucket_stats(
+                kind,
+                "20260311",
+                &next,
+                &BTreeSet::new(),
+                &mut FrozenActivityAddrSets::default(),
+                &mut StoreBatch::new(&bulk_store),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("but no stats row"), "{err}");
     }
 
     #[test]

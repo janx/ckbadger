@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use tracing::{info, warn};
 
-use ckbadger_store::{keys, CkbadgerStore};
+use ckbadger_store::keys;
 
 use super::{reorg::RollbackCause, BatchWriter, ContractRequirement};
 
@@ -161,18 +161,12 @@ impl BatchWriter {
         })
     }
 
-    pub fn init_sync_start(
-        &self,
-        append_store: &CkbadgerStore,
-        start_block: i64,
-        is_bulk_sync: bool,
-    ) -> Result<()> {
-        self.init_sync_start_with_options(append_store, start_block, is_bulk_sync, false)
+    pub fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
+        self.init_sync_start_with_options(start_block, is_bulk_sync, false)
     }
 
     pub fn init_sync_start_with_options(
         &self,
-        append_store: &CkbadgerStore,
         start_block: i64,
         is_bulk_sync: bool,
         force_cleanup: bool,
@@ -218,55 +212,23 @@ impl BatchWriter {
                 } else {
                     start_block
                 };
-            // Same coverage check `execute_reorg` applies, and it matters more
-            // here: the branch above resets to -1 whenever the tip header is
-            // missing, and since the eight entity families are no longer deleted
-            // by the cutoff sweep they would survive a reset that wipes blocks,
-            // cells and indexes — the re-sync would then add the same deltas on
-            // top, undetectably, because the totals stay positive.
-            self.ensure_rollback_within_entity_stats_coverage(
+            // The coverage floor matters most here: the branch above resets
+            // to -1 whenever the tip header is missing, which no journal
+            // reaches on a store whose floor is above it.
+            self.rollback_to(
                 rollback_target,
                 ContractRequirement::OptionalOnFreshStore,
                 "startup cleanup rollback target",
+                RollbackCause::Cleanup {
+                    target: rollback_target,
+                },
+                || Ok(()),
             )?;
-            // Revert entity mutations (Spore, mNFT, dotbit) from undo log FIRST
-            // so that the subsequent canonical rollback rebuilds aggregates from
-            // correct entity state.  This matches the normal reorg path ordering
-            // in execute_reorg().
-            crate::derive::invalidate_for_rollback(&self.store, rollback_target)?;
-            self.begin_rollback(RollbackCause::Cleanup {
-                target: rollback_target,
-            })?;
-            let undo_result = self
-                .store
-                .rollback_via_undo_log(append_store, rollback_target)?;
-            // Domain rollback for canonical mutable state (cells, blocks, stats,
-            // aggregates rebuilt from now-correct entity data).
-            self.store.rollback_to_block_with_tx_contexts(
-                rollback_target,
-                Some(append_store),
-                undo_result.tx_contexts,
-            )?;
-            // Re-derive script version/family rollups from corrected reference info.
-            self.refresh_script_reference_rollups()?;
-            // Re-derive DAO singleton stats (latest stats + top depositors)
-            // which may have been deleted during rollback.
-            self.refresh_latest_dao_statistics()?;
             info!(
                 start_block,
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
             );
         } else if force_cleanup {
-            if self.store.is_rollback_cleanup_in_progress()? {
-                self.store
-                    .restore_live_cell_summary_visibility_after_interrupted_rollback()?;
-                info!(
-                    start_block,
-                    next_block,
-                    cleanup_reason,
-                    "Restored live-cell summary visibility from exact tip history after interrupted rollback"
-                );
-            }
             info!(
                 start_block,
                 next_block,
@@ -282,31 +244,15 @@ impl BatchWriter {
             );
         }
 
-        // Re-derive script version/family rollups on startup.  Rollups are
-        // now written atomically inside data_batch.commit(), so this covers
-        // only legacy DB state from before that change.  Idempotent and fast
-        // (reads CF_SCRIPT_REFERENCE_INFO, writes ≤3 CFs).
-        self.refresh_script_reference_rollups()?;
-        // Re-derive DAO singleton stats unconditionally on startup to ensure
-        // they are consistent even after a crash between batch commit and DAO
-        // refresh.  Idempotent.
+        // Re-derive the DAO tip summary (singletons and the open day's
+        // snapshot) unconditionally on startup, so a crash between a batch
+        // commit and its tip summary leaves no stale row.  Idempotent.
         self.refresh_latest_dao_statistics()?;
 
-        // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
-        let (tip_number, tip_hash) = if let Some((num, header)) = self.store.get_sync_tip_block()? {
-            (num, Some(header.hash))
-        } else {
-            (0, None)
-        };
-        self.store.update_sync_status(|status| {
-            status.tip_block_number = tip_number;
-            match &tip_hash {
-                Some(hash) => status.tip_block_hash = hash.clone(),
-                None if tip_number == 0 => status.tip_block_hash.clear(),
-                None => {}
-            }
-            status.init_sync_start(start_block, is_bulk_sync);
-        })?;
+        // The run's start: runtime fields only, outside the journal (the
+        // chain part is the blocks', restored with them by any rollback).
+        self.store
+            .update_sync_runtime(|runtime| runtime.init_sync_start(start_block, is_bulk_sync))?;
 
         if let Some(cache) = &self.cache_invalidator {
             let cache = cache.clone();
@@ -340,7 +286,6 @@ impl BatchWriter {
 
     pub fn cleanup_batch_range(
         &self,
-        append_store: &CkbadgerStore,
         start_block: i64,
         end_block: i64,
     ) -> Result<ckbadger_store::RollbackResult> {
@@ -350,36 +295,15 @@ impl BatchWriter {
         );
 
         let cleanup_tip = start_block - 1;
-
-        self.ensure_rollback_within_entity_stats_coverage(
+        let ((), result) = self.rollback_to(
             cleanup_tip,
             ContractRequirement::OptionalOnFreshStore,
             "batch range cleanup target",
+            RollbackCause::Cleanup {
+                target: cleanup_tip,
+            },
+            || Ok(()),
         )?;
-        // Replay undo-log entries BEFORE domain rollback, matching the ordering
-        // used by execute_reorg and init_sync_start. Entity mutations (Spore,
-        // mNFT, dotbit) are reverted first so the subsequent domain rollback
-        // can rebuild aggregates from correct entity state.
-        crate::derive::invalidate_for_rollback(&self.store, cleanup_tip)?;
-        self.begin_rollback(RollbackCause::Cleanup {
-            target: cleanup_tip,
-        })?;
-        let undo_result = self
-            .store
-            .rollback_via_undo_log(append_store, cleanup_tip)?;
-
-        // For range cleanup, we rollback to the block before the range
-        // then the caller will re-sync from start_block. The replay above
-        // consumed the undo log's tx-context entries; hand the ones it
-        // returned to the canonical rollback, exactly as `execute_reorg` and
-        // `init_sync_start` do, or it can only fall back to whole-CF scans.
-        let result = self.store.rollback_to_block_with_tx_contexts(
-            cleanup_tip,
-            Some(append_store),
-            undo_result.tx_contexts,
-        )?;
-        // Re-derive script version/family rollups from corrected reference info.
-        self.refresh_script_reference_rollups()?;
 
         info!(
             "Batch cleanup complete for blocks {} to {}",
@@ -389,19 +313,6 @@ impl BatchWriter {
     }
 
     fn has_partial_data_after_block(&self, start_block: i64) -> Result<bool> {
-        // Check for a bulk batch-in-progress marker. If present, worker threads
-        // committed domain CFs but finalize never completed — partial data exists.
-        if self
-            .store
-            .get_cf(
-                self.store.cf_sync_meta(),
-                keys::sync_meta_keys::BULK_BATCH_IN_PROGRESS,
-            )?
-            .is_some()
-        {
-            return Ok(true);
-        }
-
         let start_key = keys::encode_block_num(start_block + 1);
 
         let header_iter = self.store.iterator_cf(
@@ -423,32 +334,25 @@ impl BatchWriter {
             }
         }
 
-        if self.store.has_undo_log_entries_after(start_block)? {
+        if self.store.has_journal_after(start_block)? {
             return Ok(true);
         }
 
-        // Check tracker state for blocks beyond start_block.
-        // Tracker writes (T_TRACK) use direct put_cf outside the finalize batch,
-        // so they can be committed even when block headers haven't been finalized.
-        if let Some(hodl_state) = self.store.get_hodl_tracker_state()? {
-            let last_block = hodl_state
-                .last_processed_block
-                .or_else(|| hodl_state.date_transitions.last().map(|(b, _)| *b));
-            if let Some(last_block) = last_block {
-                if last_block > start_block {
-                    return Ok(true);
-                }
-            }
-        }
-        if let Some(cell_dist_state) = self.store.get_cell_dist_tracker_state()? {
-            let last_block = cell_dist_state
-                .last_processed_block
-                .or_else(|| cell_dist_state.date_transitions.last().map(|(b, _)| *b));
-            if let Some(last_block) = last_block {
-                if last_block > start_block {
-                    return Ok(true);
-                }
-            }
+        // Check the tracker cursors for blocks beyond start_block. They are
+        // written in the same atomic batch as the blocks they processed, so a
+        // cursor ahead of the tip means rows of an unfinished tail survived.
+        let hodl_last = self
+            .store
+            .get_hodl_cursor()?
+            .map(|cursor| cursor.last_processed_block);
+        let cell_dist_last = self
+            .store
+            .get_cell_dist_cursor()?
+            .map(|cursor| cursor.last_processed_block);
+        if hodl_last.is_some_and(|last| last > start_block)
+            || cell_dist_last.is_some_and(|last| last > start_block)
+        {
+            return Ok(true);
         }
 
         Ok(false)
@@ -494,6 +398,12 @@ mod tests {
                 virtual_occupied: 504_000_000_000_000_000,
             })
             .unwrap();
+        // Every rollback ends with the DAO tip summary, whose open day's
+        // miner series needs the consensus secondary epoch reward the indexer
+        // persists at startup.
+        store
+            .set_secondary_epoch_reward(61_369_863_013_698)
+            .unwrap();
         let writer = BatchWriter::new(store.clone(), append_store.clone());
         (dir, store, append_store, writer)
     }
@@ -506,7 +416,15 @@ mod tests {
             epoch_number: 0,
             epoch_index: 0,
             epoch_length: 1,
-            dao: vec![0; 32],
+            // A valid DAO field (C, AR, S, U): the DAO tip summary every
+            // rollback ends with observes the tip with it.
+            dao: {
+                let mut dao = vec![0; 32];
+                dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+                dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+                dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+                dao
+            },
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
@@ -550,6 +468,26 @@ mod tests {
             .unwrap();
     }
 
+    /// One block as the live writer commits it: its header, `rows`, and the
+    /// sync tip it advances to (`tip_block_*`; `status` adjusts the running
+    /// totals), all in the block's journaled scope.
+    fn commit_journaled_sync_block(
+        store: &CkbadgerStore,
+        height: i64,
+        header: &CachedBlockHeader,
+        status: impl FnOnce(&mut SyncStatus),
+    ) {
+        let mut sync_status = store.get_sync_status().unwrap();
+        sync_status.tip_block_number = height;
+        sync_status.tip_block_hash = header.hash.clone();
+        status(&mut sync_status);
+        ckbadger_store::commit_journaled_block(store, height, |batch| {
+            batch.put_block_header(height, header);
+            batch.put_sync_status(&sync_status).unwrap();
+        })
+        .unwrap();
+    }
+
     fn seed_pending_reorg(store: &CkbadgerStore, superseded: bool) -> String {
         let key = ckbadger_store::keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
         let event = ckbadger_store::ReorgEvent {
@@ -590,6 +528,9 @@ mod tests {
             };
             batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
         }
+        batch.commit().unwrap();
+        // The chain 0..=11 as the live writer leaves it: each header and the
+        // sync tip it advances to in its block's journaled scope.
         let mut parent = vec![0; 32];
         for height in 0..=11 {
             let hash = match height {
@@ -603,41 +544,11 @@ mod tests {
             header.parent_hash = parent;
             header.transactions_count = 0;
             parent = header.hash.clone();
-            batch.put_block_header(height, &header);
+            commit_journaled_sync_block(store, height, &header, |_| {});
         }
-        batch.commit().unwrap();
-        store.update_sync_tip(11, &parent, 0).unwrap();
-        // Startup and execute_reorg also refresh DAO singleton statistics.
-        // Retain the earlier day's snapshot, outside this rollback's cutoff.
-        let snapshot = ckbadger_store::DaoDailySnapshot {
-            date: "20231114".to_string(),
-            total_deposited: 0,
-            depositors_count: 0,
-            new_deposits: 0,
-            withdrawals: 0,
-            compensation: 0,
-            cumulative_deposit_amount: 0,
-            total_issuance: 0,
-            secondary_pool: 0,
-            occupied_capacity: 0,
-            cum_miner_secondary: 0,
-            cum_dao_compensation: 0,
-            cum_treasury: 0,
-            unclaimed_compensation: 0,
-            frozen_phase1_compensation: 0,
-            cumulative_depositors: 0,
-            daily_depositor_addresses: 0,
-            protocol_deposited: None,
-        };
-        store
-            .put_stats_key(
-                &ckbadger_store::keys::encode_stats_key(
-                    ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
-                    snapshot.date.as_bytes(),
-                ),
-                &bincode::serialize(&snapshot).unwrap(),
-            )
-            .unwrap();
+        // Startup and execute_reorg end with the DAO tip summary: every block
+        // here is on one UTC+8 day that starts at genesis, so it computes the
+        // open day from the zero baseline and needs no earlier row.
         let histogram_key = ckbadger_store::keys::encode_stats_key(
             ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
             &0_i32.to_be_bytes(),
@@ -666,10 +577,7 @@ mod tests {
             if interrupt_pending {
                 writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
             }
-            let undo = store.rollback_via_undo_log(&append, target).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(target, Some(&append), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(target).unwrap();
             drop(writer);
             drop(store);
             let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
@@ -757,15 +665,7 @@ mod tests {
                 .unwrap();
 
             let result = writer
-                .execute_reorg(
-                    &append,
-                    fork_point,
-                    &fork_hash,
-                    11,
-                    &[0xb1; 32],
-                    12,
-                    &[0xc2; 32],
-                )
+                .execute_reorg(fork_point, &fork_hash, 11, &[0xb1; 32], 12, &[0xc2; 32])
                 .await
                 .unwrap();
 
@@ -804,7 +704,7 @@ mod tests {
                 .unwrap();
 
             let err = writer
-                .execute_reorg(&append, 8, &fork_hash, 11, &old_tip_hash, 12, &[0xc2; 32])
+                .execute_reorg(8, &fork_hash, 11, &old_tip_hash, 12, &[0xc2; 32])
                 .await
                 .err()
                 .unwrap_or_else(|| panic!("an unlinked {expected} must be refused"))
@@ -845,15 +745,7 @@ mod tests {
             let fork_hash = store.get_block_header(target).unwrap().unwrap().hash;
 
             let result = writer
-                .execute_reorg(
-                    &append,
-                    target,
-                    &fork_hash,
-                    11,
-                    &[0xb1; 32],
-                    12,
-                    &[0xc2; 32],
-                )
+                .execute_reorg(target, &fork_hash, 11, &[0xb1; 32], 12, &[0xc2; 32])
                 .await
                 .unwrap();
 
@@ -897,9 +789,7 @@ mod tests {
         );
     }
 
-    fn assert_cleanup_preserves_pending_reconciliation(
-        cleanup: impl Fn(&BatchWriter, &CkbadgerStore, i64),
-    ) {
+    fn assert_cleanup_preserves_pending_reconciliation(cleanup: impl Fn(&BatchWriter, i64)) {
         for target in [8, 9] {
             let (_dir, store, append, writer) = setup();
             let key = seed_pending_reorg(&store, false);
@@ -923,7 +813,7 @@ mod tests {
                 .put_cf(append.cf_cells(), &[7; 36], b"immutable")
                 .unwrap();
 
-            cleanup(&writer, &append, target);
+            cleanup(&writer, target);
 
             assert!(store.get_block_header(target + 1).unwrap().is_none());
             assert_eq!(
@@ -993,9 +883,7 @@ mod tests {
         }
     }
 
-    fn assert_cleanup_interrupts_pending_reconciliation(
-        cleanup: impl Fn(&BatchWriter, &CkbadgerStore, i64),
-    ) {
+    fn assert_cleanup_interrupts_pending_reconciliation(cleanup: impl Fn(&BatchWriter, i64)) {
         for target in [-1, 7] {
             let (_dir, store, append, writer) = setup();
             seed_pending_reorg(&store, true);
@@ -1003,7 +891,7 @@ mod tests {
                 .put_cf(append.cf_cells(), &[7; 36], b"immutable")
                 .unwrap();
 
-            cleanup(&writer, &append, target);
+            cleanup(&writer, target);
 
             assert!(store.get_block_header(target + 1).unwrap().is_none());
             assert!(store
@@ -1022,35 +910,35 @@ mod tests {
 
     #[test]
     fn startup_cleanup_preserves_pending_reconciliation_at_or_above_fork_point() {
-        assert_cleanup_preserves_pending_reconciliation(|writer, append, target| {
-            writer.init_sync_start(append, target, false).unwrap();
+        assert_cleanup_preserves_pending_reconciliation(|writer, target| {
+            writer.init_sync_start(target, false).unwrap();
         });
     }
 
     #[test]
     fn batch_cleanup_preserves_pending_reconciliation_at_or_above_fork_point() {
-        assert_cleanup_preserves_pending_reconciliation(|writer, append, target| {
-            writer.cleanup_batch_range(append, target + 1, 11).unwrap();
+        assert_cleanup_preserves_pending_reconciliation(|writer, target| {
+            writer.cleanup_batch_range(target + 1, 11).unwrap();
         });
     }
 
     #[test]
     fn startup_cleanup_interrupts_pending_reconciliation_below_fork_point() {
-        assert_cleanup_interrupts_pending_reconciliation(|writer, append, target| {
-            writer.init_sync_start(append, target, false).unwrap();
+        assert_cleanup_interrupts_pending_reconciliation(|writer, target| {
+            writer.init_sync_start(target, false).unwrap();
         });
     }
 
     #[test]
     fn batch_cleanup_interrupts_pending_reconciliation_below_fork_point() {
-        assert_cleanup_interrupts_pending_reconciliation(|writer, append, target| {
-            writer.cleanup_batch_range(append, target + 1, 11).unwrap();
+        assert_cleanup_interrupts_pending_reconciliation(|writer, target| {
+            writer.cleanup_batch_range(target + 1, 11).unwrap();
         });
     }
 
     #[test]
     fn test_init_sync_start_skips_cleanup_when_no_partial_data() {
-        let (_dir, store, append_store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
         let lock_hash = vec![0xAA; 32];
         store
             .put_addr_balance_direct(
@@ -1062,16 +950,14 @@ mod tests {
             )
             .unwrap();
 
-        writer
-            .init_sync_start(append_store.as_ref(), 0, false)
-            .unwrap();
+        writer.init_sync_start(0, false).unwrap();
 
         assert!(store.get_addr_balance(&lock_hash).unwrap().is_some());
     }
 
     #[test]
     fn test_init_sync_start_cleans_when_partial_data_exists() {
-        let (_dir, store, append_store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
         let lock_hash = vec![0xBB; 32];
         store
             .put_addr_balance_direct(
@@ -1083,15 +969,16 @@ mod tests {
             )
             .unwrap();
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(0, &make_header(0x10, 1_700_000_000_000));
-        batch.put_block_header(1, &make_header(0x11, 1_700_000_010_000));
-        batch.commit().unwrap();
+        // Blocks 0 and 1 as the live writer commits them (journaled).
+        for (block, tag, time) in [(0, 0x10, 1_700_000_000_000), (1, 0x11, 1_700_000_010_000)] {
+            ckbadger_store::commit_journaled_block(&store, block, |batch| {
+                batch.put_block_header(block, &make_header(tag, time))
+            })
+            .unwrap();
+        }
         seed_ten_second_histogram(&store);
 
-        writer
-            .init_sync_start(append_store.as_ref(), 0, false)
-            .unwrap();
+        writer.init_sync_start(0, false).unwrap();
 
         assert!(store.get_block_header(1).unwrap().is_none());
     }
@@ -1113,17 +1000,11 @@ mod tests {
         let (_dir, store, _append_store, writer) = setup();
         assert!(!writer.needs_startup_cleanup(0).unwrap());
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_reorg_undo_log_by_block(
-            2,
-            0,
-            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
-                tx_hash: vec![0xAA; 32],
-                outputs_count: 0,
-                inputs: vec![],
-            }),
-        );
-        batch.commit().unwrap();
+        // A journal row of block 2 (a block-2 write through a journaled batch).
+        ckbadger_store::commit_journaled_block(&store, 2, |batch| {
+            batch.put_sync_meta(b"fixture", b"written at block 2")
+        })
+        .unwrap();
 
         assert!(writer.needs_startup_cleanup(0).unwrap());
         assert!(!writer.needs_startup_cleanup(2).unwrap());
@@ -1178,7 +1059,7 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_forces_cleanup_without_partial_data() {
-        let (_dir, store, append_store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
         let lock_hash = vec![0xCC; 32];
 
         // Write some addr_balance data that would be wiped by a full rollback to -1
@@ -1193,9 +1074,7 @@ mod tests {
             .unwrap();
 
         // force_cleanup=true but no partial data → should skip rollback, data preserved
-        writer
-            .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
-            .unwrap();
+        writer.init_sync_start_with_options(0, false, true).unwrap();
 
         // addr_balance should survive because no rollback was executed
         assert!(store.get_addr_balance(&lock_hash).unwrap().is_some());
@@ -1205,19 +1084,20 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_forces_cleanup_with_partial_data() {
-        let (_dir, store, append_store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
 
-        // Write block headers at 0 and 1, then init from block 0 with force_cleanup
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(0, &make_header(0x60, 1_700_000_000_000));
-        batch.put_block_header(1, &make_header(0x61, 1_700_000_010_000));
-        batch.commit().unwrap();
+        // Write block headers at 0 and 1 (journaled, as the live writer
+        // does), then init from block 0 with force_cleanup
+        for (block, tag, time) in [(0, 0x60, 1_700_000_000_000), (1, 0x61, 1_700_000_010_000)] {
+            ckbadger_store::commit_journaled_block(&store, block, |batch| {
+                batch.put_block_header(block, &make_header(tag, time))
+            })
+            .unwrap();
+        }
         seed_ten_second_histogram(&store);
 
         // force_cleanup=true AND partial data (block 1 beyond start_block 0) → cleanup runs
-        writer
-            .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
-            .unwrap();
+        writer.init_sync_start_with_options(0, false, true).unwrap();
 
         // Block 1 should be cleaned up
         assert!(store.get_block_header(1).unwrap().is_none());
@@ -1225,31 +1105,27 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_cleanup_rolls_back_sync_status_totals() {
-        let (_dir, store, append_store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
 
+        // Blocks 0 and 1 as the live writer commits them: rows and the sync
+        // totals each block leaves, journaled in the block's scope.
+        commit_journaled_sync_block(&store, 0, &make_header(0x70, 1_700_000_000_000), |status| {
+            status.total_transactions = 1;
+            status.total_cells_created = 2;
+            status.total_cells_consumed = 1;
+        });
+        commit_journaled_sync_block(&store, 1, &make_header(0x71, 1_700_000_010_000), |status| {
+            status.total_transactions = 3;
+            status.total_cells_created = 11;
+            status.total_cells_consumed = 6;
+        });
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(0, &make_header(0x70, 1_700_000_000_000));
-        batch.put_block_header(1, &make_header(0x71, 1_700_000_010_000));
         batch.put_tx_index(0, 0, &make_tx_index_entry_with_counts(1, 2));
         batch.put_tx_index(1, 0, &make_tx_index_entry_with_counts(3, 5));
         batch.put_tx_index(1, 1, &make_tx_index_entry_with_counts(2, 4));
         batch.commit().unwrap();
-        seed_ten_second_histogram(&store);
 
-        store
-            .set_sync_status(&SyncStatus {
-                tip_block_number: 1,
-                tip_block_hash: vec![0x71; 32],
-                total_transactions: 3,
-                total_cells_created: 11,
-                total_cells_consumed: 6,
-                ..Default::default()
-            })
-            .unwrap();
-
-        writer
-            .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
-            .unwrap();
+        writer.init_sync_start_with_options(0, false, true).unwrap();
 
         let status = store.get_sync_status().unwrap();
         assert_eq!(status.tip_block_number, 0);
@@ -1261,11 +1137,9 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_persists_bulk_sync_start_metadata() {
-        let (_dir, store, append_store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
 
-        writer
-            .init_sync_start(append_store.as_ref(), 128, true)
-            .unwrap();
+        writer.init_sync_start(128, true).unwrap();
 
         let status = store.get_sync_status().unwrap();
         assert_eq!(status.sync_started_block, 128);
@@ -1276,10 +1150,8 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_errors_when_start_block_below_minus_one() {
-        let (_dir, _store, append_store, writer) = setup();
-        let err = writer
-            .init_sync_start(append_store.as_ref(), -2, false)
-            .unwrap_err();
+        let (_dir, _store, _append_store, writer) = setup();
+        let err = writer.init_sync_start(-2, false).unwrap_err();
         assert!(err.to_string().contains("expected >= -1"));
     }
 
@@ -1303,23 +1175,5 @@ mod tests {
         );
         assert_eq!(probe.missing_tx_incomplete_sample.len(), 1);
         assert_eq!(probe.missing_tx_incomplete_sample[0], (0, 3, 1));
-    }
-
-    #[test]
-    fn test_needs_startup_cleanup_detects_bulk_batch_in_progress_marker() {
-        let (_dir, store, _append_store, writer) = setup();
-        assert!(!writer.needs_startup_cleanup(0).unwrap());
-
-        // Simulate a bulk batch that started but finalize never completed:
-        // write the batch-in-progress marker directly.
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                sync_meta_keys::BULK_BATCH_IN_PROGRESS,
-                b"100-200",
-            )
-            .unwrap();
-
-        assert!(writer.needs_startup_cleanup(0).unwrap());
     }
 }

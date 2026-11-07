@@ -8,7 +8,6 @@ use ckbadger_common::PipelineProgressData;
 use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
-use ckbadger_store::types::{CellDistributionTrackerState, HodlTrackerState};
 use ckbadger_store::{CkbadgerStore, SyncStatus};
 
 use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
@@ -37,123 +36,6 @@ use super::shutdown::ShutdownSignal;
 use super::sync_mode::*;
 use super::types::{CachedCellInfo, CachedUdtCellInfo};
 use super::SyncProgress;
-
-fn ensure_hodl_tracker_state_consistent(
-    state: Option<&HodlTrackerState>,
-    tip_block: i64,
-) -> Result<()> {
-    if tip_block <= 0 {
-        return Ok(());
-    }
-    let state = state.ok_or_else(|| {
-        anyhow!(
-            "missing HODL tracker state at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            tip_block
-        )
-    })?;
-    if state.date_transitions.is_empty() {
-        bail!(
-            "invalid HODL tracker state: empty date_transitions at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            tip_block
-        );
-    }
-    // Use last_processed_block for consistency checks (tracks every block processed,
-    // not just date boundary transitions). Fall back to date_transitions.last() for
-    // backward compatibility with states persisted before this field was added.
-    let last_block = state
-        .last_processed_block
-        .or_else(|| state.date_transitions.last().map(|(b, _)| *b))
-        .unwrap(); // safe: date_transitions is non-empty
-    if last_block > tip_block {
-        bail!(
-            "invalid HODL tracker state: last processed block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            last_block,
-            tip_block
-        );
-    }
-    if last_block < tip_block {
-        bail!(
-            "invalid HODL tracker state: last processed block {} behind sync tip {} \
-             (likely crash between domain commit and tracker persist). \
-             automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            last_block,
-            tip_block
-        );
-    }
-    Ok(())
-}
-
-pub(super) fn rebuild_hodl_tracker_from_state(
-    state: Option<HodlTrackerState>,
-    tip_block: i64,
-) -> Result<HodlWaveTracker> {
-    ensure_hodl_tracker_state_consistent(state.as_ref(), tip_block)?;
-    if tip_block <= 0 {
-        return Ok(HodlWaveTracker::new());
-    }
-    match state {
-        Some(s) => Ok(HodlWaveTracker::from_state(s)?),
-        None => Ok(HodlWaveTracker::new()),
-    }
-}
-
-fn ensure_cell_dist_tracker_state_consistent(
-    state: Option<&CellDistributionTrackerState>,
-    tip_block: i64,
-) -> Result<()> {
-    if tip_block <= 0 {
-        return Ok(());
-    }
-    let state = state.ok_or_else(|| {
-        anyhow!(
-            "missing cell distribution tracker state at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            tip_block
-        )
-    })?;
-    if state.date_transitions.is_empty() {
-        bail!(
-            "invalid cell distribution tracker state: empty date_transitions at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            tip_block
-        );
-    }
-    // Use last_processed_block for consistency checks. Fall back to date_transitions.last()
-    // for backward compatibility with states persisted before this field was added.
-    let last_block = state
-        .last_processed_block
-        .or_else(|| state.date_transitions.last().map(|(b, _)| *b))
-        .unwrap(); // safe: date_transitions is non-empty
-    if last_block > tip_block {
-        bail!(
-            "invalid cell distribution tracker state: last processed block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            last_block,
-            tip_block
-        );
-    }
-    if last_block < tip_block {
-        bail!(
-            "invalid cell distribution tracker state: last processed block {} behind sync tip {} \
-             (likely crash between domain commit and tracker persist). \
-             automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-            last_block,
-            tip_block
-        );
-    }
-    Ok(())
-}
-
-pub(super) fn rebuild_cell_dist_tracker_from_state(
-    state: Option<CellDistributionTrackerState>,
-    tip_block: i64,
-) -> Result<CellDistributionTracker> {
-    ensure_cell_dist_tracker_state_consistent(state.as_ref(), tip_block)?;
-    if tip_block <= 0 {
-        return Ok(CellDistributionTracker::new());
-    }
-    match state {
-        Some(s) => Ok(CellDistributionTracker::from_state(s)?),
-        None => Ok(CellDistributionTracker::new()),
-    }
-}
 
 pub(super) fn require_non_negative_block_number(value: i64, context: &str) -> Result<u64> {
     u64::try_from(value).map_err(|_| anyhow!("negative block number in {}: {}", context, value))
@@ -448,7 +330,7 @@ pub(crate) fn persist_bulk_sync_completion_status(
             i64::MAX
         )
     })?;
-    // Bulk build never records undo entries (`BULK_SYNC.md`: bulk is empty-store
+    // Bulk build never records journal entries (`BULK_SYNC.md`: bulk is empty-store
     // only and never rolls back), so the last block it WROTE is the coverage
     // floor the live process starts from. It must be the handoff tip, not the
     // chain tip: those differ by up to `bulk_sync_threshold`, and a floor above
@@ -467,8 +349,8 @@ pub(crate) fn persist_bulk_sync_completion_status(
         coverage_floor_block: handoff_tip,
         updated_at_block: handoff_tip,
     })?;
-    store.update_sync_status(|status| {
-        status.mark_bulk_sync_completed(chain_tip_i64);
+    store.update_sync_runtime(|runtime| {
+        runtime.mark_bulk_sync_completed(chain_tip_i64);
     })
 }
 
@@ -531,6 +413,11 @@ pub struct Indexer {
     /// thing allowed to delete hourly buckets. A background task deleting them
     /// directly could race an undo replay restoring the same key.
     pub(crate) hourly_retention_requested: Arc<AtomicBool>,
+    /// DOB decode outcomes the background worker produced; the writer
+    /// applies them in its next live batch, in that batch's last block's
+    /// scope (B-5h). A background task writing them directly would bypass
+    /// the block journal.
+    pub(crate) dob_outcomes: super::dob_decode_worker::DobOutcomeQueue,
 }
 
 impl Indexer {
@@ -547,7 +434,7 @@ impl Indexer {
         let reader = CkbChainReader::open(&config.ckb_db_path)?;
         info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
         let ckb_store = Some(Arc::new(reader));
-        let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
+        let repo = Repository::new(store.clone());
         let writer = BatchWriter::with_cache(
             store.clone(),
             append_only_store.clone(),
@@ -576,35 +463,16 @@ impl Indexer {
         // from a second tip sample is exactly the divergence P3.1 removes.
         let bulk_sync_allowed = startup_decision.is_bulk_build();
         let was_bulk = bulk_sync_allowed;
-        let hodl_tracker = match store.get_hodl_tracker_state()? {
-            Some(state) => {
-                info!(
-                    "Restored HODL tracker: {} date entries, {} transitions, holder_count={}",
-                    state.capacity_by_date.len(),
-                    state.date_transitions.len(),
-                    state.holder_count,
-                );
-                HodlWaveTracker::from_state(state)?
-            }
-            None => {
-                info!("Starting fresh HODL wave tracker");
-                HodlWaveTracker::new()
-            }
-        };
-
-        let cell_dist_tracker = match store.get_cell_dist_tracker_state()? {
-            Some(state) => {
-                info!(
-                    "Restored cell distribution tracker: {} transitions",
-                    state.date_transitions.len(),
-                );
-                CellDistributionTracker::from_state(state)?
-            }
-            None => {
-                info!("Starting fresh cell distribution tracker");
-                CellDistributionTracker::new()
-            }
-        };
+        // The trackers as their rows persist them; startup reconciles them
+        // with the tip.
+        let hodl_tracker = HodlWaveTracker::load(&store)?;
+        let cell_dist_tracker = CellDistributionTracker::load(&store)?;
+        info!(
+            hodl_last_block = ?hodl_tracker.last_processed_block(),
+            hodl_holders = hodl_tracker.holder_count,
+            cell_dist_last_block = ?cell_dist_tracker.last_processed_block(),
+            "Loaded the HODL and cell distribution trackers from their rows"
+        );
 
         let incident_dir = PathBuf::from(&config.domain_data_path).join("incidents");
 
@@ -644,6 +512,7 @@ impl Indexer {
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
             hourly_retention_requested: Arc::new(AtomicBool::new(false)),
+            dob_outcomes: super::dob_decode_worker::DobOutcomeQueue::default(),
         })
     }
 
@@ -918,6 +787,56 @@ impl Indexer {
 
     pub fn finalize_bulk_sync_perf_failed(&self) {
         self.finalize_bulk_sync_perf_run(false);
+    }
+
+    /// The store-side startup steps, run once per process before the first
+    /// batch: the startup cleanup decision and rollback, the sync-start
+    /// metadata (`init_sync_start_with_options`), then loading the HODL and
+    /// cell-distribution trackers at the tip. A restart must not change chain
+    /// data: on a clean store these steps write only the sync-start fields of
+    /// `sync_status` and the DAO tip summary as it already is.
+    pub(crate) fn prepare_store_for_sync(
+        &self,
+        actual_start: i64,
+        bulk_sync_mode: bool,
+    ) -> Result<()> {
+        let cleanup_needed = self
+            .writer
+            .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
+
+        if cleanup_needed {
+            self.startup_phase
+                .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
+            info!(
+                run_id = %self.run_id,
+                from_block = actual_start + 1,
+                "Startup rollback cleanup phase started"
+            );
+            self.record_flight_event(
+                "startup_cleanup_started",
+                format!("from_block={}", actual_start + 1),
+            );
+        }
+
+        let init_result = self.writer.init_sync_start_with_options(
+            actual_start,
+            bulk_sync_mode,
+            self.config.force_startup_cleanup,
+        );
+
+        self.startup_phase
+            .store(STARTUP_PHASE_NONE, Ordering::SeqCst);
+        if cleanup_needed {
+            info!(
+                run_id = %self.run_id,
+                "Startup rollback cleanup phase completed"
+            );
+            self.record_flight_event("startup_cleanup_completed", "ok");
+        }
+        init_result?;
+        self.reconcile_hodl_tracker_with_tip(actual_start)?;
+        self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
+        Ok(())
     }
 
     fn start_bulk_sync_perf_run(&self, bulk_sync_mode: bool) -> Result<()> {
@@ -1396,50 +1315,12 @@ impl Indexer {
             );
         }
 
-        let cleanup_needed = self
-            .writer
-            .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
-
-        if cleanup_needed {
-            self.startup_phase
-                .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
-            info!(
-                run_id = %self.run_id,
-                from_block = actual_start + 1,
-                "Startup rollback cleanup phase started"
-            );
-            self.record_flight_event(
-                "startup_cleanup_started",
-                format!("from_block={}", actual_start + 1),
-            );
-        }
-
-        let init_result = self.writer.init_sync_start_with_options(
-            self.append_only_store.as_ref(),
-            actual_start,
-            bulk_sync_mode,
-            self.config.force_startup_cleanup,
-        );
-
-        self.startup_phase
-            .store(STARTUP_PHASE_NONE, Ordering::SeqCst);
-        if cleanup_needed {
-            info!(
-                run_id = %self.run_id,
-                "Startup rollback cleanup phase completed"
-            );
-            self.record_flight_event("startup_cleanup_completed", "ok");
-        }
-        init_result?;
-        // Undo-log rollback is now handled inside init_sync_start_with_options
-        // before canonical rollback, matching the normal reorg path ordering.
-        self.reconcile_hodl_tracker_with_tip(actual_start)?;
-        self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
+        self.prepare_store_for_sync(actual_start, bulk_sync_mode)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
 
         // Periodic hourly-retention REQUEST. The task no longer deletes
         // anything itself: expired hourly buckets are removed by the same
-        // writer that commits blocks and replays undo entries, inside the
+        // writer that commits blocks and replays journal entries, inside the
         // block batch, so a deletion can never race a rollback restoring the
         // same key.
         let progress_for_task = Arc::clone(&self.progress);
@@ -1473,6 +1354,7 @@ impl Indexer {
             let dob_threshold = self.config.bulk_sync_threshold;
             let dob_cache_path = self.config.decoder_cache_path.clone();
             let dob_decode_dir = PathBuf::from(&self.config.dob_decode_dir);
+            let dob_outcomes = self.dob_outcomes.clone();
 
             // Initialize DOB task as Waiting before spawning the worker.
             let _ = dob_store.update_background_task("dob_decode", |entry| {
@@ -1512,6 +1394,7 @@ impl Indexer {
                     dob_decode_dir,
                     dob_rpc_url,
                     dob_shutdown,
+                    dob_outcomes,
                 );
 
                 if let Err(e) = worker.run().await {
@@ -1835,100 +1718,6 @@ mod tests {
         assert!(msg.contains("gap at block 123"));
         assert!(msg.contains("delete RocksDB and re-sync from genesis"));
         assert!(msg.contains("automatic gap replay is disabled"));
-    }
-
-    #[test]
-    fn test_ensure_hodl_tracker_state_consistency_rules() {
-        assert!(ensure_hodl_tracker_state_consistent(None, 0).is_ok());
-        let missing = ensure_hodl_tracker_state_consistent(None, 1).unwrap_err();
-        assert!(missing.to_string().contains("missing HODL tracker state"));
-
-        let empty = HodlTrackerState {
-            capacity_by_date: vec![],
-            date_transitions: vec![],
-            holder_count: 0,
-            last_snapshot_date: None,
-            last_processed_block: None,
-        };
-        let empty_err = ensure_hodl_tracker_state_consistent(Some(&empty), 100).unwrap_err();
-        assert!(empty_err.to_string().contains("empty date_transitions"));
-
-        // last_processed_block matches tip — valid even though last date transition < tip
-        let aligned = HodlTrackerState {
-            capacity_by_date: vec![("20240101".to_string(), 1)],
-            date_transitions: vec![(0, "20240101".to_string()), (50, "20240102".to_string())],
-            holder_count: 1,
-            last_snapshot_date: Some("20240102".to_string()),
-            last_processed_block: Some(100),
-        };
-        assert!(ensure_hodl_tracker_state_consistent(Some(&aligned), 100).is_ok());
-
-        let ahead = HodlTrackerState {
-            capacity_by_date: vec![("20240101".to_string(), 1)],
-            date_transitions: vec![(0, "20240101".to_string()), (50, "20240102".to_string())],
-            holder_count: 1,
-            last_snapshot_date: Some("20240102".to_string()),
-            last_processed_block: Some(101),
-        };
-        let ahead_err = ensure_hodl_tracker_state_consistent(Some(&ahead), 100).unwrap_err();
-        assert!(ahead_err.to_string().contains("ahead of sync tip"));
-
-        // Backward compat: no last_processed_block, falls back to date_transitions.last()
-        let fallback_aligned = HodlTrackerState {
-            capacity_by_date: vec![("20240101".to_string(), 1)],
-            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
-            holder_count: 1,
-            last_snapshot_date: Some("20240102".to_string()),
-            last_processed_block: None,
-        };
-        assert!(ensure_hodl_tracker_state_consistent(Some(&fallback_aligned), 100).is_ok());
-
-        // last_processed_block behind tip — crash detection
-        let behind = HodlTrackerState {
-            capacity_by_date: vec![("20240101".to_string(), 1)],
-            date_transitions: vec![(0, "20240101".to_string()), (50, "20240102".to_string())],
-            holder_count: 1,
-            last_snapshot_date: Some("20240102".to_string()),
-            last_processed_block: Some(90),
-        };
-        let behind_err = ensure_hodl_tracker_state_consistent(Some(&behind), 100).unwrap_err();
-        assert!(behind_err.to_string().contains("behind sync tip"));
-    }
-
-    #[test]
-    fn test_rebuild_hodl_tracker_from_state_resets_when_tip_is_zero() {
-        let stale = HodlTrackerState {
-            capacity_by_date: vec![("20240101".to_string(), 10)],
-            date_transitions: vec![(200, "20240101".to_string())],
-            holder_count: 7,
-            last_snapshot_date: Some("20240101".to_string()),
-            last_processed_block: Some(200),
-        };
-
-        let tracker = rebuild_hodl_tracker_from_state(Some(stale), 0).unwrap();
-        let state = tracker.to_state();
-        assert!(state.capacity_by_date.is_empty());
-        assert!(state.date_transitions.is_empty());
-        assert_eq!(state.holder_count, 0);
-        assert!(state.last_snapshot_date.is_none());
-    }
-
-    #[test]
-    fn test_rebuild_hodl_tracker_from_state_restores_when_tip_is_positive() {
-        let persisted = HodlTrackerState {
-            capacity_by_date: vec![("20240101".to_string(), 10)],
-            date_transitions: vec![(1, "20240101".to_string())],
-            holder_count: 3,
-            last_snapshot_date: Some("20240101".to_string()),
-            last_processed_block: Some(1),
-        };
-
-        let tracker = rebuild_hodl_tracker_from_state(Some(persisted), 1).unwrap();
-        let state = tracker.to_state();
-        assert_eq!(state.capacity_by_date.len(), 1);
-        assert_eq!(state.date_transitions.len(), 1);
-        assert_eq!(state.holder_count, 3);
-        assert_eq!(state.last_snapshot_date, Some("20240101".to_string()));
     }
 
     #[test]

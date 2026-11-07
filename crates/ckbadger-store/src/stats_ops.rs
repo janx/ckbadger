@@ -8,16 +8,19 @@ use ckbadger_common::dao::extract_dao_csu;
 use crate::bytes_to_hex;
 use anyhow::Context;
 use ckbadger_common::dao::{calculate_miner_secondary_issuance, secondary_block_issuance};
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
-// Activity address-set rows (ACTIVITY_DAILY_ADDR_SET / ACTIVITY_HOURLY_ADDR_SET)
+// Activity address sets (ACTIVITY_*_ADDR_SET blobs + ACTIVITY_*_ADDR_ROW rows)
 //
-// The persistent per-bucket address set is the dedup memory behind
-// `DailyActivityStats::unique_address_count`. Its on-disk form and its count
-// derivation have exactly one implementation — these functions — shared by the
-// live write path (`BatchWriter::merge_persistent_addr_set`) and by reorg
-// rollback repair (`reorg_ops`). Set and count must never be derived
-// independently, or a rollback can leave them disagreeing forever.
+// The per-bucket address set is the dedup memory behind
+// `DailyActivityStats::unique_address_count`. It has two parts: the blob bulk
+// build writes once per bucket (`ACTIVITY_*_ADDR_SET`, whose on-disk form and
+// count derivation are the functions below), and one empty row per address
+// live sync saw first in the bucket (`ACTIVITY_*_ADDR_ROW`, see
+// `keys::ActivityBucketKind`). Live sync never rewrites the blob, and writes a
+// row only for an address in neither part, so the bucket's set is their
+// disjoint union and `unique_address_count` is the blob's count plus the rows.
 // ---------------------------------------------------------------------------
 
 /// Canonical on-disk encoding of an activity address-set row: the bucket's
@@ -598,27 +601,6 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    // ---- HODL tracker state persistence ----
-
-    pub fn get_hodl_tracker_state(&self) -> anyhow::Result<Option<HodlTrackerState>> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::HODL_TRACKER,
-        )? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn put_hodl_tracker_state(&self, state: &HodlTrackerState) -> anyhow::Result<()> {
-        let value = bincode::serialize(state)?;
-        self.put_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::HODL_TRACKER,
-            &value,
-        )
-    }
-
     // ---- Cell distribution snapshots ----
 
     pub fn put_cell_distribution(
@@ -738,32 +720,6 @@ impl CkbadgerStore {
         Ok(None)
     }
 
-    // ---- Cell distribution tracker state persistence ----
-
-    pub fn get_cell_dist_tracker_state(
-        &self,
-    ) -> anyhow::Result<Option<CellDistributionTrackerState>> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
-        )? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn put_cell_dist_tracker_state(
-        &self,
-        state: &CellDistributionTrackerState,
-    ) -> anyhow::Result<()> {
-        let value = bincode::serialize(state)?;
-        self.put_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
-            &value,
-        )
-    }
-
     // ---- Daily activity stats ----
 
     pub fn get_daily_activity_stats(
@@ -830,6 +786,55 @@ impl CkbadgerStore {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
         let value = bincode::serialize(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
+    }
+
+    /// The bucket's bulk-written address-set blob, decoded; empty when the
+    /// bucket has none (every bucket live sync opened).
+    pub fn get_activity_addr_set_blob(
+        &self,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+    ) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
+        let key = kind.addr_set_key(bucket)?;
+        match self.get_cf(self.cf_stats_chain(), &key)? {
+            Some(raw) => decode_activity_addr_set(&raw, bucket),
+            None => Ok(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Every unique address of an activity bucket: the bulk-written blob's
+    /// addresses plus the live per-address rows'. Fails if an address is in
+    /// both (live sync writes a row only for an address the blob lacks).
+    pub fn get_activity_bucket_addrs(
+        &self,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+    ) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
+        let mut addrs = self.get_activity_addr_set_blob(kind, bucket)?;
+        let prefix = kind.addr_row_bucket_prefix(bucket)?;
+        for item in self.prefix_iterator_cf(self.cf_stats_chain(), &prefix) {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate {:?} activity address rows: bucket={}, {}",
+                    kind,
+                    bucket,
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let lock_hash = kind.decode_addr_row_key(bucket, &key)?;
+            if !addrs.insert(lock_hash) {
+                anyhow::bail!(
+                    "{:?} activity bucket {} has address 0x{} both in its address-set blob and as a row",
+                    kind,
+                    bucket,
+                    hex::encode(lock_hash)
+                );
+            }
+        }
+        Ok(addrs)
     }
 
     pub fn get_hourly_activity_stats(
@@ -1169,78 +1174,81 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// Recompute the DAO daily snapshot for a single date from the canonical
-    /// `dao_deposits` CF plus `block_headers` CF. Used by reorg rollback to
-    /// rebuild the cutoff-date snapshot after a partial-day rollback.
+    /// The blocks of the UTC+8 day `date` at or below `end_block_inclusive`,
+    /// as `(first, last)`; `None` when no such block carries the date.
     ///
-    /// `date` is the target UTC+8 date (e.g., 2026-04-08).
-    /// `end_block_inclusive` is the highest block number to include (typically
-    /// the rollback target for partial-day reorgs, or the last block of the
-    /// day for cross-day reorgs).
-    ///
-    /// Assumes:
-    /// - `dao_deposits` CF is in its post-rollback normalized state (i.e.,
-    ///   `repair_and_rebuild_dao_indexes` has already run).
-    /// - `block_headers` CF still contains all headers for blocks up to
-    ///   `end_block_inclusive`.
-    pub fn recompute_dao_daily_snapshot_for_date(
+    /// Both ends are binary searches over the canonical chain time, which is
+    /// monotonic (raw header timestamps are not), so every block between them
+    /// carries the date; [`Self::reduce_dao_day_snapshot`] checks each one as
+    /// it walks the day.
+    pub fn dao_day_block_range(
         &self,
         date: chrono::NaiveDate,
         end_block_inclusive: i64,
-        batch: &mut crate::batch::StoreBatch,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<(i64, i64)>> {
+        let (day_start_ms, day_end_ms) = utc8_day_bounds_ms(date)?;
+        let Some(first) = self.find_first_block_at_or_after_chain_time_ms(day_start_ms)? else {
+            return Ok(None); // no blocks at or after this date
+        };
+        // NOTE: the binary search reads the live DB, which during a rollback
+        // still holds the blocks being rolled back, so `first` may be above
+        // `end_block_inclusive` when the first block on this date is itself
+        // being rolled back. This early return handles that case — do NOT
+        // remove it.
+        if first > end_block_inclusive {
+            return Ok(None);
+        }
+        let first_header = self.get_block_header(first)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing canonical header of the first block at or after {date}: block={first}"
+            )
+        })?;
+        if first_header.chain_time_ms >= day_end_ms {
+            return Ok(None); // the first block at or after the day is on a later day
+        }
+        let last = self
+            .find_last_block_at_or_before_chain_time_ms(day_end_ms - 1)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no canonical block before the end of {date} although block {first} carries it"
+                )
+            })?;
+        Ok(Some((first, last.min(end_block_inclusive))))
+    }
+
+    /// The DAO daily snapshot of `facts`' day observed at its end block: the
+    /// last snapshot before the day (the zero baseline only for a day that
+    /// starts at genesis) plus the day's own deltas, walked block by block
+    /// over the day's headers — the deposits, withdraw requests and
+    /// completions `facts` collected, and each block's miner secondary
+    /// issuance (RFC-0023) — observed with the end header's DAO field and
+    /// `compensation`, which must be the exact lifecycle partition at the end
+    /// block and its AR (the caller computes it, from its own scan).
+    ///
+    /// The one store-side calculation of a day's snapshot: the DAO tip
+    /// summary's open day and the rollback's cutoff-date recompute.
+    pub fn reduce_dao_day_snapshot(
+        &self,
+        facts: DaoDayFacts,
+        compensation: DaoCompensationBreakdown,
+    ) -> anyhow::Result<DaoDailySnapshot> {
         use crate::dao_snapshot::{
             reduce_dao_daily_snapshot, DaoObservationKind, DaoSnapshotDelta, DaoSnapshotObservation,
         };
-        use chrono::{FixedOffset, TimeZone};
-        use ckbadger_common::CKB_UTC8_OFFSET;
-        use std::collections::{HashMap, HashSet};
 
-        // 1. Compute the UTC ms bounds of the target UTC+8 date.
-        let utc8 = FixedOffset::east_opt(CKB_UTC8_OFFSET).unwrap();
-        let day_start_naive = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| anyhow::anyhow!("invalid midnight for date {}", date))?;
-        let day_start_utc = utc8
-            .from_local_datetime(&day_start_naive)
-            .single()
-            .ok_or_else(|| anyhow::anyhow!("ambiguous day start for {}", date))?;
-        let day_end_utc = day_start_utc + chrono::Duration::days(1);
-        let day_start_ms = day_start_utc.timestamp_millis();
-        let day_end_ms = day_end_utc.timestamp_millis();
+        let DaoDayFacts {
+            date,
+            start_block: day_start_block,
+            end_block: day_end_block,
+            by_deposit_block,
+            by_phase1_block,
+            by_phase2_block,
+            mut prior_ever_deposited,
+            mut active_counts,
+        } = facts;
+        let (day_start_ms, day_end_ms) = utc8_day_bounds_ms(date)?;
 
-        // 2. Locate the first block whose chain time >= day_start_ms, bounded
-        //    above by end_block_inclusive.
-        let Some(day_start_block) =
-            self.find_first_block_at_or_after_chain_time_ms(day_start_ms)?
-        else {
-            return Ok(()); // no blocks at or after this date — nothing to recompute
-        };
-        // NOTE: find_first_block_at_or_after_chain_time_ms reads the live DB (pre-rollback-
-        // committed state), so day_start_block may be > end_block_inclusive if
-        // the first block on this date is itself being rolled back. This early
-        // return correctly handles that case — do NOT remove this guard.
-        if day_start_block > end_block_inclusive {
-            return Ok(()); // day_start is after our upper bound
-        }
-
-        // Walk forward to find the last block on this date <= end_block_inclusive.
-        let mut day_end_block = day_start_block;
-        {
-            let mut bn = day_start_block + 1;
-            while bn <= end_block_inclusive {
-                let h = self.get_block_header(bn)?.ok_or_else(|| anyhow::anyhow!(
-                    "missing canonical header while recomputing DAO day: date={date} block={bn} end_block={end_block_inclusive}"
-                ))?;
-                if h.chain_time_ms >= day_end_ms {
-                    break;
-                }
-                day_end_block = bn;
-                bn += 1;
-            }
-        }
-
-        // 3. Load previous day's snapshot as the starting baseline.
+        // The previous day's snapshot is the starting baseline.
         let prev_snap = self.get_dao_daily_snapshot_before(&date.format("%Y%m%d").to_string())?;
         anyhow::ensure!(prev_snap.is_some() || day_start_block == 0,
             "missing prior DAO snapshot while recomputing {date}: first block on day={day_start_block}; only a genesis-start recomputation may use the zero baseline");
@@ -1263,9 +1271,9 @@ impl CkbadgerStore {
         // at indexer startup; a store without it cannot produce exact values.
         let secondary_epoch_reward = self.get_secondary_epoch_reward()?.ok_or_else(|| {
             anyhow::anyhow!(
-                "missing consensus secondary_epoch_reward while recomputing DAO snapshot: target_date={}, end_block_inclusive={}",
+                "missing consensus secondary_epoch_reward while recomputing DAO snapshot: target_date={}, end_block={}",
                 date,
-                end_block_inclusive
+                day_end_block
             )
         })?;
 
@@ -1294,58 +1302,10 @@ impl CkbadgerStore {
             None
         };
 
-        // 4. Scan dao_deposits CF once. Group entries by (deposit_block_number,
-        //    withdraw_request_block, withdraw_block) for block-by-block walk.
-        //    Also build the "prior_ever_deposited" set for cumulative_depositors.
-        let mut by_deposit_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
-            HashMap::new();
-        let mut by_phase1_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
-            HashMap::new();
-        let mut by_phase2_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
-            HashMap::new();
-        let mut prior_ever_deposited: HashSet<Vec<u8>> = HashSet::new();
-        let mut active_counts: HashMap<Vec<u8>, i64> = HashMap::new();
-
-        self.scan_dao_deposits(|_key, entry| {
-            // For cumulative_depositors delta: any deposit with deposit_block_number
-            // strictly before our day_start_block counts as "previously seen".
-            if entry.deposit_block_number < day_start_block {
-                prior_ever_deposited.insert(entry.lock_script_hash.clone());
-                if entry
-                    .withdraw_request_block
-                    .is_none_or(|block| block >= day_start_block)
-                {
-                    *active_counts
-                        .entry(entry.lock_script_hash.clone())
-                        .or_default() += 1;
-                }
-            }
-            if entry.deposit_block_number >= day_start_block
-                && entry.deposit_block_number <= day_end_block
-            {
-                by_deposit_block
-                    .entry(entry.deposit_block_number)
-                    .or_default()
-                    .push(entry.clone());
-            }
-            if let Some(wrb) = entry.withdraw_request_block {
-                if wrb >= day_start_block && wrb <= day_end_block {
-                    by_phase1_block.entry(wrb).or_default().push(entry.clone());
-                }
-            }
-            if let Some(wb) = entry.withdraw_block {
-                if wb >= day_start_block && wb <= day_end_block {
-                    by_phase2_block.entry(wb).or_default().push(entry.clone());
-                }
-            }
-            Ok(())
-        })?;
-
         // Track unique lock hashes for daily_depositor_addresses.
         let mut daily_depositor_locks: HashSet<Vec<u8>> = HashSet::new();
 
-        // 5. Walk blocks day_start_block..=day_end_block, applying deltas.
-        let mut last_header_ar: u64 = 0;
+        // Walk blocks day_start_block..=day_end_block, applying deltas.
         let mut last_header_dao = Vec::new();
         let mut last_header_chain_time_ms = 0;
         for block_num in day_start_block..=day_end_block {
@@ -1355,6 +1315,11 @@ impl CkbadgerStore {
                     block_num
                 )
             })?;
+            anyhow::ensure!(
+                (day_start_ms..day_end_ms).contains(&header.chain_time_ms),
+                "block {block_num} is not on {date} although it lies between the day's first block {day_start_block} and block {day_end_block}: chain_time_ms={}",
+                header.chain_time_ms
+            );
             let (c, _s, u) = extract_dao_csu(&header.dao).ok_or_else(|| {
                 anyhow::anyhow!(
                     "invalid DAO field during recompute: block_num={}, dao_len={}",
@@ -1362,18 +1327,9 @@ impl CkbadgerStore {
                     header.dao.len()
                 )
             })?;
-            let ar = extract_dao_ar(&header.dao).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invalid AR during recompute: block_num={}, dao_len={}",
-                    block_num,
-                    header.dao.len()
-                )
-            })?;
-            last_header_ar = ar;
-            last_header_dao = header.dao.clone();
             last_header_chain_time_ms = header.chain_time_ms;
 
-            // 5a. Deposits created in this block.
+            // Deposits created in this block.
             if let Some(deposits) = by_deposit_block.get(&block_num) {
                 for d in deposits {
                     running_total_deposited = running_total_deposited
@@ -1432,8 +1388,8 @@ impl CkbadgerStore {
                 }
             }
 
-            // 5b. Phase-1 (withdraw request) in this block. Subtract from active
-            //     total_deposited but NOT from protocol_deposited (cell still locked).
+            // Phase-1 (withdraw request) in this block. Subtract from active
+            // total_deposited but NOT from protocol_deposited (cell still locked).
             if let Some(phase1s) = by_phase1_block.get(&block_num) {
                 for p in phase1s {
                     running_total_deposited = running_total_deposited
@@ -1465,10 +1421,10 @@ impl CkbadgerStore {
                 }
             }
 
-            // 5c. Phase-2 (withdraw completion) in this block. Increment withdrawals
-            //     count and subtract from protocol_deposited. Claimed compensation
-            //     feeds only the compensation aggregates (step 6), never the
-            //     miner series.
+            // Phase-2 (withdraw completion) in this block. Increment withdrawals
+            // count and subtract from protocol_deposited. Claimed compensation
+            // feeds only the compensation aggregates (`compensation`), never
+            // the miner series.
             if let Some(phase2s) = by_phase2_block.get(&block_num) {
                 for p in phase2s {
                     running_protocol_deposited = running_protocol_deposited
@@ -1485,13 +1441,13 @@ impl CkbadgerStore {
                 }
             }
 
-            // 5d. Exact miner portion for this block: the protocol's own
-            // direct split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023), where
-            // `s_i` comes from the epoch schedule and C/U come from the end of
-            // block N-1. Deliberately independent of DAO claimed compensation,
-            // which has its own exact per-deposit lifecycle path below.
-            // Genesis carries its own share inside the genesis DAO `C` and has
-            // no parent to split against.
+            // Exact miner portion for this block: the protocol's own direct
+            // split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023), where `s_i`
+            // comes from the epoch schedule and C/U come from the end of
+            // block N-1. Deliberately independent of DAO claimed
+            // compensation, which has its own exact per-deposit lifecycle
+            // path. Genesis carries its own share inside the genesis DAO `C`
+            // and has no parent to split against.
             if block_num > 0 {
                 let (prev_c, prev_u) = prev_dao_cu.ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1520,14 +1476,10 @@ impl CkbadgerStore {
                 })?;
             }
             prev_dao_cu = Some((c, u));
+            last_header_dao = header.dao;
         }
 
-        // 6. Exact end-of-day compensation from the normalized DAO lifecycle.
-        let compensation =
-            self.compute_dao_compensation_breakdown_at(day_end_block, last_header_ar)?;
-
-        // 7. Write the rebuilt snapshot.
-        let snapshot = reduce_dao_daily_snapshot(
+        reduce_dao_daily_snapshot(
             prev_snap.as_ref(),
             DaoSnapshotDelta {
                 active_capacity: running_total_deposited,
@@ -1550,7 +1502,55 @@ impl CkbadgerStore {
                 compensation,
             },
         )
-        .with_context(|| format!("recomputing DAO snapshot for {date}"))?;
+        .with_context(|| format!("recomputing DAO snapshot for {date}"))
+    }
+
+    /// Recompute the DAO daily snapshot for a single date from the canonical
+    /// `dao_deposits` CF plus `block_headers` CF. Used by reorg rollback to
+    /// rebuild the cutoff-date snapshot after a partial-day rollback.
+    ///
+    /// `date` is the target UTC+8 date (e.g., 2026-04-08).
+    /// `end_block_inclusive` is the highest block number to include (typically
+    /// the rollback target for partial-day reorgs, or the last block of the
+    /// day for cross-day reorgs).
+    ///
+    /// Assumes:
+    /// - `dao_deposits` CF is in its post-rollback normalized state (i.e.,
+    ///   `repair_and_rebuild_dao_indexes` has already run).
+    /// - `block_headers` CF still contains all headers for blocks up to
+    ///   `end_block_inclusive`.
+    pub fn recompute_dao_daily_snapshot_for_date(
+        &self,
+        date: chrono::NaiveDate,
+        end_block_inclusive: i64,
+        batch: &mut crate::batch::StoreBatch,
+    ) -> anyhow::Result<()> {
+        let Some((day_start_block, day_end_block)) =
+            self.dao_day_block_range(date, end_block_inclusive)?
+        else {
+            return Ok(()); // no block of this date at or below the bound
+        };
+        let mut facts = DaoDayFacts::new(date, day_start_block, day_end_block)?;
+        self.scan_dao_deposits(|_key, entry| {
+            facts.observe(entry);
+            Ok(())
+        })?;
+        // Exact end-of-day compensation from the normalized DAO lifecycle.
+        let end_header = self.get_block_header(day_end_block)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing block header during DAO snapshot recompute: block_num={}",
+                day_end_block
+            )
+        })?;
+        let end_ar = extract_dao_ar(&end_header.dao).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid AR during recompute: block_num={}, dao_len={}",
+                day_end_block,
+                end_header.dao.len()
+            )
+        })?;
+        let compensation = self.compute_dao_compensation_breakdown_at(day_end_block, end_ar)?;
+        let snapshot = self.reduce_dao_day_snapshot(facts, compensation)?;
         let key = keys::encode_stats_key(
             keys::stats_prefix::DAO_DAILY_SNAPSHOT,
             date.format("%Y%m%d").to_string().as_bytes(),
@@ -1558,6 +1558,112 @@ impl CkbadgerStore {
         batch.put_stats(&key, &bincode::serialize(&snapshot)?);
         Ok(())
     }
+}
+
+/// The DAO lifecycle facts of one UTC+8 day's blocks `start_block..=end_block`
+/// that [`CkbadgerStore::reduce_dao_day_snapshot`] walks, gathered from one
+/// pass over every `dao_deposits` entry ([`Self::observe`]): the day's
+/// deposits, withdraw requests and completions by block, the locks that had
+/// deposited before the day, and each lock's phase-0 deposits at the day's
+/// start.
+pub struct DaoDayFacts {
+    date: chrono::NaiveDate,
+    start_block: i64,
+    end_block: i64,
+    by_deposit_block: HashMap<i64, Vec<DaoDepositCacheEntry>>,
+    by_phase1_block: HashMap<i64, Vec<DaoDepositCacheEntry>>,
+    by_phase2_block: HashMap<i64, Vec<DaoDepositCacheEntry>>,
+    /// Locks with a deposit before the day (for `cumulative_depositors`).
+    prior_ever_deposited: HashSet<Vec<u8>>,
+    /// Phase-0 deposit cells per lock at the day's start.
+    active_counts: HashMap<Vec<u8>, i64>,
+}
+
+impl DaoDayFacts {
+    /// The facts of `date`'s blocks `start_block..=end_block`
+    /// ([`CkbadgerStore::dao_day_block_range`]), before any entry is observed.
+    pub fn new(date: chrono::NaiveDate, start_block: i64, end_block: i64) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            0 <= start_block && start_block <= end_block,
+            "invalid DAO day block range for {date}: {start_block}..={end_block}"
+        );
+        Ok(Self {
+            date,
+            start_block,
+            end_block,
+            by_deposit_block: HashMap::new(),
+            by_phase1_block: HashMap::new(),
+            by_phase2_block: HashMap::new(),
+            prior_ever_deposited: HashSet::new(),
+            active_counts: HashMap::new(),
+        })
+    }
+
+    pub fn date(&self) -> chrono::NaiveDate {
+        self.date
+    }
+
+    pub fn end_block(&self) -> i64 {
+        self.end_block
+    }
+
+    /// Fold one `dao_deposits` entry in; every entry of the CF must be
+    /// observed exactly once.
+    pub fn observe(&mut self, entry: &DaoDepositCacheEntry) {
+        let in_day = |block: i64| block >= self.start_block && block <= self.end_block;
+        // For the cumulative_depositors delta: any deposit strictly before
+        // the day's first block counts as "previously seen".
+        if entry.deposit_block_number < self.start_block {
+            self.prior_ever_deposited
+                .insert(entry.lock_script_hash.clone());
+            if entry
+                .withdraw_request_block
+                .is_none_or(|block| block >= self.start_block)
+            {
+                *self
+                    .active_counts
+                    .entry(entry.lock_script_hash.clone())
+                    .or_default() += 1;
+            }
+        }
+        if in_day(entry.deposit_block_number) {
+            self.by_deposit_block
+                .entry(entry.deposit_block_number)
+                .or_default()
+                .push(entry.clone());
+        }
+        if let Some(request) = entry.withdraw_request_block.filter(|block| in_day(*block)) {
+            self.by_phase1_block
+                .entry(request)
+                .or_default()
+                .push(entry.clone());
+        }
+        if let Some(withdraw) = entry.withdraw_block.filter(|block| in_day(*block)) {
+            self.by_phase2_block
+                .entry(withdraw)
+                .or_default()
+                .push(entry.clone());
+        }
+    }
+}
+
+/// The UTC milliseconds `[start, end)` of the UTC+8 calendar day `date`.
+fn utc8_day_bounds_ms(date: chrono::NaiveDate) -> anyhow::Result<(i64, i64)> {
+    use chrono::{FixedOffset, TimeZone};
+    let utc8 = FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+        .ok_or_else(|| anyhow::anyhow!("invalid UTC+8 offset"))?;
+    let day_start_naive = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid midnight for date {}", date))?;
+    let day_start_utc = utc8
+        .from_local_datetime(&day_start_naive)
+        .single()
+        .ok_or_else(|| anyhow::anyhow!("ambiguous day start for {}", date))?;
+    let day_end_utc = day_start_utc + chrono::Duration::days(1);
+    Ok((
+        day_start_utc.timestamp_millis(),
+        day_end_utc.timestamp_millis(),
+    ))
 }
 
 fn extract_dao_ar(dao: &[u8]) -> Option<u64> {
@@ -1617,6 +1723,122 @@ mod tests {
                 && msg.contains("39"),
             "decode must fail fast with bucket + length context, got: {}",
             msg
+        );
+    }
+
+    #[test]
+    fn activity_addr_row_keys_encode_bucket_then_lock_hash() {
+        use crate::keys::ActivityBucketKind;
+        let lock = [0xA7u8; 32];
+        let daily = ActivityBucketKind::Daily
+            .addr_row_key("20260210", &lock)
+            .unwrap();
+        assert_eq!(daily.len(), 1 + 8 + 32);
+        assert_eq!(daily[0], keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW);
+        assert_eq!(&daily[1..9], b"20260210");
+        assert_eq!(&daily[9..], &lock);
+        assert_eq!(
+            ActivityBucketKind::Daily
+                .decode_addr_row_key("20260210", &daily)
+                .unwrap(),
+            lock
+        );
+        let hourly = ActivityBucketKind::Hourly
+            .addr_row_key("2026021015", &lock)
+            .unwrap();
+        assert_eq!(hourly.len(), 1 + 10 + 32);
+        assert_eq!(hourly[0], keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW);
+        assert_eq!(&hourly[1..11], b"2026021015");
+        // Rows sort by bucket first, so one bucket's rows are one prefix range.
+        let later = ActivityBucketKind::Daily
+            .addr_row_key("20260211", &[0u8; 32])
+            .unwrap();
+        assert!(daily < later);
+        // Both families live in stats_chain.
+        for prefix in [
+            keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW,
+            keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW,
+        ] {
+            assert_eq!(
+                CkbadgerStore::stats_cf_name_by_prefix(prefix).unwrap(),
+                crate::store::CF_STATS_CHAIN
+            );
+        }
+        // A label of the other family's width, or a non-digit, is refused.
+        assert!(ActivityBucketKind::Daily
+            .addr_row_key("2026021015", &lock)
+            .is_err());
+        assert!(ActivityBucketKind::Hourly
+            .addr_row_key("20260210", &lock)
+            .is_err());
+        assert!(ActivityBucketKind::Daily
+            .addr_row_key("2026-02-1", &lock)
+            .is_err());
+        // A row of another bucket does not decode as this bucket's.
+        assert!(ActivityBucketKind::Daily
+            .decode_addr_row_key("20260211", &daily)
+            .is_err());
+    }
+
+    #[test]
+    fn activity_bucket_addrs_are_the_blob_plus_the_rows() {
+        use crate::keys::ActivityBucketKind;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let (a, b, c) = ([0xA1u8; 32], [0xB2u8; 32], [0xC3u8; 32]);
+        let put_blob = |kind: ActivityBucketKind, bucket: &str, addrs: &[[u8; 32]]| {
+            store
+                .put_stats_key(
+                    &kind.addr_set_key(bucket).unwrap(),
+                    &encode_activity_addr_set(addrs.iter().copied()),
+                )
+                .unwrap();
+        };
+        let put_row = |kind: ActivityBucketKind, bucket: &str, addr: &[u8; 32]| {
+            store
+                .put_stats_key(&kind.addr_row_key(bucket, addr).unwrap(), &[])
+                .unwrap();
+        };
+        // A new bucket: neither part.
+        assert!(store
+            .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
+            .unwrap()
+            .is_empty());
+        // Blob only (a bulk-built bucket).
+        put_blob(ActivityBucketKind::Daily, "20260210", &[a, b]);
+        assert_eq!(
+            store
+                .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
+                .unwrap(),
+            std::collections::HashSet::from([a, b])
+        );
+        // Rows only (a bucket live sync opened); a neighbour bucket's row is
+        // not this bucket's.
+        put_row(ActivityBucketKind::Hourly, "2026021015", &c);
+        put_row(ActivityBucketKind::Hourly, "2026021016", &a);
+        assert_eq!(
+            store
+                .get_activity_bucket_addrs(ActivityBucketKind::Hourly, "2026021015")
+                .unwrap(),
+            std::collections::HashSet::from([c])
+        );
+        // Both: the bulk blob plus the rows live sync added after it.
+        put_row(ActivityBucketKind::Daily, "20260210", &c);
+        assert_eq!(
+            store
+                .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
+                .unwrap(),
+            std::collections::HashSet::from([a, b, c])
+        );
+        // An address in both parts is a broken invariant.
+        put_row(ActivityBucketKind::Daily, "20260210", &a);
+        let err = store
+            .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("both in its address-set blob and as a row"),
+            "{err}"
         );
     }
 
@@ -1704,34 +1926,6 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize hodl wave in list_hodl_waves"));
-    }
-
-    #[test]
-    fn test_hodl_tracker_state_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
-
-        // Initially none
-        assert!(store.get_hodl_tracker_state().unwrap().is_none());
-
-        let state = HodlTrackerState {
-            capacity_by_date: vec![
-                ("20240101".to_string(), 1_000_000),
-                ("20240102".to_string(), 2_000_000),
-            ],
-            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
-            holder_count: 500,
-            last_snapshot_date: Some("20240102".to_string()),
-            last_processed_block: Some(100),
-        };
-
-        store.put_hodl_tracker_state(&state).unwrap();
-
-        let retrieved = store.get_hodl_tracker_state().unwrap().unwrap();
-        assert_eq!(retrieved.capacity_by_date.len(), 2);
-        assert_eq!(retrieved.holder_count, 500);
-        assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
-        assert_eq!(retrieved.date_transitions[1].0, 100);
     }
 
     #[test]
@@ -2421,34 +2615,6 @@ mod cell_distribution_tests {
         assert_eq!(latest.cohorts.len(), 1);
         assert_eq!(latest.cohorts[0].cohort_month, "2024-02");
     }
-
-    #[test]
-    fn test_cell_dist_tracker_state_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
-
-        // Initially none
-        assert!(store.get_cell_dist_tracker_state().unwrap().is_none());
-
-        let state = CellDistributionTrackerState {
-            count_by_bucket: [10, 20, 30, 40, 50, 60],
-            total_capacity_by_bucket: [1000, 2000, 3000, 4000, 5000, 6000],
-            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
-            last_snapshot_date: Some("20240102".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(100),
-        };
-
-        store.put_cell_dist_tracker_state(&state).unwrap();
-
-        let retrieved = store.get_cell_dist_tracker_state().unwrap().unwrap();
-        assert_eq!(retrieved.count_by_bucket, [10, 20, 30, 40, 50, 60]);
-        assert_eq!(
-            retrieved.total_capacity_by_bucket,
-            [1000, 2000, 3000, 4000, 5000, 6000]
-        );
-        assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
-    }
 }
 
 #[cfg(test)]
@@ -2588,6 +2754,41 @@ mod dao_daily_snapshot_recompute_tests {
             "two cells under one lock are one depositor"
         );
         assert_eq!(snapshot.cumulative_depositors, 1);
+    }
+
+    /// A UTC+8 day's block range is bounded on both ends by the canonical
+    /// chain time and above by the caller's bound; a day no block carries,
+    /// or whose first block is above the bound, has none.
+    #[test]
+    fn dao_day_block_range_follows_the_canonical_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let day = |d| chrono::NaiveDate::from_ymd_opt(2026, 3, d).unwrap();
+        let ar = 10_000_000_000_000_000u64;
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        // Blocks 0-1 on 03-09, 2-4 on 03-10, 5 on 03-12 (03-11 is empty).
+        for (block, time) in [
+            (0, utc8_ms(day(9), 22, 0)),
+            (1, utc8_ms(day(9), 23, 59)),
+            (2, utc8_ms(day(10), 0, 0)),
+            (3, utc8_ms(day(10), 12, 0)),
+            (4, utc8_ms(day(10), 23, 59)),
+            (5, utc8_ms(day(12), 0, 1)),
+        ] {
+            batch.put_block_header(
+                block,
+                &header_with_dao(block, time, dao_field(TEST_C, ar, 0, TEST_U)),
+            );
+        }
+        batch.commit().unwrap();
+
+        assert_eq!(store.dao_day_block_range(day(9), 5).unwrap(), Some((0, 1)));
+        assert_eq!(store.dao_day_block_range(day(10), 5).unwrap(), Some((2, 4)));
+        assert_eq!(store.dao_day_block_range(day(10), 3).unwrap(), Some((2, 3)));
+        assert_eq!(store.dao_day_block_range(day(10), 1).unwrap(), None);
+        assert_eq!(store.dao_day_block_range(day(11), 5).unwrap(), None);
+        assert_eq!(store.dao_day_block_range(day(12), 5).unwrap(), Some((5, 5)));
+        assert_eq!(store.dao_day_block_range(day(13), 5).unwrap(), None);
     }
 
     #[test]

@@ -913,7 +913,9 @@ mod global_bucket_tests {
         batch.put_tx_actions(&cellbase);
         assert_eq!(batch.len(), 3, "two TxActions rows + one bucket row");
         // `into_write_batch` refuses a batch carrying append-only operations.
-        domain.write_batch(batch.into_write_batch()).unwrap();
+        domain
+            .write_batch(batch.into_write_batch().unwrap())
+            .unwrap();
 
         assert_eq!(bucket_rows(&domain), vec![(GlobalBucket::Token, 100, 2)]);
         assert!(

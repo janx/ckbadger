@@ -3922,31 +3922,35 @@ fn seed_dao_latest(
 /// Seed blocks 10 and 11 (the sync tip) with different DAO fields; block 10
 /// carries mainnet-shaped C, S and U.
 fn seed_allocation_headers(store: &Arc<CkbadgerStore>) {
-    let mut batch = StoreBatch::new(store.as_ref());
     let mut header = recent_block_header(10, 1_700_000_000_000);
     header.dao = dao_field(
         4_790_000_000_000_000_000,
         30_000_000_000_000_000,
         519_967_746_700_000_000,
     );
-    batch.put_block_header(10, &header);
     let mut later = recent_block_header(11, 1_700_000_010_000);
     later.dao = dao_field(
         4_790_000_001_000_000_000,
         30_000_000_100_000_000,
         519_967_746_800_000_000,
     );
-    batch.put_block_header(11, &later);
-    // Block 11's 10-second gap was persisted by the indexer. Rollback must
-    // subtract the actual histogram row instead of inventing missing state.
-    batch.put_stats(
-        &ckbadger_store::keys::encode_stats_key(
-            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
-            &10i32.to_be_bytes(),
-        ),
-        &1i32.to_le_bytes(),
-    );
-    batch.commit().unwrap();
+    // Each block's rows in its journaled scope, as the live writer commits
+    // them, so the test can roll block 11 back.
+    ckbadger_store::commit_journaled(store.as_ref(), |batch| {
+        batch.at(10).put_block_header(10, &header);
+        let mut block_11 = batch.at(11);
+        block_11.put_block_header(11, &later);
+        // Block 11's 10-second gap was persisted by the indexer. Rollback must
+        // subtract the actual histogram row instead of inventing missing state.
+        block_11.put_stats(
+            &ckbadger_store::keys::encode_stats_key(
+                ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+                &10i32.to_be_bytes(),
+            ),
+            &1i32.to_le_bytes(),
+        );
+    })
+    .unwrap();
 }
 
 /// BE-4: the homepage CKBytes bar must partition circulation exactly.

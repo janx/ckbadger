@@ -1,5 +1,6 @@
 mod adaptive;
 mod batch;
+pub(crate) mod block_days;
 pub(crate) mod bottleneck;
 pub(crate) mod bulk_build;
 pub(crate) mod dao_helpers;
@@ -11,6 +12,8 @@ pub mod dob_decode_worker;
 mod helpers;
 mod indexer;
 mod live_cell_summary;
+#[doc(hidden)]
+pub mod live_test_support;
 mod nft_helpers;
 mod pipeline;
 mod progress;

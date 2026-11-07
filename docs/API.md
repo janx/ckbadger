@@ -980,11 +980,11 @@ writes nothing.
 
 - `EntityStatisticsResponse`
   - `anchor` — `{blockNumber, blockHash}` of the store's sync tip
-  - `state` — `{bulkSessionInProgress, rollbackCleanupInProgress, liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract, hourlyRetention}`,
+  - `state` — `{bulkSessionInProgress, liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract, hourlyRetention}`,
     all read under the same pin as the rows they qualify.
     - `entityStatsUndoContract` — `{version, coverageFloorBlock, updatedAtBlock}`,
       or `null` when the write path has published no contract.
-      `coverageFloorBlock` is the lowest block entity-stats undo can still roll
+      `coverageFloorBlock` is the lowest block the block journal can still roll
       back to; `updatedAtBlock` is the committed tip when that floor was last
       advanced, so a stale floor is distinguishable from a current one.
     - `hourlyRetention` — one answer **per hourly family**, keyed by family

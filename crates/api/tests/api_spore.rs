@@ -682,6 +682,93 @@ async fn test_spore_decode_endpoint_returns_pending_without_cached_result() {
         .is_some_and(|s| s.contains("background worker"))));
 }
 
+/// `dob_decoded` is `Validated`: not rolled back, so a reader resolves the
+/// canonical spore before it reads the cached decode. A decode cached for a
+/// spore that is not (or no longer) canonical serves nothing, whatever the
+/// requested media hash.
+#[tokio::test]
+async fn test_media_of_a_non_canonical_spore_is_not_served_from_the_decode_cache() {
+    let store = test_store();
+    let spore_id = [0x56u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+    let cached_hash = "ab".repeat(32);
+    store
+        .put_dob_decoded_direct(
+            &spore_id,
+            &DobDecodedEntry {
+                steps: vec![ckbadger_store::DobDecodedStep {
+                    step: 0,
+                    media_type: "image/svg+xml".to_string(),
+                    size: 29,
+                    hash: cached_hash.clone(),
+                    traits: vec![],
+                }],
+                media_sources: vec![],
+                decoded_at: 1700000000,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    for hash in [cached_hash, "cd".repeat(32)] {
+        let request = Request::builder()
+            .uri(format!("/api/v1/spore/objects/{spore_id_hex}/media/{hash}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{hash}");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json.to_string().contains("Spore not found"),
+            "{hash}: the canonical spore is resolved first: {json}"
+        );
+    }
+}
+
+/// `render_spore_svg` resolves the canonical spore before it reads the
+/// cached decode too: an inline SVG cached for a spore that is not (or no
+/// longer) canonical is not rendered.
+#[tokio::test]
+async fn test_render_of_a_non_canonical_spore_is_not_served_from_the_decode_cache() {
+    let store = test_store();
+    let spore_id = [0x57u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+    store
+        .put_dob_decoded_direct(
+            &spore_id,
+            &DobDecodedEntry {
+                steps: vec![ckbadger_store::DobDecodedStep {
+                    step: 0,
+                    media_type: "text/plain".to_string(),
+                    size: 0,
+                    hash: "ab".repeat(32),
+                    traits: vec![DobDecodedTrait {
+                        name: "image".to_string(),
+                        value: "<svg xmlns='http://www.w3.org/2000/svg'></svg>".to_string(),
+                    }],
+                }],
+                media_sources: vec![],
+                decoded_at: 1700000000,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/objects/{spore_id_hex}/render"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json.to_string().contains("Spore not found"),
+        "the canonical spore is resolved first: {json}"
+    );
+}
+
 #[tokio::test]
 async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
     let store = test_store();

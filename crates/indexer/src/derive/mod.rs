@@ -15,9 +15,9 @@
 //!   being written.
 //! - [`live::apply_live_batch`] adds each live block's signed deltas
 //!   `f(new) - f(old)` to every aggregate whose derivation is running or
-//!   complete, in the batch's own atomic write, with per-block undo
-//!   pre-images under `UndoSeqScope::Derived`. Rollback is therefore owned by
-//!   the undo log, exactly like the entity stats families.
+//!   complete, in the batch's own atomic write, each moved row in its block's
+//!   scope. Rollback is therefore the block journal's, like every other
+//!   `Journal`-class row.
 //! - [`invalidate_for_rollback`] runs before every rollback (reorg, startup
 //!   cleanup, partial-batch cleanup): a running derivation, or a complete one
 //!   whose rows became exact above the rollback target, is reset and derived
@@ -149,8 +149,8 @@ pub fn resume_key(cursor: Option<&[u8]>) -> Vec<u8> {
 /// rows (see `ckbadger_store::derive_ops`): the rebuild folds the rows of a
 /// snapshot, live sync folds `f(new) - f(old)` for each row a block changes.
 /// Clearing and rollback are the framework's: `clear` is a range delete of
-/// [`DerivedAggregateId::cf_name`], and rollback replays the per-block undo
-/// pre-images [`live::apply_live_batch`] records.
+/// [`DerivedAggregateId::cf_name`], and rollback writes back the block
+/// journal entries of the rows [`live::apply_live_batch`] writes per block.
 pub trait DerivedAggregate: Send + Sync {
     fn id(&self) -> DerivedAggregateId;
 
@@ -186,15 +186,15 @@ pub fn registry() -> Vec<Box<dyn DerivedAggregate>> {
 /// the rollback writes anything.
 ///
 /// - A running derivation is reset by any rollback that removes a block: its
-///   rows mix snapshot contributions with live deltas, and the undo
-///   pre-images recorded while chunks were still writing would put stale
+///   rows mix snapshot contributions with live deltas, and the journal
+///   entries recorded while chunks were still writing would put stale
 ///   values back.
 /// - A complete derivation is reset when `rollback_to` is below the tip it
-///   completed at, for the same reason; at or above it every undo pre-image
-///   was recorded after the rows became exact, so undo replay restores them.
+///   completed at, for the same reason; at or above it every journal entry
+///   was recorded after the rows became exact, so the rollback restores them.
 ///
-/// The reset (meta `NotStarted` + range delete) commits before the undo
-/// replay, so a crash anywhere in the rollback leaves the aggregate reset,
+/// The reset (meta `NotStarted` + range delete) commits before the journal
+/// rollback, so a crash anywhere in the rollback leaves the aggregate reset,
 /// never half-restored. The scheduler derives it again.
 pub fn invalidate_for_rollback(store: &CkbadgerStore, rollback_to: i64) -> Result<()> {
     invalidate_registered_for_rollback(store, &registry(), rollback_to)
@@ -208,10 +208,10 @@ pub(crate) fn invalidate_registered_for_rollback(
     let tip = committed_tip(store)?;
     let mut batch = StoreBatch::new(store);
     let mut reset = Vec::new();
-    // Undo replay owns an aggregate's rollback only while it is complete at
-    // or below the target; every other aggregate's `Derived` pre-images above
-    // the target would write stale rows into a CF that is (or is about to be)
-    // empty, so they are dropped with the reset.
+    // The journal owns an aggregate's rollback only while it is complete at
+    // or below the target; every other aggregate's journal entries above the
+    // target would write stale rows into a CF that is (or is about to be)
+    // empty, so they are dropped in the same write as the reset.
     let mut not_replayed: Vec<&'static str> = Vec::new();
     for aggregate in aggregates {
         let id = aggregate.id();
@@ -235,7 +235,7 @@ pub(crate) fn invalidate_registered_for_rollback(
             not_replayed.push(id.cf_name);
         }
     }
-    let dropped = store.stage_delete_derived_undo_above(&mut batch, &not_replayed, rollback_to)?;
+    let dropped = store.stage_delete_journal_above(&mut batch, &not_replayed, rollback_to)?;
     if !reset.is_empty() || dropped > 0 {
         batch.commit()?;
         tracing::info!(
@@ -243,7 +243,7 @@ pub(crate) fn invalidate_registered_for_rollback(
             rollback_to,
             tip,
             aggregates = ?reset,
-            dropped_undo_entries = dropped,
+            dropped_journal_entries = dropped,
             "derived aggregates reset before rollback; they are derived again"
         );
     }
@@ -548,10 +548,10 @@ mod tests {
     }
 
     /// Review P2: a reset must leave the aggregate's CF empty through the
-    /// rollback that follows it — undo replay must not write the aggregate's
-    /// `Derived` pre-images above the target back into the cleared CF.
+    /// rollback that follows it — the rollback must not write the aggregate's
+    /// journal entries above the target back into the cleared CF.
     #[test]
-    fn a_reset_aggregate_stays_empty_through_the_undo_replay() {
+    fn a_reset_aggregate_stays_empty_through_the_rollback() {
         let (_dir, store) = toy_store();
         commit_headers(&store, 0..=10);
         crate::derive::derive_to_completion_with(&store, toy()).unwrap();
@@ -563,11 +563,11 @@ mod tests {
             stored_rows(&store, &TOY).is_empty(),
             "the reset cleared the rows"
         );
-        store.rollback_via_undo_log(&store, 13).unwrap();
+        store.rollback_to_block(13).unwrap();
         assert_eq!(
             stored_rows(&store, &TOY),
             Vec::new(),
-            "undo replay wrote stale derived rows into a reset aggregate"
+            "the rollback wrote stale derived rows into a reset aggregate"
         );
     }
 

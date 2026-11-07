@@ -5,14 +5,11 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use ckbadger_store::derive_ops::{encode_derived_value, DeriveMeta};
-use ckbadger_store::keys::UndoSeqScope;
-use ckbadger_store::types::{UndoLogEntry, UndoLogStoreTarget};
+use ckbadger_store::derive_ops::DeriveMeta;
 use ckbadger_store::{CkbadgerStore, StoreBatch};
 use tracing::error;
 
 use super::{failed_meta, sum_with, BlockDeltas, DerivedAggregate};
-use crate::sync::undo::SharedUndoSeq;
 
 /// One block of a live batch, as the derivations see it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +39,9 @@ pub struct LiveDeriveCtx<'a> {
 }
 
 /// Add this batch's deltas to every aggregate live sync maintains (state
-/// `Running` or `Complete` at the current version), staging rows and undo
-/// pre-images into `batch`.
+/// `Running` or `Complete` at the current version), staging each moved row
+/// into `batch` in its block's scope (the block journal records its previous
+/// value).
 ///
 /// Fail fast: an error — a live delta that cannot be computed, or a row that
 /// breaks its aggregate's invariant — fails the batch like any other writer
@@ -56,7 +54,6 @@ pub(crate) fn apply_live_batch(
     aggregates: &[Box<dyn DerivedAggregate>],
     ctx: &LiveDeriveCtx<'_>,
     batch: &mut StoreBatch<'_>,
-    undo_seq: &SharedUndoSeq,
 ) -> Result<()> {
     for aggregate in aggregates {
         let id = aggregate.id();
@@ -67,7 +64,7 @@ pub(crate) fn apply_live_batch(
             continue;
         }
         match stage_one(store, aggregate.as_ref(), &meta, ctx) {
-            Ok(staged) => stage_into(staged, id.cf_name, batch, undo_seq)?,
+            Ok(staged) => stage_into(staged, id.cf_name, batch)?,
             Err(err) => {
                 let err = err.context(format!(
                     "derived aggregate {} live maintenance for blocks {}..={}",
@@ -103,12 +100,13 @@ pub(crate) fn record_failure_before_stop(
     Ok(())
 }
 
-/// The rows and undo pre-images one aggregate's live deltas produce.
+/// The rows one aggregate's live deltas produce.
 struct StagedAggregate {
-    /// `(block, key, value at the end of the previous block)`, ascending block.
-    undo: Vec<(i64, Vec<u8>, Option<Vec<u8>>)>,
-    /// Final value per touched key (`None` = row removed).
-    rows: HashMap<Vec<u8>, Option<Vec<i128>>>,
+    /// `(block, key, value at the end of the block)` for every block that
+    /// moves a key, ascending block (`None` = row removed): each is written in
+    /// its block's scope, so the block journal restores the row as of the
+    /// end of any block of the batch.
+    rows: Vec<(i64, Vec<u8>, Option<Vec<i128>>)>,
 }
 
 fn stage_one(
@@ -120,21 +118,15 @@ fn stage_one(
     let id = aggregate.id();
     let mut deltas = BlockDeltas::new();
     aggregate.live_deltas(ctx, &mut deltas)?;
-    let mut rows: HashMap<Vec<u8>, Option<Vec<i128>>> = HashMap::new();
-    let mut undo = Vec::new();
+    // Each touched key's value as of the last block that moved it.
+    let mut current_rows: HashMap<Vec<u8>, Option<Vec<i128>>> = HashMap::new();
+    let mut rows = Vec::new();
     for (block, keyed) in deltas {
         for (key, delta) in keyed {
-            let current = match rows.get(&key) {
+            let current = match current_rows.get(&key) {
                 Some(value) => value.clone(),
                 None => store.get_derived_value(id.cf_name, &key)?,
             };
-            // A block's deltas are one map entry per key, so this is the
-            // block's first touch of `key`: record its pre-block value.
-            undo.push((
-                block,
-                key.clone(),
-                current.as_deref().map(encode_derived_value),
-            ));
             let next = sum_with(current, &delta).map_err(|e| {
                 anyhow!(
                     "{} live delta at block {block}, key=0x{}: {e}",
@@ -142,11 +134,12 @@ fn stage_one(
                     hex::encode(&key)
                 )
             })?;
-            rows.insert(key, next);
+            rows.push((block, key.clone(), next.clone()));
+            current_rows.insert(key, next);
         }
     }
     if meta.checks_rows() {
-        for (key, value) in &rows {
+        for (key, value) in &current_rows {
             if let Some(value) = value {
                 aggregate.check_row(key, value).map_err(|e| {
                     anyhow!(
@@ -160,30 +153,14 @@ fn stage_one(
             }
         }
     }
-    Ok(StagedAggregate { undo, rows })
+    Ok(StagedAggregate { rows })
 }
 
-fn stage_into(
-    staged: StagedAggregate,
-    cf_name: &str,
-    batch: &mut StoreBatch<'_>,
-    undo_seq: &SharedUndoSeq,
-) -> Result<()> {
-    for (block, key, previous_value) in staged.undo {
-        let seq = undo_seq.next(block, UndoSeqScope::Derived);
-        batch.put_reorg_undo_log_by_block(
-            block,
-            seq,
-            &UndoLogEntry::KeyMutation {
-                target_store: UndoLogStoreTarget::Domain,
-                cf_name: cf_name.to_string(),
-                key,
-                previous_value,
-            },
-        );
-    }
-    for (key, value) in staged.rows {
-        batch.put_derived_value(cf_name, &key, value.as_deref())?;
+fn stage_into(staged: StagedAggregate, cf_name: &str, batch: &mut StoreBatch<'_>) -> Result<()> {
+    for (block, key, value) in staged.rows {
+        batch
+            .at(block)
+            .put_derived_value(cf_name, &key, value.as_deref())?;
     }
     Ok(())
 }
@@ -193,7 +170,7 @@ pub(crate) mod tests {
     use super::super::test_support::*;
     use super::super::{DeriveScheduler, DerivedAggregate};
     use super::*;
-    use ckbadger_store::derive_ops::DeriveState;
+    use ckbadger_store::derive_ops::{encode_derived_value, DeriveState};
 
     fn blocks(range: std::ops::RangeInclusive<i64>) -> Vec<LiveBlockPoint> {
         range
@@ -214,26 +191,23 @@ pub(crate) mod tests {
         range: std::ops::RangeInclusive<i64>,
     ) {
         let points = blocks(range.clone());
-        let mut batch = StoreBatch::new(store);
-        for number in range {
-            batch.put_block_header(number, &header(number, epoch_of(number)));
-        }
-        let ctx = LiveDeriveCtx {
-            store,
-            blocks: &points,
-            dao_transitions: &[],
-            object_collection_activity_rows: &[],
-            identity_transitions: &[],
-        };
-        apply_live_batch(
-            store,
-            aggregates,
-            &ctx,
-            &mut batch,
-            &SharedUndoSeq::default(),
-        )
+        // One live batch: journaled, each header in its block's scope.
+        ckbadger_store::commit_journaled(store, |batch| {
+            for number in range {
+                batch
+                    .at(number)
+                    .put_block_header(number, &header(number, epoch_of(number)));
+            }
+            let ctx = LiveDeriveCtx {
+                store,
+                blocks: &points,
+                dao_transitions: &[],
+                object_collection_activity_rows: &[],
+                identity_transitions: &[],
+            };
+            apply_live_batch(store, aggregates, &ctx, batch).unwrap();
+        })
         .unwrap();
-        batch.commit().unwrap();
     }
 
     fn toy() -> Vec<Box<dyn DerivedAggregate>> {
@@ -271,23 +245,73 @@ pub(crate) mod tests {
         assert!(stored_rows(&store, &TOY).is_empty());
     }
 
-    /// The fork point may land inside a multi-block live batch: undo replay
+    /// The fork point may land inside a multi-block live batch: the rollback
     /// must restore the value at the end of the fork block, not the value
-    /// before the batch (per-block pre-images).
+    /// before the batch (per-block journal entries).
     #[test]
-    fn undo_replay_restores_the_rows_at_any_fork_point_inside_a_batch() {
+    fn rollback_restores_the_rows_at_any_fork_point_inside_a_batch() {
         for fork_point in [10, 12, 13, 15] {
             let (_dir, store) = toy_store();
             commit_headers(&store, 0..=10);
             complete(&store);
             write_live_batch(&store, &toy(), 11..=16);
-            store.rollback_via_undo_log(&store, fork_point).unwrap();
+            store.rollback_to_block(fork_point).unwrap();
             assert_eq!(
                 stored_rows(&store, &TOY),
                 expected_rows(fork_point),
                 "fork_point={fork_point}"
             );
         }
+    }
+
+    /// Through the live batch's block overlay, every block that moves a row
+    /// writes it in its own scope: the block journal holds the row's value at
+    /// the end of the previous block, so replaying it restores the rows as of
+    /// any block of the batch (store refactor lane B, B-3).
+    #[test]
+    fn a_journaled_live_batch_journals_each_row_at_its_block() {
+        use crate::db::writer::journal_test_support::journal_entries;
+        use ckbadger_store::block_overlay::SharedBlockOverlay;
+
+        let (_dir, store) = toy_store();
+        commit_headers(&store, 0..=10);
+        complete(&store);
+        // Epoch 3 (blocks 9..=11) gains block 11; epoch 4 (12..=14) is
+        // created by block 12 and moved by block 13.
+        let points = blocks(11..=13);
+        let overlay = SharedBlockOverlay::new(&store).unwrap();
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        for number in 11..=13 {
+            batch
+                .at(number)
+                .put_block_header(number, &header(number, epoch_of(number)));
+        }
+        let ctx = LiveDeriveCtx {
+            store: &store,
+            blocks: &points,
+            dao_transitions: &[],
+            object_collection_activity_rows: &[],
+            identity_transitions: &[],
+        };
+        apply_live_batch(&store, &toy(), &ctx, &mut batch).unwrap();
+        let mut counters = HashMap::new();
+        batch
+            .stage_journal(&mut |block| {
+                ckbadger_store::block_overlay::journal_seq(&mut counters, block)
+            })
+            .unwrap();
+        batch.commit().unwrap();
+
+        let row = |count: i128| Some(encode_derived_value(&[count]));
+        assert_eq!(
+            journal_entries(&store, TOY.cf_name),
+            vec![
+                (11, epoch_key(3), row(2)),
+                (12, epoch_key(4), None),
+                (13, epoch_key(4), row(1)),
+            ]
+        );
+        assert_eq!(stored_rows(&store, &TOY), expected_rows(13));
     }
 
     /// Ruling A: a live invariant violation fails the batch like any other
@@ -315,7 +339,7 @@ pub(crate) mod tests {
             object_collection_activity_rows: &[],
             identity_transitions: &[],
         };
-        let result = apply_live_batch(&store, &strict, &ctx, &mut batch, &SharedUndoSeq::default());
+        let result = apply_live_batch(&store, &strict, &ctx, &mut batch);
         let err = format!("{:#}", result.expect_err("the batch must fail"));
         assert!(
             err.contains("toy_headers_per_epoch")

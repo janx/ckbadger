@@ -1,9 +1,9 @@
 //! Task 1.2 — per-block entity stats rollback and replay-equivalence matrix.
 //!
 //! These tests drive the real `BatchWriter` daily writers and the real
-//! `EntityStatsOverlay` hourly path, then roll back with the production
-//! two-phase path (`rollback_via_undo_log` + `rollback_to_block_with_append_only_store`,
-//! the exact order `BatchWriter::execute_reorg` uses) and compare the resulting
+//! `EntityStatsOverlay` hourly path through a journaled batch, then roll back
+//! with the production rollback (`CkbadgerStore::rollback_to_block`, the block
+//! journal `BatchWriter::execute_reorg` replays) and compare the resulting
 //! eight entity stats families byte-for-byte against a second, independently
 //! built store that synced the surviving branch directly.
 //!
@@ -22,9 +22,10 @@ use ckbadger_indexer::sync::types::{
     EntityDailyChanges, EntityDateKey, ScriptDailyKey, TokenDailyChanges,
 };
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::block_overlay::journal_seq;
 use ckbadger_store::keys::UndoSeqScope;
 use ckbadger_store::types::{EpochStats, HourlyRetentionFamily};
-use ckbadger_store::{keys, CachedBlockHeader, CkbadgerStore, LiveCellInfo};
+use ckbadger_store::{keys, CachedBlockHeader, CkbadgerStore, LiveCellInfo, SharedBlockOverlay};
 use rocksdb::{Direction, IteratorMode};
 
 // ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
         epoch_number: 11,
         epoch_index: (block_num % 1800) as i32,
         epoch_length: 1800,
-        dao: vec![0u8; 32],
+        dao: valid_dao_field(),
         transactions_count: 0,
         uncles_count: 0,
         proposals_count: 0,
@@ -85,6 +86,67 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
         cycles: None,
         chain_time_ms: timestamp,
     }
+}
+
+/// A valid DAO field (C, AR, S, U): every rollback ends with the DAO tip
+/// summary, which observes the tip with it and splits each block's secondary
+/// issuance against its parent's C / U.
+fn valid_dao_field() -> Vec<u8> {
+    let mut dao = vec![0u8; 32];
+    dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+    dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+    dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+    dao
+}
+
+/// What the DAO tip summary every rollback ends with reads besides the
+/// blocks: the genesis baseline, the consensus secondary epoch reward the
+/// indexer persists at startup, a genesis header on the previous UTC+8 day
+/// and that day's sealed row (no DAO activity), on which the open day
+/// builds. The rollbacks here never reach the previous day.
+fn seed_dao_tip_summary_inputs(domain: &CkbadgerStore) {
+    domain
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 0,
+        })
+        .unwrap();
+    domain
+        .set_secondary_epoch_reward(61_369_863_013_698)
+        .unwrap();
+    let mut genesis = StoreBatch::new(domain);
+    genesis.put_block_header(0, &make_header(0, TS_PREV_DAY - 1_000));
+    genesis.commit().unwrap();
+    domain
+        .put_stats_key(
+            &keys::encode_stats_key(
+                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                PREV_DAY.to_string().as_bytes(),
+            ),
+            &bincode::serialize(&ckbadger_store::types::DaoDailySnapshot {
+                date: "2026-09-21".to_string(),
+                total_deposited: 0,
+                depositors_count: 0,
+                new_deposits: 0,
+                withdrawals: 0,
+                compensation: 0,
+                cumulative_deposit_amount: 0,
+                total_issuance: 3_360_000_000_000_000_000,
+                secondary_pool: 0,
+                occupied_capacity: 100_000_000_000_000,
+                cum_miner_secondary: 0,
+                cum_dao_compensation: 0,
+                cum_treasury: 0,
+                unclaimed_compensation: 0,
+                frozen_phase1_compensation: 0,
+                cumulative_depositors: 0,
+                daily_depositor_addresses: 0,
+                protocol_deposited: Some(0),
+            })
+            .unwrap(),
+        )
+        .unwrap();
 }
 
 /// Epoch rows consistent with `make_header`: rollback fails fast when the
@@ -244,13 +306,15 @@ fn blk(n: i64) -> BlockChanges {
 }
 
 /// Apply one committed batch of blocks exactly the way the writer will: a
-/// single `StoreBatch`, a single `EntityStatsOverlay`, a single shared
-/// `undo_seq_by_block` map, per-block undo pre-images and one final write per
-/// touched key.
+/// single journaled `StoreBatch`, a single `EntityStatsOverlay` on its block
+/// overlay, per-block journal entries and one final write per touched key.
 fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockChanges]) {
-    let mut batch = StoreBatch::new(domain);
-    let mut overlay = EntityStatsOverlay::new();
-    let mut undo_seq: HashMap<i64, u64> = HashMap::new();
+    // The live batch's shape: one block overlay journals every block's
+    // pre-images, the entity stats overlay is its stats side.
+    let block_overlay = SharedBlockOverlay::new(domain).unwrap();
+    let mut batch = StoreBatch::journaled(domain, &block_overlay, 0);
+    let mut overlay = EntityStatsOverlay::sharing(&block_overlay);
+    let mut journal_seqs: HashMap<i64, u64> = HashMap::new();
 
     let mut script = EntityDailyChanges::<ScriptDailyKey>::new();
     // Each token contribution is one transaction touching the token's cells.
@@ -283,19 +347,19 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
     }
 
     writer
-        .update_script_daily_deltas_batch(&script, &mut overlay, &mut undo_seq, &mut batch)
+        .update_script_daily_deltas_batch(&script, &mut overlay)
         .unwrap();
     writer
-        .update_token_daily_deltas_batch(&token, &mut overlay, &mut undo_seq, &mut batch)
+        .update_token_daily_deltas_batch(&token, &mut overlay)
         .unwrap();
     writer
-        .update_cluster_daily_deltas_batch(&cluster, &mut overlay, &mut undo_seq, &mut batch)
+        .update_cluster_daily_deltas_batch(&cluster, &mut overlay)
         .unwrap();
     writer
-        .update_spore_daily_deltas_batch(&spore, &mut overlay, &mut undo_seq, &mut batch)
+        .update_spore_daily_deltas_batch(&spore, &mut overlay)
         .unwrap();
     writer
-        .update_object_daily_deltas_batch(&object, &mut overlay, &mut undo_seq, &mut batch)
+        .update_object_daily_deltas_batch(&object, &mut overlay)
         .unwrap();
 
     // The four hourly write points route through the same overlay; driving them
@@ -308,9 +372,7 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
                 format!("test hourly key=0x{}", hex::encode(key))
             })
             .unwrap();
-            overlay
-                .mutate(domain, &mut batch, &mut undo_seq, b.block, key, next)
-                .unwrap();
+            overlay.mutate(b.block, key, next).unwrap();
         }
     }
 
@@ -324,8 +386,11 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
         header.chain_time_ms =
             previous_chain_time.map_or(b.timestamp, |prior| prior.max(b.timestamp));
         previous_chain_time = Some(header.chain_time_ms);
-        batch.put_block_header(b.block, &header);
+        batch.at(b.block).put_block_header(b.block, &header);
     }
+    batch
+        .stage_journal(&mut |block| journal_seq(&mut journal_seqs, block))
+        .unwrap();
     batch.commit().unwrap();
     seed_epoch_rows(domain, blocks.iter().map(|b| (b.block, b.timestamp)));
 }
@@ -387,10 +452,8 @@ fn seed_forward_histogram(domain: &CkbadgerStore) {
 
 fn rollback(domain: &CkbadgerStore, append: &CkbadgerStore, fork_point: i64) {
     seed_forward_histogram(domain);
-    let undo = domain.rollback_via_undo_log(append, fork_point).unwrap();
-    domain
-        .rollback_to_block_with_tx_contexts(fork_point, Some(append), undo.tx_contexts)
-        .unwrap();
+    let _ = append;
+    domain.rollback_to_block(fork_point).unwrap();
 }
 
 /// Byte-exact dump of the eight entity stats families, keyed by full stats key.
@@ -873,7 +936,7 @@ async fn two_consecutive_reorgs() {
         "two consecutive reorgs must not double-undo, double-count, or collide on undo seq"
     );
     assert!(
-        !domain.has_undo_log_entries_after(4).unwrap(),
+        !domain.has_journal_after(4).unwrap(),
         "every replayed undo entry must be consumed"
     );
 }
@@ -1114,15 +1177,13 @@ async fn startup_fails_on_nonfresh_store_without_contract() {
     // Give it a tip and nothing else.
     let mut batch = StoreBatch::new(&domain);
     batch.put_block_header(500, &make_header(500, TS_DAY));
-    batch.put_sync_meta(
-        keys::sync_meta_keys::SYNC_STATUS,
-        &bincode::serialize(&ckbadger_store::types::SyncStatus {
+    batch
+        .put_sync_status(&ckbadger_store::types::SyncStatus {
             tip_block_number: 500,
             tip_block_hash: make_header(500, TS_DAY).hash,
             ..Default::default()
         })
-        .unwrap(),
-    );
+        .unwrap();
     batch.commit().unwrap();
 
     let err = ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain)
@@ -1151,29 +1212,30 @@ async fn startup_fails_on_nonfresh_store_without_contract() {
 async fn prune_keeps_window_and_updates_floor() {
     let (domain, _append) = setup_split_stores();
 
-    const ENTITY: u64 = UndoSeqScope::EntityStats.seq_base();
-    const TX_CONTEXT: u64 = UndoSeqScope::TxContext.seq_base();
+    // Two journal rows per block (a token daily row and a sync_meta key).
     let mut batch = StoreBatch::new(&domain);
     for block in 1..=1_200i64 {
-        batch.put_reorg_undo_log_by_block(
-            block,
-            ENTITY,
-            &ckbadger_store::types::UndoLogEntry::KeyMutation {
-                target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-                cf_name: ckbadger_store::CF_STATS_TOKEN.to_string(),
-                key: keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec(),
-                previous_value: None,
-            },
-        );
-        batch.put_reorg_undo_log_by_block(
-            block,
-            TX_CONTEXT,
-            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
-                tx_hash: vec![block as u8; 32],
-                outputs_count: 1,
-                inputs: vec![],
-            }),
-        );
+        for (seq, (cf, key)) in [
+            (
+                ckbadger_store::CF_STATS_TOKEN,
+                keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec(),
+            ),
+            (ckbadger_store::CF_SYNC_META, b"fixture".to_vec()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            batch
+                .put_raw_cf_by_name(
+                    ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK,
+                    &keys::encode_reorg_undo_log_key(
+                        block,
+                        UndoSeqScope::Journal.seq_base() | seq as u64,
+                    ),
+                    &ckbadger_store::encode_journal_value(cf, &key, None).unwrap(),
+                )
+                .unwrap();
+        }
     }
     batch.commit().unwrap();
 
@@ -1183,28 +1245,31 @@ async fn prune_keeps_window_and_updates_floor() {
             .unwrap();
     batch.commit().unwrap();
     assert_eq!(
-        pruned, 200,
-        "blocks 1..=200 fall out of the 1000-block window"
+        pruned,
+        Some(0..=200),
+        "blocks up to 200 fall out of the 1000-block window"
     );
 
     let mut entity_blocks = Vec::new();
-    let mut tx_context_entries = 0usize;
+    let mut other_entries = 0usize;
     let iter = domain.iterator_cf(domain.cf_reorg_undo_log_by_block(), IteratorMode::Start);
     for item in iter {
-        let (key, _) = item.unwrap();
-        let (block, seq) = keys::decode_reorg_undo_log_key(&key);
-        if UndoSeqScope::EntityStats.owns(seq) {
+        let (key, value) = item.unwrap();
+        let (block, _) = keys::decode_reorg_undo_log_key(&key);
+        if ckbadger_store::decode_journal_value(&value).unwrap().cf
+            == ckbadger_store::CF_STATS_TOKEN
+        {
             entity_blocks.push(block);
         } else {
-            tx_context_entries += 1;
+            other_entries += 1;
         }
     }
     assert_eq!(entity_blocks.len(), 1_000);
     assert_eq!(*entity_blocks.iter().min().unwrap(), 201);
     assert_eq!(*entity_blocks.iter().max().unwrap(), 1_200);
     assert_eq!(
-        tx_context_entries, 1_200,
-        "retention must not touch the TxContext scope"
+        other_entries, 1_000,
+        "retention prunes every journal row below the floor (one range delete)"
     );
 
     let contract = domain.get_entity_stats_undo_contract().unwrap().unwrap();
@@ -1216,7 +1281,7 @@ async fn prune_keeps_window_and_updates_floor() {
     assert_eq!(
         ckbadger_indexer::sync::stage_entity_stats_undo_retention(&domain, &mut batch, 900)
             .unwrap(),
-        0
+        None
     );
     batch.commit().unwrap();
     assert_eq!(
@@ -1254,15 +1319,7 @@ async fn reorg_below_floor_fails_fast() {
     assert!(!before.is_empty());
 
     let result = writer
-        .execute_reorg(
-            append.as_ref(),
-            150,
-            &[0x96; 32],
-            1_200,
-            &[0x11; 32],
-            1_201,
-            &[0x22; 32],
-        )
+        .execute_reorg(150, &[0x96; 32], 1_200, &[0x11; 32], 1_201, &[0x22; 32])
         .await;
     let err = match result {
         Ok(_) => panic!("a fork point below the coverage floor must fail fast"),
@@ -1639,186 +1696,6 @@ async fn clock_rollback_does_not_lower_executed_cutoff() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2.7 — interrupted rollback recovery
-// ---------------------------------------------------------------------------
-
-/// `execute_reorg` replays the undo log and THEN runs the domain rollback. A
-/// crash between the two leaves the entity stats already restored and their
-/// undo entries already consumed. The startup cleanup path must finish the same
-/// rollback without undoing anything a second time.
-#[tokio::test]
-async fn crash_between_undo_replay_and_domain_rollback_is_recoverable() {
-    let original = vec![vec![
-        blk(1)
-            .token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000)
-            .script(CODE_A, false, DAY, 9_000_000_000, 6_100_000_000)
-            .token_hour(TOKEN_X, TS_DAY, 2),
-        blk(2)
-            .token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000)
-            .object(COLLECTION_ID, DAY, 5_000_000_000, 4_800_000_000),
-        // Orphans from here.
-        blk(3)
-            .token(TOKEN_X, DAY, 100_000_000_000, 90_000_000_000)
-            .token(TOKEN_Y, DAY, 6_000_000_000, 5_000_000_000)
-            .token_hour(TOKEN_X, TS_DAY, 4),
-        blk(4)
-            .object(COLLECTION_ID, DAY, -5_000_000_000, -4_800_000_000)
-            .spore(SPORE_ID, DAY, 1_000_000_000, 800_000_000),
-    ]];
-
-    // Branch A: apply everything, replay the undo log, then CRASH — no
-    // `rollback_to_block`, no refreshes. Recovery runs the startup path.
-    let (domain_a, append_a) = setup_split_stores();
-    let writer_a = BatchWriter::new(domain_a.clone(), append_a.clone());
-    let (cell_key, cell_bytes) = seed_append_only_witness(&append_a);
-    for commit in &original {
-        apply_commit(&writer_a, &domain_a, commit);
-    }
-    domain_a
-        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
-            total_issuance: 3_360_000_000_000_000_000,
-            burnt: 840_000_000_000_000_000,
-            virtual_occupied: 0,
-        })
-        .unwrap();
-    // The startup cleanup path also re-derives the DAO singleton stats, which
-    // need a daily snapshot to exist. Seed one on a day BEFORE the cutoff, the
-    // way a real chain would have it; it is untouched by this rollback.
-    domain_a
-        .put_stats_key(
-            &keys::encode_stats_key(
-                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
-                PREV_DAY.to_string().as_bytes(),
-            ),
-            &bincode::serialize(&ckbadger_store::types::DaoDailySnapshot {
-                date: PREV_DAY.to_string(),
-                total_deposited: 0,
-                depositors_count: 0,
-                new_deposits: 0,
-                withdrawals: 0,
-                compensation: 0,
-                cumulative_deposit_amount: 0,
-                total_issuance: 0,
-                secondary_pool: 0,
-                occupied_capacity: 0,
-                cum_miner_secondary: 0,
-                cum_dao_compensation: 0,
-                cum_treasury: 0,
-                unclaimed_compensation: 0,
-                frozen_phase1_compensation: 0,
-                cumulative_depositors: 0,
-                daily_depositor_addresses: 0,
-                protocol_deposited: None,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-
-    let undo = domain_a.rollback_via_undo_log(&append_a, 2).unwrap();
-    assert!(
-        undo.undo_entries_applied > 0,
-        "the fixture must exercise the undo path"
-    );
-    let after_undo_only = dump_entity_stats(&domain_a);
-    assert!(
-        !domain_a.has_undo_log_entries_after(2).unwrap(),
-        "the replayed entries are consumed before the crash"
-    );
-
-    // Recovery: the startup cleanup path with the same target.
-    let mut genesis = StoreBatch::new(domain_a.as_ref());
-    genesis.put_block_header(0, &make_header(0, TS_PREV_DAY - 1_000));
-    genesis.commit().unwrap();
-    seed_forward_histogram(&domain_a);
-    writer_a
-        .init_sync_start_with_options(append_a.as_ref(), 2, false, true)
-        .expect("startup cleanup must finish the interrupted rollback");
-
-    assert_eq!(
-        dump_entity_stats(&domain_a),
-        after_undo_only,
-        "recovery must not undo the already-applied restoration a second time"
-    );
-    assert_eq!(
-        append_a.get_cf(append_a.cf_cells(), &cell_key).unwrap(),
-        Some(cell_bytes),
-        "append-only payload bytes must be unchanged by crash recovery"
-    );
-
-    // Branch B: the same surviving history, synced directly.
-    let (domain_b, append_b) = setup_split_stores();
-    let writer_b = BatchWriter::new(domain_b.clone(), append_b.clone());
-    seed_append_only_witness(&append_b);
-    let surviving: Vec<BlockChanges> = original[0]
-        .iter()
-        .filter(|b| b.block <= 2)
-        .cloned()
-        .collect();
-    apply_commit(&writer_b, &domain_b, &surviving);
-
-    assert_eq!(
-        dump_entity_stats(&domain_a),
-        dump_entity_stats(&domain_b),
-        "a crash between undo replay and domain rollback must still land on the \
-         same eight entity stats families as a node that never saw the orphans"
-    );
-}
-
-/// If the domain rollback fails after the undo log was replayed, the restored
-/// values must stay visible and the cleanup marker must stay set, so the next
-/// start finishes the same rollback instead of publishing an inconsistent tip.
-#[tokio::test]
-async fn rollback_to_block_failure_leaves_undo_replay_visible_and_marker_set() {
-    let (domain, append) = setup_split_stores();
-    let writer = BatchWriter::new(domain.clone(), append.clone());
-
-    apply_commit(
-        &writer,
-        &domain,
-        &[
-            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
-            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
-            blk(3).token(TOKEN_X, DAY, 100_000_000_000, 90_000_000_000),
-        ],
-    );
-    let key = keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec();
-    let after_block_3 = read_stats(&domain, &key).unwrap();
-
-    // Corrupt block 3's header so the domain rollback cannot decode it.
-    domain
-        .put_cf(
-            domain.cf_block_headers(),
-            &keys::encode_block_num(3),
-            b"invalid-header-payload",
-        )
-        .unwrap();
-
-    let undo = domain.rollback_via_undo_log(&append, 2).unwrap();
-    assert!(undo.undo_entries_applied > 0);
-    let restored = read_stats(&domain, &key).unwrap();
-    assert_ne!(
-        restored, after_block_3,
-        "the undo replay must have rolled the row back to its end-of-block-2 value"
-    );
-
-    let err = domain
-        .rollback_to_block_with_tx_contexts(2, Some(append.as_ref()), undo.tx_contexts)
-        .expect_err("a corrupt header must fail the domain rollback");
-    assert!(!err.to_string().is_empty());
-
-    assert_eq!(
-        read_stats(&domain, &key),
-        Some(restored),
-        "a failed domain rollback must leave the undo replay's result intact — the next \
-         start finishes the same rollback, it does not redo it"
-    );
-    assert!(
-        !domain.has_undo_log_entries_after(2).unwrap(),
-        "consumed undo entries must not reappear and be applied twice"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Review M2 — every rollback entry point must honour the coverage floor
 // ---------------------------------------------------------------------------
 
@@ -1876,7 +1753,7 @@ async fn startup_cleanup_below_coverage_floor_fails_fast() {
     assert!(!before.is_empty());
 
     let err = writer
-        .init_sync_start_with_options(append.as_ref(), 3_000, false, true)
+        .init_sync_start_with_options(3_000, false, true)
         .expect_err("a cleanup below the coverage floor must fail fast");
     assert!(
         ckbadger_indexer::lifecycle::is_rebuild_required(&err),
@@ -1913,7 +1790,7 @@ async fn cleanup_batch_range_below_coverage_floor_fails_fast() {
 
     let before = dump_entity_stats(&domain);
     let err = writer
-        .cleanup_batch_range(append.as_ref(), 100, 200)
+        .cleanup_batch_range(100, 200)
         .expect_err("a batch-range cleanup below the coverage floor must fail fast");
     assert!(
         ckbadger_indexer::lifecycle::is_rebuild_required(&err),
@@ -1941,10 +1818,12 @@ async fn cleanup_at_or_above_coverage_floor_still_runs() {
             blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
         ],
     );
-    // No contract yet (fresh store mid-first-batch): cleanup proceeds.
+    // No contract yet (fresh store mid-first-batch): cleanup proceeds, and
+    // ends with the DAO tip summary.
+    seed_dao_tip_summary_inputs(&domain);
     seed_forward_histogram(&domain);
     writer
-        .cleanup_batch_range(append.as_ref(), 2, 2)
+        .cleanup_batch_range(2, 2)
         .expect("a store with no contract has nothing to protect");
 
     domain
@@ -1955,7 +1834,7 @@ async fn cleanup_at_or_above_coverage_floor_still_runs() {
         })
         .unwrap();
     writer
-        .cleanup_batch_range(append.as_ref(), 2, 2)
+        .cleanup_batch_range(2, 2)
         .expect("a target exactly at the floor is inside coverage");
 }
 
@@ -1980,15 +1859,7 @@ async fn reorg_without_a_contract_fails_fast() {
 
     let before = dump_entity_stats(&domain);
     let result = writer
-        .execute_reorg(
-            append.as_ref(),
-            1,
-            &[0x01; 32],
-            2,
-            &[0x02; 32],
-            3,
-            &[0x03; 32],
-        )
+        .execute_reorg(1, &[0x01; 32], 2, &[0x02; 32], 3, &[0x03; 32])
         .await;
     let err = match result {
         Ok(_) => panic!("a reorg without a coverage contract must fail fast"),

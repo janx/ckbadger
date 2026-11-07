@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (72 total: 68 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (75 total: 71 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 68 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 71 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -47,7 +47,7 @@ requires re-sync from genesis; there is no migration.
 | `cells` **(append-only store)**  | tx_hash + output_index (34B)                                                  | LiveCellInfo v2 (see `cells` payload above)                                    | Immutable cell payload store (write-once, content-addressed)                                                                                                                                                                                               |
 | `live_cells`                     | tx_hash + output_index (34B)                                                  | empty                                                                          | Live UTXO pointer set                                                                                                                                                                                                                                      |
 | `consumed_cells`                 | tx_hash + output_index (34B)                                                  | ConsumedCellMeta                                                               | Consumed pointer + consume metadata                                                                                                                                                                                                                        |
-| `reorg_undo_log_by_block`        | block + seq                                                                   | UndoLogEntry                                                                   | Unified rollback undo-log journal                                                                                                                                                                                                                          |
+| `reorg_undo_log_by_block`        | block (8B BE) + seq (8B BE)                                                   | journal entry: cf name, key, previous value                                    | The block journal: each live block's previous values of the `Journal`-class keys it wrote (see [below](#reorg_undo_log_by_block-the-block-journal))                                                                                                        |
 | `block_headers`                  | block_number (8B)                                                             | CachedBlockHeader                                                              | Block header + DAO field cache                                                                                                                                                                                                                             |
 | `block_hash_index`               | block_hash (32B)                                                              | block_number (8B)                                                              | Reverse lookup: hash -> number                                                                                                                                                                                                                             |
 | `cell_by_lock`                   | lock_script_hash + outpoint                                                   | empty                                                                          | Cell index by lock script                                                                                                                                                                                                                                  |
@@ -87,7 +87,7 @@ requires re-sync from genesis; there is no migration.
 | `dotcell_ring`                   | namespace_args (20B)                                                          | DotCellRingRoot                                                                | One row per `.cell` namespace: the uniqueness ring's root cell, so verify can walk the ring without scanning. A network runs exactly one namespace                                                                                                         |
 | `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)                                  | TxActions                                                                      | One canonical per-tx activity record; TX-level protocol/type/lock actions stored once plus sorted participant deltas                                                                                                                                       |
 | `tx_actions_by_bucket`           | bucket(1) + block_num_desc(8) + tx_idx_desc(4) = 13B                          | empty                                                                          | Global activity bucket index: one row per non-cellbase `activities` row, keyed by `classify_global_bucket` (`Dao=1 … Ckb=7`). Serves filtered `/activities` and `/transactions` pages without scanning; see the note below                                 |
-| `pending_proposals`              | proposal_id (10B hex string)                                                  | CachedProposal (JSON)                                                          | Ephemeral pending proposal cache (live sync only)                                                                                                                                                                                                          |
+| `pending_proposals`              | proposal_id (10B hex string)                                                  | CachedProposal (JSON)                                                          | Ephemeral pending proposal cache (live sync only); rollback class `Never`: written out of band from mempool snapshots, a proposal of an orphaned block stays until committed or expired                                                                                                                                                                                                          |
 | `fiber_channels`                 | channel_id (32B blake2b of funding outpoint)                                  | FiberChannel                                                                   | Fiber Network channel registry; funding lock args are descriptive and are not unique                                                                                                                                                                       |
 | `fiber_channel_by_commitment`    | commitment_hash                                                               | channel_id (32B)                                                               | Fiber channel index by commitment                                                                                                                                                                                                                          |
 | `addr_fiber_channels`            | lock_hash (32B) + channel_id (32B)                                            | empty                                                                          | Address-to-Fiber-channels index                                                                                                                                                                                                                            |
@@ -96,6 +96,8 @@ requires re-sync from genesis; there is no migration.
 | `stats_chain`                    | prefixed keys                                                                 | chain chart snapshots                                                          | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts)                                                                                                                                                                  |
 | `stats_dao`                      | prefixed keys                                                                 | DAO snapshots                                                                  | DAO daily snapshots (including exact unclaimed and frozen phase-1 compensation), plus latest/top summaries; sealed aggregates in bulk build                                                                                                                |
 | `stats_hodl`                     | prefixed keys                                                                 | HODL/chart snapshots                                                           | HODL waves, cell distribution, address cohorts                                                                                                                                                                                                             |
+| `hodl_capacity_by_date`          | creation day `YYYYMMDD` (8B ASCII, UTC+8)                                     | i128 LE (16B), > 0                                                             | HODL wave tracker: live capacity per cell creation day (a day with no live capacity has no row); scalars in `sync_meta` `hodl_cursor`. Written per block that moves it (B-4)                                                                               |
+| `cell_dist_cohort_by_month`      | cohort month `YYYY-MM` (7B ASCII)                                             | (used, balance): 2 × i128 LE (32B), >= 0                                       | Cell-distribution tracker: address cohort accumulator by first-seen month; bucket totals in `sync_meta` `cell_dist_cursor`. Written per block that moves it (B-4)                                                                                          |
 | `stats_script`                   | prefixed keys                                                                 | ScriptDailyDelta                                                               | Script daily deltas (per `code_hash` + `hash_type` + lock/type + day; sealed in bulk build)                                                                                                                                                                |
 | `stats_token`                    | prefixed keys                                                                 | token rollups + deltas                                                         | Token transfer totals, hourly buckets, and daily deltas (sealed in bulk build)                                                                                                                                                                             |
 | `stats_spore`                    | prefixed keys                                                                 | spore rollups/indexes                                                          | Spore/cluster daily + owner/index stats                                                                                                                                                                                                                    |
@@ -108,11 +110,12 @@ requires re-sync from genesis; there is no migration.
 | `script_reference_to_version`    | reference_hash + hash_type (33B)                                              | version_hash                                                                   | Script reference to version mapping                                                                                                                                                                                                                        |
 | `script_family_by_name`          | family_name (string)                                                          | family_id                                                                      | Reverse lookup: family name -> family ID                                                                                                                                                                                                                   |
 | `sync_meta`                      | fixed keys                                                                    | Typed records / JSON monitoring bytes                                          | Tip/status/runtime/progress/memory, reorg/deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                                                                                          |
-| `dob_decoded`                    | spore_id (32B)                                                                | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure))           | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted.                                                                     |
+| `dob_decoded`                    | spore_id (32B)                                                                | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure))           | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted. Rollback class `Journal`: the DOB decode worker only queues outcomes; the live writer applies each one, together with the spore's media profile (`spore_data`) and its cluster's tier counts (`cluster_agg`), in a live batch's last block's scope, so a rollback of that block undoes all three. The worker makes one pass per indexer process: a decode a rollback undid is decoded again at the next indexer start, and outcomes still queued at a shutdown (the queue is in memory) are dropped, their spores decoded again at the next start. An outcome names the decoded instance by its creating transaction; against an object the id no longer names (a reorg recreated it) it writes nothing. All pending outcomes are applied by the next live batch in one block's scope, with no cap: measured on mainnet 2026-11-05, the post-bulk pass over 32,789 spores journaled about 66k entries / 10.8 MB in its two live batches (8.59 MB in one block); at that rate the 30 MB per 1,000 blocks journal budget is reached at roughly 75,000 pending outcomes.                                                                     |
 | `lock_scripts`                   | lock_hash (32B)                                                               | LockScriptEntry                                                                | Lock script components by hash (survives cell consumption for address resolution)                                                                                                                                                                          |
 | `dao_live_agg`                   | kind(1B) + kind-specific key (see [Derived Aggregates](#derived-aggregates))  | signed components, 16B LE each                                                 | **Derived** (bulk-disabled): live NervosDAO cells by depositor lock, deposit epoch and (deposit, request) epoch, plus one global row                                                                                                                       |
 | `object_collection_activity_count` | collection_id (32B, padded)                                                 | `[count]` (16B LE)                                                             | **Derived** (bulk-disabled): `object_collection_activities` rows per collection — the Spore cluster `activitiesCount`                                                                                                                                      |
 | `bit_cell_by_account`            | account_id (20B) + `.bit Cell` identity id (32B)                              | `[1]` (16B LE)                                                                 | **Derived** (bulk-disabled): live `.bit Cell` items naming each `.bit` account                                                                                                                                                                            |
+| `tx_group_cycles`               | block_number + tx_index (12B, the canonical slot)                             | TxGroupCyclesRecord (Complete(TransactionCycles) \| Failed)                   | Lazy script-group cycles of one transaction, written by the on-demand cycles worker after the block committed (bulk-disabled); `RangeByBlock`: removed with its block on rollback |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                                           | NodeRecord                                                                     | TTL-retained same-network crawler-Identify records, latest dialability, and exact Discovery evidence                                                                                                                                                       |
 | `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)                        | LatestStatus / HistoryPoint                                                    | Checked completed dial/session/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                                                                                                    |
 | `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                                         | ActiveCrawl / CrawlCandidate                                                   | Durable logical-round state: dial aliases, target-centric advertisements, direct sessions, active probes, and stable completed evidence                                                                                                                    |
@@ -142,10 +145,8 @@ keyed `pad_id_32(parent_id) ‖ child_id` — the parent's 20-byte name id zero-
   Liveness is decided on read: the API's children listing filters `is_live` and pages by child
   id.
 - The forward writers file the row when the sub-name is first inserted (live
-  `db/writer/dotcell.rs`, bulk `sync/bulk_build/owners/object.rs`). It records no undo pre-image:
-  rollback stage 10 range-deletes the whole CF and rebuilds it from the identity entries that
-  survive, writing the parent row for every surviving `IdentityExtra::DotCell` with a
-  `parent_id`, so a rebuilt index equals the forward one (POSTMORTEM IDX-010).
+  `db/writer/dotcell.rs`, bulk `sync/bulk_build/owners/object.rs`). The live writer writes it in
+  its block's scope, so the block journal removes it again when that block is rolled back.
 
 ### `activities` value: item deltas
 
@@ -178,9 +179,10 @@ script calls → Script, else Ckb. Cellbase has no row (it has no `activities` r
   row's `TxActions` by its 12-byte position prefix. A row without `TxActions`, or one whose
   `TxActions` classifies elsewhere, is an error naming the position. Rows are canonical by
   construction, so the read does no per-row canonicity lookups.
-- **Rollback.** Stage 8b' deletes each bucket's leading range above the fork point and requires
-  the count to equal the non-cellbase `activities` rows stage 8b deleted; a difference aborts the
-  rollback. No undo pre-image.
+- **Rollback.** The row is written in its block's scope, so the block journal records its
+  creation and a rollback deletes it (`Journal` class: unlike `activities`, its key opens with the
+  bucket, not the block number). Pinned by the rollback property suite
+  (`crates/indexer/tests/rollback_property.rs`).
 - **Verify.** `global_activity_bucket_index_consistency` (S32, `docs/TESTING.md`).
 
 ### `collection_activity_daily`: a collection's activity per day
@@ -194,19 +196,18 @@ activity rows (`object_collection_activities` / `identity_collection_activities`
 - **Rule.** `CollectionActivityDailyCounts::of_actions`: each activity row adds 1 to each of Mint /
   Transfer / Burn its `actions` contain (a row can add to more than one); Recycle / Renew / Update
   add nothing, and a day whose rows add nothing has no row. `CollectionActivityDailyDeltas::add_row`
-  folds a row into its `(collection, day)`; both sync paths, rollback and the API test fixtures
-  call it.
+  folds a row into its `(collection, day)`; both sync paths and the API test fixtures call it.
 - **Write.** Live: every site that writes a collection activity row folds it in the same place
   (`ObjectCollectionActivityAccumulator::flush` / `flush_identity`, `resolve_dotbit_tx_activity`,
-  the `.cell` row in the activity loop); `stage_collection_activity_daily` then reads each touched
-  `(collection, day)` once (one `multi_get`) and writes it once into the batch's atomic domain
-  commit. Bulk: `build_history_rows_for_block` folds each row it pushes into the block's day;
+  the `.cell` row in the activity loop), per block (`CollectionActivityDailyBlockDeltas`);
+  `stage_collection_activity_daily` then reads each touched `(collection, day)` once through the
+  batch (`StoreBatch::get_current_many`, one `multi_get`) and writes it in the scope of every block
+  that adds to it, with its value at the end of that block, into the batch's atomic domain commit.
+  Bulk: `build_history_rows_for_block` folds each row it pushes into the block's day;
   `ActivityStatsAccumulator` keeps the open days and writes a day once, when the chain-time
   watermark passes its UTC+8 end (Class C, like `ACTIVITY_DAILY`), the rest at finalize.
-- **Rollback.** No undo pre-image: like `addr_prefix_stats`, stage 8e' subtracts the contributions
-  of the collection activity rows stages 8d/8e delete (their day from the deleted block's header);
-  a day reaching zero is deleted, one that would go below zero or has no row aborts the rollback
-  naming the collection and day.
+- **Rollback.** The block journal writes each row back to its value at the end of the target
+  block. Pinned by the rollback property suite (`crates/indexer/tests/rollback_property.rs`).
 - **Read.** The insights `weeklyActivity` (`completed_week_calendar`) folds the collection's rows
   into Monday weeks: O(days), no activity, transaction or header read. `/assets/objects/{id}/activities`
   rows carry `chainTime`, the clock their day is taken from.
@@ -220,6 +221,15 @@ activity rows (`object_collection_activities` / `identity_collection_activities`
 byte outside `0..=4` fails when the row is decoded, naming the byte, and every reader propagates
 that error with its lock/block/tx context — a corrupt byte is never rendered as some default
 label. The stored bytes of every valid row are unchanged.
+
+**`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
+Both forward paths increment it through `AddressBalance::cellbase_tx_increment` — bulk inside the
+address reducer's existing row update, live in the parser's `fold_tx_address_deltas` — and a
+rollback restores it with the rest of the row from the block journal. Cellbase rows are the only
+`addr_txs` rows without a `CF_TX_ACTIONS` row, so `CkbadgerStore::address_activity_count`
+(`address_tx_count - cellbase_txs_count`) is the one definition of an address's activity count,
+served as `total` on the unfiltered `/addresses/{addr}/activities`. The `AddressBalance` bincode
+layout changed and requires a genesis re-sync.
 
 ### Script Modeling Note
 
@@ -240,95 +250,76 @@ because:
 See [docs/SCRIPTS_CODE_CELLS_AND_REFS.md](./SCRIPTS_CODE_CELLS_AND_REFS.md) for the terminology and
 model that future script schema refactors should follow.
 
+### `tx_group_cycles`: lazy VM results
+
+Key = the transaction's canonical slot, `block_number (8B BE) ‖ tx_index (4B BE)` — the
+`tx_index` key. The value is `TxGroupCyclesRecord::Complete(TransactionCycles { block_hash,
+cycles, groups })` or `Failed { block_hash, failure: ReplayFailure }`. Failure evidence is
+fixed-size: dependency resolution, invalid chain data, lock/type group plus script hash, no groups,
+or cycles overflow. Raw diagnostics are logged, never persisted or exposed by the public API. RPC
+transport/body errors, RPC errors, uncommitted transactions and commit-block mismatches are
+retryable: they leave both the group record and scalar cycles untouched. Open transaction pages
+retry every two seconds while the node is unavailable and recover when it returns.
+
+Only the indexer's on-demand cycles worker writes these records, atomically with
+`tx_index.cycles`, after checking canonical identity; bulk emits no such row. Cellbase/genesis
+transactions reject group records; a Complete record cannot regress to Failed. Failed may become
+Failed or Complete. Readers resolve the transaction's canonical slot through `tx_hash_map` /
+`tx_index` and read that key, then validate group sum and uniqueness. The CF is `RangeByBlock`: a
+rollback range-deletes the rolled-back blocks' slots with `tx_index`, so a transaction re-included
+by the winning branch has no record until the worker computes it again (until B-5c the record
+lived in `sync_meta` under `tx_group_cycles:<tx_hash>`, which the journal rollback left behind).
+
 ### DAO Secondary Index Notes
 
 - `dao_by_block`: key = `i64::MAX - deposit_block` (big-endian) + deposit outpoint, supports global DAO deposit pagination in newest-first order.
 - `dao_by_lock_block`: key = `lock_script_hash(32B)` + block_desc + outpoint, supports per-address DAO deposit pagination.
 - `dao_by_status_block`: key = `status(i16 BE)` + block_desc + outpoint, supports status-filtered DAO queries (`deposited/withdrawing/withdrawn`).
 
-### `reorg_undo_log_by_block` Undo Scopes
+### `reorg_undo_log_by_block`: the block journal
 
-Key = `block_number(8B BE i64) + seq(8B BE u64)`. The sequence number carries its scope in the
-high bits: `seq = (scope << 48) | local`, where `local` counts entries within one block.
+Every row is one block journal entry (`docs/prompts/REORG_HANDLING.md` → Rollback Mechanisms): the
+value of a `Journal`-class key (`CfSpec::rollback_class`, `CF_SPECS`) at the end of the block before
+the one that first wrote it in a live batch.
 
-| Scope         | Value    | Records                                                                                                       |
-| ------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `TxContext`   | `0x0001` | Per-tx input/output shape used to derive cell and consumption rollback                                        |
-| `DotBit`      | `0x0002` | `.bit` account/identity entity mutations                                                                      |
-| `Object`      | `0x0003` | Object-writer entity mutations (Spore, cluster, mNFT, `.cell`, …) and the outpoint reverse-index rows (below) |
-| `EntityStats` | `0x0004` | The eight per-entity daily/hourly stats buckets                                                               |
-| `Derived`     | `0x0005` | Rows of the three derived aggregate CFs, written by their live maintenance                                    |
+- **Key** = `block_number(8B BE i64) + seq(8B BE u64)`, with `seq = (0x0006 << 48) | local`:
+  `UndoSeqScope::Journal` (`crates/ckbadger-store/src/keys.rs`, the only scope; a row with other
+  scope bits is an error on every read) in the high 16 bits, and `local` counting the block's
+  entries from 0.
+- **Value** = `[cf name length u8][cf name][key length u16 BE][key][tag u8]`, the tag 0 (absent)
+  or 1 (present), followed when present by `[previous value length u32 BE][previous value]`.
+  One encode (`encode_journal_value`, used by `BlockOverlay::finish`) and one decode
+  (`decode_journal_value`, used by the rollback), both in
+  `crates/ckbadger-store/src/block_overlay.rs`; a CF name over 255 bytes, a key over 65,535 or a
+  value over `u32` is refused on encode, and a short row, trailing bytes, an unknown tag or a CF
+  name that is not UTF-8 is an error on decode, naming the offset. An absent previous value means
+  the key did not exist, and a rollback deletes it.
 
-The scope table has one definition, `UndoSeqScope` in `crates/ckbadger-store/src/keys.rs`, next to
-the undo-log key codec (`UNDO_SEQ_SCOPE_SHIFT`, `UndoSeqScope::seq_base` / `owns`); the indexer
-re-exports it and the retention prune selects its entries through it.
+One entry per `(block, key)`, written by the batch's `BlockOverlay` in the same atomic commit as
+the block; a block that leaves a key unchanged journals nothing for it. `rollback_to_block`
+(`reorg_ops.rs`) range-deletes the rolled-back blocks' `RangeByBlock` rows (this CF among them) and
+writes their entries back from the top block down, each block's in reverse sequence order. Every
+`Journal`-class row is restored this way, counters and aggregates included (`addr_balance` with its
+`txs_count` / `cellbase_txs_count`, `addr_prefix_stats`, `collection_activity_daily`, the eight
+per-entity daily / hourly stats families, entity rows with their owner-index and outpoint
+reverse-index rows, token and DAO lifecycle rows): nothing is reversed from the rows a rollback
+deletes or rebuilt from the rows that survive. The DAO tip summary (`stats_dao` latest / top rows
+and the still-open UTC+8 day's `DAO_DAILY_SNAPSHOT` row) is written outside the journal and
+recomputed after every tip change; a sealed day's snapshot is journaled at its sealer block.
 
-The `local` counter is **per block and shared by every writer in one committed batch**
-(`SharedUndoSeq`). Spore, mNFT and `.bit` batch states used to own three private counters that all
-started at 0 and all stamped `Object`, so a second object write in the same block computed the
-identical undo key and silently overwrote the first entry's pre-image (POSTMORTEM IDX-008).
+**Bounded window.** Every live commit advances the coverage floor to
+`committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks, `crates/indexer/src/sync/batch.rs`)
+and deletes every journal row of the blocks it leaves behind with one range delete, staged into the
+same batch as the blocks, so the floor and the deletions it describes are never separately durable.
+`committed_tip` is the durable tip the batch builds on (the block before its first block), because
+the prune can only see committed rows; a batch longer than the window leaves its own below-floor
+rows to the next batch, whose tip has moved past them. The floor is monotonic. Bulk build records
+no journal at all.
 
-**`EntityStats` scope.** The eight per-entity stats prefixes — `SCRIPT_DAILY` (`stats_script`),
-`TOKEN_DAILY` and `TOKEN_HOURLY` (`stats_token`), `CLUSTER_DAILY`, `SPORE_DAILY` and
-`SPORE_HOURLY` (`stats_spore`), `OBJECT_DAILY` and `OBJECT_HOURLY` (`stats_mnft`) — are restored
-**only** by undo replay. They are not in `STATS_REPLAY_CANDIDATE_PREFIXES` and the rollback cutoff
-sweep never deletes them (POSTMORTEM STATS-010). Each entry is a
-`KeyMutation { target_store: Domain, cf_name, key, previous_value }` holding that key's value at
-the **end of the previous block**, recorded once per `(block, key)` by `EntityStatsOverlay`
-(`crates/indexer/src/db/writer/entity_stats.rs`); `previous_value: None` means the row did not
-exist and rollback deletes it.
-
-**Outpoint reverse-index rows are owned by the undo log.** The `outpoint -> id` and
-`id -> outpoint` rows in `stats_spore` (`STATS_PREFIX_SPORE_OUTPOINT` /
-`STATS_PREFIX_SPORE_OUTPOINT_BY_ID`, written for Spore, did:ckb, `.bit Cell` and `.cell` through
-`BatchWriter::put_object_outpoint_rows`) and the mNFT class/token rows in `stats_mnft`
-(`STATS_PREFIX_MNFT_CLASS_OUTPOINT` / `STATS_PREFIX_MNFT_TOKEN_OUTPOINT`, written through
-`put_mnft_outpoint_row`) each record an `Object`-scope pre-image before they are written. The
-pre-image is read with `get_cf`, and a failed read is an error — never "the row did not exist",
-which would make rollback delete a row that had a value. None of these prefixes is in
-`STATS_REPLAY_CANDIDATE_PREFIXES`: the identity/object repair stage cannot clean them, because a
-rolled-back mint has already lost its entry to the undo replay that runs first, and a
-rolled-back transfer leaves its item alive (POSTMORTEM PROTO-010 and PROTO-012).
-
-**Entity rows are owned by undo replay alone.** `identity_data`, `spore_data` and `mnft_data`,
-with their owner-index and outpoint rows, are restored only by undo replay, which runs before
-`rollback_to_block` at every entry point. Stage 10 (`repair_spore_object_domain`) rebuilds derived
-indexes and aggregates from the surviving entities — including the identity owner counts in
-`stats_identity`, keyed by `ParticipantId` (`Lock` or `LockPrefix` picks the key encoder) — and
-never deletes an entity: one with `created_at_block > rollback_to` still present there means its
-writer recorded no pre-image, and the rollback fails `… missing undo pre-image from writer`,
-committing nothing (`docs/prompts/REORG_HANDLING.md`).
-
-**`addr_prefix_stats` owns no undo scope.** Rollback reverses it by the number of
-`addr_txs_by_prefix` rows it deletes — the same shape `addr_balance.txs_count` is reversed from the
-`addr_txs` rows it deletes — and then asserts the counter **equals** the surviving rows. An undo
-pre-image cannot do this: a live batch spans many blocks, the pre-image is recorded on one of them,
-and a fork point on a later block of the same batch would never replay it while still deleting the
-rows written after it.
-
-**`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
-Both forward paths increment it through `AddressBalance::cellbase_tx_increment` — bulk inside the
-address reducer's existing row update, live in the parser's `fold_tx_address_deltas` — and
-rollback reverses it like `txs_count`, by the deleted `addr_txs` rows at tx position 0 (a block's
-cellbase), failing if it would leave `0..=txs_count`. Cellbase rows are the only `addr_txs` rows
-without a `CF_TX_ACTIONS` row, so `CkbadgerStore::address_activity_count`
-(`address_tx_count - cellbase_txs_count`) is the one definition of an address's activity count,
-served as `total` on the unfiltered `/addresses/{addr}/activities`. The `AddressBalance` bincode
-layout changed and requires a genesis re-sync.
-
-**`Derived` scope.** `dao_live_agg`, `object_collection_activity_count` and `bit_cell_by_account`
-are restored by undo replay alone, with the same per-`(block, key)` end-of-previous-block
-pre-image `EntityStats` uses (`crates/indexer/src/derive/live.rs`). See
-[Derived Aggregates](#derived-aggregates) for when a rollback resets a derivation instead.
-
-**Bounded window.** Only the `EntityStats` and `Derived` scopes are pruned during normal sync. Every live commit
-advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
-`crates/indexer/src/sync/batch.rs`) and deletes the `EntityStats` and `Derived` entries it leaves behind, staged
-into the same batch as the blocks, so the floor and the deletions it describes are never
-separately durable. `committed_tip` is the durable tip the batch builds on (the block before its
-first block), because the prune can only see committed rows; a batch longer than the window
-leaves its own below-floor entries to the next batch, whose tip has moved past them. The floor is monotonic. `TxContext`, `DotBit` and `Object` entries are never
-pruned — they are removed only when replayed. Bulk build records no undo entries at all.
+**Size.** Each live batch logs `Live batch journal staged` at `debug` with `journal_entries`,
+`journal_bytes` and `journal_keys_written`. Most entries are creations of insert-only index rows
+(no previous value); an aggregate row journals its previous value once per block that changes it.
+On the test fixture chains an entry averages ~110 bytes, 4.8–8.0 KB per block.
 
 ### Protocol history and Type ID lineage
 
@@ -338,7 +329,7 @@ account id; it is re-created on mainnet) or data too short to name one — get n
 account (indexed under its id), because the activity builder counts identities from the data
 alone. They get an empty
 `STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT` row (domain `stats_mnft`, key prefix `0x25` + outpoint)
-instead, written by live sync with a `DotBit` undo pre-image and by bulk build from the cell's
+instead, written by live sync in its block's scope (journaled) and by bulk build from the cell's
 missing protocol facts. Consuming an AccountCell that has neither row is a lost index row and
 stops the live batch; consuming one with the marker moves no `.bit` identity on either sync path,
 exactly as its creation moved none.
@@ -357,8 +348,8 @@ and deduplicated independently of that preference.
 observations of ELF code. Only registered Type ID lineage propagates permanent family membership
 to newly observed binaries. An unregistered Type ID may deploy binaries from different families;
 its active binary determines its current family without creating a permanent registration.
-Bulk excludes non-executable state cells; live changes record undo for version metadata,
-family/label indexes and reference mapping. Retirement clears the executable mapping while
+Bulk excludes non-executable state cells; live changes to version metadata, family/label indexes
+and reference mapping are journaled per block. Retirement clears the executable mapping while
 preserving deployment history and the registered family's reference usage.
 
 Startup label import owns imported registrations, not chain deployment history. A binary listed
@@ -376,41 +367,44 @@ family attribution fails with reference, binary and block context instead of bei
 `sync_meta` belongs to the **domain store** and is written only by the indexer. Its fixed-key
 namespace includes:
 
-- canonical progress/state: `tip_block`, `sync_status`, `runtime_status`, `sync_progress`,
-  `memory_stats`, and `background_tasks`
-- rollback state: `rollback_cleanup_in_progress`, latest/history reorg records, and `deep_fork`
-- bulk-build state: batch/session-in-progress markers
-- materialization trackers: HODL and cell-distribution trackers
+- canonical progress/state: `sync_status` (bincode `SyncChainStatus`: tip number / hash and the
+  running transaction / cell totals, journaled per block) and `sync_runtime` (bincode
+  `SyncRuntimeStatus`: last sync time, rate, run start, bulk completion, deep-fork state, written
+  outside the journal); both decode exactly, and `get_sync_status` composes them into `SyncStatus`.
+  Telemetry: `runtime_status`, `sync_progress`, `memory_stats`, and `background_tasks`
+- every `sync_meta` key written outside the block journal is listed, with its owner and reason,
+  in `OUTSIDE_JOURNAL` (`crates/ckbadger-store/src/store.rs`; `docs/prompts/REORG_HANDLING.md` →
+  Outside the journal)
+- rollback state: the reorg event records (`reorg:*`); the deep-fork state is in `sync_runtime`
+- bulk-build state: the session-in-progress marker
+- materialization tracker cursors: `hodl_cursor` (bincode `HodlTrackerCursor`: holder count,
+  open snapshot day, last processed block) and `cell_dist_cursor` (bincode
+  `CellDistTrackerCursor`: per-size-bucket live cell counts and occupied capacities, open snapshot
+  day, last processed block). With the `hodl_capacity_by_date` and `cell_dist_cohort_by_month`
+  rows they are the trackers' whole persisted state; the live writer writes, in each block's
+  scope, the rows the block moved plus both cursors, so the block journal restores them, and bulk
+  finalize writes them all once. A block's day (a consumed cell's creation day, an address's
+  first-seen month) is `stats_day` of its stored header's `chain_time_ms`; no block→day map is
+  persisted. (The legacy whole-state blobs `hodl_tracker` / `cell_dist_tracker` and their
+  one-time conversion are gone: every store is re-synced from genesis.)
 - chain identity: `network_identity`, persisted at first sync and validated on later starts
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
-- exact live-cell inventory: `live_cell_summary:initialized`, `live_cell_summary:current`, plus
-  `live_cell_summary:history:<block_be_i64>`. Each value is a fixed-width 72-byte
-  `LiveCellSummary` (`tip block/hash` + four `u64` counters). History retains up to 37 block-end
-  snapshots (current plus the maximum 36-block automatic reorg depth).
+- exact live-cell inventory: `live_cell_summary:initialized` (presence marker) and
+  `live_cell_summary:current`, a fixed-width 72-byte `LiveCellSummary` (`tip block/hash` + four
+  `u64` counters). The live writer writes `current` at every block of a batch, in that block's
+  scope, so the block journal restores the target block's summary on rollback; no per-block
+  history is kept.
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
 - derived aggregate state: `derive:<aggregate>` (bincode `DeriveMeta`, see
   [Derived Aggregates](#derived-aggregates))
-- lazy VM results: `tx_group_cycles:<tx_hash_32B>` stores
-  `TxGroupCyclesRecord::Complete(TransactionCycles { block_hash, cycles, groups })` or
-  `Failed { block_hash, failure: ReplayFailure }`. Failure evidence is fixed-size: dependency
-  resolution, invalid chain data, lock/type group plus script hash, no groups, or cycles overflow.
-  Raw diagnostics are logged, never persisted or exposed by the public API. RPC transport/body
-  errors, RPC errors, uncommitted transactions and commit-block mismatches are retryable: they
-  leave both the group record and scalar cycles untouched. Open transaction pages retry every
-  two seconds while the node is unavailable and recover when it returns.
-  Only the indexer's on-demand cycles worker writes these domain records, atomically with
-  `tx_index.cycles`, after checking canonical identity. Cellbase/genesis transactions reject
-  group records; a Complete record cannot regress to Failed. Failed may become Failed or
-  Complete. Readers validate group sum, uniqueness and canonical identity. Rollback deletes
-  the record alongside `tx_hash_map`; bulk emits no such row. Append-only cell payloads are
-  untouched. The bincode format changed; existing chain stores require a genesis re-sync.
+- lazy VM results are not in `sync_meta`: see [`tx_group_cycles`](#tx_group_cycles-lazy-vm-results).
 - fork reconciliation: `reorg_reconcile_pending` names the automatic event waiting for
   canonical replay. Once the winning tip is replayed, the indexer verifies abandoned-tip
   ancestry and atomically adds full event-key `reverted_by_event` / `reverses_events` links.
   Historical detection fields remain unchanged, and these observation links are not undo state.
-  Before reorg, startup cleanup or partial-batch cleanup replays any undo entry, the indexer
+  Before reorg, startup cleanup or partial-batch cleanup rolls any block back, the indexer
   atomically sets the pending event's `reconcile_interrupted` flag and deletes the marker in
   domain `CF_SYNC_META`. A surviving marker proves no subsequent rollback began, so the retained
   fork-point check remains a strict invariant. Interruption and `superseded_by_tip_hash` may
@@ -426,9 +420,13 @@ old_tip_hash` links; `None` exactly for a deep detection. It is the event's D7 a
 #### `entity_stats_undo_contract`
 
 Value is `EntityStatsUndoContract { version, coverage_floor_block, updated_at_block }`.
-`coverage_floor_block` is the lowest block a shallow reorg can still be undone to — `EntityStats`
-undo entries at or below it have been pruned; `updated_at_block` is the committed tip when that
-floor was last advanced, so a stale floor is distinguishable from a current one.
+`coverage_floor_block` is the lowest block a shallow reorg can still be undone to — block journal
+rows at or below it have been pruned; `updated_at_block` is the committed tip when that floor was
+last advanced, so a stale floor is distinguishable from a current one. The contract describes
+which journal rows exist, so it is written outside the journal
+(`StoreBatch::put_entity_stats_undo_contract` stages it straight into the commit; the block overlay
+refuses the key and the rollback refuses a journal row that names it): rolling back the block that
+advanced the floor leaves the floor where the prune put it.
 
 Who writes it, and when:
 
@@ -441,7 +439,7 @@ Who writes it, and when:
 
 All three rollback entry points — live reorg, startup cleanup, and partial-batch cleanup — refuse
 a target below `coverage_floor_block` with a rebuild-required error rather than rolling back
-buckets they cannot restore. A store with a tip but no contract is refused at startup: it was
+rows they cannot restore. A store with a tip but no contract is refused at startup: it was
 written by a build that deleted these buckets instead of undoing them, so there is no honest
 migration.
 
@@ -461,7 +459,7 @@ One row per hourly family that has a retention policy — `hourly_retention_stat
   persisted boundary always matches what was actually deleted.
 - A round's cutoff is the lower of two bounds: the read contract (`now − 48 h`) and the rollback
   contract (the hour of the header at `committed_tip − ENTITY_STATS_UNDO_RETAIN_BLOCKS`, so no
-  hourly key a retained `EntityStats` undo entry could restore is deleted), and never below
+  hourly key a retained journal entry could restore is deleted), and never below
   `executed_cutoff_hour`. `committed_tip` is the block before the live batch's first block — the
   store's durable sync tip, checked equal to it — never the batch's own uncommitted last block:
   a batch longer than the undo window would otherwise read a header it has not committed yet and
@@ -481,10 +479,11 @@ corruption. A reader that cannot see it must report `unknown`, never "zero".
 expire, resolved through `cf_mnft_collection_agg` via the padded 32-byte collection id.
 
 The live-cell summary is mutable canonical state, so it belongs to the domain store. Normal sync
-updates it in the same atomic batch as block headers and `sync_status`; bulk-build keeps only the
-four global counters and up to 37 snapshots in memory, then publishes them with the final status.
-Reorg restores a retained target snapshot and deletes orphan snapshots. Neither API reads nor
-recovery scan `live_cells`/`cells`, and `CF_CELLS` is never written by this feature.
+updates it at every block, in the same atomic batch as block headers and `sync_status`, and the
+block journal records it per block; bulk-build keeps only the four global counters and the last
+block-end summary in memory, then publishes it with the final status. A rollback writes the target
+block's summary back from the journal. Neither API reads nor recovery scan `live_cells`/`cells`, and
+`CF_CELLS` is never written by this feature.
 
 Missing or conflicting identity/baseline state is an invariant failure. API readers must not
 invent a replacement value or write this CF.
@@ -544,7 +543,7 @@ inline as Class C sealed aggregates:
   the day. A day with a transaction keeps its row even when its capacity
   nets to zero, and `find_first_invalid_token_daily_delta` rejects a row with `tx_count == 0`, a
   running supply that a day's burns would take below zero, a record count without its amount (or the
-  reverse), and a `transfer_tx_count` above `tx_count` or zero beside mint / burn records. Live rollback restores the whole row from its undo pre-image. The script,
+  reverse), and a `transfer_tx_count` above `tx_count` or zero beside mint / burn records. A rollback restores the whole row from the block journal. The script,
   cluster, spore and object daily rows keep the 32-byte pair codec (`apply_daily_pair`); each codec
   rejects the other's width.
 
@@ -587,10 +586,10 @@ folds at most 20,000 source rows / 4,096 distinct keys / ~150 ms. When the sourc
 the phase becomes `Validating`: the rows are checked against the aggregate's invariant in chunks
 of the same size (live writes are checked from then on, since every row is exact), and after the
 last row the state becomes `Complete{H, C}`. A rollback resets
-(`NotStarted` + clear + deletion of its `Derived` undo entries above the target, committed
-**before** undo replay) a `Running` derivation whenever it removes a block, and a `Complete` one
-when its target is below `C`; otherwise undo replay restores the rows exactly. Aggregates that are
-not maintained have their entries above the target dropped the same way. **Fail fast:** a live delta that cannot be computed or a row that
+(`NotStarted` + clear + deletion of its journal entries above the target, committed **before** the
+journal rollback) a `Running` derivation whenever it removes a block, and a `Complete` one when its
+target is below `C`; otherwise the block journal restores the rows exactly. Aggregates that are
+not maintained have their journal entries above the target dropped the same way. **Fail fast:** a live delta that cannot be computed or a row that
 breaks its invariant fails the live batch as a pre-commit invariant (nothing of the batch is
 committed) and a rebuild-chunk or validation error propagates out of the scheduler — either way
 the indexer stops, after writing the aggregate's `Failed` marker. There is no degraded
@@ -619,7 +618,7 @@ time); live sync folds `LiveDaoBatch`'s transitions (creation, phase 1, phase 2)
 with that prefix (Spore clusters, the Sole Spores collection, and m-NFT classes alike; the API
 reads it for Spore collections, whose `cluster_agg` row is bulk-written and stays byte-identical).
 The rebuild counts the CF; live sync adds one per row `ObjectCollectionActivityAccumulator::flush`
-writes; rollback deletes rows and the undo log restores the count.
+writes; a rollback restores the rows and the count from the block journal.
 
 **`bit_cell_by_account`** (L3, J3). Key = account_id (20B) + `.bit Cell` identity id (32B) →
 `[1]` for every live `.bit Cell` whose data names that `.bit` account; a prefix scan on the
@@ -630,13 +629,33 @@ moves between accounts (`f(new) − f(old)`); the completion check requires ever
 exactly `[1]`.
 
 **Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
-deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
+deltas, each row written per block in the live batch and journaled with it), the block journal
+(rollback). The API reads the
 meta and the rows in the request's pinned view and serves an aggregate only when its meta is
 `Complete` at the version it reads (`crates/api/src/derived.rs`). Until then `/dao/evidence` and
 `/dao/depositors` — whose whole response is the aggregate — answer `503 derive_pending`, and every
 other field an aggregate feeds (a cluster's `activitiesCount`, a feed's `total`, a `.bit`
 account's `bitCells`) is `null` (unknown) in an otherwise normal response.
 Progress is mirrored to `background_tasks` as `derive:<aggregate>` (TUI, `/pipeline`).
+
+### `stats_chain` activity address sets
+
+`ACTIVITY_DAILY` (`0x1D`) / `ACTIVITY_HOURLY` (`0x1E`) rows carry `unique_address_count`; the
+addresses behind it are kept per bucket in two forms (`Lock` participants only):
+
+| Prefix | Constant                   | Key suffix                           | Value                                    | Written by                                                                                  |
+| ------ | -------------------------- | ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `0x23` | `ACTIVITY_DAILY_ADDR_SET`  | `%Y%m%d` (UTC+8)                     | sorted, concatenated 32-byte lock hashes | bulk build, once per bucket; live sync never rewrites it                                    |
+| `0x24` | `ACTIVITY_HOURLY_ADDR_SET` | `%Y%m%d%H` (UTC+8)                   | sorted, concatenated 32-byte lock hashes | bulk build, once per bucket; live sync never rewrites it                                    |
+| `0x26` | `ACTIVITY_DAILY_ADDR_ROW`  | `%Y%m%d` (UTC+8) + lock hash (32B)   | empty                                    | live sync: one row per address it saw first in the bucket, in the block's scope (journaled) |
+| `0x27` | `ACTIVITY_HOURLY_ADDR_ROW` | `%Y%m%d%H` (UTC+8) + lock hash (32B) | empty                                    | live sync: one row per address it saw first in the bucket, in the block's scope (journaled) |
+
+An address is new to a bucket when it is in neither the bucket's blob nor an earlier row; each new
+one gets its row and raises the bucket's `unique_address_count` by one
+(`BatchWriter::update_activity_bucket_stats`, per block). So a live block journals one small entry
+per new address and its bucket row, never the bucket-wide set. A bucket's addresses are the blob
+plus its rows (`CkbadgerStore::get_activity_bucket_addrs`, which fails on an address in both); a
+blob without its bucket's stats row is an error.
 
 ### stats_hodl Key Prefixes
 
@@ -652,7 +671,7 @@ Cell distribution and address cohort snapshots are materialized by the indexer d
 
 ## Network Store
 
-The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 67 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
+The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 75 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
 
 - **Non-chain / non-deterministic** — contents are derived from live peer-to-peer observation
   (crawler Identify/Discovery probes and configured-node `local_node_info`/`get_peers` sessions),
@@ -862,7 +881,7 @@ Memory sizing is per network rather than a fixed host-wide peak:
 ### Live Write Buffers and Flush Frequency
 
 `atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
-**whole** database, so the smallest per-CF buffer decides how often all 64 CFs flush together.
+**whole** database, so the smallest per-CF buffer decides how often all 71 CFs flush together.
 
 - Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
   (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)

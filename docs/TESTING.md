@@ -69,9 +69,11 @@ rejected when `-C` names an orchestrator root with multiple networks.
 
 `data_hash_index_only_cells_with_data` (F8) reads the bounded raw export
 `GET /verify/data-hash-rows?data_hash=…` for the hash of empty data. A `cell_by_data_hash` row
-exists iff its cell has data (`keys::cell_has_data_hash_row`, shared by the live writer, the bulk
-build and rollback), so that hash must name no row; the export itself answers 500 for a row that
-names neither a live nor a consumed cell. A store bulk-built before the fix filed every
+exists iff its cell has data (`keys::cell_has_data_hash_row`, shared by the live writer and the
+bulk build; a rollback restores the rows from the block journal, which the rollback property suite
+`crates/indexer/tests/rollback_property.rs` pins with a data cell created and consumed above the
+fork), so that hash must name no row; the export itself answers 500 for a row that names neither a
+live nor a consumed cell. A store bulk-built before the fix filed every
 empty-data cell under it and fails until re-synced.
 
 `address_balance_spot_check` is deliberately bounded. It deterministically

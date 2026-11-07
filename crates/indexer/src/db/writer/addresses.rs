@@ -153,21 +153,6 @@ fn overlay_script_metadata(
     base
 }
 
-fn clear_script_version_usage(info: &mut ScriptVersionInfo) {
-    info.lock_cells_count = 0;
-    info.lock_live_cells_count = 0;
-    info.lock_capacity_sum = 0;
-    info.lock_owned_capacity_sum = 0;
-    info.lock_used_capacity_sum = 0;
-    info.lock_owned_knowledge_sum = 0;
-    info.type_cells_count = 0;
-    info.type_live_cells_count = 0;
-    info.type_capacity_sum = 0;
-    info.type_owned_capacity_sum = 0;
-    info.type_used_capacity_sum = 0;
-    info.type_owned_knowledge_sum = 0;
-}
-
 fn clear_script_family_usage(info: &mut ScriptFamilyInfo) {
     info.deprecated = true;
     info.versions_count = 0;
@@ -326,146 +311,240 @@ fn type_id_family_templates(
     Ok(templates)
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct ScriptReferenceRollupState {
-    pub(crate) reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
-    pub(crate) versions: Vec<(Vec<u8>, ScriptVersionInfo)>,
-    pub(crate) families: Vec<(String, ScriptFamilyInfo)>,
-    /// The committed rows this rollup was computed FROM, so a caller can stage
-    /// only the rows whose value actually changed. Read once here rather than
-    /// re-read per row at write time.
-    pub(crate) existing_versions: HashMap<Vec<u8>, ScriptVersionInfo>,
-    pub(crate) existing_families: HashMap<String, ScriptFamilyInfo>,
-    pub(crate) lineage_undo: Vec<(i64, &'static str, Vec<u8>, Option<Vec<u8>>)>,
+/// Each family's `versions_count`: the number of version rows naming the
+/// family. THE one computation of the field — the rollup builder and label
+/// import (which writes families before any block recomputes the rollup) both
+/// count with it, so a label import that changes no label changes no count.
+pub(crate) fn family_versions_counts<'a>(
+    versions: impl IntoIterator<Item = &'a ScriptVersionInfo>,
+) -> Result<HashMap<String, i64>> {
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for version in versions {
+        if let Some(family_id) = version.family_id.as_deref() {
+            let count = counts.entry(family_id.to_string()).or_insert(0);
+            *count = checked_add_family_i64(family_id, "versions_count", *count, 1)?;
+        }
+    }
+    Ok(counts)
 }
 
-pub(crate) fn build_script_reference_rollup_state(
-    store: &ckbadger_store::CkbadgerStore,
-    reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
-    reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
-) -> Result<ScriptReferenceRollupState> {
-    build_script_reference_rollup_state_with_lineage(
-        store,
-        reference_mappings,
-        reference_info_map,
-        &[],
-    )
+/// A version row's family and name, the keys of its two index rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VersionLabels {
+    pub(crate) family_id: Option<String>,
+    pub(crate) name: Option<String>,
+}
+
+impl VersionLabels {
+    fn of(version: &ScriptVersionInfo) -> Self {
+        Self {
+            family_id: version.family_id.clone(),
+            name: version.name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ScriptReferenceRollupState {
+    /// Every version row the rollup leaves.
+    pub(crate) versions: HashMap<Vec<u8>, ScriptVersionInfo>,
+    /// Every family row the rollup leaves.
+    pub(crate) families: HashMap<String, ScriptFamilyInfo>,
+    /// The version rows the rollup changed (usage, Type ID lineage metadata,
+    /// or a new row), sorted, each with the labels its row had before
+    /// (`None`: a new row).
+    pub(crate) changed_versions: Vec<(Vec<u8>, Option<VersionLabels>)>,
+    /// The family rows the rollup changed or created, sorted.
+    pub(crate) changed_families: Vec<String>,
 }
 
 pub(crate) fn build_script_reference_rollup_state_with_lineage(
     store: &ckbadger_store::CkbadgerStore,
-    mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
-    let existing_versions: HashMap<Vec<u8>, ScriptVersionInfo> =
+    let versions: HashMap<Vec<u8>, ScriptVersionInfo> =
         store.list_script_versions()?.into_iter().collect();
-    let existing_families: HashMap<String, ScriptFamilyInfo> =
+    let families: HashMap<String, ScriptFamilyInfo> =
         store.list_script_families()?.into_iter().collect();
+    let mappings: HashMap<(Vec<u8>, u8), Option<Vec<u8>>> =
+        reference_mappings.into_iter().collect();
+    build_script_reference_rollup_state_over(
+        versions,
+        families,
+        &mappings,
+        &reference_info_map,
+        lineage,
+    )
+}
 
-    let mut version_map: HashMap<Vec<u8>, ScriptVersionInfo> = existing_versions.clone();
-    let templates = type_id_family_templates(&existing_versions)?;
-    let mut lineage_undo = Vec::new();
-    let mut lineage_mappings: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
+/// One version's usage: the sum of the usage of the references that resolve
+/// to it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct VersionUsage {
+    lock_cells_count: i64,
+    lock_live_cells_count: i64,
+    lock_capacity_sum: i128,
+    lock_owned_capacity_sum: i128,
+    lock_used_capacity_sum: i128,
+    lock_owned_knowledge_sum: i128,
+    type_cells_count: i64,
+    type_live_cells_count: i64,
+    type_capacity_sum: i128,
+    type_owned_capacity_sum: i128,
+    type_used_capacity_sum: i128,
+    type_owned_knowledge_sum: i128,
+}
+
+impl VersionUsage {
+    fn of(version: &ScriptVersionInfo) -> Self {
+        Self {
+            lock_cells_count: version.lock_cells_count,
+            lock_live_cells_count: version.lock_live_cells_count,
+            lock_capacity_sum: version.lock_capacity_sum,
+            lock_owned_capacity_sum: version.lock_owned_capacity_sum,
+            lock_used_capacity_sum: version.lock_used_capacity_sum,
+            lock_owned_knowledge_sum: version.lock_owned_knowledge_sum,
+            type_cells_count: version.type_cells_count,
+            type_live_cells_count: version.type_live_cells_count,
+            type_capacity_sum: version.type_capacity_sum,
+            type_owned_capacity_sum: version.type_owned_capacity_sum,
+            type_used_capacity_sum: version.type_used_capacity_sum,
+            type_owned_knowledge_sum: version.type_owned_knowledge_sum,
+        }
+    }
+
+    fn apply_to(self, version: &mut ScriptVersionInfo) {
+        version.lock_cells_count = self.lock_cells_count;
+        version.lock_live_cells_count = self.lock_live_cells_count;
+        version.lock_capacity_sum = self.lock_capacity_sum;
+        version.lock_owned_capacity_sum = self.lock_owned_capacity_sum;
+        version.lock_used_capacity_sum = self.lock_used_capacity_sum;
+        version.lock_owned_knowledge_sum = self.lock_owned_knowledge_sum;
+        version.type_cells_count = self.type_cells_count;
+        version.type_live_cells_count = self.type_live_cells_count;
+        version.type_capacity_sum = self.type_capacity_sum;
+        version.type_owned_capacity_sum = self.type_owned_capacity_sum;
+        version.type_used_capacity_sum = self.type_used_capacity_sum;
+        version.type_owned_knowledge_sum = self.type_owned_knowledge_sum;
+    }
+
+    fn add(&mut self, version_hash: &[u8], info: &ScriptReferenceInfo) -> Result<()> {
+        let i64s = [
+            (
+                "lock_cells_count",
+                &mut self.lock_cells_count,
+                info.lock_cells_count,
+            ),
+            (
+                "lock_live_cells_count",
+                &mut self.lock_live_cells_count,
+                info.lock_live_cells_count,
+            ),
+            (
+                "type_cells_count",
+                &mut self.type_cells_count,
+                info.type_cells_count,
+            ),
+            (
+                "type_live_cells_count",
+                &mut self.type_live_cells_count,
+                info.type_live_cells_count,
+            ),
+        ];
+        for (metric, current, delta) in i64s {
+            *current = checked_add_version_i64(version_hash, metric, *current, delta)?;
+        }
+        let i128s = [
+            (
+                "lock_capacity_sum",
+                &mut self.lock_capacity_sum,
+                info.lock_capacity_sum,
+            ),
+            (
+                "lock_owned_capacity_sum",
+                &mut self.lock_owned_capacity_sum,
+                info.lock_owned_capacity_sum,
+            ),
+            (
+                "lock_used_capacity_sum",
+                &mut self.lock_used_capacity_sum,
+                info.lock_used_capacity_sum,
+            ),
+            (
+                "lock_owned_knowledge_sum",
+                &mut self.lock_owned_knowledge_sum,
+                info.lock_owned_knowledge_sum,
+            ),
+            (
+                "type_capacity_sum",
+                &mut self.type_capacity_sum,
+                info.type_capacity_sum,
+            ),
+            (
+                "type_owned_capacity_sum",
+                &mut self.type_owned_capacity_sum,
+                info.type_owned_capacity_sum,
+            ),
+            (
+                "type_used_capacity_sum",
+                &mut self.type_used_capacity_sum,
+                info.type_used_capacity_sum,
+            ),
+            (
+                "type_owned_knowledge_sum",
+                &mut self.type_owned_knowledge_sum,
+                info.type_owned_knowledge_sum,
+            ),
+        ];
+        for (metric, current, delta) in i128s {
+            *current = checked_add_version_i128(version_hash, metric, *current, delta)?;
+        }
+        Ok(())
+    }
+}
+
+/// The rollup of `reference_info_map` under `mappings` (reference → binary,
+/// one entry per reference of `reference_info_map`), on top of the version
+/// and family rows `versions` / `families` (their metadata; usage is
+/// recomputed from the references). The one computation behind every rollup
+/// the indexer writes: bulk finalize passes the rows label import left, the
+/// per-block live rollup the rows the previous block left. The rows are
+/// updated in place (no copy of the version table per call) and the result
+/// names the rows that changed.
+pub(crate) fn build_script_reference_rollup_state_over(
+    mut version_map: HashMap<Vec<u8>, ScriptVersionInfo>,
+    mut family_map: HashMap<String, ScriptFamilyInfo>,
+    mappings: &HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
+    reference_info_map: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
+    lineage: &[TypeIdCodeChange],
+) -> Result<ScriptReferenceRollupState> {
+    let templates = type_id_family_templates(&version_map)?;
+    // Type ID lineage changes the metadata of the binaries it observes (only
+    // blocks that deploy code): keep each one's row from before the rollup.
+    let mut lineage_before: HashMap<Vec<u8>, Option<ScriptVersionInfo>> = HashMap::new();
     for observation in lineage {
-        let mapping_key =
-            keys::encode_script_reference_key(1, &observation.reference_hash).to_vec();
-        let previous_mapping = match lineage_mappings.get(&observation.reference_hash) {
-            Some(value) => value.clone(),
-            None => store.get_script_reference_version_hash(1, &observation.reference_hash)?,
-        };
-        lineage_undo.push((
-            observation.block_number,
-            ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
-            mapping_key,
-            previous_mapping,
-        ));
-        lineage_mappings.insert(
-            observation.reference_hash.clone(),
-            observation.version_hash.clone(),
-        );
-
-        let Some(version_hash) = &observation.version_hash else {
-            continue;
-        };
-        let previous = version_map
-            .get(version_hash)
-            .map(bincode::serialize)
-            .transpose()?;
-        lineage_undo.push((
-            observation.block_number,
-            ckbadger_store::CF_SCRIPT_VERSIONS,
-            version_hash.clone(),
-            previous,
-        ));
-        let previous_family = version_map
-            .get(version_hash)
-            .and_then(|info| info.family_id.clone());
-        let previous_name = version_map
-            .get(version_hash)
-            .and_then(|info| info.name.clone());
-        apply_type_id_lineage(&mut version_map, &templates, observation)?;
-        let updated = &version_map[version_hash];
-        // Rebind deletes the old by-family / by-label keys. Record those
-        // pre-images so a reorg can restore them; recording only the new keys
-        // leaves the old family permanently under-indexed after rollback.
-        if updated.family_id != previous_family {
-            if let Some(old) = &previous_family {
-                let key = keys::encode_script_version_by_family_key(old, version_hash);
-                lineage_undo.push((
-                    observation.block_number,
-                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
-                    key.clone(),
-                    store.get_cf(store.cf_script_versions_by_family(), &key)?,
-                ));
+        if let Some(version_hash) = &observation.version_hash {
+            if !lineage_before.contains_key(version_hash) {
+                lineage_before.insert(version_hash.clone(), version_map.get(version_hash).cloned());
             }
-            if let Some(family) = &updated.family_id {
-                let key = keys::encode_script_version_by_family_key(family, version_hash);
-                lineage_undo.push((
-                    observation.block_number,
-                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
-                    key.clone(),
-                    store.get_cf(store.cf_script_versions_by_family(), &key)?,
-                ));
-            }
-        }
-        if updated.name != previous_name {
-            if let Some(old) = &previous_name {
-                let key = keys::encode_script_version_by_label_key(old, version_hash);
-                lineage_undo.push((
-                    observation.block_number,
-                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
-                    key.clone(),
-                    store.get_cf(store.cf_script_versions_by_label(), &key)?,
-                ));
-            }
-            if let Some(name) = &updated.name {
-                let key = keys::encode_script_version_by_label_key(name, version_hash);
-                lineage_undo.push((
-                    observation.block_number,
-                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
-                    key.clone(),
-                    store.get_cf(store.cf_script_versions_by_label(), &key)?,
-                ));
-            }
+            apply_type_id_lineage(&mut version_map, &templates, observation)?;
         }
     }
 
-    for version in version_map.values_mut() {
-        clear_script_version_usage(version);
-    }
-
-    for ((reference_hash, hash_type), resolved_version) in &reference_mappings {
-        let Some(reference_info) = reference_info_map.get(&(reference_hash.clone(), *hash_type))
-        else {
+    // Each version's usage, summed over the references that resolve to it.
+    let mut usage: HashMap<&[u8], VersionUsage> = HashMap::new();
+    for (key, reference_info) in reference_info_map {
+        let (reference_hash, hash_type) = key;
+        let Some(resolved) = mappings.get(key) else {
             bail!(
-                "missing script reference info while building rollups: reference_hash=0x{}, hash_type={}",
+                "missing script reference mapping while building rollups: reference_hash=0x{}, hash_type={}",
                 hex::encode(reference_hash),
                 hash_type
             );
         };
-
-        let Some(version_hash) = resolved_version else {
+        let Some(version_hash) = resolved else {
             continue;
         };
         if *hash_type == 1 {
@@ -478,89 +557,50 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
                 }
             }
         }
-        let version =
-            version_map
-                .entry(version_hash.clone())
-                .or_insert_with(|| ScriptVersionInfo {
-                    version_hash: version_hash.clone(),
-                    ..Default::default()
-                });
-        version.version_hash = version_hash.clone();
-        version.lock_cells_count = checked_add_version_i64(
-            version_hash,
-            "lock_cells_count",
-            version.lock_cells_count,
-            reference_info.lock_cells_count,
-        )?;
-        version.lock_live_cells_count = checked_add_version_i64(
-            version_hash,
-            "lock_live_cells_count",
-            version.lock_live_cells_count,
-            reference_info.lock_live_cells_count,
-        )?;
-        version.lock_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "lock_capacity_sum",
-            version.lock_capacity_sum,
-            reference_info.lock_capacity_sum,
-        )?;
-        version.lock_owned_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "lock_owned_capacity_sum",
-            version.lock_owned_capacity_sum,
-            reference_info.lock_owned_capacity_sum,
-        )?;
-        version.lock_used_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "lock_used_capacity_sum",
-            version.lock_used_capacity_sum,
-            reference_info.lock_used_capacity_sum,
-        )?;
-        version.lock_owned_knowledge_sum = checked_add_version_i128(
-            version_hash,
-            "lock_owned_knowledge_sum",
-            version.lock_owned_knowledge_sum,
-            reference_info.lock_owned_knowledge_sum,
-        )?;
-        version.type_cells_count = checked_add_version_i64(
-            version_hash,
-            "type_cells_count",
-            version.type_cells_count,
-            reference_info.type_cells_count,
-        )?;
-        version.type_live_cells_count = checked_add_version_i64(
-            version_hash,
-            "type_live_cells_count",
-            version.type_live_cells_count,
-            reference_info.type_live_cells_count,
-        )?;
-        version.type_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "type_capacity_sum",
-            version.type_capacity_sum,
-            reference_info.type_capacity_sum,
-        )?;
-        version.type_owned_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "type_owned_capacity_sum",
-            version.type_owned_capacity_sum,
-            reference_info.type_owned_capacity_sum,
-        )?;
-        version.type_used_capacity_sum = checked_add_version_i128(
-            version_hash,
-            "type_used_capacity_sum",
-            version.type_used_capacity_sum,
-            reference_info.type_used_capacity_sum,
-        )?;
-        version.type_owned_knowledge_sum = checked_add_version_i128(
-            version_hash,
-            "type_owned_knowledge_sum",
-            version.type_owned_knowledge_sum,
-            reference_info.type_owned_knowledge_sum,
-        )?;
+        usage
+            .entry(version_hash.as_slice())
+            .or_default()
+            .add(version_hash, reference_info)?;
     }
 
-    let mut family_map: HashMap<String, ScriptFamilyInfo> = existing_families.clone();
+    let mut changed: std::collections::BTreeMap<Vec<u8>, Option<VersionLabels>> =
+        std::collections::BTreeMap::new();
+    for (version_hash, version) in version_map.iter_mut() {
+        // A version no reference resolves to has the empty sum (zero usage).
+        let next = usage.remove(version_hash.as_slice()).unwrap_or_default();
+        let usage_changed = VersionUsage::of(version) != next;
+        if usage_changed {
+            next.apply_to(version);
+        }
+        match lineage_before.get(version_hash) {
+            // Lineage observed this binary: compare its whole row.
+            Some(Some(before)) => {
+                if before != version {
+                    changed.insert(version_hash.clone(), Some(VersionLabels::of(before)));
+                }
+            }
+            // Lineage created it.
+            Some(None) => {
+                changed.insert(version_hash.clone(), None);
+            }
+            None => {
+                if usage_changed {
+                    changed.insert(version_hash.clone(), Some(VersionLabels::of(version)));
+                }
+            }
+        }
+    }
+    for (version_hash, next) in usage {
+        let mut version = ScriptVersionInfo {
+            version_hash: version_hash.to_vec(),
+            ..Default::default()
+        };
+        next.apply_to(&mut version);
+        version_map.insert(version_hash.to_vec(), version);
+        changed.insert(version_hash.to_vec(), None);
+    }
+
+    let families_before = family_map.clone();
     for family in family_map.values_mut() {
         clear_script_family_usage(family);
     }
@@ -589,8 +629,12 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
                 state.1 = true;
             }
         }
-        family.versions_count =
-            checked_add_family_i64(family_id, "versions_count", family.versions_count, 1)?;
+    }
+    for (family_id, count) in family_versions_counts(version_map.values())? {
+        let family = family_map.get_mut(&family_id).ok_or_else(|| {
+            anyhow::anyhow!("missing family row for a version's family: family={family_id}")
+        })?;
+        family.versions_count = count;
     }
     // The one rule: a family is deprecated iff it has at least one labeled
     // version and every labeled version is deprecated. A family with no
@@ -609,20 +653,18 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
     // of summing version counters, which describe current binary resolution.
     let membership = ckbadger_store::ScriptFamilyMembershipIndex::new(version_map.values())?;
     let mut family_usage: HashMap<String, ckbadger_store::ScriptFamilyUsage> = HashMap::new();
-    for ((reference, hash_type), current) in &reference_mappings {
+    for (key, info) in reference_info_map {
+        let (reference, hash_type) = key;
+        let current = mappings.get(key).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing script reference mapping while building family usage: reference=0x{} hash_type={}",
+                hex::encode(reference),
+                hash_type
+            )
+        })?;
         if let Some(family) =
             membership.resolve_family(reference, *hash_type, current.as_deref())?
         {
-            let info = reference_info_map
-                .get(&(reference.clone(), *hash_type))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing family reference info: family={} reference=0x{} hash_type={}",
-                        family,
-                        hex::encode(reference),
-                        hash_type
-                    )
-                })?;
             family_usage
                 .entry(family.to_owned())
                 .or_default()
@@ -636,40 +678,65 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         usage.apply_to(family);
     }
 
-    let mut versions = version_map.into_iter().collect::<Vec<_>>();
-    versions.sort_by(|left, right| left.0.cmp(&right.0));
-
-    let mut families = family_map.into_iter().collect::<Vec<_>>();
-    families.sort_by(|left, right| left.0.cmp(&right.0));
-
-    reference_mappings.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut changed_families: Vec<String> = family_map
+        .iter()
+        .filter(|(family_id, family)| families_before.get(*family_id) != Some(family))
+        .map(|(family_id, _)| family_id.clone())
+        .collect();
+    changed_families.sort();
 
     Ok(ScriptReferenceRollupState {
-        reference_mappings,
-        versions,
-        families,
-        existing_versions,
-        existing_families,
-        lineage_undo,
+        versions: version_map,
+        families: family_map,
+        changed_versions: changed.into_iter().collect(),
+        changed_families,
     })
 }
 
-pub(crate) fn collect_current_script_reference_rollup_state(
-    store: &ckbadger_store::CkbadgerStore,
-) -> Result<ScriptReferenceRollupState> {
-    // Canonical bindings are maintained by chain transitions and restored by
-    // chronological undo. Rebuilding usage must never reinterpret a retired
-    // Type ID's current non-executable payload as a new binary version.
-    let all_infos = store.list_script_reference_infos()?;
-    let reference_mappings = all_infos.iter().map(|((reference_hash, hash_type), _)| {
-        let version_hash = match hash_type {
-            0 | 2 | 4 => Some(reference_hash.clone()),
-            1 => store.get_script_reference_version_hash(*hash_type, reference_hash)?,
-            _ => bail!("unsupported script reference hash_type while rebuilding rollups: reference_hash=0x{}, hash_type={}", hex::encode(reference_hash), hash_type),
-        };
-        Ok(((reference_hash.clone(), *hash_type), version_hash))
-    }).collect::<Result<Vec<_>>>()?;
-    build_script_reference_rollup_state(store, reference_mappings, all_infos.into_iter().collect())
+/// The rollup inputs a live batch advances block by block.
+struct RollupSteps {
+    reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
+    versions: HashMap<Vec<u8>, ScriptVersionInfo>,
+    families: HashMap<String, ScriptFamilyInfo>,
+    /// Reference -> binary, read once per batch and moved by Type ID lineage.
+    mappings: HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
+}
+
+/// Whether a script reference names its binary by data hash (`data` /
+/// `data1` / `data2`) rather than by type hash (`type`); any other hash type
+/// is an error.
+pub(crate) fn is_data_hash_reference(reference_hash: &[u8], hash_type: u8) -> Result<bool> {
+    match hash_type {
+        0 | 2 | 4 => Ok(true),
+        1 => Ok(false),
+        _ => bail!(
+            "unsupported script reference hash_type: reference_hash=0x{}, hash_type={}",
+            hex::encode(reference_hash),
+            hash_type
+        ),
+    }
+}
+
+/// The binary a script reference resolves to: THE one classification, shared
+/// by bulk finalize and the live per-block rollup so both write the same
+/// `script_reference_to_version` and `script_versions` rows.
+///
+/// A data-hash reference is its binary's hash — `reference -> version` is
+/// direct and immutable (docs/SCRIPTS_CODE_CELLS_AND_REFS.md) — and its
+/// mapping row exists from the block that first observes the reference. A
+/// type-hash reference resolves to the Type ID binding chain progression
+/// maintains (`type_id_binding`: bulk's in-memory lineage, or the stored row
+/// on the live path), or to no binary.
+pub(crate) fn reference_binary(
+    reference_hash: &[u8],
+    hash_type: u8,
+    type_id_binding: impl FnOnce() -> Result<Option<Vec<u8>>>,
+) -> Result<Option<Vec<u8>>> {
+    if is_data_hash_reference(reference_hash, hash_type)? {
+        Ok(Some(reference_hash.to_vec()))
+    } else {
+        type_id_binding()
+    }
 }
 
 impl BatchWriter {
@@ -712,14 +779,36 @@ impl BatchWriter {
         Ok(map)
     }
 
+    /// Apply a live batch's address deltas block by block: each block's
+    /// deltas on top of the balances the previous block left, written in that
+    /// block's scope of the block overlay.
+    pub fn apply_address_balance_changes(
+        &self,
+        mut current: HashMap<Vec<u8>, Option<AddressBalance>>,
+        changes: &crate::sync::types::AddressBalanceChanges,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (block, block_changes) in changes.by_block() {
+            let updated =
+                self.apply_address_balance_deltas(&current, block_changes, &mut batch.at(*block))?;
+            for (lock_hash, balance) in updated {
+                current.insert(lock_hash, Some(balance));
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply ONE block's address deltas on top of `existing`; returns the
+    /// rows written.
     pub fn apply_address_balance_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
         changes: &HashMap<Vec<u8>, crate::sync::types::AddressBalanceDelta>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<HashMap<Vec<u8>, AddressBalance>> {
+        let mut written = HashMap::with_capacity(changes.len());
         if changes.is_empty() {
-            return Ok(());
+            return Ok(written);
         }
 
         for (lock_hash, delta) in changes {
@@ -878,9 +967,10 @@ impl BatchWriter {
             };
 
             batch.put_addr_balance(lock_hash, &updated);
+            written.insert(lock_hash.clone(), updated);
         }
 
-        Ok(())
+        Ok(written)
     }
 
     pub fn read_script_info(
@@ -922,14 +1012,34 @@ impl BatchWriter {
         Ok(map)
     }
 
+    /// Apply a live batch's script usage block by block (see
+    /// [`Self::apply_address_balance_changes`]).
+    pub(crate) fn apply_script_usage_changes(
+        &self,
+        mut current: HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
+        changes: &crate::sync::types::ScriptUsageChanges,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (block, block_changes) in changes.by_block() {
+            let updated =
+                self.apply_script_usage_deltas(&current, block_changes, &mut batch.at(*block))?;
+            for (code_hash, info) in updated {
+                current.insert(code_hash, Some(info));
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply ONE block's script usage on top of `existing`; returns the rows
+    /// written.
     pub fn apply_script_usage_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
         changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<HashMap<Vec<u8>, ckbadger_store::types::ScriptInfo>> {
         if changes.is_empty() {
-            return Ok(());
+            return Ok(HashMap::new());
         }
 
         let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
@@ -1121,7 +1231,10 @@ impl BatchWriter {
             batch.put_script_info(code_hash, info);
         }
 
-        Ok(())
+        Ok(updated_map
+            .into_iter()
+            .map(|(code_hash, info)| (code_hash.clone(), info))
+            .collect())
     }
 
     pub fn read_script_reference_info(
@@ -1172,6 +1285,30 @@ impl BatchWriter {
         }
 
         Ok(map)
+    }
+
+    /// Apply a live batch's script reference usage block by block (see
+    /// [`Self::apply_address_balance_changes`]); returns the rows each block
+    /// wrote.
+    pub(crate) fn apply_script_reference_usage_changes(
+        &self,
+        mut current: HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>,
+        changes: &crate::sync::types::ScriptReferenceUsageChanges,
+        batch: &mut StoreBatch,
+    ) -> Result<Vec<(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)>> {
+        let mut written = Vec::new();
+        for (block, block_changes) in changes.by_block() {
+            let updated = self.apply_script_reference_usage_deltas(
+                &current,
+                block_changes,
+                &mut batch.at(*block),
+            )?;
+            for (key, info) in &updated {
+                current.insert(key.clone(), Some(info.clone()));
+            }
+            written.push((*block, updated));
+        }
+        Ok(written)
     }
 
     pub fn apply_script_reference_usage_deltas(
@@ -1405,6 +1542,7 @@ impl BatchWriter {
         let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
         let existing = self.read_script_info(&refs)?;
         self.apply_script_usage_deltas(&existing, changes, batch)
+            .map(|_| ())
     }
 
     pub fn update_script_reference_usage_batch(
@@ -1428,53 +1566,25 @@ impl BatchWriter {
         self.apply_script_reference_usage_deltas(&existing, changes, batch)
     }
 
-    pub fn refresh_script_reference_rollups(&self) -> Result<()> {
-        let rollups = collect_current_script_reference_rollup_state(self.store.as_ref())?;
-
-        let mut batch = StoreBatch::new(self.store.as_ref());
-        for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
-            if let Some(version_hash) = version_hash {
-                batch.put_script_reference_to_version(hash_type, &reference_hash, &version_hash);
-            } else {
-                batch.delete_script_reference_to_version(hash_type, &reference_hash);
-            }
-        }
-        for (version_hash, info) in rollups.versions {
-            batch.put_script_version(&version_hash, &info);
-        }
-        for (family_id, info) in rollups.families {
-            batch.put_script_family(&family_id, &info);
-        }
-
-        if batch.is_empty() {
-            return Ok(());
-        }
-        batch.commit()
-    }
-
     #[allow(clippy::too_many_arguments)]
+    /// Materialize the script version / family rollups block by block.
+    ///
+    /// `updated_references` holds, per block, the reference rows that block
+    /// wrote (`apply_script_reference_usage_changes`). For every block that
+    /// changes a reference or a Type ID binding, the rollup is recomputed with
+    /// the one builder over the reference rows as of the end of that block,
+    /// and the version / family rows it changes are written in that block's
+    /// scope — so the journal restores the rollup at any fork point.
     pub(crate) fn materialize_script_versions_and_families_with_chain(
         &self,
-        updated_references: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
+        updated_references: &[(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)],
         txs: &[crate::sync::types::TxData],
         input_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
         batch_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
         input_script_hashes: &crate::sync::types::InputScriptHashes,
-        undo_seq: &crate::sync::undo::SharedUndoSeq,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        // Build complete reference info map: committed state + batch-pending updates.
-        // This ensures the rollup reflects post-delta state for references modified
-        // in the current batch, rather than reading stale pre-commit values.
-        let mut reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> = self
-            .store
-            .list_script_reference_infos()?
-            .into_iter()
-            .collect();
-        for (key, info) in updated_references {
-            reference_info_map.insert(key.clone(), info.clone());
-        }
-
+        // Type ID bindings this batch observes, in chain order.
         let mut lineage = Vec::new();
         let mut chain_mappings: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
         for tx in txs {
@@ -1548,82 +1658,186 @@ impl BatchWriter {
                 chain_mappings.insert(reference.clone(), Some(cell.data_hash.to_vec()));
             }
         }
-        let reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)> = reference_info_map
-            .keys()
-            .map(|(reference_hash, hash_type)| {
-                let version_hash = if *hash_type == 1 && chain_mappings.contains_key(reference_hash)
-                {
-                    chain_mappings.get(reference_hash).cloned().flatten()
-                } else {
-                    self.store
-                        .get_script_reference_version_hash(*hash_type, reference_hash)?
-                };
-                Ok(((reference_hash.clone(), *hash_type), version_hash))
-            })
-            .collect::<Result<Vec<_>>>()?;
 
-        let rollups = build_script_reference_rollup_state_with_lineage(
-            self.store.as_ref(),
-            reference_mappings,
+        let mut blocks: std::collections::BTreeSet<i64> =
+            updated_references.iter().map(|(block, _)| *block).collect();
+        blocks.extend(lineage.iter().map(|change| change.block_number));
+
+        // The committed state, then advanced block by block.
+        let mut state = RollupSteps {
+            reference_info_map: self
+                .store
+                .list_script_reference_infos()?
+                .into_iter()
+                .collect(),
+            versions: self.store.list_script_versions()?.into_iter().collect(),
+            families: self.store.list_script_families()?.into_iter().collect(),
+            mappings: HashMap::new(),
+        };
+        let updated_by_block: HashMap<i64, &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> =
+            updated_references
+                .iter()
+                .map(|(block, updated)| (*block, updated))
+                .collect();
+        if blocks.is_empty() {
+            // Nothing moved: the rollup of the committed state must equal the
+            // committed rows, so this stages nothing (a difference is drift,
+            // and a journaled batch refuses an unscoped write).
+            return self.rollup_step(&mut state, &[], &[], batch);
+        }
+        for block in blocks {
+            // References this block observes for the first time.
+            let mut first_seen = Vec::new();
+            if let Some(updated) = updated_by_block.get(&block) {
+                for (key, info) in updated.iter() {
+                    if state
+                        .reference_info_map
+                        .insert(key.clone(), info.clone())
+                        .is_none()
+                    {
+                        first_seen.push(key.clone());
+                    }
+                }
+            }
+            first_seen.sort();
+            let block_lineage: Vec<TypeIdCodeChange> = lineage
+                .iter()
+                .filter(|change| change.block_number == block)
+                .cloned()
+                .collect();
+            self.rollup_step(
+                &mut state,
+                &block_lineage,
+                &first_seen,
+                &mut batch.at(block),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The live rollup of the committed state, committed: what a store holds
+    /// after the blocks that wrote its reference rows. Test fixtures that
+    /// seed reference rows directly use it to seed the rollup they imply.
+    #[cfg(test)]
+    pub(crate) fn commit_rollup_of_committed_state_for_test(&self) -> Result<()> {
+        let mut batch = StoreBatch::new(self.store.as_ref());
+        self.materialize_script_versions_and_families_with_chain(
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &crate::sync::types::InputScriptHashes::new(),
+            &mut batch,
+        )?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+        batch.commit()
+    }
+
+    /// One rollup step: write the binary rows of the data-hash references in
+    /// `first_seen`, apply `lineage`'s Type ID bindings, recompute the rollup
+    /// over the references as `state` holds them (each resolved by
+    /// [`reference_binary`]), write the rows that changed and advance `state`
+    /// to them.
+    fn rollup_step(
+        &self,
+        state: &mut RollupSteps,
+        lineage: &[TypeIdCodeChange],
+        first_seen: &[(Vec<u8>, u8)],
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (reference_hash, hash_type) in first_seen {
+            if is_data_hash_reference(reference_hash, *hash_type)? {
+                batch.put_script_reference_to_version(*hash_type, reference_hash, reference_hash);
+            }
+        }
+        for change in lineage {
+            state.mappings.insert(
+                (change.reference_hash.clone(), 1),
+                change.version_hash.clone(),
+            );
+            match &change.version_hash {
+                Some(hash) => {
+                    batch.put_script_reference_to_version(1, &change.reference_hash, hash)
+                }
+                None => batch.delete_script_reference_to_version(1, &change.reference_hash),
+            }
+        }
+        // Every reference's binary, resolved once per batch (`state.mappings`
+        // carries it across the batch's blocks; lineage moves it).
+        let RollupSteps {
             reference_info_map,
-            &lineage,
+            mappings,
+            ..
+        } = &mut *state;
+        for key in reference_info_map.keys() {
+            if !mappings.contains_key(key) {
+                let version_hash = reference_binary(&key.0, key.1, || {
+                    self.store.get_script_reference_version_hash(key.1, &key.0)
+                })?;
+                mappings.insert(key.clone(), version_hash);
+            }
+        }
+
+        let rollups = build_script_reference_rollup_state_over(
+            std::mem::take(&mut state.versions),
+            std::mem::take(&mut state.families),
+            &state.mappings,
+            &state.reference_info_map,
+            lineage,
         )?;
 
-        for (block, cf, key, previous) in &rollups.lineage_undo {
-            self.record_object_undo(batch, *block, cf, key, previous.clone(), undo_seq);
-        }
-        for (reference, hash) in &chain_mappings {
-            if let Some(hash) = hash {
-                batch.put_script_reference_to_version(1, reference, hash);
-            } else {
-                batch.delete_script_reference_to_version(1, reference);
-            }
-        }
-        for (version_hash, info) in rollups.versions {
-            if rollups.existing_versions.get(&version_hash) == Some(&info) {
-                continue;
-            }
-            batch.put_script_version(&version_hash, &info);
-            let previous = rollups.existing_versions.get(&version_hash);
+        for (version_hash, labels_before) in &rollups.changed_versions {
+            let info = rollups.versions.get(version_hash).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rollup names a changed version it does not hold: version=0x{}",
+                    hex::encode(version_hash)
+                )
+            })?;
+            batch.put_script_version(version_hash, info);
             // Type ID lineage (or any family rebind) must drop the old
             // by-family / by-label index rows; leaving them makes the next
             // label-import preflight see a contradictory family index.
-            let prev_family = previous.and_then(|info| info.family_id.as_ref());
+            let prev_family = labels_before.as_ref().and_then(|l| l.family_id.as_ref());
             match (prev_family, info.family_id.as_ref()) {
                 (Some(old), Some(new)) if old != new => {
-                    batch.delete_script_version_by_family(old, &version_hash);
-                    batch.put_script_version_by_family(new, &version_hash);
+                    batch.delete_script_version_by_family(old, version_hash);
+                    batch.put_script_version_by_family(new, version_hash);
                 }
                 (Some(old), None) => {
-                    batch.delete_script_version_by_family(old, &version_hash);
+                    batch.delete_script_version_by_family(old, version_hash);
                 }
                 (None, Some(new)) => {
-                    batch.put_script_version_by_family(new, &version_hash);
+                    batch.put_script_version_by_family(new, version_hash);
                 }
                 _ => {}
             }
-            let prev_name = previous.and_then(|info| info.name.as_ref());
+            let prev_name = labels_before.as_ref().and_then(|l| l.name.as_ref());
             match (prev_name, info.name.as_ref()) {
                 (Some(old), Some(new)) if old != new => {
-                    batch.delete_script_version_by_label(old, &version_hash);
-                    batch.put_script_version_by_label(new, &version_hash);
+                    batch.delete_script_version_by_label(old, version_hash);
+                    batch.put_script_version_by_label(new, version_hash);
                 }
                 (Some(old), None) => {
-                    batch.delete_script_version_by_label(old, &version_hash);
+                    batch.delete_script_version_by_label(old, version_hash);
                 }
                 (None, Some(new)) => {
-                    batch.put_script_version_by_label(new, &version_hash);
+                    batch.put_script_version_by_label(new, version_hash);
                 }
                 _ => {}
             }
         }
-        for (family_id, info) in rollups.families {
-            if rollups.existing_families.get(&family_id) == Some(&info) {
-                continue;
-            }
-            batch.put_script_family(&family_id, &info);
+        for family_id in &rollups.changed_families {
+            let info = rollups.families.get(family_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rollup names a changed family it does not hold: family={family_id}"
+                )
+            })?;
+            batch.put_script_family(family_id, info);
         }
-
+        state.versions = rollups.versions;
+        state.families = rollups.families;
         Ok(())
     }
 
@@ -1631,15 +1845,12 @@ impl BatchWriter {
     ///
     /// Every mutation goes through the batch overlay, which records the value
     /// as of the end of the previous block the first time a given block touches
-    /// a given key. That undo entry is the ONLY thing that restores these rows
-    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
-    /// them (Task 2.4).
+    /// a given key. Its block journal entry is what restores these rows
+    /// after a shallow fork.
     pub fn update_script_daily_deltas_batch(
         &self,
         changes: &EntityDailyChanges<ScriptDailyKey>,
         overlay: &mut EntityStatsOverlay,
-        undo_seq: &mut HashMap<i64, u64>,
-        batch: &mut StoreBatch,
     ) -> Result<()> {
         // One `multi_get` for every key this family touches, instead of a point
         // read per key inside the loop. The overlay keeps whatever a previous
@@ -1683,7 +1894,7 @@ impl BatchWriter {
                 let prev = overlay.current(self.store.as_ref(), &key)?;
                 let next =
                     apply_daily_pair(prev.as_deref(), *capacity_delta, *knowledge_delta, &ctx)?;
-                overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
+                overlay.mutate(*block, &key, next)?;
             }
         }
         Ok(())
@@ -1694,7 +1905,7 @@ impl BatchWriter {
     ///
     /// The value semantics these callers assert (accumulate, delete on net
     /// zero, fail on a corrupt existing row) are unchanged by Task 2.3; the
-    /// per-block undo semantics are covered by `entity_stats`' own unit tests
+    /// per-block journal semantics are covered by `entity_stats`' own unit tests
     /// and by `tests/entity_stats_rollback.rs`.
     #[cfg(test)]
     pub(crate) fn update_script_daily_deltas_batch_flat_for_test(
@@ -1706,9 +1917,8 @@ impl BatchWriter {
         for (key, (capacity_delta, knowledge_delta)) in changes {
             by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
-        let mut overlay = EntityStatsOverlay::new();
-        let mut undo_seq = HashMap::new();
-        self.update_script_daily_deltas_batch(&by_block, &mut overlay, &mut undo_seq, batch)?;
+        let mut overlay = EntityStatsOverlay::standalone(self.store())?;
+        self.update_script_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }
 }
@@ -2204,9 +2414,7 @@ mod tests {
             // Persist the shared rollup exactly as bulk final materialization:
             // version/family/index rows, and only the observed current binding.
             // There is no undo on the bulk path and no chain replay on reopen.
-            for ((reference, kind), binary) in rollup.reference_mappings {
-                batch.put_script_reference_to_version(kind, &reference, binary.as_ref().unwrap());
-            }
+            batch.put_script_reference_to_version(1, &reference, &current_binary);
             for (hash, version) in rollup.versions {
                 batch.put_script_version(&hash, &version);
                 if let Some(family) = &version.family_id {
@@ -2220,7 +2428,6 @@ mod tests {
                 batch.put_script_family(&family, &info);
             }
             batch.commit().unwrap();
-            writer.refresh_script_reference_rollups().unwrap();
             let version = store.get_script_version(&binary).unwrap().unwrap();
             assert_eq!(version.family_id.as_deref(), Some(family));
             assert_eq!(version.canonical_reference_hash, Some(reference.clone()));
@@ -2279,7 +2486,8 @@ mod tests {
             let imported =
                 crate::label_import::run_label_import_bundled(&store, "mainnet").unwrap();
             assert!(imported.errors.is_empty(), "{:?}", imported.errors);
-            // Capture importer evidence before startup refresh can mask damage.
+            // Startup writes no script rollup row (B-5c): the import is the
+            // only step that may touch these rows, and it must change none.
             let imported_version = store.get_script_version(&binary).unwrap().unwrap();
             let family_key = keys::encode_script_version_by_family_key(family, &binary);
             let label_key = keys::encode_script_version_by_label_key(
@@ -2292,12 +2500,9 @@ mod tests {
             let label_index = store
                 .get_cf(store.cf_script_versions_by_label(), &label_key)
                 .unwrap();
-            let writer = BatchWriter::new(store.clone(), append.clone());
-            // This is the actual unconditional startup entry point in writer/sync.rs.
-            let refreshed = writer.refresh_script_reference_rollups();
             assert_eq!(
                 imported_version, expected_version,
-                "{family} lost persisted lineage metadata during startup {startup}; refresh={refreshed:?}"
+                "{family} lost persisted lineage metadata during startup {startup}"
             );
             assert_eq!(
                 family_index,
@@ -2309,7 +2514,6 @@ mod tests {
                 Some(vec![]),
                 "{family} label index after import"
             );
-            refreshed.unwrap();
             assert_eq!(
                 script_startup_rows(&store),
                 expected_rows,
@@ -2637,7 +2841,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
@@ -2646,7 +2850,6 @@ mod tests {
                     &HashMap::new(),
                     &HashMap::new(),
                 ),
-                &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
             .unwrap();
@@ -2728,6 +2931,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 100..=100);
         let binary = vec![0x42; 32];
         let registered = vec![0x52; 32];
         let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
@@ -2818,23 +3022,23 @@ mod tests {
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             semantic_tags: 0,
         };
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                std::slice::from_ref(&tx),
-                &HashMap::new(),
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&tx),
                     &HashMap::new(),
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&tx),
+                        &HashMap::new(),
+                        &HashMap::new(),
+                    ),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
 
         assert_eq!(
             store
@@ -2845,7 +3049,7 @@ mod tests {
                 .as_deref(),
             Some("template-family")
         );
-        store.rollback_via_undo_log(&append, 99).unwrap();
+        store.rollback_to_block(99).unwrap();
 
         let restored = store.get_script_version(&binary).unwrap().unwrap();
         assert_eq!(
@@ -2882,6 +3086,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 20..=23);
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
@@ -2957,23 +3162,23 @@ mod tests {
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             semantic_tags: 0,
         };
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                std::slice::from_ref(&tx),
-                &HashMap::new(),
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&tx),
                     &HashMap::new(),
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&tx),
+                        &HashMap::new(),
+                        &HashMap::new(),
+                    ),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         let version = store.get_script_version(&new_hash).unwrap().unwrap();
         assert_eq!(version.family_id.as_deref(), Some("cells-account"));
         assert_eq!(version.type_id_deployments, vec![(reference.clone(), 20)]);
@@ -3036,46 +3241,46 @@ mod tests {
             .unwrap()
             .cell
             .data_hash = Some([0xee; 32]);
-        let mut inactive_batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                std::slice::from_ref(&retired),
-                &inactive,
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |inactive_batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &inactive,
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut inactive_batch,
-            )
-            .unwrap();
-        inactive_batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &inactive,
+                        &HashMap::new(),
+                    ),
+                    inactive_batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
                 .unwrap(),
             Some(new_hash.to_vec())
         );
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                std::slice::from_ref(&retired),
-                &input_cells,
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &input_cells,
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &input_cells,
+                        &HashMap::new(),
+                    ),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3083,7 +3288,6 @@ mod tests {
             None
         );
         assert!(store.get_script_version(&new_hash).unwrap().is_some());
-        writer.refresh_script_reference_rollups().unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3128,23 +3332,23 @@ mod tests {
         let reactivated_hash =
             crate::parser::ScriptParser::compute_data_hash(&retired.cells[0].data);
         retired.cells[0].data_hash = reactivated_hash;
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                std::slice::from_ref(&retired),
-                &input_cells,
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &input_cells,
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &input_cells,
+                        &HashMap::new(),
+                    ),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3202,23 +3406,23 @@ mod tests {
         retired.inputs[0].previous_tx_hash = previous_hash;
         retired.cells.clear();
         retired.outputs_count = 0;
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                std::slice::from_ref(&retired),
-                &HashMap::new(),
-                &batch_cells,
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &HashMap::new(),
                     &batch_cells,
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &HashMap::new(),
+                        &batch_cells,
+                    ),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3249,8 +3453,7 @@ mod tests {
                 .cells_count,
             254
         );
-        store.rollback_via_undo_log(&append, 22).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(22).unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3265,8 +3468,7 @@ mod tests {
                 .type_live_cells_count,
             72
         );
-        store.rollback_via_undo_log(&append, 21).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(21).unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3289,16 +3491,14 @@ mod tests {
                 .versions_count,
             2
         );
-        store.rollback_via_undo_log(&append, 20).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(20).unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
                 .unwrap(),
             Some(new_hash.to_vec())
         );
-        store.rollback_via_undo_log(&append, 19).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(19).unwrap();
         assert!(store.get_script_version(&new_hash).unwrap().is_none());
         assert!(!store
             .list_script_version_hashes_by_family("cells-account")
@@ -3328,6 +3528,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 21..=24);
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
@@ -3367,6 +3568,10 @@ mod tests {
             },
         );
         seed.commit().unwrap();
+        // The seeded state's version / family rollups, as the store holds
+        // them before the batch (the forward writer journals the batch's
+        // changes on top of them).
+        writer.commit_rollup_of_committed_state_for_test().unwrap();
         let mut previous = ckbadger_store::LiveCellInfo {
             capacity: 10000,
             lock_code_hash: [0x12; 32],
@@ -3436,19 +3641,19 @@ mod tests {
                 semantic_tags: 0,
             });
         }
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
-                &txs,
-                &HashMap::new(),
-                &inputs,
-                &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
+                    &txs,
+                    &HashMap::new(),
+                    &inputs,
+                    &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3469,8 +3674,7 @@ mod tests {
             (21, None),
             (20, Some(old_hash.to_vec())),
         ] {
-            store.rollback_via_undo_log(&append, fork).unwrap();
-            writer.refresh_script_reference_rollups().unwrap();
+            store.rollback_to_block(fork).unwrap();
             assert_eq!(
                 store
                     .get_script_reference_version_hash(1, &reference)
@@ -3542,10 +3746,11 @@ mod tests {
             type_cells_count: 245,
             ..Default::default()
         };
-        let result = build_script_reference_rollup_state(
+        let result = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![((reference.clone(), 1), Some(vec![0x91; 32]))],
             HashMap::from([((reference, 1), info)]),
+            &[],
         );
         assert!(
             result.is_err(),
@@ -3641,12 +3846,11 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
                 &crate::sync::types::InputScriptHashes::new(),
-                &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
             .unwrap();
@@ -3774,11 +3978,7 @@ mod tests {
             &observed,
         )
         .unwrap();
-        let (_, unlabeled_info) = rollup
-            .versions
-            .iter()
-            .find(|(h, _)| h == &unlabeled)
-            .unwrap();
+        let unlabeled_info = rollup.versions.get(&unlabeled).unwrap();
         assert_eq!(unlabeled_info.name.as_deref(), Some("PW Lock"));
         assert!(unlabeled_info.registered_references.is_empty());
         assert!(!unlabeled_info.deprecated);
@@ -3790,12 +3990,11 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
                 &crate::sync::types::InputScriptHashes::new(),
-                &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
             .unwrap();
@@ -3892,7 +4091,7 @@ mod tests {
             .unwrap();
 
         // Baseline: the committed rollup now matches the reference info.
-        writer.refresh_script_reference_rollups().unwrap();
+        writer.commit_rollup_of_committed_state_for_test().unwrap();
 
         // Nothing changed -> nothing staged. No early return on empty input:
         // the rollup is still recomputed, it just finds no differences.
@@ -3900,12 +4099,11 @@ mod tests {
         let mut unchanged_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
                 &crate::sync::types::InputScriptHashes::new(),
-                &crate::sync::undo::SharedUndoSeq::default(),
                 &mut unchanged_batch,
             )
             .unwrap();
@@ -3915,18 +4113,20 @@ mod tests {
             "an unchanged rollup must stage zero writes"
         );
         // Read budget: exactly ONE `script_reference_to_version` point read per
-        // reference, to resolve the mapping the rollup is computed from. The
-        // fixture has two references, so two point reads and nothing else —
-        // reading each mapping a second time to "diff" it against the value it
-        // was just read from is ~1,903 extra reads per block on testnet, inside
-        // the commit window. The CF listings (`list_script_reference_infos`,
+        // type-hash reference, to resolve the Type ID binding the rollup is
+        // computed from; a data-hash reference is its own binary and costs no
+        // read (`reference_binary`). The fixture has one reference of each
+        // form, so one point read and nothing else — reading each mapping a
+        // second time to "diff" it against the value it was just read from is
+        // ~1,903 extra reads per block on testnet, inside the commit window.
+        // The CF listings (`list_script_reference_infos`,
         // `list_script_versions`, `list_script_families`) are iterator scans and
         // do not count here.
         let (get_cf_calls, multi_get_cf_calls) = store.read_call_counts();
         assert_eq!(
             (get_cf_calls, multi_get_cf_calls),
-            (2, 0),
-            "the rollup must resolve each reference mapping exactly once"
+            (1, 0),
+            "the rollup must resolve each type-hash reference's binding exactly once"
         );
 
         let baseline_version = store.get_script_version(&version_hash).unwrap().unwrap();
@@ -3952,12 +4152,11 @@ mod tests {
         let mut changed_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &updated_references,
+                &[(1, updated_references)],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
                 &crate::sync::types::InputScriptHashes::new(),
-                &crate::sync::undo::SharedUndoSeq::default(),
                 &mut changed_batch,
             )
             .unwrap();
@@ -3978,7 +4177,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_rollups_uses_canonical_mapping_without_scanning_typed_payloads() {
+    fn rollup_uses_canonical_mapping_without_scanning_typed_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -4042,7 +4241,7 @@ mod tests {
         let payload_before = store
             .get_cell_by_outpoint_key(&keys::encode_outpoint(&[0x45; 32], 0))
             .unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        writer.commit_rollup_of_committed_state_for_test().unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -4066,7 +4265,7 @@ mod tests {
         store
             .put_script_reference_to_version_direct(1, &reference, &version)
             .unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        writer.commit_rollup_of_committed_state_for_test().unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)

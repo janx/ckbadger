@@ -12,6 +12,6 @@ pub use writer::entity_stats::{
     apply_daily_pair, apply_hourly_increment, apply_token_daily, EntityStatsOverlay,
 };
 pub use writer::participant_rows::{addr_tx_rows, standalone_prefixes};
-pub use writer::{BatchWriter, DaoConsumedRow, ReorgResult};
+pub use writer::{BatchWriter, DaoConsumedRow, FrozenActivityAddrSets, ReorgResult};
 
 pub use writer::{dotcell_asset_action, DOTCELL_RING_RELINK_ACTION};

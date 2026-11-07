@@ -293,48 +293,59 @@ impl CkbadgerStore {
                 &keys::encode_block_num(block_num),
                 &keys::encode_tx_idx(tx_idx),
             ]);
-            let mut batch = rocksdb::WriteBatch::default();
-            batch.put_cf(self.cf_tx_index(), &key, bincode::serialize(&entry).with_context(|| format!("failed to serialize tx index entry {block_num}:{tx_idx}"))?);
-            let groups_key = keys::encode_tx_group_cycles_key(expected_hash);
+            // An unjournaled StoreBatch, so the journal discipline sees each
+            // write (both CFs are RangeByBlock), written under the gate the
+            // closure holds: the store's only raw WriteBatch commit is the
+            // rollback core's.
+            let mut batch = crate::StoreBatch::new(self);
+            batch.put_raw_cf_by_name(
+                crate::store::CF_TX_INDEX,
+                &key,
+                &bincode::serialize(&entry).with_context(|| {
+                    format!("failed to serialize tx index entry {block_num}:{tx_idx}")
+                })?,
+            )?;
+            // The record lives at the transaction's canonical slot, so the
+            // rollback that removes the slot's tx_index row removes it too.
             if let Some(record) = record {
-                batch.put_cf(self.cf_sync_meta(), &groups_key, bincode::serialize(&record)?);
+                batch.put_raw_cf_by_name(
+                    crate::store::CF_TX_GROUP_CYCLES,
+                    &key,
+                    &bincode::serialize(&record)?,
+                )?;
             } else {
-                batch.delete_cf(self.cf_sync_meta(), &groups_key);
+                batch.delete_raw_cf_by_name(crate::store::CF_TX_GROUP_CYCLES, &key)?;
             }
-            db.write(batch).with_context(|| format!(
+            db.write(batch.into_write_batch()?).with_context(|| format!(
                 "failed to write canonical tx cycles: hash=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash)
             ))
         })
     }
 
+    /// The lazy cycles record of a canonical transaction: read at the
+    /// transaction's canonical slot (`tx_hash_map` -> `block ‖ tx_idx`), so a
+    /// record of a slot another block once held cannot be read.
     pub fn get_tx_group_cycles_record(
         &self,
         tx_hash: &[u8],
     ) -> anyhow::Result<Option<TxGroupCyclesRecord>> {
-        let Some((block_num, _, tx)) = self.get_tx_by_hash(tx_hash)? else {
+        let Some((block_num, tx_idx, tx)) = self.get_tx_by_hash(tx_hash)? else {
             return Ok(None);
         };
         let Some(bytes) = self.get_cf(
-            self.cf_sync_meta(),
-            &keys::encode_tx_group_cycles_key(tx_hash),
+            self.cf_tx_group_cycles(),
+            &keys::encode_tx_slot_key(block_num, tx_idx),
         )?
         else {
             return Ok(None);
         };
-        let record: TxGroupCyclesRecord = bincode::deserialize(&bytes)?;
-        let header = self
-            .get_block_header(block_num)?
-            .ok_or_else(|| anyhow!("lazy group cycles lack canonical block: {block_num}"))?;
-        anyhow::ensure!(
-            header.hash.as_slice()
-                == match &record {
-                    TxGroupCyclesRecord::Complete(result) => result.block_hash,
-                    TxGroupCyclesRecord::Failed { block_hash, .. } => *block_hash,
-                },
-            "lazy group cycles belong to another block: tx=0x{}",
-            hex::encode(tx_hash)
-        );
+        let record: TxGroupCyclesRecord = bincode::deserialize(&bytes).with_context(|| {
+            format!(
+                "undecodable lazy group cycles: tx=0x{} block={block_num} index={tx_idx}",
+                hex::encode(tx_hash)
+            )
+        })?;
         if let TxGroupCyclesRecord::Complete(result) = &record {
             result.validate().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
@@ -516,6 +527,10 @@ mod tests {
         let mut header_batch = StoreBatch::new(&store);
         header_batch.put_block_header(block_num, &make_header(0x77));
         header_batch.commit().unwrap();
+        // The cycles worker runs under the indexer's journal discipline: its
+        // writes (tx_index, tx_group_cycles) go through an unjournaled
+        // StoreBatch and pass it, with no raw WriteBatch.
+        store.enforce_journal_discipline();
         store
             .persist_tx_cycles(
                 block_num,
@@ -542,14 +557,15 @@ mod tests {
                 failure: ReplayFailure::DependencyResolution
             })
         );
-        let mut replacement = StoreBatch::new(&store);
-        replacement.put_block_header(block_num, &make_header(0x88));
-        replacement.commit().unwrap();
-        let error = store.get_tx_group_cycles_record(&tx_hash).unwrap_err();
-        assert!(error.to_string().contains("another block"), "{error:#}");
-        let mut restore = StoreBatch::new(&store);
-        restore.put_block_header(block_num, &make_header(0x77));
-        restore.commit().unwrap();
+        // The record lives at the transaction's canonical slot, in its own
+        // RangeByBlock CF, so a rollback of the block removes it.
+        assert!(store
+            .get_cf(
+                store.cf_tx_group_cycles(),
+                &keys::encode_tx_slot_key(block_num, tx_idx)
+            )
+            .unwrap()
+            .is_some());
         let result = TransactionCycles {
             block_hash: [0x77; 32],
             cycles: 12_345,

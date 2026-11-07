@@ -117,6 +117,31 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// The one rollback every entry point runs (live reorg, startup cleanup,
+    /// batch-range cleanup): refuse a target below the coverage floor (the
+    /// journal is pruned behind it), run the caller's `read_first` (reads of
+    /// the store as it is, before anything is written), reset the derived
+    /// aggregates the target invalidates (and drop their journal entries
+    /// above it), mark an interrupted reconciliation, roll the store back
+    /// through the block journal in one atomic write, then advance the DAO
+    /// tip summary to the new tip, as after every tip change.
+    pub(crate) fn rollback_to<T>(
+        &self,
+        target: i64,
+        requirement: ContractRequirement,
+        context: &str,
+        cause: RollbackCause,
+        read_first: impl FnOnce() -> Result<T>,
+    ) -> Result<(T, ckbadger_store::RollbackResult)> {
+        self.ensure_rollback_within_entity_stats_coverage(target, requirement, context)?;
+        let read = read_first()?;
+        crate::derive::invalidate_for_rollback(&self.store, target)?;
+        self.begin_rollback(cause)?;
+        let result = self.store.rollback_to_block(target)?;
+        self.refresh_latest_dao_statistics()?;
+        Ok((read, result))
+    }
+
     /// Reconcile the latest automatic switch after replay reaches its observed
     /// new-tip height and verifies the retained fork point. The observed tip
     /// may have been superseded before replay. A marker makes the normal live
@@ -271,11 +296,9 @@ impl BatchWriter {
             depth: depth_i32,
             fork_point,
         });
-        let status_bytes = bincode::serialize(&status)?;
-
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
-        batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        batch.put_sync_runtime(&status.runtime())?;
         // The local node has already reported that this tip is no longer
         // canonical. Keep the API unavailable until an operator resolves the
         // deep fork instead of serving a stale summary under a canonical label.
@@ -287,7 +310,6 @@ impl BatchWriter {
 
     pub async fn execute_reorg(
         &self,
-        append_store: &CkbadgerStore,
         fork_point: i64,
         fork_hash: &[u8],
         old_tip: i64,
@@ -303,9 +325,7 @@ impl BatchWriter {
             )
         })?;
 
-        // Validate the retained recovery source before undo-log replay. The
-        // old summary stays verifiable by hash during this first phase;
-        // rollback_to_block withdraws it before staging canonical cell changes.
+        // The live-cell summary must describe the tip this switch drops.
         let summary_initialized = self.store.is_live_cell_summary_initialized()?;
         let current_summary = self.store.get_live_cell_summary()?;
         if summary_initialized && current_summary.is_none() {
@@ -321,83 +341,34 @@ impl BatchWriter {
             ));
         }
         if let Some(current) = current_summary {
-            let history = self
-                .store
-                .get_live_cell_summary_at(current.tip_block_number)?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing live-cell summary history before reorg: block={} hash=0x{}",
-                        current.tip_block_number,
-                        hex::encode(current.tip_block_hash),
-                    )
-                })?;
-            if history != current
-                || current.tip_block_number != old_tip
+            if current.tip_block_number != old_tip
                 || current.tip_block_hash.as_slice() != old_tip_hash
             {
                 return Err(anyhow!(
-                    "live-cell summary does not match reorg source tip: current={:?} history={:?} old_tip={} old_tip_hash=0x{}",
+                    "live-cell summary does not match reorg source tip: current={:?} old_tip={} old_tip_hash=0x{}",
                     current,
-                    history,
                     old_tip,
                     hex::encode(old_tip_hash),
                 ));
             }
         }
-        // Entity daily/hourly stats are restored ONLY by the undo log, and the
-        // undo log is pruned behind a coverage floor. A fork point below that
-        // floor cannot be undone — fail with the numbers rather than replay a
-        // rollback that would silently leave those buckets wrong.
-        self.ensure_rollback_within_entity_stats_coverage(
+        // The event's D7 address: the first block this switch drops, read and
+        // proved from the store's own headers before the rollback deletes them.
+        let (first_orphan_hash, rollback) = self.rollback_to(
             fork_point,
             ContractRequirement::Required,
             "reorg fork point",
+            RollbackCause::NewForkEvent,
+            || {
+                first_orphan_of_stored_branch(
+                    &self.store,
+                    fork_point,
+                    fork_hash,
+                    old_tip,
+                    old_tip_hash,
+                )
+            },
         )?;
-        // The event's D7 address: the first block this switch drops, read and
-        // proved from the store's own headers before the rollback deletes them.
-        let first_orphan_hash = first_orphan_of_stored_branch(
-            &self.store,
-            fork_point,
-            fork_hash,
-            old_tip,
-            old_tip_hash,
-        )?;
-
-        // Revert domain mutations from undo-log first so that entity data
-        // (Spore, mNFT, dotbit) is restored to pre-fork state before the
-        // multi-stage rollback rebuilds aggregates from it.
-        // Extract TxContext entries before the undo log deletes them, so the
-        // subsequent cell rollback can use targeted lookups instead of full
-        // CF scans.
-        // Derived aggregates this rollback would corrupt are reset first, so
-        // a crash anywhere below leaves them reset rather than half-restored.
-        crate::derive::invalidate_for_rollback(&self.store, fork_point)?;
-        self.begin_rollback(RollbackCause::NewForkEvent)?;
-        let undo_result = self.store.rollback_via_undo_log(append_store, fork_point)?;
-        // Domain rollback for canonical mutable state (cells, blocks, stats,
-        // aggregates rebuilt from now-correct entity data).
-        let rollback = self.store.rollback_to_block_with_tx_contexts(
-            fork_point,
-            Some(append_store),
-            undo_result.tx_contexts,
-        )?;
-        // Flush both stores after the rollback. The original reason — avoiding
-        // O(N log N) VectorRep sorts on the un-flushed memtable during the
-        // refresh reads below — no longer applies: a live process is the only
-        // one that reorgs, and it now always opens with a skiplist (P3.1).
-        // The flush stays for durability and cross-store consistency: the
-        // rolled-back tip of BOTH stores must be on disk before the refresh
-        // reads re-derive aggregates from it and before an API secondary can
-        // catch up to a half-rolled-back view.
-        self.store.flush_all_memtables()?;
-        append_store.flush_all_memtables()?;
-        // Re-derive script version/family rollups from the corrected reference info.
-        self.refresh_script_reference_rollups()?;
-        // Advance the DAO singleton stats (latest stats + top depositors) to the
-        // post-rollback tip. Rollback deliberately leaves the pre-rollback row
-        // in place — it is never deleted — so the read path always has a value
-        // and this refresh overwrites it rather than filling a gap.
-        self.refresh_latest_dao_statistics()?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
         let orphaned_blocks = i64::try_from(rollback.blocks_removed).map_err(|_| {
@@ -435,14 +406,15 @@ impl BatchWriter {
         let mut status = self.store.get_sync_status()?;
         status.deep_fork_detected = false;
         status.deep_fork_info = None;
-        let status_bytes = bincode::serialize(&status)?;
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
         batch.put_sync_meta(
             sync_meta_keys::REORG_RECONCILE_PENDING,
             event_key.as_bytes(),
         );
-        batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        // Only the runtime part: the rollback restored the chain part with
+        // the blocks.
+        batch.put_sync_runtime(&status.runtime())?;
         batch.commit()?;
 
         // Update cache
@@ -1207,7 +1179,6 @@ mod tests {
         assert_eq!(info.chain_tip, 130);
         assert_eq!(info.depth, 20);
         assert_eq!(store.get_live_cell_summary().unwrap(), None);
-        assert_eq!(store.get_live_cell_summary_at(120).unwrap(), Some(summary));
     }
 
     #[tokio::test]
@@ -1221,9 +1192,7 @@ mod tests {
             .put_cf(store.cf_block_headers(), &key, b"invalid-header-payload")
             .unwrap();
 
-        let result = writer
-            .execute_reorg(store.as_ref(), 0, &[0xAA; 32], 1, &[], 1, &[])
-            .await;
+        let result = writer.execute_reorg(0, &[0xAA; 32], 1, &[], 1, &[]).await;
         assert!(result.is_err());
         assert_eq!(reorg_event_count(store.as_ref()), 0);
     }

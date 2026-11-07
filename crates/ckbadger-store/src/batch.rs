@@ -5,8 +5,9 @@ use std::collections::HashMap;
 
 use ckbadger_common::TokenBalance;
 
+use crate::block_overlay::{JournalStats, SharedBlockOverlay};
 use crate::keys;
-use crate::store::{CkbadgerStore, StoreWriteIntent};
+use crate::store::{cf_spec, CkbadgerStore, RollbackClass, StoreWriteIntent};
 use crate::types::*;
 
 /// How many keys one append-only existence probe reads at a time.
@@ -39,6 +40,52 @@ pub struct StoreBatch<'a> {
     /// Transaction-local commitment-hash index with the same shadowing rules as
     /// `pending_fiber_channels`.
     pending_fiber_channel_by_commitment: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// A journaled batch routes every write to a `Journal`-class domain CF into
+    /// the live batch's block overlay instead of its own `WriteBatch`.
+    journal: Option<Journal>,
+    /// The first write of this unjournaled batch the journal discipline
+    /// refused (`CkbadgerStore::check_unjournaled_write`); `commit` returns
+    /// it and writes nothing.
+    discipline_error: Option<anyhow::Error>,
+}
+
+/// The journaled side of a [`StoreBatch`]: the shared overlay, which
+/// sub-batch this is, and the block the current writes belong to.
+struct Journal {
+    overlay: SharedBlockOverlay,
+    origin: u32,
+    block: Option<i64>,
+    /// The first error a routed write raised; `commit` and `stage_journal`
+    /// return it (the typed writers cannot).
+    error: Option<anyhow::Error>,
+}
+
+/// A [`StoreBatch`] whose writes belong to one block. Created by
+/// [`StoreBatch::at`]; restores the previous block scope when dropped.
+pub struct BlockScope<'b, 'a> {
+    batch: &'b mut StoreBatch<'a>,
+    previous: Option<i64>,
+}
+
+impl<'a> std::ops::Deref for BlockScope<'_, 'a> {
+    type Target = StoreBatch<'a>;
+    fn deref(&self) -> &Self::Target {
+        self.batch
+    }
+}
+
+impl std::ops::DerefMut for BlockScope<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.batch
+    }
+}
+
+impl Drop for BlockScope<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(journal) = self.batch.journal.as_mut() {
+            journal.block = self.previous;
+        }
+    }
 }
 
 impl<'a> StoreBatch<'a> {
@@ -50,7 +97,175 @@ impl<'a> StoreBatch<'a> {
             pending_dao_deposits: HashMap::new(),
             pending_fiber_channels: HashMap::new(),
             pending_fiber_channel_by_commitment: HashMap::new(),
+            journal: None,
+            discipline_error: None,
         }
+    }
+
+    /// A domain batch of a live write: its writes to `Journal`-class CFs go
+    /// into `overlay` (which journals them per block and stages each key once
+    /// in [`Self::stage_journal`]); `origin` tells the overlay which of the
+    /// live batch's sub-batches wrote a key.
+    pub fn journaled(store: &'a CkbadgerStore, overlay: &SharedBlockOverlay, origin: u32) -> Self {
+        let mut batch = Self::new(store);
+        batch.journal = Some(Journal {
+            overlay: overlay.clone(),
+            origin,
+            block: None,
+            error: None,
+        });
+        batch
+    }
+
+    /// The writes made through the returned scope belong to `block`. On an
+    /// unjournaled batch this is only a reborrow.
+    pub fn at(&mut self, block: i64) -> BlockScope<'_, 'a> {
+        let previous = self
+            .journal
+            .as_mut()
+            .and_then(|journal| journal.block.replace(block));
+        BlockScope {
+            batch: self,
+            previous,
+        }
+    }
+
+    /// Whether this batch routes its `Journal`-class writes into an overlay.
+    pub fn is_journaled(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// The current value of a stats key as this batch sees it.
+    ///
+    /// On a journaled batch whose stats CF is `Journal`-class this is the
+    /// block overlay's value: the live batch's latest write of the key (from
+    /// any of its sub-batches, as of the last block that wrote it), else the
+    /// committed value. A writer that applies one block's deltas on top of
+    /// the previous block's row reads it here. On an unjournaled batch it is
+    /// the committed value only: such a batch must not read back a key it
+    /// already wrote.
+    pub fn get_stats(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        let Some(prefix) = key.first().copied() else {
+            anyhow::bail!("empty stats key");
+        };
+        self.get_current(CkbadgerStore::stats_cf_name_by_prefix(prefix)?, key)
+    }
+
+    /// The current value of `key` in the domain column family `cf_name` as
+    /// this batch sees it: on a journaled batch the block overlay's value
+    /// (the live batch's latest write of the key from any of its sub-batches,
+    /// else the committed value); on an unjournaled batch the committed value
+    /// only, so such a batch must not read back a key it already wrote.
+    ///
+    /// A journaled batch cannot read back its writes to a column family that
+    /// is not `Journal`-class (they bypass the overlay), so asking for one is
+    /// an error rather than a stale committed value.
+    pub fn get_current(&self, cf_name: &str, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self
+            .get_current_many(cf_name, std::slice::from_ref(&key.to_vec()))?
+            .pop()
+            .expect("one key in, one value out"))
+    }
+
+    /// [`Self::get_current`] for many keys of one column family, with one
+    /// `multi_get` for the committed values; values in `keys` order.
+    pub fn get_current_many(
+        &self,
+        cf_name: &str,
+        keys: &[Vec<u8>],
+    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
+        if !self.store.has_cf(cf_name) {
+            anyhow::bail!("CF '{cf_name}' is not available in this store batch");
+        }
+        let Some(journal) = self.journal.as_ref() else {
+            let handle = self.store.cf(cf_name);
+            return self
+                .store
+                .multi_get_cf(keys.iter().map(|key| (handle, key.as_slice())).collect())
+                .into_iter()
+                .zip(keys)
+                .map(|(value, key)| {
+                    value.map_err(|e| {
+                        anyhow::anyhow!(
+                            "batch read cf={cf_name} key=0x{}: {e}",
+                            crate::bytes_to_hex(key)
+                        )
+                    })
+                })
+                .collect();
+        };
+        if !cf_spec(cf_name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal) {
+            anyhow::bail!(
+                "a journaled batch reads back only Journal-class CFs through its overlay; \
+                 cf={cf_name} is not one"
+            );
+        }
+        journal.overlay.with(|overlay| {
+            overlay.prefetch(self.store, cf_name, keys)?;
+            keys.iter()
+                .map(|key| overlay.current(self.store, cf_name, key))
+                .collect()
+        })
+    }
+
+    /// Stage the overlay's final values and journal entries into this batch.
+    /// Call once, on the batch that commits, after every sub-batch's writes.
+    pub fn stage_journal(
+        &mut self,
+        next_seq: &mut dyn FnMut(i64) -> anyhow::Result<u64>,
+    ) -> anyhow::Result<JournalStats> {
+        let Some(journal) = self.journal.as_mut() else {
+            anyhow::bail!("stage_journal on a batch that is not journaled");
+        };
+        if let Some(error) = journal.error.take() {
+            return Err(error);
+        }
+        let overlay = journal.overlay.clone();
+        self.stage_overlay(&overlay, next_seq)
+    }
+
+    /// Stage `overlay`'s final values and journal entries into this batch.
+    /// The store this batch commits to.
+    pub fn store(&self) -> &'a CkbadgerStore {
+        self.store
+    }
+
+    pub fn stage_overlay(
+        &mut self,
+        overlay: &SharedBlockOverlay,
+        next_seq: &mut dyn FnMut(i64) -> anyhow::Result<u64>,
+    ) -> anyhow::Result<JournalStats> {
+        overlay.with(|overlay| overlay.finish(self.store, &mut self.batch, next_seq))
+    }
+
+    /// Route a write into the overlay when this batch is journaled and `cf`
+    /// is a `Journal`-class CF. Returns false when the caller must write it
+    /// to the `WriteBatch` itself.
+    fn route_to_journal(&mut self, cf: &ColumnFamily, key: &[u8], value: Option<&[u8]>) -> bool {
+        let Some(journal) = self.journal.as_mut() else {
+            return false;
+        };
+        let name = match self.store.cf_name_for_handle(cf) {
+            Ok(name) => name,
+            Err(error) => {
+                journal.error.get_or_insert(error);
+                return true;
+            }
+        };
+        let journaled =
+            cf_spec(name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        // A key that is never journaled goes straight into the commit.
+        if !journaled || crate::block_overlay::is_outside_journal(name, key) {
+            return false;
+        }
+        let (block, origin) = (journal.block, journal.origin);
+        let result = journal
+            .overlay
+            .with(|overlay| overlay.write(block, name, key, value.map(<[u8]>::to_vec), origin));
+        if let Err(error) = result {
+            journal.error.get_or_insert(error);
+        }
+        true
     }
 
     /// Commit all accumulated writes atomically (WAL enabled, no fsync).
@@ -92,20 +307,30 @@ impl<'a> StoreBatch<'a> {
 
     /// Extract the inner domain `WriteBatch`, consuming the `StoreBatch`.
     ///
-    /// # Panics
-    /// Panics if this `StoreBatch` has any pending append-only operations,
-    /// because those cannot be represented in a plain `WriteBatch`. Only
-    /// use this method when the batch contains only domain-store writes.
-    pub fn into_write_batch(self) -> WriteBatch {
-        assert!(
+    /// Refused, with an error, for a batch whose writes a plain `WriteBatch`
+    /// cannot carry: a journaled batch (its `Journal`-class writes and
+    /// journal entries live in the block overlay), a batch the journal
+    /// discipline refused, and a batch with append-only operations or
+    /// pending DAO deposits.
+    pub fn into_write_batch(self) -> anyhow::Result<WriteBatch> {
+        if self.journal.is_some() {
+            anyhow::bail!(
+                "StoreBatch::into_write_batch on a journaled batch: its Journal-class writes and \
+                 journal entries live in the block overlay, which a plain WriteBatch would drop"
+            );
+        }
+        if let Some(error) = self.discipline_error {
+            return Err(error);
+        }
+        anyhow::ensure!(
             self.append_ops.is_empty(),
             "StoreBatch::into_write_batch: cannot extract WriteBatch when append_ops is non-empty"
         );
-        assert!(
+        anyhow::ensure!(
             self.pending_dao_deposits.is_empty(),
             "StoreBatch::into_write_batch: cannot extract WriteBatch when pending_dao_deposits is non-empty"
         );
-        self.batch
+        Ok(self.batch)
     }
 
     /// Merge another `StoreBatch` into this one.
@@ -176,9 +401,34 @@ impl<'a> StoreBatch<'a> {
             .extend(other.pending_fiber_channels);
         self.pending_fiber_channel_by_commitment
             .extend(other.pending_fiber_channel_by_commitment);
+
+        if let Some(error) = other.discipline_error {
+            self.discipline_error.get_or_insert(error);
+        }
+        if let Some(error) = other.journal.and_then(|journal| journal.error) {
+            match self.journal.as_mut() {
+                Some(journal) => {
+                    journal.error.get_or_insert(error);
+                }
+                None => panic!("StoreBatch::merge_from: journaled batch merged into an unjournaled one: {error:#}"),
+            }
+        }
     }
 
-    fn commit_inner(self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
+    fn commit_inner(mut self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
+        if let Some(error) = self.discipline_error.take() {
+            return Err(error);
+        }
+        if let Some(journal) = self.journal.as_mut() {
+            if let Some(error) = journal.error.take() {
+                return Err(error);
+            }
+            if !journal.overlay.with(|overlay| overlay.is_finished()) {
+                anyhow::bail!(
+                    "journaled batch committed before its block overlay was staged (stage_journal)"
+                );
+            }
+        }
         debug_assert!(
             !(no_wal && sync),
             "commit_inner: no_wal and sync are mutually exclusive"
@@ -291,11 +541,16 @@ impl<'a> StoreBatch<'a> {
                 self.store.write_batch_with_intent(filtered_batch, intent)
             }
         } else if no_wal {
-            self.store.write_batch_no_wal(self.batch)
+            self.store
+                .write_batch_no_wal_with_intent(self.batch, StoreWriteIntent::Normal)
         } else if sync {
-            self.store.write_batch_synced(self.batch)
+            self.store
+                .write_batch_with_intent_synced(self.batch, StoreWriteIntent::Normal)
         } else {
-            self.store.write_batch(self.batch)
+            // Every write of this batch passed the journal discipline when it
+            // was staged (or went through the journal).
+            self.store
+                .write_batch_with_intent(self.batch, StoreWriteIntent::Normal)
         }
     }
 
@@ -317,8 +572,30 @@ impl<'a> StoreBatch<'a> {
                 key: key_ref.to_vec(),
                 value: Some(value_ref.to_vec()),
             });
-        } else {
+        } else if !self.route_to_journal(cf, key_ref, Some(value_ref)) {
+            self.check_discipline(cf, key_ref);
             self.batch.put_cf(cf, key_ref, value_ref);
+        }
+    }
+
+    /// An unjournaled batch's write to a domain CF under the journal
+    /// discipline: a refusal is kept and fails the commit. (A journaled
+    /// batch routes its `Journal`-class writes into the overlay instead.)
+    fn check_discipline(&mut self, cf: &ColumnFamily, key: &[u8]) {
+        // Bulk sync (and a store without the discipline) pays nothing per row:
+        // the discipline is decided before any handle-to-name lookup.
+        if self.journal.is_some()
+            || self.discipline_error.is_some()
+            || !self.store.journal_discipline_applies()
+        {
+            return;
+        }
+        let checked = self
+            .store
+            .cf_name_for_handle(cf)
+            .and_then(|name| self.store.check_unjournaled_write(name, key));
+        if let Err(error) = checked {
+            self.discipline_error = Some(error);
         }
     }
 
@@ -361,6 +638,18 @@ impl<'a> StoreBatch<'a> {
         if crate::store::is_append_only_cf_name(cf_name) || self.store.is_append_only_store() {
             anyhow::bail!("range delete refused on append-only CF '{}'", cf_name);
         }
+        if self.journal.is_some()
+            && cf_spec(cf_name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal)
+        {
+            anyhow::bail!(
+                "range delete refused on Journal-class CF '{}' in a journaled batch: the journal needs every key",
+                cf_name
+            );
+        }
+        if self.journal.is_none() {
+            self.store
+                .check_unjournaled_range_delete(cf_name, start, end)?;
+        }
         let cf = self.store.cf(cf_name);
         self.batch.delete_range_cf(cf, start, end);
         Ok(())
@@ -383,7 +672,8 @@ impl<'a> StoreBatch<'a> {
                 key: key_ref.to_vec(),
                 value: None,
             });
-        } else {
+        } else if !self.route_to_journal(cf, key_ref, None) {
+            self.check_discipline(cf, key_ref);
             self.batch.delete_cf(cf, key_ref);
         }
     }
@@ -861,12 +1151,6 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_dotcell_ring(), namespace_args, &encoded);
     }
 
-    pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
-        let key = keys::encode_reorg_undo_log_key(block_num, seq);
-        let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
-        self.put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
-    }
-
     /// Remove one undo-log entry by its full `block + seq` key.
     pub fn delete_reorg_undo_log_key(&mut self, key: &[u8]) {
         self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
@@ -880,14 +1164,47 @@ impl<'a> StoreBatch<'a> {
         self.put_sync_meta(&key, &value);
     }
 
-    /// Persist the entity-stats rollback coverage contract in the same atomic
-    /// batch as the writes it describes.
+    /// Persist the rollback coverage contract in the same atomic batch as the
+    /// journal prune it describes, OUTSIDE the block journal: on a journaled
+    /// batch it goes straight into this batch's `WriteBatch` instead of the
+    /// block overlay, so no journal entry records it and no rollback restores
+    /// an older floor over journal rows the prune already deleted (the
+    /// overlay refuses the key, see `block_overlay::is_outside_journal`).
+    /// Write a sync status: the chain part (`sync_status`) through this
+    /// batch's routing — in the current block's scope on a journaled batch —
+    /// and the runtime part (`sync_runtime`) outside the journal.
+    pub fn put_sync_status(&mut self, status: &crate::types::SyncStatus) -> anyhow::Result<()> {
+        let chain = bincode::serialize(&status.chain())?;
+        self.put_sync_meta(keys::sync_meta_keys::SYNC_STATUS, &chain);
+        self.put_sync_runtime(&status.runtime())
+    }
+
+    /// Write the runtime part of the sync status straight into the commit,
+    /// outside the journal, on any batch: it is not chain state, so a
+    /// rollback must not restore an older one.
+    pub fn put_sync_runtime(
+        &mut self,
+        runtime: &crate::types::SyncRuntimeStatus,
+    ) -> anyhow::Result<()> {
+        let value = bincode::serialize(runtime)?;
+        self.batch.put_cf(
+            self.store.cf_sync_meta(),
+            keys::sync_meta_keys::SYNC_RUNTIME,
+            &value,
+        );
+        Ok(())
+    }
+
     pub fn put_entity_stats_undo_contract(
         &mut self,
         contract: &crate::types::EntityStatsUndoContract,
     ) {
         let value = bincode::serialize(contract).expect("serialize EntityStatsUndoContract");
-        self.put_sync_meta(keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT, &value);
+        self.batch.put_cf(
+            self.store.cf_sync_meta(),
+            keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+            &value,
+        );
     }
 
     // ---- DAO ----
@@ -1607,18 +1924,35 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
-    /// Stage the whole HODL tracker state. Returns the serialized byte count so
-    /// the writer can report how much of each commit window this fixed-size
-    /// `sync_meta` rewrite costs.
-    pub fn put_hodl_tracker_state(&mut self, state: &HodlTrackerState) -> usize {
-        let value = bincode::serialize(state).expect("failed to serialize hodl tracker state");
-        let bytes = value.len();
+    /// Stage one creation day's live capacity (`hodl_capacity_by_date`).
+    /// Returns the value bytes staged. A day whose capacity reached zero is
+    /// deleted, never written as zero.
+    pub fn put_hodl_capacity_by_date(
+        &mut self,
+        day: chrono::NaiveDate,
+        capacity: i128,
+    ) -> anyhow::Result<usize> {
+        let key = crate::tracker_ops::encode_hodl_day_key(day)?;
+        let value = crate::tracker_ops::encode_hodl_capacity(day, capacity)?;
+        self.put_cf(self.store.cf_hodl_capacity_by_date(), key, value);
+        Ok(value.len())
+    }
+
+    pub fn delete_hodl_capacity_by_date(&mut self, day: chrono::NaiveDate) -> anyhow::Result<()> {
+        let key = crate::tracker_ops::encode_hodl_day_key(day)?;
+        self.delete_cf(self.store.cf_hodl_capacity_by_date(), key);
+        Ok(())
+    }
+
+    /// Stage the HODL tracker's cursor row. Returns the value bytes staged.
+    pub fn put_hodl_cursor(&mut self, cursor: &HodlTrackerCursor) -> anyhow::Result<usize> {
+        let value = crate::tracker_ops::encode_hodl_cursor(cursor)?;
         self.put_cf(
             self.store.cf_sync_meta(),
-            keys::sync_meta_keys::HODL_TRACKER,
+            keys::sync_meta_keys::HODL_CURSOR,
             &value,
         );
-        bytes
+        Ok(value.len())
     }
 
     pub fn put_cell_distribution(&mut self, date: &str, snapshot: &DailyCellDistribution) {
@@ -1633,23 +1967,40 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
-    /// Stage the whole cell-distribution tracker state. Returns the serialized
-    /// byte count; see [`Self::put_hodl_tracker_state`].
-    pub fn put_cell_dist_tracker_state(&mut self, state: &CellDistributionTrackerState) -> usize {
-        let value = bincode::serialize(state).expect("failed to serialize cell dist tracker state");
-        let bytes = value.len();
+    /// Stage one cohort month's `(used_capacity, balance)`
+    /// (`cell_dist_cohort_by_month`). Returns the value bytes staged.
+    pub fn put_cell_dist_cohort(
+        &mut self,
+        month: &str,
+        used: i128,
+        balance: i128,
+    ) -> anyhow::Result<usize> {
+        let value = crate::tracker_ops::encode_cohort(month, used, balance)?;
+        self.put_cf(self.store.cf_cell_dist_cohort_by_month(), month, value);
+        Ok(value.len())
+    }
+
+    /// Stage the cell-distribution tracker's cursor row. Returns the value
+    /// bytes staged.
+    pub fn put_cell_dist_cursor(
+        &mut self,
+        cursor: &CellDistTrackerCursor,
+    ) -> anyhow::Result<usize> {
+        let value = crate::tracker_ops::encode_cell_dist_cursor(cursor)?;
         self.put_cf(
             self.store.cf_sync_meta(),
-            keys::sync_meta_keys::CELL_DIST_TRACKER,
+            keys::sync_meta_keys::CELL_DIST_CURSOR,
             &value,
         );
-        bytes
+        Ok(value.len())
     }
 
     // ---- Sync meta ----
 
-    /// Stage block-end live-cell summaries into the bounded history ring and
-    /// publish the last one as the API-visible current value.
+    /// Publish block-end live-cell summaries as the API-visible current value,
+    /// each in its own block's scope (on a live batch the block journal then
+    /// holds the current value as of the end of every block, which is how a
+    /// rollback restores it); the last one stays current.
     ///
     /// This is a domain-store mutation. It intentionally has no append-only
     /// equivalent: `CF_CELLS` remains immutable cell payload history.
@@ -1693,32 +2044,13 @@ impl<'a> StoreBatch<'a> {
                     error,
                 )
             })?;
-            let history_key = keys::encode_live_cell_summary_history_key(summary.tip_block_number);
-            self.put_sync_meta(&history_key, &value);
-
-            if let Some(expired_block) = summary
-                .tip_block_number
-                .checked_sub(LIVE_CELL_SUMMARY_HISTORY_BLOCKS)
-                .filter(|block| *block >= 0)
-            {
-                let expired_key = keys::encode_live_cell_summary_history_key(expired_block);
-                self.delete_sync_meta(&expired_key);
+            let mut scope = self.at(summary.tip_block_number);
+            if previous_block.is_none() {
+                scope.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1u8]);
             }
+            scope.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, &value);
             previous_block = Some(summary.tip_block_number);
         }
-
-        let current = summaries
-            .last()
-            .expect("non-empty summary sequence checked above");
-        let value = bincode::serialize(current).map_err(|error| {
-            anyhow::anyhow!(
-                "failed to serialize current live-cell summary: block={} error={}",
-                current.tip_block_number,
-                error,
-            )
-        })?;
-        self.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1u8]);
-        self.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, &value);
         Ok(())
     }
 
@@ -1845,6 +2177,26 @@ mod tests {
     use super::*;
     use crate::CF_CELLS;
     use tempfile::TempDir;
+
+    /// A journaled batch's `Journal`-class writes live in its block overlay:
+    /// extracting a plain `WriteBatch` would drop them and their journal
+    /// entries, so it is refused.
+    #[test]
+    fn into_write_batch_refuses_a_journaled_batch() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        batch.at(4).put_sync_meta(b"key", b"value");
+        let Err(error) = batch.into_write_batch() else {
+            panic!("a journaled batch must not become a plain WriteBatch");
+        };
+        assert!(error.to_string().contains("journaled batch"), "{error}");
+
+        let mut plain = StoreBatch::new(&store);
+        plain.put_sync_meta(b"key", b"value");
+        assert_eq!(plain.into_write_batch().unwrap().len(), 1);
+    }
 
     #[test]
     fn test_batch_commit() {
@@ -1987,30 +2339,6 @@ mod tests {
         assert_eq!(decoded.created_at_block, 1);
         assert_eq!(decoded.consumed_at_block, 22);
         assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
-    }
-
-    #[test]
-    fn test_reorg_undo_log_by_block_batch_write() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let entry = UndoLogEntry::KeyMutation {
-            target_store: UndoLogStoreTarget::Domain,
-            cf_name: crate::store::CF_SYNC_META.to_string(),
-            key: b"k".to_vec(),
-            previous_value: Some(b"v1".to_vec()),
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_reorg_undo_log_by_block(88, 3, &entry);
-        batch.commit().unwrap();
-
-        let key = keys::encode_reorg_undo_log_key(88, 3);
-        let value = store
-            .get_cf(store.cf_reorg_undo_log_by_block(), &key)
-            .unwrap()
-            .unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&value).unwrap();
-        assert_eq!(decoded, entry);
     }
 
     #[test]

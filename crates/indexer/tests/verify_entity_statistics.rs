@@ -339,7 +339,6 @@ fn export_body(
         "anchor": {"blockNumber": anchor, "blockHash": format!("0xb{anchor:063x}")},
         "state": {
             "bulkSessionInProgress": false,
-            "rollbackCleanupInProgress": false,
             "liveCellSummaryInitialized": true,
             "deepForkDetected": false,
             "entityStatsUndoContract": null,

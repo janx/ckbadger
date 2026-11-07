@@ -240,8 +240,9 @@ enum VersionAttachment {
 }
 
 /// THE single computation deciding whether an entry's version identity is
-/// attachable. Both the family `versions_count` and the version-write path go
-/// through here so they can never disagree.
+/// attachable. The version-write path goes through here, and a family's
+/// `versions_count` counts the version rows it attached
+/// (`family_versions_counts`), so the two can never disagree.
 fn version_attachment(entry: &ScriptDeploymentEntry) -> Result<VersionAttachment> {
     let version_hash = decode_hex(&entry.version_hash)
         .map_err(|e| anyhow::anyhow!("invalid version_hash `{}`: {}", entry.version_hash, e))?;
@@ -465,6 +466,7 @@ pub(crate) fn import_all(
             Err(e) => result.errors.push(format!("Script {}: {}", script.name, e)),
         }
     }
+    set_family_versions_counts(store)?;
     info!(
         "Label import completed: {} UDT, {} scripts, {} errors",
         result.udt_labels_imported,
@@ -887,7 +889,8 @@ fn upsert_script_label(
 ) -> Result<()> {
     let registrations =
         validate_script_registrations(store, std::slice::from_ref(script), network)?;
-    upsert_script_label_validated(store, script, network, &registrations)
+    upsert_script_label_validated(store, script, network, &registrations)?;
+    set_family_versions_counts(store)
 }
 
 fn upsert_script_label_validated(
@@ -904,7 +907,7 @@ fn upsert_script_label_validated(
         .map(|family| family.name);
 
     if !active.is_empty() {
-        upsert_script_family(store, script, family_id, &active)?;
+        upsert_script_family(store, script, family_id)?;
     }
 
     for deployment in &excluded {
@@ -1000,11 +1003,32 @@ fn upsert_script_label_validated(
     Ok(())
 }
 
+/// Set every family row's `versions_count` from the version rows the import
+/// leaves, with the rollup's own routine (`family_versions_counts`): the
+/// count is the number of version rows naming the family, so an import that
+/// changes no label rewrites no family row, and the next block's rollup
+/// computes the same value. A family no version row names counts zero.
+fn set_family_versions_counts(store: &CkbadgerStore) -> Result<()> {
+    let versions = store.list_script_versions()?;
+    let counts =
+        crate::db::writer::family_versions_counts(versions.iter().map(|(_, version)| version))?;
+    for (family_id, mut family) in store.list_script_families()? {
+        let count = match counts.get(&family_id) {
+            Some(count) => *count,
+            None => 0,
+        };
+        if family.versions_count != count {
+            family.versions_count = count;
+            store.put_script_family_direct(&family_id, &family)?;
+        }
+    }
+    Ok(())
+}
+
 fn upsert_script_family(
     store: &CkbadgerStore,
     script: &ScriptMetadata,
     family_id: &str,
-    active_deployments: &[ImportDeployment],
 ) -> Result<()> {
     let mut family = store.get_script_family(family_id)?.unwrap_or_else(|| {
         ckbadger_store::types::ScriptFamilyInfo {
@@ -1020,19 +1044,6 @@ fn upsert_script_family(
     family.description = script.description.clone();
     family.website = script.website.clone();
     family.category = script.category.clone();
-    // Count unique attachable bytecode versions: one binary deployed under
-    // several references (e.g. RGB++ signet + BTC-testnet3) is ONE version,
-    // and an entry whose version identity is invalid attaches nothing, so the
-    // family must not claim it.
-    let mut attachable_versions: std::collections::HashSet<Vec<u8>> = Default::default();
-    for deployment in active_deployments {
-        if let ImportDeployment::Version(version) = deployment {
-            if let VersionAttachment::Attachable(version_hash) = version_attachment(version)? {
-                attachable_versions.insert(version_hash);
-            }
-        }
-    }
-    family.versions_count = attachable_versions.len() as i64;
     store.put_script_family_direct(family_id, &family)?;
     store.put_script_family_name_direct(&script.name, family_id)?;
     Ok(())
@@ -3499,14 +3510,15 @@ mod version_identity_tests {
         );
         batch.commit().unwrap();
 
-        let rollups =
-            crate::db::writer::collect_current_script_reference_rollup_state(&store).unwrap();
+        // The live rollup over the committed state (no block moved).
+        let store = std::sync::Arc::new(store);
+        crate::db::BatchWriter::new(store.clone(), store.clone())
+            .commit_rollup_of_committed_state_for_test()
+            .unwrap();
 
-        let version = rollups
-            .versions
-            .iter()
-            .find(|(hash, _)| hash == &funding_version)
-            .map(|(_, info)| info)
+        let version = store
+            .get_script_version(&funding_version)
+            .unwrap()
             .expect("the live funding bytecode version row must exist");
         assert_eq!(
             version.name.as_deref(),
@@ -3517,11 +3529,9 @@ mod version_identity_tests {
         assert_eq!(version.lock_live_cells_count, 5021);
         assert_eq!(version.lock_owned_capacity_sum, 16_131_558_405_032_860);
 
-        let family = rollups
-            .families
-            .iter()
-            .find(|(id, _)| id == "fiber-funding-lock")
-            .map(|(_, info)| info)
+        let family = store
+            .get_script_family("fiber-funding-lock")
+            .unwrap()
             .expect("fiber-funding-lock family must exist");
         assert_eq!(
             family.live_cells_count, 5021,

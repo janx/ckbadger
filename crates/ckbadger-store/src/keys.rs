@@ -268,31 +268,25 @@ pub fn encode_reorg_undo_log_key(block_num: i64, seq: u64) -> [u8; REORG_UNDO_LO
 }
 
 /// Bit position of an undo sequence number's scope. The top 16 bits of the
-/// `seq` in `encode_reorg_undo_log_key` name the writer family that recorded
-/// the entry; the low 48 bits count entries within the block. This is the ONE
-/// definition: the indexer composes sequence numbers from it and the store's
-/// retention prune reads it back.
+/// `seq` in `encode_reorg_undo_log_key` name the scope of the row; the low 48
+/// bits count entries within the block. This is the ONE definition: the
+/// journal composes sequence numbers from it and the rollback reads it back.
 pub const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
 /// Largest per-block counter value a sequence number can carry.
 pub const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 
-/// The writer family an undo-log entry belongs to.
+/// The scope of an undo-log row. One scope exists: the block journal. A row
+/// of any other scope bits is not a row this store writes, and the rollback
+/// refuses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum UndoSeqScope {
-    TxContext = 0x0001,
-    DotBit = 0x0002,
-    Object = 0x0003,
-    /// Entity daily/hourly stats buckets (`SCRIPT_DAILY`, `TOKEN_DAILY`,
-    /// `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`,
-    /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
-    /// can prune exactly these entries without touching the other three.
-    EntityStats = 0x0004,
-    /// Derived aggregate rows (`dao_live_agg`, `object_collection_activity_count`,
-    /// `bit_cell_by_account`), written by the live maintenance of the
-    /// indexer's background derivations. Pruned behind the same coverage
-    /// floor as `EntityStats`.
-    Derived = 0x0005,
+    /// The block journal (`block_overlay::BlockOverlay`): one entry per
+    /// `(block, key)` of every `Journal`-class column family a live batch
+    /// writes, holding the key's value at the end of the previous block.
+    /// The value 0x0006 is the one the journal has used since it was the
+    /// sixth scope; the per-writer scopes 0x0001–0x0005 are gone.
+    Journal = 0x0006,
 }
 
 impl UndoSeqScope {
@@ -329,7 +323,7 @@ pub fn encode_composite(parts: &[&[u8]]) -> Vec<u8> {
     key
 }
 
-fn encode_desc_block_num(block_num: i64) -> [u8; 8] {
+pub fn encode_desc_block_num(block_num: i64) -> [u8; 8] {
     assert!(
         block_num >= 0,
         "encode_desc_block_num: expected non-negative block_num, got {}",
@@ -800,8 +794,7 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 ///   hourly activity series aligned with its UTC+8 daily parent.
 ///
 /// Any cutoff/window computation against an hour-keyed prefix MUST use the
-/// clock of that prefix (see reorg `should_delete_stats_for_replay`, which
-/// carries one cutoff per clock).
+/// clock of that prefix.
 pub mod stats_prefix {
     /// Chain daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
     pub const DAILY: u8 = 0x01;
@@ -855,6 +848,16 @@ pub mod stats_prefix {
     /// root AccountCell with its all-zero account id, or data too short to
     /// name one). Suffix: outpoint. Value: empty.
     pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
+    /// One address of a daily activity bucket that live sync saw first in
+    /// that bucket: neither in the bucket's bulk-written `ACTIVITY_DAILY_ADDR_SET`
+    /// blob nor in an earlier row. Suffix: `%Y%m%d` (UTC+8) + 32B lock hash.
+    /// Value: empty. One row per address keeps a live block's journal to one
+    /// small entry per new address instead of a rewritten bucket-wide blob.
+    pub const ACTIVITY_DAILY_ADDR_ROW: u8 = 0x26;
+    /// One address of an hourly activity bucket that live sync saw first in
+    /// that bucket (see `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the
+    /// **UTC+8** clock + 32B lock hash. Value: empty.
+    pub const ACTIVITY_HOURLY_ADDR_ROW: u8 = 0x27;
 }
 
 // Flat re-exports for convenience
@@ -896,6 +899,111 @@ pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
 pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
 pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
 pub const STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT: u8 = stats_prefix::DOTBIT_UNINDEXED_OUTPOINT;
+pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_ROW;
+pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_ROW;
+
+/// The two activity bucket families and their three row kinds: the bucket's
+/// `DailyActivityStats`, the bulk-written address-set blob, and the live
+/// per-address rows. A bucket's unique addresses are the blob's addresses
+/// plus the rows' addresses; live sync never rewrites the blob and writes a
+/// row only for an address in neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActivityBucketKind {
+    /// UTC+8 calendar day, `%Y%m%d`.
+    Daily,
+    /// UTC+8 hour, `%Y%m%d%H`.
+    Hourly,
+}
+
+impl ActivityBucketKind {
+    /// Prefix of the bucket's `DailyActivityStats` row.
+    pub const fn stats_prefix(self) -> u8 {
+        match self {
+            Self::Daily => stats_prefix::ACTIVITY_DAILY,
+            Self::Hourly => stats_prefix::ACTIVITY_HOURLY,
+        }
+    }
+
+    /// Prefix of the bucket's bulk-written address-set blob.
+    pub const fn addr_set_prefix(self) -> u8 {
+        match self {
+            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
+        }
+    }
+
+    /// Prefix of the bucket's live per-address rows.
+    pub const fn addr_row_prefix(self) -> u8 {
+        match self {
+            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_ROW,
+            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+        }
+    }
+
+    /// Byte length of the bucket label (`%Y%m%d` or `%Y%m%d%H`).
+    pub const fn bucket_len(self) -> usize {
+        match self {
+            Self::Daily => 8,
+            Self::Hourly => 10,
+        }
+    }
+
+    fn check_bucket(self, bucket: &str) -> anyhow::Result<()> {
+        if bucket.len() != self.bucket_len() || !bucket.bytes().all(|b| b.is_ascii_digit()) {
+            anyhow::bail!(
+                "invalid {:?} activity bucket label {:?}: expected {} ASCII digits",
+                self,
+                bucket,
+                self.bucket_len()
+            );
+        }
+        Ok(())
+    }
+
+    /// Key of the bucket's `DailyActivityStats` row.
+    pub fn stats_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        Ok(encode_stats_key(self.stats_prefix(), bucket.as_bytes()))
+    }
+
+    /// Key of the bucket's bulk-written address-set blob.
+    pub fn addr_set_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        Ok(encode_stats_key(self.addr_set_prefix(), bucket.as_bytes()))
+    }
+
+    /// Key of one live per-address row: prefix ‖ bucket ‖ lock hash.
+    pub fn addr_row_key(self, bucket: &str, lock_hash: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        let mut key = Vec::with_capacity(1 + self.bucket_len() + HASH32_LEN);
+        key.push(self.addr_row_prefix());
+        key.extend_from_slice(bucket.as_bytes());
+        key.extend_from_slice(lock_hash);
+        Ok(key)
+    }
+
+    /// Prefix of every per-address row of one bucket (for a prefix scan).
+    pub fn addr_row_bucket_prefix(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        Ok(encode_stats_key(self.addr_row_prefix(), bucket.as_bytes()))
+    }
+
+    /// The lock hash of a per-address row key of `bucket`.
+    pub fn decode_addr_row_key(self, bucket: &str, key: &[u8]) -> anyhow::Result<[u8; 32]> {
+        let prefix = self.addr_row_bucket_prefix(bucket)?;
+        if key.len() != prefix.len() + HASH32_LEN || !key.starts_with(&prefix) {
+            anyhow::bail!(
+                "invalid {:?} activity address row key for bucket {}: key=0x{}",
+                self,
+                bucket,
+                hex::encode(key)
+            );
+        }
+        let mut lock_hash = [0u8; 32];
+        lock_hash.copy_from_slice(&key[prefix.len()..]);
+        Ok(lock_hash)
+    }
+}
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -2075,27 +2183,35 @@ pub fn decode_object_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32,
     (collection_id, block_num, tx_idx, block_hash, tx_hash)
 }
 
-/// Sync meta keys
-/// On-demand script-group cycles in domain sync_meta; no bulk writer emits it.
-pub fn encode_tx_group_cycles_key(tx_hash: &[u8]) -> Vec<u8> {
-    let mut key = b"tx_group_cycles:".to_vec();
-    key.extend_from_slice(tx_hash);
-    key
+/// A transaction's canonical slot, `block_number (8B BE) ‖ tx_idx (4B BE)`:
+/// the key of `tx_index` and of `tx_group_cycles`.
+pub fn encode_tx_slot_key(block_number: i64, tx_idx: i32) -> Vec<u8> {
+    encode_composite(&[&encode_block_num(block_number), &encode_tx_idx(tx_idx)])
 }
 
+/// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
+    /// `SyncChainStatus`: tip and totals, journaled per block.
     pub const SYNC_STATUS: &[u8] = b"sync_status";
+    /// `SyncRuntimeStatus`: run telemetry, bulk completion and deep-fork
+    /// state, written outside the journal.
+    pub const SYNC_RUNTIME: &[u8] = b"sync_runtime";
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
-    pub const ROLLBACK_CLEANUP_IN_PROGRESS: &[u8] = b"rollback_cleanup_in_progress";
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
-    pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
-    pub const CELL_DIST_TRACKER: &[u8] = b"cell_dist_tracker";
+    /// The HODL wave tracker's scalars (bincode `HodlTrackerCursor`): holder
+    /// count, open snapshot day, last processed block. Its per-day capacity
+    /// is `CF_HODL_CAPACITY_BY_DATE`.
+    pub const HODL_CURSOR: &[u8] = b"hodl_cursor";
+    /// The cell-distribution tracker's scalars (bincode
+    /// `CellDistTrackerCursor`): size-bucket counts and capacities, open
+    /// snapshot day, last processed block. Its cohort accumulator is
+    /// `CF_CELL_DIST_COHORT_BY_MONTH`.
+    pub const CELL_DIST_CURSOR: &[u8] = b"cell_dist_cursor";
     pub const SYNC_PROGRESS: &[u8] = b"sync_progress";
     pub const MEMORY_STATS: &[u8] = b"memory_stats";
-    pub const BULK_BATCH_IN_PROGRESS: &[u8] = b"bulk_batch_in_progress";
     pub const BULK_BUILD_SESSION_IN_PROGRESS: &[u8] = b"bulk_build_session_in_progress";
     pub const BACKGROUND_TASKS: &[u8] = b"background_tasks";
     /// Chain-network tag ("mainnet"/"testnet") the DB was first synced for.
@@ -2137,41 +2253,6 @@ pub fn encode_hourly_retention_state_key(family: &str) -> Vec<u8> {
     let mut key = sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX.to_vec();
     key.extend_from_slice(family.as_bytes());
     key
-}
-
-/// Block-end summary history used only for bounded shallow-reorg restoration.
-pub const LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX: &[u8] = b"live_cell_summary:history:";
-pub const LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE: usize =
-    LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX.len() + BLOCK_NUM_KEY_SIZE;
-
-pub fn encode_live_cell_summary_history_key(block_number: i64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE);
-    key.extend_from_slice(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX);
-    key.extend_from_slice(&encode_block_num(block_number));
-    key
-}
-
-pub fn decode_live_cell_summary_history_key(key: &[u8]) -> anyhow::Result<i64> {
-    if key.len() != LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE
-        || !key.starts_with(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX)
-    {
-        anyhow::bail!(
-            "malformed live-cell summary history key: expected prefix=0x{} length={}, got key=0x{} length={}",
-            crate::bytes_to_hex(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX),
-            LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE,
-            crate::bytes_to_hex(key),
-            key.len(),
-        );
-    }
-    let block_number = decode_block_num(&key[LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX.len()..]);
-    if block_number < 0 {
-        anyhow::bail!(
-            "live-cell summary history key contains negative block: block={} key=0x{}",
-            block_number,
-            crate::bytes_to_hex(key),
-        );
-    }
-    Ok(block_number)
 }
 
 // -- Reorg event history (CF_SYNC_META) --
@@ -2364,28 +2445,6 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn live_cell_summary_history_key_roundtrip_and_order() {
-        let first = encode_live_cell_summary_history_key(12_345_678);
-        let second = encode_live_cell_summary_history_key(12_345_679);
-
-        assert_eq!(first.len(), LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE);
-        assert_eq!(
-            decode_live_cell_summary_history_key(&first).unwrap(),
-            12_345_678
-        );
-        assert!(first < second);
-    }
-
-    #[test]
-    fn live_cell_summary_history_key_rejects_wrong_shape() {
-        let error =
-            decode_live_cell_summary_history_key(b"live_cell_summary:history:short").unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("malformed live-cell summary history key"));
-    }
 
     #[test]
     fn test_reorg_event_key_roundtrip_and_shape() {
@@ -4321,33 +4380,21 @@ mod tests {
         let _ = encode_outpoint(&[0x9B; 31], 0);
     }
 
-    /// The scope table is part of the persisted undo-log key: its values are
-    /// pinned so a renumbering cannot silently re-scope stored entries.
+    /// The scope is part of the persisted undo-log key: its value is pinned
+    /// so a renumbering cannot silently re-scope stored entries.
     #[test]
     fn test_undo_seq_scope_table_is_pinned() {
         assert_eq!(UNDO_SEQ_SCOPE_SHIFT, 48);
         assert_eq!(UNDO_SEQ_LOCAL_MAX, 0x0000_FFFF_FFFF_FFFF);
-        let table = [
-            (UndoSeqScope::TxContext, 0x0001u64),
-            (UndoSeqScope::DotBit, 0x0002),
-            (UndoSeqScope::Object, 0x0003),
-            (UndoSeqScope::EntityStats, 0x0004),
-            (UndoSeqScope::Derived, 0x0005),
-        ];
-        for (scope, bits) in table {
-            assert_eq!(scope.seq_base(), bits << 48, "{scope:?}");
-            assert!(scope.owns(scope.seq_base()), "{scope:?}");
-            assert!(
-                scope.owns(scope.seq_base() | UNDO_SEQ_LOCAL_MAX),
-                "{scope:?}"
-            );
-            for (other, _) in table.iter().filter(|(other, _)| *other != scope) {
-                assert!(!scope.owns(other.seq_base()), "{scope:?} vs {other:?}");
-            }
+        let journal = UndoSeqScope::Journal;
+        assert_eq!(journal.seq_base(), 0x0006 << 48);
+        assert!(journal.owns(journal.seq_base()));
+        assert!(journal.owns(journal.seq_base() | UNDO_SEQ_LOCAL_MAX));
+        // The retired per-writer scopes' bits, a counter that overflowed into
+        // the scope bits, and no scope bits at all are not journal rows.
+        for bits in [0x0000u64, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0007] {
+            assert!(!journal.owns(bits << 48), "{bits:#06x}");
         }
-        // A counter that overflowed into the scope bits is no scope's entry.
-        assert!(!UndoSeqScope::EntityStats.owns(6 << 48));
-        assert!(!UndoSeqScope::TxContext.owns(0));
     }
 
     #[test]
