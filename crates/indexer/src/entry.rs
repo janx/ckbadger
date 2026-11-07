@@ -108,6 +108,8 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
     .await
     .map_err(|e| anyhow::anyhow!("startup label import task panicked: {}", e))??;
 
+    // A store error already stopped the import above (`??`); what remains
+    // are metadata entries skipped as malformed (finding 14).
     if summary.errors.is_empty() {
         info!(
             "Startup label import completed: {} UDT, {} scripts, 0 errors",
@@ -115,10 +117,10 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
         );
     } else {
         for err in &summary.errors {
-            warn!("Label import error: {}", err);
+            warn!("Label import skipped a malformed metadata entry: {}", err);
         }
         warn!(
-            "Startup label import completed with {} errors: {} UDT, {} scripts",
+            "Startup label import completed with {} malformed metadata entries skipped: {} UDT, {} scripts",
             summary.errors.len(),
             summary.udt_labels_imported,
             summary.script_labels_imported
