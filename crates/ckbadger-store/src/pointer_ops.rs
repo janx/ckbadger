@@ -23,6 +23,17 @@ impl CkbadgerStore {
         row_kind: &str,
         positions: &[(i64, i32)],
     ) -> anyhow::Result<Vec<TxIndexEntry>> {
+        self.tx_index_entries_named(positions, |_| row_kind.to_string())
+    }
+
+    /// [`Self::tx_index_entries_at`] where `row(i)` names the row holding
+    /// `positions[i]` (its kind and owner) — for a slice merged from several
+    /// row kinds or owners. Called only to build an error.
+    pub fn tx_index_entries_named(
+        &self,
+        positions: &[(i64, i32)],
+        row: impl Fn(usize) -> String,
+    ) -> anyhow::Result<Vec<TxIndexEntry>> {
         if positions.is_empty() {
             return Ok(Vec::new());
         }
@@ -37,23 +48,27 @@ impl CkbadgerStore {
             .iter()
             .zip(keys.iter())
             .zip(values)
-            .map(|(((block, tx_idx), key), value)| {
+            .enumerate()
+            .map(|(i, (((block, tx_idx), key), value))| {
                 let value = value
                     .map_err(|e| {
                         anyhow::anyhow!(
-                            "{row_kind}: reading tx_index at block={block}, tx_idx={tx_idx} (key 0x{}) failed: {e}",
+                            "{}: reading tx_index at block={block}, tx_idx={tx_idx} (key 0x{}) failed: {e}",
+                            row(i),
                             bytes_to_hex(key)
                         )
                     })?
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "{row_kind} points at block={block}, tx_idx={tx_idx}, which has no tx_index row (key 0x{})",
+                            "{} points at block={block}, tx_idx={tx_idx}, which has no tx_index row (key 0x{})",
+                            row(i),
                             bytes_to_hex(key)
                         )
                     })?;
                 bincode::deserialize::<TxIndexEntry>(&value).map_err(|e| {
                     anyhow::anyhow!(
-                        "{row_kind}: tx_index row at block={block}, tx_idx={tx_idx} (key 0x{}) does not decode: {e}",
+                        "{}: tx_index row at block={block}, tx_idx={tx_idx} (key 0x{}) does not decode: {e}",
+                        row(i),
                         bytes_to_hex(key)
                     )
                 })
@@ -80,7 +95,22 @@ impl CkbadgerStore {
     /// `ConsumedCellInfo::consumer_position`), in order: the one way a reader
     /// turns a consumed cell's consumer into a hash.
     pub fn consumer_tx_hashes(&self, positions: &[(i64, i32)]) -> anyhow::Result<Vec<[u8; 32]>> {
-        self.tx_hashes_at("consumed_cells", positions)
+        self.consumer_tx_hashes_named(positions, |_| "consumed_cells".to_string())
+    }
+
+    /// [`Self::consumer_tx_hashes`] where `row(i)` names the consumed cell
+    /// holding `positions[i]` (`consumed_cells` row of an outpoint), for the
+    /// error.
+    pub fn consumer_tx_hashes_named(
+        &self,
+        positions: &[(i64, i32)],
+        row: impl Fn(usize) -> String,
+    ) -> anyhow::Result<Vec<[u8; 32]>> {
+        Ok(self
+            .tx_index_entries_named(positions, row)?
+            .into_iter()
+            .map(|entry| entry.tx_hash)
+            .collect())
     }
 }
 
@@ -119,6 +149,27 @@ mod tests {
             .unwrap();
         assert_eq!(hashes, vec![[0x0c; 32], [0x0a; 32], [0x0c; 32]]);
         assert_eq!(store.read_call_counts(), (0, 1), "(get_cf, multi_get_cf)");
+    }
+
+    /// Review 18: a slice merged from several rows names the row holding
+    /// the failing position, not one kind for all.
+    #[test]
+    fn a_named_slice_reports_the_row_holding_the_failing_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(10, 1, &entry([0x0a; 32]));
+        batch.commit().unwrap();
+
+        let rows = ["addr_txs row of 0xaa", "addr_txs_by_prefix row of 0xaa"];
+        let err = store
+            .tx_index_entries_named(&[(10, 1), (11, 2)], |i| rows[i].to_string())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("addr_txs_by_prefix row of 0xaa points at block=11, tx_idx=2"),
+            "{err}"
+        );
     }
 
     #[test]

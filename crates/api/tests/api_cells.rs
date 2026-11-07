@@ -1634,13 +1634,17 @@ async fn cell_detail_rejects_a_consumer_position_without_a_transaction() {
     batch.put_consumed_cell(&tx, 0, &cell_with(1, Some(1)), 123, 456, 3);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
-    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         body["message"]
             .as_str()
             .unwrap()
-            .contains("consumed_cells points at block=456, tx_idx=3, which has no tx_index row"),
+            .contains(&format!(
+                "consumed_cells row of item=0x{0} outpoint=0x{0}:0 points at block=456, tx_idx=3, \
+                 which has no tx_index row",
+                hex::encode(&tx)
+            )),
         "{body}"
     );
 }

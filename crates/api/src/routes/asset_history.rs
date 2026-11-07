@@ -139,13 +139,22 @@ pub(crate) fn canonical_versions_at(
             (None, Some(consumed)) => markers.push((context, Err(consumed))),
         }
     }
-    let consumer_positions: Vec<(i64, i32)> = markers
+    let consumed: Vec<(&str, (i64, i32))> = markers
         .iter()
-        .filter_map(|(_, marker)| marker.as_ref().err().map(|c| c.consumer_position()))
+        .filter_map(|(context, marker)| {
+            marker
+                .as_ref()
+                .err()
+                .map(|c| (context.as_str(), c.consumer_position()))
+        })
         .collect();
+    let consumer_positions: Vec<(i64, i32)> =
+        consumed.iter().map(|(_, position)| *position).collect();
     let mut consumers = state
         .store
-        .consumer_tx_hashes(&consumer_positions)?
+        .consumer_tx_hashes_named(&consumer_positions, |i| {
+            format!("consumed_cells row of {}", consumed[i].0)
+        })?
         .into_iter();
     let mut versions = Vec::with_capacity(outpoints.len());
     for ((tx_hash, index), (context, marker)) in outpoints.iter().zip(markers) {

@@ -6369,7 +6369,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("addr_txs points at block=30, tx_idx=0, which has no tx_index row"),
+            err.contains(&format!(
+                "addr_txs row of 0x{} points at block=30, tx_idx=0, which has no tx_index row",
+                hex::encode(lock_hash)
+            )),
             "{err}"
         );
         let rows = domain

@@ -62,13 +62,15 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, TxIndexEntry, AddrTxValue)>> {
-        let rows = self.list_addr_tx_positions_recent(lock_hash, limit, cursor)?;
-        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
-        let entries = self.tx_index_entries_at("addr_txs", &positions)?;
+        let rows = self.list_addr_tx_positions_with_kind(lock_hash, limit, cursor)?;
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _, _)| (*b, *t)).collect();
+        let entries = self.tx_index_entries_named(&positions, |i| {
+            format!("{} row of 0x{}", rows[i].3, bytes_to_hex(lock_hash))
+        })?;
         Ok(rows
             .into_iter()
             .zip(entries)
-            .map(|((block, tx_idx, value), entry)| (block, tx_idx, entry, value))
+            .map(|((block, tx_idx, value, _), entry)| (block, tx_idx, entry, value))
             .collect())
     }
 
@@ -88,6 +90,23 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, AddrTxValue)>> {
+        Ok(self
+            .list_addr_tx_positions_with_kind(lock_hash, limit, cursor)?
+            .into_iter()
+            .map(|(block, tx_idx, value, _)| (block, tx_idx, value))
+            .collect())
+    }
+
+    /// [`Self::list_addr_tx_positions_recent`] with each row's kind
+    /// (`addr_txs` or `addr_txs_by_prefix`), so an error about a position
+    /// names the row that holds it.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn list_addr_tx_positions_with_kind(
+        &self,
+        lock_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(i64, i32, AddrTxValue, &'static str)>> {
         if lock_hash.len() != 32 {
             anyhow::bail!(
                 "list_addr_txs_recent expects 32-byte lock_hash, got {} bytes",
@@ -120,10 +139,12 @@ impl CkbadgerStore {
                 (None, None) => break,
             };
             if take_lock {
-                out.push(by_lock[i].clone());
+                let (block, tx_idx, value) = by_lock[i].clone();
+                out.push((block, tx_idx, value, crate::store::CF_ADDR_TXS));
                 i += 1;
             } else {
-                out.push(by_prefix[j].clone());
+                let (block, tx_idx, value) = by_prefix[j].clone();
+                out.push((block, tx_idx, value, crate::store::CF_ADDR_TXS_BY_PREFIX));
                 j += 1;
             }
         }
@@ -686,7 +707,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("addr_txs points at block=100, tx_idx=1, which has no tx_index row"),
+            err.contains(&format!(
+                "addr_txs row of 0x{} points at block=100, tx_idx=1, which has no tx_index row",
+                "ac".repeat(32)
+            )),
             "{err}"
         );
     }

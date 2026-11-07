@@ -467,7 +467,7 @@ impl CkbadgerStore {
         let mut results = Vec::with_capacity(limit);
         let mut scan_cursor = cursor;
         loop {
-            let rows = self.list_addr_tx_positions_recent(lock_hash, scan_limit, scan_cursor)?;
+            let rows = self.list_addr_tx_positions_with_kind(lock_hash, scan_limit, scan_cursor)?;
             if rows.is_empty() {
                 break;
             }
@@ -475,25 +475,29 @@ impl CkbadgerStore {
             // Always advance the scan cursor by the last row we saw, even if the
             // tag pre-filter excludes the entire chunk — otherwise filtered scans
             // on top addresses would re-read the same chunk forever.
-            let last_seen = rows.last().map(|(b, t, _)| (*b, *t));
+            let last_seen = rows.last().map(|(b, t, _, _)| (*b, *t));
 
             // Pre-filter on AddrTxValue.tags from the thin index so we don't
             // multi_get CF_TX_ACTIONS for entries that can't match. This is the
             // perf-critical path for filtered scans on high-cardinality addresses.
-            let surviving_positions: Vec<(i64, i32)> = rows
+            let survivors: Vec<(i64, i32, &'static str)> = rows
                 .iter()
-                .filter(|(_, _, addr_tx_value)| tags_pass_filter(addr_tx_value.tags, filter))
-                .map(|(block_num, tx_idx, _)| (*block_num, *tx_idx))
+                .filter(|(_, _, addr_tx_value, _)| tags_pass_filter(addr_tx_value.tags, filter))
+                .map(|(block_num, tx_idx, _, kind)| (*block_num, *tx_idx, *kind))
                 .collect();
+            let surviving_positions: Vec<(i64, i32)> =
+                survivors.iter().map(|(b, t, _)| (*b, *t)).collect();
             // The survivors' transactions and activity rows: one tx_index and
             // one activities read for the chunk (and one block_headers read
             // to complete them).
-            let entries = self.tx_index_entries_at("addr_txs", &surviving_positions)?;
+            let entries = self.tx_index_entries_named(&surviving_positions, |i| {
+                format!("{} row of 0x{}", survivors[i].2, bytes_to_hex(lock_hash))
+            })?;
             let stored = self.stored_tx_actions_at(&surviving_positions)?;
             let mut kept_rows = Vec::with_capacity(stored.len());
             let mut kept_entries = Vec::with_capacity(stored.len());
-            for (((block_num, tx_idx), entry), stored) in
-                surviving_positions.iter().zip(entries).zip(stored)
+            for (((block_num, tx_idx, kind), entry), stored) in
+                survivors.iter().zip(entries).zip(stored)
             {
                 match stored {
                     Some(stored) => {
@@ -505,7 +509,7 @@ impl CkbadgerStore {
                     // lost row.
                     None if entry.is_cellbase => {}
                     None => anyhow::bail!(
-                        "addr_txs row of 0x{} at block={}, tx_idx={} (tx 0x{}) has no activities row",
+                        "{kind} row of 0x{} at block={}, tx_idx={} (tx 0x{}) has no activities row",
                         bytes_to_hex(lock_hash),
                         block_num,
                         tx_idx,
