@@ -2258,7 +2258,6 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
         &lock_hash[..20],
         11,
         0,
-        &named_tx,
         &ckbadger_store::types::AddrTxValue::new(
             0,
             false,
@@ -2306,11 +2305,11 @@ async fn test_prefix_transactions_endpoint_lists_named_participations() {
     let prefix = [0x99u8; 20];
     let mut batch = StoreBatch::new(store.as_ref());
     for (block, tx_byte) in [(10i64, 0xa1u8), (11, 0xa2)] {
+        seed_tx_at(&mut batch, &[tx_byte; 32], block, 0);
         batch.put_addr_tx_by_prefix(
             &prefix,
             block,
             0,
-            &[tx_byte; 32],
             &ckbadger_store::types::AddrTxValue::new(
                 0,
                 false,
@@ -2324,7 +2323,6 @@ async fn test_prefix_transactions_endpoint_lists_named_participations() {
         &[0x11u8; 20],
         12,
         0,
-        &[0xa3; 32],
         &ckbadger_store::types::AddrTxValue::new(0, false, false, 0),
     );
     batch.commit().unwrap();

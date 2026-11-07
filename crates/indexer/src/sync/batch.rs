@@ -3257,7 +3257,6 @@ impl Indexer {
                                 &hash,
                                 tx_actions.block_number,
                                 tx_actions.tx_index,
-                                &tx_actions.tx_hash,
                                 &value,
                             ),
                             ParticipantId::LockPrefix(prefix) => put_addr_tx_by_prefix(
@@ -3265,7 +3264,6 @@ impl Indexer {
                                 &prefix,
                                 tx_actions.block_number,
                                 tx_actions.tx_index,
-                                &tx_actions.tx_hash,
                                 &value,
                             ),
                         }
@@ -8862,9 +8860,9 @@ mod tests {
             let mut out = Vec::new();
             for item in store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start) {
                 let (key, _) = item.unwrap();
-                let (lock_hash, block_num, tx_idx, _) =
-                    ckbadger_store::keys::decode_addr_tx_key(&key);
-                out.push((lock_hash, block_num, tx_idx));
+                let (lock_hash, block_num, tx_idx) =
+                    ckbadger_store::keys::decode_addr_tx_key(&key).unwrap();
+                out.push((lock_hash.to_vec(), block_num, tx_idx));
             }
             out.sort();
             out
@@ -8878,8 +8876,8 @@ mod tests {
                 store.iterator_cf(store.cf_addr_txs_by_prefix(), rocksdb::IteratorMode::Start)
             {
                 let (key, value) = item.unwrap();
-                let (prefix, block_num, tx_idx, _) =
-                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key);
+                let (prefix, block_num, tx_idx) =
+                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key).unwrap();
                 out.push((
                     prefix,
                     block_num,
@@ -9023,7 +9021,6 @@ mod tests {
                         &lock,
                         50,
                         0,
-                        &[0x51; 32],
                         &ckbadger_store::types::AddrTxValue::new(1, false, true, 0),
                     );
                 }
@@ -12110,16 +12107,14 @@ mod tests {
         pub(super) fn live_rows(
             store: &CkbadgerStore,
         ) -> (
-            BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), AddrTxValue>,
-            BTreeMap<([u8; 20], i64, i32, Vec<u8>), AddrTxValue>,
+            BTreeMap<([u8; 32], i64, i32), AddrTxValue>,
+            BTreeMap<([u8; 20], i64, i32), AddrTxValue>,
         ) {
             let mut by_lock = BTreeMap::new();
             for item in store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start) {
                 let (key, value) = item.unwrap();
-                let (lock_hash, block_num, tx_idx, tx_hash) =
-                    ckbadger_store::keys::decode_addr_tx_key(&key);
                 by_lock.insert(
-                    (lock_hash, block_num, tx_idx, tx_hash),
+                    ckbadger_store::keys::decode_addr_tx_key(&key).unwrap(),
                     bincode::deserialize(&value).unwrap(),
                 );
             }
@@ -12128,10 +12123,8 @@ mod tests {
                 store.iterator_cf(store.cf_addr_txs_by_prefix(), rocksdb::IteratorMode::Start)
             {
                 let (key, value) = item.unwrap();
-                let (prefix, block_num, tx_idx, tx_hash) =
-                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key);
                 by_prefix.insert(
-                    (prefix, block_num, tx_idx, tx_hash),
+                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key).unwrap(),
                     bincode::deserialize(&value).unwrap(),
                 );
             }
@@ -12150,7 +12143,7 @@ mod tests {
             let mut positions: Vec<(Vec<u8>, i64, i32)> = snapshot
                 .addr_txs
                 .keys()
-                .map(|(lock_hash, block_num, tx_idx, _)| (lock_hash.clone(), *block_num, *tx_idx))
+                .map(|(lock_hash, block_num, tx_idx)| (lock_hash.to_vec(), *block_num, *tx_idx))
                 .collect();
             positions.sort();
             assert_eq!(
@@ -12164,7 +12157,7 @@ mod tests {
             );
 
             assert_eq!(snapshot.addr_txs_by_prefix.len(), 1);
-            let ((prefix, block_num, tx_idx, _), value) =
+            let ((prefix, block_num, tx_idx), value) =
                 snapshot.addr_txs_by_prefix.iter().next().unwrap();
             assert_eq!((*prefix, *block_num, *tx_idx), (NAMED_PREFIX, 101, 1));
             assert_eq!(value.flags, AddrTxValue::TX_TYPE_NAMED);
@@ -12232,10 +12225,8 @@ mod tests {
                 }
             }
 
-            let mut expected: BTreeMap<
-                (Vec<u8>, i64, i32, Vec<u8>),
-                ckbadger_store::types::AddrTxValue,
-            > = BTreeMap::new();
+            let mut expected: BTreeMap<([u8; 32], i64, i32), ckbadger_store::types::AddrTxValue> =
+                BTreeMap::new();
             for block in &blocks {
                 let block_number =
                     i64::from_str_radix(block.block.header.number.trim_start_matches("0x"), 16)
@@ -12290,7 +12281,11 @@ mod tests {
                             None => ckbadger_store::types::TAG_CELLBASE,
                         };
                         expected.insert(
-                            (lock, block_number, tx_index, tx_hash.clone()),
+                            (
+                                <[u8; 32]>::try_from(lock.as_slice()).unwrap(),
+                                block_number,
+                                tx_index,
+                            ),
                             ckbadger_store::types::AddrTxValue::new(
                                 out_cap - in_cap,
                                 has_in,
@@ -14957,8 +14952,8 @@ mod tests {
                 .iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start)
                 .map(|row| {
                     let (key, _) = row.unwrap();
-                    let (lock, _, tx_idx, _) = keys::decode_addr_tx_key(&key);
-                    (lock, tx_idx)
+                    let (lock, _, tx_idx) = keys::decode_addr_tx_key(&key).unwrap();
+                    (lock.to_vec(), tx_idx)
                 })
                 .collect();
             addr_tx_counts(keys.iter().map(|(lock, idx)| (lock.as_slice(), *idx)))
@@ -15005,7 +15000,7 @@ mod tests {
             let bulk_rows = addr_tx_counts(
                 bulk.addr_txs
                     .keys()
-                    .map(|(lock, _, tx_idx, _)| (lock.as_slice(), *tx_idx)),
+                    .map(|(lock, _, tx_idx)| (lock.as_slice(), *tx_idx)),
             );
             assert_tx_counts_match_rows(&expected, &bulk_rows, "bulk");
             // Every block of the fixture opens with a cellbase paying the

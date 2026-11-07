@@ -55,12 +55,12 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     ),
     (
         "addr_txs",
-        "1e2d62803000d30926bfba76bd85e87cd422e837a7778e89ddc2d28df59eef3d7ffffffffffffff57ffffffe0a017a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+        "1e2d62803000d30926bfba76bd85e87cd422e837a7778e89ddc2d28df59eef3d7ffffffffffffff57ffffffe",
         "003793b1e8ffffff019000",
     ),
     (
         "addr_txs_by_prefix",
-        "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a7ffffffffffffff77ffffffe08017a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+        "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a7ffffffffffffff77ffffffe",
         "0000000000000000041400",
     ),
     (

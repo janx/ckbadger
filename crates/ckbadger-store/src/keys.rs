@@ -508,30 +508,27 @@ pub fn cell_code_index_hash_type_byte(hash_type: i16) -> anyhow::Result<u8> {
     })
 }
 
-/// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
-pub const ADDR_TX_KEY_SIZE: usize = 76;
+/// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE).
+/// The transaction is its position; its hash is `tx_index` there.
+pub const ADDR_TX_KEY_SIZE: usize = 44;
 
-pub fn encode_addr_tx_key(
-    lock_hash: &[u8],
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> Vec<u8> {
+pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     assert_key_component_len(
         "encode_addr_tx_key",
         "lock_hash",
         lock_hash.len(),
         HASH32_LEN,
     );
-    assert_key_component_len("encode_addr_tx_key", "tx_hash", tx_hash.len(), HASH32_LEN);
     let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
     key.extend_from_slice(&lock_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&tx_hash[..32]);
     key
 }
 
+/// The seek key for the first `addr_txs` row of `lock_hash` strictly after
+/// (older than) the position `(block_num, tx_idx)`: the row key plus one
+/// byte, so a forward seek passes the row itself.
 pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     assert_key_component_len(
         "encode_addr_tx_seek_after_key",
@@ -539,11 +536,8 @@ pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i
         lock_hash.len(),
         HASH32_LEN,
     );
-    let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
-    key.extend_from_slice(&lock_hash[..32]);
-    key.extend_from_slice(&encode_desc_block_num(block_num));
-    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&[0xFF; 32]);
+    let mut key = encode_addr_tx_key(lock_hash, block_num, tx_idx);
+    key.push(0);
     key
 }
 
@@ -565,54 +559,51 @@ pub fn encode_addr_tx_block_seek_key(lock_hash: &[u8], block_num: i64) -> Vec<u8
     key
 }
 
-pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
-    assert!(
+/// `(lock_hash, block_num, tx_idx)` of an `addr_txs` key. A key of any other
+/// width — the 76-byte layout that also held the tx hash included — is
+/// refused: re-sync required.
+pub fn decode_addr_tx_key(key: &[u8]) -> anyhow::Result<([u8; 32], i64, i32)> {
+    anyhow::ensure!(
         key.len() == ADDR_TX_KEY_SIZE,
-        "decode_addr_tx_key: expected {} bytes, got {}",
-        ADDR_TX_KEY_SIZE,
-        key.len()
+        "addr_txs key 0x{} has {} bytes, expected {} (lock_hash, block, tx_idx): written by an \
+         older layout, re-sync required",
+        hex::encode(key),
+        key.len(),
+        ADDR_TX_KEY_SIZE
     );
-    let lock_hash = key[..32].to_vec();
-    let block_num = decode_desc_block_num(&key[32..40]);
-    let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    let tx_hash = key[44..76].to_vec();
-    (lock_hash, block_num, tx_idx, tx_hash)
+    let mut lock_hash = [0u8; 32];
+    lock_hash.copy_from_slice(&key[..32]);
+    Ok((
+        lock_hash,
+        decode_desc_block_num(&key[32..40]),
+        decode_desc_tx_idx(&key[40..44]),
+    ))
 }
 
 /// Address-tx key for a party a protocol named by the first 20 bytes of its lock
-/// hash: prefix20 + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 64.
+/// hash: prefix20 + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 32.
 ///
 /// A separate CF (and therefore a separate fixed width) keeps `ADDR_TX_KEY_SIZE`
 /// and every length assert on the full-hash index intact.
-pub const ADDR_TX_BY_PREFIX_KEY_SIZE: usize = 64;
+pub const ADDR_TX_BY_PREFIX_KEY_SIZE: usize = 32;
 const LOCK_PREFIX_LEN: usize = 20;
 
-pub fn encode_addr_tx_by_prefix_key(
-    prefix: &[u8],
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> Vec<u8> {
+pub fn encode_addr_tx_by_prefix_key(prefix: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     assert_key_component_len(
         "encode_addr_tx_by_prefix_key",
         "prefix",
         prefix.len(),
         LOCK_PREFIX_LEN,
     );
-    assert_key_component_len(
-        "encode_addr_tx_by_prefix_key",
-        "tx_hash",
-        tx_hash.len(),
-        HASH32_LEN,
-    );
     let mut key = Vec::with_capacity(ADDR_TX_BY_PREFIX_KEY_SIZE);
     key.extend_from_slice(prefix);
     // Reuse the full-hash encoder's descending position suffix verbatim, so the
     // two indexes can never drift in ordering.
-    key.extend_from_slice(&encode_addr_tx_key(&[0u8; 32], block_num, tx_idx, tx_hash)[32..]);
+    key.extend_from_slice(&encode_addr_tx_key(&[0u8; 32], block_num, tx_idx)[32..]);
     key
 }
 
+/// [`encode_addr_tx_seek_after_key`] for `addr_txs_by_prefix`.
 pub fn encode_addr_tx_by_prefix_seek_after_key(
     prefix: &[u8],
     block_num: i64,
@@ -624,25 +615,29 @@ pub fn encode_addr_tx_by_prefix_seek_after_key(
         prefix.len(),
         LOCK_PREFIX_LEN,
     );
-    let mut key = Vec::with_capacity(ADDR_TX_BY_PREFIX_KEY_SIZE);
-    key.extend_from_slice(prefix);
-    key.extend_from_slice(&encode_addr_tx_seek_after_key(&[0u8; 32], block_num, tx_idx)[32..]);
+    let mut key = encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx);
+    key.push(0);
     key
 }
 
-pub fn decode_addr_tx_by_prefix_key(key: &[u8]) -> ([u8; 20], i64, i32, Vec<u8>) {
-    assert!(
+/// `(prefix, block_num, tx_idx)` of an `addr_txs_by_prefix` key; any other
+/// width (the 64-byte layout with the tx hash included) is refused.
+pub fn decode_addr_tx_by_prefix_key(key: &[u8]) -> anyhow::Result<([u8; 20], i64, i32)> {
+    anyhow::ensure!(
         key.len() == ADDR_TX_BY_PREFIX_KEY_SIZE,
-        "decode_addr_tx_by_prefix_key: expected {} bytes, got {}",
-        ADDR_TX_BY_PREFIX_KEY_SIZE,
-        key.len()
+        "addr_txs_by_prefix key 0x{} has {} bytes, expected {} (prefix, block, tx_idx): written \
+         by an older layout, re-sync required",
+        hex::encode(key),
+        key.len(),
+        ADDR_TX_BY_PREFIX_KEY_SIZE
     );
     let mut prefix = [0u8; LOCK_PREFIX_LEN];
     prefix.copy_from_slice(&key[..LOCK_PREFIX_LEN]);
-    let mut padded = vec![0u8; 32];
-    padded.extend_from_slice(&key[LOCK_PREFIX_LEN..]);
-    let (_, block_num, tx_idx, tx_hash) = decode_addr_tx_key(&padded);
-    (prefix, block_num, tx_idx, tx_hash)
+    Ok((
+        prefix,
+        decode_desc_block_num(&key[20..28]),
+        decode_desc_tx_idx(&key[28..32]),
+    ))
 }
 
 /// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
@@ -3500,17 +3495,29 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_addr_tx_key_includes_tx_hash() {
+    fn addr_tx_key_is_the_44_byte_position_and_round_trips() {
         let lock_hash = [0x11u8; 32];
-        let tx_hash = [0xAAu8; 32];
-        let key = encode_addr_tx_key(&lock_hash, 100, 3, &tx_hash);
-        assert_eq!(key.len(), 76);
-        let (decoded_lock_hash, decoded_block, decoded_idx, decoded_tx_hash) =
-            decode_addr_tx_key(&key);
-        assert_eq!(decoded_lock_hash, lock_hash.to_vec());
-        assert_eq!(decoded_block, 100);
-        assert_eq!(decoded_idx, 3);
-        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        let key = encode_addr_tx_key(&lock_hash, 100, 3);
+        assert_eq!(key.len(), ADDR_TX_KEY_SIZE);
+        assert_eq!(ADDR_TX_KEY_SIZE, 44);
+        assert_eq!(&key[..32], &lock_hash);
+        assert_eq!(decode_addr_tx_key(&key).unwrap(), (lock_hash, 100, 3));
+        // Newer positions first; the seek-after key lands strictly after its row.
+        assert!(encode_addr_tx_key(&lock_hash, 100, 4) < key);
+        assert!(encode_addr_tx_key(&lock_hash, 101, 0) < key);
+        let seek = encode_addr_tx_seek_after_key(&lock_hash, 100, 3);
+        assert!(seek > key && seek < encode_addr_tx_key(&lock_hash, 100, 2));
+    }
+
+    #[test]
+    fn decode_addr_tx_key_refuses_the_76_byte_layout() {
+        let mut old = encode_addr_tx_key(&[0x11; 32], 100, 3);
+        old.extend_from_slice(&[0xAA; 32]);
+        let err = decode_addr_tx_key(&old).unwrap_err().to_string();
+        assert!(
+            err.contains("has 76 bytes, expected 44") && err.contains("re-sync required"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -3819,15 +3826,7 @@ mod tests {
                 component: "lock_hash",
                 expected: 32,
                 call: |h| {
-                    let _ = encode_addr_tx_key(h, 1, 0, &H);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_addr_tx_key",
-                component: "tx_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_addr_tx_key(&H, 1, 0, h);
+                    let _ = encode_addr_tx_key(h, 1, 0);
                 },
             },
             FixedWidthCase {
@@ -4401,25 +4400,18 @@ mod tests {
     fn test_addr_tx_block_seek_key_orders_between_blocks() {
         let lock = [0xAA; 32];
         let seek = encode_addr_tx_block_seek_key(&lock, 5);
-        // Every row of block 5, whatever its tx index or hash, sorts at or after the seek key.
-        assert!(encode_addr_tx_key(&lock, 5, 0, &[0x00; 32]) >= seek);
-        assert!(encode_addr_tx_key(&lock, 5, i32::MAX, &[0x00; 32]) >= seek);
-        assert!(encode_addr_tx_key(&lock, 5, 0, &[0xFF; 32]) >= seek);
+        // Every row of block 5, whatever its tx index, sorts at or after the seek key.
+        assert!(encode_addr_tx_key(&lock, 5, 0) >= seek);
+        assert!(encode_addr_tx_key(&lock, 5, i32::MAX) >= seek);
         // Lower blocks follow it; higher blocks precede it.
-        assert!(encode_addr_tx_key(&lock, 4, i32::MAX, &[0x00; 32]) > seek);
-        assert!(encode_addr_tx_key(&lock, 6, 0, &[0xFF; 32]) < seek);
+        assert!(encode_addr_tx_key(&lock, 4, i32::MAX) > seek);
+        assert!(encode_addr_tx_key(&lock, 6, 0) < seek);
     }
 
     #[test]
     #[should_panic(expected = "encode_addr_tx_key: lock_hash must be exactly 32 bytes, got 33")]
     fn test_addr_tx_key_rejects_oversized_lock_hash() {
-        let _ = encode_addr_tx_key(&[0x9B; 33], 1, 0, &[0xAB; 32]);
-    }
-
-    #[test]
-    #[should_panic(expected = "encode_addr_tx_key: tx_hash must be exactly 32 bytes, got 33")]
-    fn test_addr_tx_key_rejects_oversized_tx_hash() {
-        let _ = encode_addr_tx_key(&[0x9B; 32], 1, 0, &[0xAB; 33]);
+        let _ = encode_addr_tx_key(&[0x9B; 33], 1, 0);
     }
 
     #[test]
@@ -4453,23 +4445,33 @@ mod addr_tx_by_prefix_key_tests {
     use super::*;
 
     #[test]
-    fn addr_tx_by_prefix_key_roundtrip_is_64_bytes_and_descending() {
+    fn addr_tx_by_prefix_key_roundtrip_is_32_bytes_and_descending() {
         let prefix = [0x5Au8; 20];
-        let tx_hash = [0x77u8; 32];
-        let k1 = encode_addr_tx_by_prefix_key(&prefix, 100, 3, &tx_hash);
-        let k2 = encode_addr_tx_by_prefix_key(&prefix, 101, 0, &tx_hash);
+        let k1 = encode_addr_tx_by_prefix_key(&prefix, 100, 3);
+        let k2 = encode_addr_tx_by_prefix_key(&prefix, 101, 0);
         assert_eq!(k1.len(), ADDR_TX_BY_PREFIX_KEY_SIZE);
+        assert_eq!(ADDR_TX_BY_PREFIX_KEY_SIZE, 32);
         assert!(k2 < k1, "更高的块必须排在前面（desc 编码）");
-        let (p, b, t, h) = decode_addr_tx_by_prefix_key(&k1);
-        assert_eq!((p, b, t, h.as_slice()), (prefix, 100, 3, &tx_hash[..]));
+        assert_eq!(decode_addr_tx_by_prefix_key(&k1).unwrap(), (prefix, 100, 3));
         let seek = encode_addr_tx_by_prefix_seek_after_key(&prefix, 100, 3);
         assert!(seek > k1 && seek.starts_with(&prefix));
     }
 
     #[test]
+    fn decode_addr_tx_by_prefix_key_refuses_the_64_byte_layout() {
+        let mut old = encode_addr_tx_by_prefix_key(&[0x5A; 20], 100, 3);
+        old.extend_from_slice(&[0x77; 32]);
+        let err = decode_addr_tx_by_prefix_key(&old).unwrap_err().to_string();
+        assert!(
+            err.contains("has 64 bytes, expected 32") && err.contains("re-sync required"),
+            "{err}"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "prefix must be exactly 20 bytes")]
     fn addr_tx_by_prefix_key_rejects_wrong_prefix_width() {
-        encode_addr_tx_by_prefix_key(&[0u8; 32], 1, 0, &[0u8; 32]);
+        encode_addr_tx_by_prefix_key(&[0u8; 32], 1, 0);
     }
 }
 

@@ -1066,15 +1066,17 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_addr_balance(), lock_hash, &value);
     }
 
+    /// The `addr_txs` row of `lock_hash` at the transaction position
+    /// `(block_num, tx_idx)` (the key holds no tx hash: readers resolve it
+    /// through `tx_index`).
     pub fn put_addr_tx(
         &mut self,
         lock_hash: &[u8],
         block_num: i64,
         tx_idx: i32,
-        tx_hash: &[u8],
         value: &AddrTxValue,
     ) {
-        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
+        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
         let encoded = bincode::serialize(value).expect("serialize AddrTxValue");
         self.put_cf(self.store.cf_addr_txs(), &key, &encoded);
     }
@@ -1088,10 +1090,9 @@ impl<'a> StoreBatch<'a> {
         prefix: &[u8],
         block_num: i64,
         tx_idx: i32,
-        tx_hash: &[u8],
         value: &AddrTxValue,
     ) {
-        let key = keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx, tx_hash);
+        let key = keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx);
         let encoded = bincode::serialize(value).expect("serialize AddrTxValue");
         self.put_cf(self.store.cf_addr_txs_by_prefix(), &key, &encoded);
     }
@@ -2354,14 +2355,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAD; 32];
-        let tx_hash = [0xBE; 32];
         let addr_tx_value = AddrTxValue::new(500, false, true, 0);
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_addr_tx(&lock, 100, 0, &tx_hash, &addr_tx_value);
+        batch.put_addr_tx(&lock, 100, 0, &addr_tx_value);
         batch.commit().unwrap();
 
-        let key = keys::encode_addr_tx_key(&lock, 100, 0, &tx_hash);
+        let key = keys::encode_addr_tx_key(&lock, 100, 0);
         let raw = store.get_cf(store.cf_addr_txs(), &key).unwrap().unwrap();
         let decoded: AddrTxValue = bincode::deserialize(&raw).unwrap();
         assert_eq!(decoded, addr_tx_value);

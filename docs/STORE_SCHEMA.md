@@ -58,8 +58,8 @@ requires re-sync from genesis; there is no migration.
 | `tx_index`                       | block_number + tx_index                                                       | TxIndexEntry { tx_hash: [u8; 32], fee, size, counts, cycles, tags, timestamp } | Domain transaction order and canonical hash pointer; written by the indexer in live and bulk paths                                                                                                                                                         |
 | `tx_hash_map`                    | tx_hash (32B)                                                                 | block_number + tx_index                                                        | Reverse lookup: tx_hash -> position                                                                                                                                                                                                                        |
 | `addr_balance`                   | lock_script_hash (32B)                                                        | AddressBalance                                                                 | Address balance, cell counts, `txs_count` and `cellbase_txs_count` (the cellbase txs among them; activity total = `address_tx_count - cellbase_txs_count`)                                                                                                 |
-| `addr_txs`                       | lock_hash + block + tx_index + tx_hash                                        | AddrTxValue                                                                    | Address transaction thin index with capacity change, tx flags, and participant activity tags                                                                                                                                                               |
-| `addr_txs_by_prefix`             | lock_hash_prefix(20) + block_num_desc(8) + tx_idx_desc(4) + tx_hash(32) = 64B | AddrTxValue                                                                    | Same thin index for a party a protocol NAMED by its 20-byte lock-hash prefix and that holds no cell in the transaction                                                                                                                                     |
+| `addr_txs`                       | lock_hash(32) + block_num_desc(8) + tx_idx_desc(4) = 44B                      | AddrTxValue                                                                    | Address transaction thin index with capacity change, tx flags, and participant activity tags; the transaction is its position (hash: `tx_index`)                                                                                                        |
+| `addr_txs_by_prefix`             | lock_hash_prefix(20) + block_num_desc(8) + tx_idx_desc(4) = 32B               | AddrTxValue                                                                    | Same thin index for a party a protocol NAMED by its 20-byte lock-hash prefix and that holds no cell in the transaction                                                                                                                                     |
 | `addr_prefix_stats`              | lock_hash_prefix(20)                                                          | AddrPrefixStats                                                                | How many transactions named this prefix without it holding a cell; added to `addr_balance.txs_count` by `address_tx_count`                                                                                                                                 |
 | `dao_deposits`                   | tx_hash + output_index (34B)                                                  | DaoDepositCacheEntry                                                           | DAO lifecycle plus original capacity, exact occupied capacity, deposit/request ARs, and claimed compensation                                                                                                                                               |
 | `dao_by_withdraw_tx`             | withdraw_outpoint (34B)                                                       | deposit outpoint                                                               | Reverse lookup: withdraw outpoint -> deposit                                                                                                                                                                                                               |
@@ -807,16 +807,18 @@ is no migration.
 | CF | Pointer | Resolved by |
 | --- | --- | --- |
 | `consumed_cells` | value `ConsumedCellMeta { created_at_block: i64, consumed_at_block: i64, consumed_tx_idx: i32 }`, 20 B (was 57 B with the consumer's hash); `decode_consumed_cell_meta` refuses any other width | `CkbadgerStore::consumer_tx_hashes(positions)` |
+| `addr_txs` / `addr_txs_by_prefix` | key `party + block_num_desc + tx_idx_desc`, 44 B / 32 B (were 76 B / 64 B with the tx hash); `decode_addr_tx_key` / `decode_addr_tx_by_prefix_key` refuse any other width | `list_addr_txs_recent` / `list_addr_txs_by_prefix_recent` (one `tx_hashes_at` per page); `list_addr_tx_positions_recent` for readers that need no hash |
 
 ## Key Design
 
-- `addr_txs` is keyed `lock_hash(32) + block_num_desc(8) + tx_idx_desc(4) + tx_hash(32)` = 76B and
-  `addr_txs_by_prefix` `lock_hash_prefix(20) + block_num_desc(8) + tx_idx_desc(4) + tx_hash(32)` =
-  64B. Two fixed-width CFs rather than one tagged key: every length assert on the full-hash index
-  stays exact, and `list_addr_txs_recent` is a plain descending merge of the two scans. A given
-  (party, tx) pair reaches exactly one of them — the activity builder merges a named prefix into
-  the cell owner it matches — so the merge has nothing to dedupe and treats a collision as the
-  upstream bug it is.
+- `addr_txs` is keyed `lock_hash(32) + block_num_desc(8) + tx_idx_desc(4)` = 44B and
+  `addr_txs_by_prefix` `lock_hash_prefix(20) + block_num_desc(8) + tx_idx_desc(4)` = 32B: the
+  transaction is its position, so a party has one row per position by construction. Two fixed-width
+  CFs rather than one tagged key: every length assert on the full-hash index stays exact, and
+  `list_addr_tx_positions_recent` is a plain descending merge of the two scans. A given (party, tx)
+  pair reaches exactly one of them — the activity builder merges a named prefix into the cell owner
+  it matches — so the merge has nothing to dedupe and treats a collision as the upstream bug it is.
+  `list_addr_txs_recent` resolves a page's hashes with one `tx_index` read.
 - `CkbadgerStore::open_domain(path)` / `open_append_only(path)` — primary read-write mode for indexer and maintenance commands (split domain + append-only)
 - `CkbadgerStore::open_domain_secondary(primary_path, secondary_path)` / `open_append_only_secondary(primary_path, secondary_path)` — read-only mode for API/TUI (split secondary stores)
 - All store operations are synchronous (RocksDB reads are fast)

@@ -1852,7 +1852,6 @@ mod tests {
                 &owner,
                 200,
                 1,
-                &reactivate_tx_hash,
                 &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
             );
             batch.put_addr_balance(

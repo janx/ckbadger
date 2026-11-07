@@ -3740,11 +3740,10 @@ pub struct BulkArtifactSnapshot {
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
     pub tx_actions_map: HashMap<Vec<u8>, TxActions>,
-    /// `CF_ADDR_TXS` rows, keyed by (lock_hash, block, tx_idx, tx_hash).
-    pub addr_txs: BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
-    /// `CF_ADDR_TXS_BY_PREFIX` rows, keyed by (prefix20, block, tx_idx, tx_hash).
-    pub addr_txs_by_prefix:
-        BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    /// `CF_ADDR_TXS` rows, keyed by (lock_hash, block, tx_idx).
+    pub addr_txs: BTreeMap<([u8; 32], i64, i32), ckbadger_store::types::AddrTxValue>,
+    /// `CF_ADDR_TXS_BY_PREFIX` rows, keyed by (prefix20, block, tx_idx).
+    pub addr_txs_by_prefix: BTreeMap<([u8; 20], i64, i32), ckbadger_store::types::AddrTxValue>,
     pub addr_prefix_stats: HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
     /// `CF_TX_ACTIONS_BY_BUCKET` keys, raw, in key order. Compared
     /// byte-for-byte against the live write path's rows.
@@ -4932,21 +4931,13 @@ fn build_history_rows_for_block(
         )? {
             match id {
                 ckbadger_store::types::ParticipantId::Lock(lock_hash) => {
-                    let addr_tx_key = keys::encode_addr_tx_key(
-                        &lock_hash,
-                        tx.block_number,
-                        tx.tx_index,
-                        &tx.hash,
-                    );
+                    let addr_tx_key =
+                        keys::encode_addr_tx_key(&lock_hash, tx.block_number, tx.tx_index);
                     rows.push_serialized(CF_ADDR_TXS, &addr_tx_key, &value)?;
                 }
                 ckbadger_store::types::ParticipantId::LockPrefix(prefix) => {
-                    let key = keys::encode_addr_tx_by_prefix_key(
-                        &prefix,
-                        tx.block_number,
-                        tx.tx_index,
-                        &tx.hash,
-                    );
+                    let key =
+                        keys::encode_addr_tx_by_prefix_key(&prefix, tx.block_number, tx.tx_index);
                     rows.push_serialized(CF_ADDR_TXS_BY_PREFIX, &key, &value)?;
                 }
             }
@@ -6232,16 +6223,15 @@ fn collect_history_snapshot(
 fn collect_addr_tx_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<(
-    BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
-    BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    BTreeMap<([u8; 32], i64, i32), ckbadger_store::types::AddrTxValue>,
+    BTreeMap<([u8; 20], i64, i32), ckbadger_store::types::AddrTxValue>,
     HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
 )> {
     let mut addr_txs = BTreeMap::new();
     for item in domain_store.iterator_cf(domain_store.cf_addr_txs(), IteratorMode::Start) {
         let (key, value) = item?;
-        let (lock_hash, block_num, tx_idx, tx_hash) = keys::decode_addr_tx_key(&key);
         addr_txs.insert(
-            (lock_hash, block_num, tx_idx, tx_hash),
+            keys::decode_addr_tx_key(&key)?,
             bincode::deserialize(&value)?,
         );
     }
@@ -6249,9 +6239,8 @@ fn collect_addr_tx_snapshot(
     for item in domain_store.iterator_cf(domain_store.cf_addr_txs_by_prefix(), IteratorMode::Start)
     {
         let (key, value) = item?;
-        let (prefix, block_num, tx_idx, tx_hash) = keys::decode_addr_tx_by_prefix_key(&key);
         addr_txs_by_prefix.insert(
-            (prefix, block_num, tx_idx, tx_hash),
+            keys::decode_addr_tx_by_prefix_key(&key)?,
             bincode::deserialize(&value)?,
         );
     }
@@ -7453,11 +7442,6 @@ mod tests {
             "0x{}",
             "02".repeat(20)
         )));
-        let create_tx_hash =
-            hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
-        let split_tx_hash =
-            hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
-
         let interner = interner::IdentityInterner::default();
         let (arena, _) =
             crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
@@ -7498,9 +7482,9 @@ mod tests {
             .expect("commit append");
 
         let expected = [
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1, &split_tx_hash),
-            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1),
+            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1),
         ];
 
         let mut actual_keys: HashSet<Vec<u8>> = HashSet::new();

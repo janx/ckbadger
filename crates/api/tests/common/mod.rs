@@ -1285,7 +1285,6 @@ pub fn seed_committed_activity(
         lock_hash,
         block_number,
         tx_index,
-        tx_hash,
         &AddrTxValue::new(capacity_change, false, true, tags),
     );
     batch.commit().unwrap();
@@ -1347,7 +1346,7 @@ pub fn sync_address_tx_counters(store: &CkbadgerStore, lock_hash: &[u8]) {
         if !key.starts_with(lock_hash) {
             break;
         }
-        let (_, block, tx_idx, _) = ckbadger_store::keys::decode_addr_tx_key(&key);
+        let (_, block, tx_idx) = ckbadger_store::keys::decode_addr_tx_key(&key).unwrap();
         txs += 1;
         let entry = store
             .get_tx_index(block, tx_idx)

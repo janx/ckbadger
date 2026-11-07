@@ -356,7 +356,7 @@ impl CkbadgerStore {
         let activity_cf = self.cf_tx_actions();
 
         loop {
-            let rows = self.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
+            let rows = self.list_addr_tx_positions_recent(lock_hash, scan_limit, scan_cursor)?;
             if rows.is_empty() {
                 break;
             }
@@ -364,20 +364,28 @@ impl CkbadgerStore {
             // Always advance the scan cursor by the last row we saw, even if the
             // tag pre-filter excludes the entire chunk — otherwise filtered scans
             // on top addresses would re-read the same chunk forever.
-            let last_seen = rows.last().map(|(b, t, _, _)| (*b, *t));
+            let last_seen = rows.last().map(|(b, t, _)| (*b, *t));
 
             // Pre-filter on AddrTxValue.tags from the thin index so we don't
             // multi_get CF_TX_ACTIONS for entries that can't match. This is the
             // perf-critical path for filtered scans on high-cardinality addresses.
-            let surviving: Vec<&(i64, i32, Vec<u8>, AddrTxValue)> = rows
+            let surviving_positions: Vec<(i64, i32)> = rows
                 .iter()
-                .filter(|(_, _, _, addr_tx_value)| tags_pass_filter(addr_tx_value.tags, filter))
+                .filter(|(_, _, addr_tx_value)| tags_pass_filter(addr_tx_value.tags, filter))
+                .map(|(block_num, tx_idx, _)| (*block_num, *tx_idx))
+                .collect();
+            // The survivors' hashes, one tx_index read for the chunk.
+            let surviving_hashes = self.tx_hashes_at("addr_txs", &surviving_positions)?;
+            let surviving: Vec<(i64, i32, [u8; 32])> = surviving_positions
+                .iter()
+                .zip(surviving_hashes)
+                .map(|((block_num, tx_idx), hash)| (*block_num, *tx_idx, hash))
                 .collect();
 
             if !surviving.is_empty() {
                 let action_keys: Vec<Vec<u8>> = surviving
                     .iter()
-                    .map(|(block_num, tx_idx, tx_hash, _)| {
+                    .map(|(block_num, tx_idx, tx_hash)| {
                         keys::encode_tx_actions_key(*block_num, *tx_idx, tx_hash)
                     })
                     .collect();
@@ -387,7 +395,7 @@ impl CkbadgerStore {
                     .collect();
                 let action_values = self.multi_get_cf(action_refs);
 
-                for ((block_num, tx_idx, tx_hash, _addr_tx_value), value_result) in
+                for ((block_num, tx_idx, tx_hash), value_result) in
                     surviving.iter().zip(action_values)
                 {
                     let value = match value_result {
@@ -725,12 +733,21 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         // Matching entry: AddrTxValue.tags has TAG_TOKEN. Real TxActions also written.
-        batch.put_addr_tx(
-            &lock,
+        batch.put_addr_tx(&lock, 100, 0, &AddrTxValue::new(50, false, true, TAG_TOKEN));
+        batch.put_tx_index(
             100,
             0,
-            &matching_tx_hash,
-            &AddrTxValue::new(50, false, true, TAG_TOKEN),
+            &TxIndexEntry {
+                tx_hash: matching_tx_hash,
+                is_cellbase: false,
+                timestamp: 1_700_000_100,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                semantic_tags: 0,
+            },
         );
         let matching_actions = TxActions {
             tx_hash: matching_tx_hash.to_vec(),
@@ -755,13 +772,8 @@ mod tests {
 
         // Non-matching entry: AddrTxValue.tags = 0 (no TAG_TOKEN). CF_TX_ACTIONS
         // intentionally corrupt — list_activities(filter=token) must NOT read it.
-        batch.put_addr_tx(
-            &lock,
-            99,
-            0,
-            &non_matching_tx_hash,
-            &AddrTxValue::new(10, false, true, 0),
-        );
+        // No tx_index row either: a rejected entry is not resolved.
+        batch.put_addr_tx(&lock, 99, 0, &AddrTxValue::new(10, false, true, 0));
         batch.commit().unwrap();
 
         let corrupt_key = keys::encode_tx_actions_key(99, 0, &non_matching_tx_hash);

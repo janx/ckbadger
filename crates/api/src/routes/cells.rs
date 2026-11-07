@@ -73,7 +73,6 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
-const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
 
 /// Convert a `semantic_tags` bitmap into human-readable script label strings.
 /// Returns an empty vec when no bits are set (including legacy `0` values).
@@ -4355,66 +4354,6 @@ fn active_addresses_from_cache(
         .collect()
 }
 
-fn is_canonical_addr_tx(
-    store: &CkbadgerStore,
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> anyhow::Result<bool> {
-    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(tx_hash)? else {
-        return Ok(false);
-    };
-    if canonical_block != block_num || canonical_tx_idx != tx_idx {
-        return Ok(false);
-    }
-    Ok(store
-        .get_tx_index(canonical_block, canonical_tx_idx)?
-        .is_some())
-}
-
-fn list_canonical_addr_txs_page(
-    store: &CkbadgerStore,
-    addr_tx_store: &CkbadgerStore,
-    lock_hash: &[u8],
-    limit: usize,
-    cursor: Option<(i64, i32)>,
-) -> anyhow::Result<Vec<(i64, i32, Vec<u8>, ckbadger_store::AddrTxValue)>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let scan_limit = ADDR_TX_SCAN_CHUNK_SIZE.max(limit);
-    let mut out = Vec::with_capacity(limit);
-    let mut scan_cursor = cursor;
-
-    loop {
-        let rows = addr_tx_store.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
-        if rows.is_empty() {
-            break;
-        }
-        let rows_len = rows.len();
-        let mut last_seen = None;
-        for (block_num, tx_idx, tx_hash, addr_tx_value) in rows {
-            last_seen = Some((block_num, tx_idx));
-            if is_canonical_addr_tx(store, block_num, tx_idx, &tx_hash)? {
-                out.push((block_num, tx_idx, tx_hash, addr_tx_value));
-                if out.len() >= limit {
-                    return Ok(out);
-                }
-            }
-        }
-        if rows_len < scan_limit {
-            break;
-        }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        scan_cursor = Some(last_seen_cursor);
-    }
-
-    Ok(out)
-}
-
 /// One `addr_txs_by_prefix` row.
 ///
 /// The prefix index is the half of an address's history that a protocol named
@@ -4615,18 +4554,14 @@ async fn get_address_transactions(
         None
     };
 
-    // Fetch canonical recent transactions for this address (newest first).
-    // Each row now includes the materialized AddrTxValue with capacity_change and tx_type.
+    // The address's recent transactions (newest first), each with its
+    // AddrTxValue (capacity_change, tx_type). Every row is canonical: its key is
+    // the transaction's position, whose hash `tx_index` resolves (a position
+    // with no transaction is an error, never a row to skip).
     let store = state.store.clone();
     let lock_hash_c = lock_hash.clone();
     let addr_txs = tokio::task::spawn_blocking(move || {
-        list_canonical_addr_txs_page(
-            store.as_ref(),
-            store.as_ref(),
-            &lock_hash_c,
-            limit + 1,
-            cursor,
-        )
+        store.list_addr_txs_recent(&lock_hash_c, limit + 1, cursor)
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -6374,18 +6309,17 @@ mod tests {
         assert_eq!(labels.len(), 8);
     }
 
+    /// An `addr_txs` row is keyed by its transaction's position, so it is
+    /// canonical by construction; a row whose position has no transaction (an
+    /// orphan the journal rollback would have deleted) is an error, not a row
+    /// the page skips.
     #[test]
-    fn test_list_canonical_addr_txs_page_filters_orphaned_entries() {
+    fn test_address_transactions_page_rejects_an_orphaned_position() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let lock_hash = [0xAA; 32];
-
-        let stale_tx = vec![0x30; 32];
-        let canonical_tx_new = vec![0x20; 32];
-        let canonical_tx_old = vec![0x10; 32];
-
-        let tx_index = TxIndexEntry {
-            tx_hash: [0u8; 32],
+        let tx_index = |hash: [u8; 32]| TxIndexEntry {
+            tx_hash: hash,
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -6396,43 +6330,38 @@ mod tests {
             semantic_tags: 0,
         };
         let mut domain_batch = StoreBatch::new(&domain);
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            30,
-            0,
-            &stale_tx,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            20,
-            0,
-            &canonical_tx_new,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            10,
-            0,
-            &canonical_tx_old,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
-        domain_batch.put_tx_index(20, 0, &tx_index);
-        domain_batch.put_tx_index(10, 0, &tx_index);
+        for block in [30, 20, 10] {
+            domain_batch.put_addr_tx(
+                &lock_hash,
+                block,
+                0,
+                &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
+            );
+        }
+        domain_batch.put_tx_index(20, 0, &tx_index([0x20; 32]));
+        domain_batch.put_tx_index(10, 0, &tx_index([0x10; 32]));
         domain_batch.commit().unwrap();
 
-        let rows = list_canonical_addr_txs_page(&domain, &domain, &lock_hash, 3, None).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, 20);
-        assert_eq!(rows[1].0, 10);
-        assert_eq!(rows[0].2, canonical_tx_new);
-        assert_eq!(rows[1].2, canonical_tx_old);
-        // AddrTxValue is propagated through from the store.
-        assert_eq!(rows[0].3.tx_type_str(), "received");
-        assert_eq!(rows[1].3.tx_type_str(), "received");
+        let err = domain
+            .list_addr_txs_recent(&lock_hash, 3, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("addr_txs points at block=30, tx_idx=0, which has no tx_index row"),
+            "{err}"
+        );
+        let rows = domain
+            .list_addr_txs_recent(&lock_hash, 2, Some((30, 0)))
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|(block, _, hash, value)| (*block, hash.clone(), value.tx_type_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (20, vec![0x20; 32], "received"),
+                (10, vec![0x10; 32], "received")
+            ]
+        );
     }
 
     #[test]

@@ -45,13 +45,7 @@ async fn test_address_activities_reads_from_store() {
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     core_batch.put_tx_actions(&actions);
-    core_batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    core_batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     core_batch.commit().unwrap();
     sync_address_tx_counters(&core_store, &lock_hash);
     core_store
@@ -131,13 +125,7 @@ async fn address_activities_response(
         },
     );
     batch.put_tx_actions(actions);
-    batch.put_addr_tx(
-        lock_hash,
-        88,
-        1,
-        &actions.tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    batch.put_addr_tx(lock_hash, 88, 1, &AddrTxValue::new(0, false, true, 0));
     batch.commit().unwrap();
     sync_address_tx_counters(&core_store, lock_hash);
     core_store
@@ -470,7 +458,6 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         &lock_hash,
         88,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, false, true, TAG_TYPE_CALL),
     );
     core_batch.put_tx_hash_map(&tx_hash, 88, 0);
@@ -797,13 +784,7 @@ async fn test_address_transactions_reads_from_derived_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
     let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
-    derived_batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    derived_batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     derived_batch.commit().unwrap();
 
     let request = Request::builder()
@@ -883,13 +864,7 @@ fn seed_activity_with_txs_count(
     );
     let actions = make_test_tx_actions(lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     batch.put_tx_actions(&actions);
-    batch.put_addr_tx(
-        lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    batch.put_addr_tx(lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     batch.commit().unwrap();
 
     store
@@ -992,13 +967,7 @@ async fn test_address_activities_total_contradicting_page_one_is_an_error() {
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     batch.put_tx_actions(&actions);
-    batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -1075,13 +1044,7 @@ async fn test_address_activities_total_is_reached_by_paging_to_exhaustion() {
                 semantic_tags: 0,
             },
         );
-        batch.put_addr_tx(
-            &lock_hash,
-            block,
-            0,
-            &tx_hash,
-            &AddrTxValue::new(100, false, true, 0),
-        );
+        batch.put_addr_tx(&lock_hash, block, 0, &AddrTxValue::new(100, false, true, 0));
     }
     batch.put_addr_balance(
         &lock_hash,
@@ -1523,7 +1486,6 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         &prefix,
         10,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, false, false, TAG_IDENTITY),
     );
     // `other` holds a cell in this transaction, so the chain view knows its
@@ -1621,13 +1583,7 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
     };
     seed_named_tx(&core_store, 10, &tx_hash, &actions);
     let mut batch = StoreBatch::new(core_store.as_ref());
-    batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(-100, true, false, 0),
-    );
+    batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(-100, true, false, 0));
     batch.commit().unwrap();
     sync_address_tx_counters(&core_store, &lock_hash);
 
@@ -1882,13 +1838,7 @@ async fn address_transactions_missing_block_header_is_a_500_naming_the_block() {
             semantic_tags: 0,
         },
     );
-    batch.put_addr_tx(
-        &lock_hash,
-        4242,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(-100, true, false, 0),
-    );
+    batch.put_addr_tx(&lock_hash, 4242, 0, &AddrTxValue::new(-100, true, false, 0));
     batch.commit().unwrap();
     let mut config = test_config(store);
     config.pool_mirror_enabled = false;
@@ -2076,13 +2026,7 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
     };
     seed_named_tx(store, 10, &tx_hash, &actions);
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_addr_tx(
-        lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(-100, true, false, 0),
-    );
+    batch.put_addr_tx(lock_hash, 10, 0, &AddrTxValue::new(-100, true, false, 0));
     batch.commit().unwrap();
     sync_address_tx_counters(store, lock_hash);
 }
@@ -2262,7 +2206,6 @@ async fn identity_item_deltas_name_their_standard() {
         &lock_hash,
         10,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, true, true, TAG_IDENTITY),
     );
     batch.commit().unwrap();
@@ -2456,7 +2399,6 @@ async fn object_item_deltas_name_collection_class_and_composition() {
         &lock_hash,
         10,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, true, true, TAG_OBJECT),
     );
     batch.commit().unwrap();
@@ -2542,7 +2484,6 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         &lock_hash,
         12,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, true, true, TAG_OBJECT),
     );
     // The transaction list sums each listed tx's output payloads.
