@@ -303,6 +303,9 @@ pub fn deployment_reference_hashes(info: &ScriptInfo) -> (Option<Vec<u8>>, Optio
 pub struct DepCellInfo {
     pub type_script_hash: Option<Vec<u8>>,
     pub data_hash: Option<Vec<u8>>,
+    /// Whether the cell's data is code (`keys::is_code_cell`, read from the
+    /// code-cell index): only code is a binary version.
+    pub is_code: bool,
 }
 
 /// Build a code_hash -> version_hash mapping from a transaction's resolved dep cells.
@@ -312,10 +315,13 @@ pub struct DepCellInfo {
 ///
 /// First-seen wins for defensive correctness. In valid CKB transactions, each type_script_hash
 /// appears at most once in cell_deps (CKB consensus rejects duplicates).
+///
+/// A dep cell whose data is not code (`secp256k1_data`, a config cell) is
+/// not a binary version and maps nothing (finding 8).
 pub fn build_dep_cell_mappings(dep_cells: &[DepCellInfo]) -> HashMap<Vec<u8>, Vec<u8>> {
     let mut mappings: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
-    for cell in dep_cells {
+    for cell in dep_cells.iter().filter(|cell| cell.is_code) {
         if let (Some(type_hash), Some(data_hash)) = (&cell.type_script_hash, &cell.data_hash) {
             mappings
                 .entry(type_hash.clone())
@@ -331,18 +337,29 @@ pub fn build_dep_cell_mappings(dep_cells: &[DepCellInfo]) -> HashMap<Vec<u8>, Ve
     mappings
 }
 
-/// Read a cell's metadata from ckbadger's append-only store by outpoint.
+/// Read a dep cell's metadata from ckbadger's stores by outpoint: `None` when
+/// the payload is not indexed yet (the node may be ahead of the store); a read
+/// error propagates.
 fn read_dep_cell_info(
+    store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
     tx_hash: &[u8],
     output_index: i16,
-) -> Option<DepCellInfo> {
+) -> anyhow::Result<Option<DepCellInfo>> {
     let key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
-    let info = cells_store.get_cell_by_outpoint_key(&key).ok()??;
-    Some(DepCellInfo {
+    let Some(info) = cells_store.get_cell_by_outpoint_key(&key)? else {
+        return Ok(None);
+    };
+    // `cell_by_data_hash` has a row exactly for code data (`keys::is_code_cell`).
+    let is_code = match info.data_hash {
+        Some(data_hash) => store.is_code_data_hash(&data_hash)?,
+        None => false,
+    };
+    Ok(Some(DepCellInfo {
         type_script_hash: info.type_script_hash().map(|hash| hash.to_vec()),
         data_hash: info.data_hash.map(|hash| hash.to_vec()),
-    })
+        is_code,
+    }))
 }
 
 /// Expand a dep_group cell into its constituent outpoints.
@@ -373,23 +390,30 @@ fn expand_dep_group(
 
 /// Resolve all dep cells for a transaction, building a code_hash -> version_hash mapping.
 ///
-/// Returns `None` if the CKB store is unavailable or the transaction is not found.
-/// Individual dep cells that can't be read are silently skipped --
-/// the caller should fall back to global resolution for any code_hash not in the mapping.
+/// `Ok(None)` if the CKB store is unavailable or the transaction is not found.
+/// A dep cell the store has not indexed yet is skipped (the node can be ahead
+/// of the store; the caller falls back to global resolution for any code_hash
+/// not in the mapping); a store read error propagates (finding 8).
 pub fn resolve_dep_cells_for_transaction(
     state: &crate::AppState,
     tx_hash_hex: &str,
-) -> Option<HashMap<Vec<u8>, Vec<u8>>> {
-    let ckb_store = state.ckb_store.as_ref()?;
-    let tx_hash_bytes_vec =
-        hex::decode(tx_hash_hex.strip_prefix("0x").unwrap_or(tx_hash_hex)).ok()?;
-    if tx_hash_bytes_vec.len() != 32 {
-        return None;
-    }
-    let mut tx_hash_arr = [0u8; 32];
-    tx_hash_arr.copy_from_slice(&tx_hash_bytes_vec);
+) -> anyhow::Result<Option<HashMap<Vec<u8>, Vec<u8>>>> {
+    let Some(ckb_store) = state.ckb_store.as_ref() else {
+        return Ok(None);
+    };
+    let tx_hash_arr: [u8; 32] = hex::decode(tx_hash_hex.strip_prefix("0x").unwrap_or(tx_hash_hex))
+        .map_err(|e| anyhow::anyhow!("tx hash {tx_hash_hex} is not hex: {e}"))?
+        .try_into()
+        .map_err(|bytes: Vec<u8>| {
+            anyhow::anyhow!(
+                "tx hash {tx_hash_hex} has {} bytes, expected 32",
+                bytes.len()
+            )
+        })?;
 
-    let tx_view = ckb_store.get_transaction(&tx_hash_arr)?;
+    let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) else {
+        return Ok(None);
+    };
     let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
 
     let mut outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
@@ -401,13 +425,23 @@ pub fn resolve_dep_cells_for_transaction(
                 .strip_prefix("0x")
                 .unwrap_or(&dep.out_point.tx_hash),
         )
-        .ok()?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "tx {tx_hash_hex}: cell dep tx hash {} is not hex: {e}",
+                dep.out_point.tx_hash
+            )
+        })?;
         let dep_index_str = dep
             .out_point
             .index
             .strip_prefix("0x")
             .unwrap_or(&dep.out_point.index);
-        let dep_index = u32::from_str_radix(dep_index_str, 16).ok()?;
+        let dep_index = u32::from_str_radix(dep_index_str, 16).map_err(|e| {
+            anyhow::anyhow!(
+                "tx {tx_hash_hex}: cell dep index {} is not a hex u32: {e}",
+                dep.out_point.index
+            )
+        })?;
 
         if dep.dep_type == "dep_group" {
             if dep_tx_hash.len() == 32 {
@@ -417,17 +451,26 @@ pub fn resolve_dep_cells_for_transaction(
                 outpoints.extend(expanded);
             }
         } else {
-            let index = i16::try_from(dep_index).ok()?;
+            let index = i16::try_from(dep_index).map_err(|e| {
+                anyhow::anyhow!("tx {tx_hash_hex}: cell dep index {dep_index} exceeds i16: {e}")
+            })?;
             outpoints.push((dep_tx_hash, index));
         }
     }
 
-    let dep_cells: Vec<DepCellInfo> = outpoints
-        .iter()
-        .filter_map(|(tx_hash, idx)| read_dep_cell_info(&state.append_only_store, tx_hash, *idx))
-        .collect();
+    let mut dep_cells: Vec<DepCellInfo> = Vec::with_capacity(outpoints.len());
+    for (dep_tx_hash, index) in &outpoints {
+        let info = read_dep_cell_info(&state.store, &state.append_only_store, dep_tx_hash, *index)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "tx {tx_hash_hex}: failed to read cell dep 0x{}:{index}: {e}",
+                    hex::encode(dep_tx_hash)
+                )
+            })?;
+        dep_cells.extend(info);
+    }
 
-    Some(build_dep_cell_mappings(&dep_cells))
+    Ok(Some(build_dep_cell_mappings(&dep_cells)))
 }
 
 pub fn resolve_live_type_reference_matches(
@@ -1505,11 +1548,121 @@ mod tests {
         let dep_cells = vec![DepCellInfo {
             type_script_hash: Some(type_hash.clone()),
             data_hash: Some(data_hash.clone()),
+            is_code: true,
         }];
 
         let mappings = build_dep_cell_mappings(&dep_cells);
         assert_eq!(mappings.get(&type_hash), Some(&data_hash));
         assert_eq!(mappings.get(&data_hash), Some(&data_hash));
+    }
+
+    /// Finding 8: a dep cell whose data is not code (`secp256k1_data`, a
+    /// Type ID config cell) is not a binary version: it maps nothing, by
+    /// data hash or by type hash.
+    #[test]
+    fn test_build_dep_cell_mappings_skips_non_code_dep_cells() {
+        let code_type = vec![0x9b; 32];
+        let code_data = vec![0x70; 32];
+        let config_type = vec![0x9c; 32];
+        let config_data = vec![0x71; 32];
+        let table_data = vec![0x72; 32];
+        let dep_cells = vec![
+            DepCellInfo {
+                type_script_hash: Some(code_type.clone()),
+                data_hash: Some(code_data.clone()),
+                is_code: true,
+            },
+            DepCellInfo {
+                type_script_hash: Some(config_type.clone()),
+                data_hash: Some(config_data.clone()),
+                is_code: false,
+            },
+            DepCellInfo {
+                type_script_hash: None,
+                data_hash: Some(table_data.clone()),
+                is_code: false,
+            },
+        ];
+
+        let mappings = build_dep_cell_mappings(&dep_cells);
+        assert_eq!(mappings.len(), 2, "{mappings:?}");
+        assert_eq!(mappings.get(&code_type), Some(&code_data));
+        assert_eq!(mappings.get(&code_data), Some(&code_data));
+        assert!(!mappings.contains_key(&config_type));
+        assert!(!mappings.contains_key(&config_data));
+        assert!(!mappings.contains_key(&table_data));
+    }
+
+    fn dep_payload(data_hash: Option<[u8; 32]>, data_size: i32) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 1_000,
+            lock_code_hash: [0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size,
+            udt_amount: None,
+            data_hash,
+        }
+    }
+
+    /// Finding 8: code-ness comes from the code-cell index; a payload the
+    /// store has not indexed yet is a skip, and a read error propagates
+    /// instead of reading as "no dep cell".
+    #[test]
+    fn test_read_dep_cell_info_reads_code_ness_and_propagates_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let code_tx = [0x31u8; 32];
+        let table_tx = [0x32u8; 32];
+        let corrupt_tx = [0x33u8; 32];
+        let code_hash = [0x41u8; 32];
+        let table_hash = [0x42u8; 32];
+        for (tx, cell) in [
+            (code_tx, dep_payload(Some(code_hash), 4_096)),
+            (table_tx, dep_payload(Some(table_hash), 1_024)),
+        ] {
+            store
+                .put_cf(
+                    store.cf_cells(),
+                    &ckbadger_store::keys::encode_outpoint(&tx, 0),
+                    &cell.encode().unwrap(),
+                )
+                .unwrap();
+        }
+        store
+            .put_cf(
+                store.cf_cell_by_data_hash(),
+                &ckbadger_store::keys::encode_cell_index_key(&code_hash, 7, &code_tx, 0),
+                &[],
+            )
+            .unwrap();
+        store
+            .put_cf(
+                store.cf_cells(),
+                &ckbadger_store::keys::encode_outpoint(&corrupt_tx, 0),
+                &[0xff, 0x00, 0x01],
+            )
+            .unwrap();
+
+        let code = read_dep_cell_info(&store, &store, &code_tx, 0)
+            .unwrap()
+            .unwrap();
+        assert!(code.is_code);
+        assert_eq!(code.data_hash.as_deref(), Some(&code_hash[..]));
+        let table = read_dep_cell_info(&store, &store, &table_tx, 0)
+            .unwrap()
+            .unwrap();
+        assert!(!table.is_code, "secp256k1_data-like data is not code");
+        assert!(read_dep_cell_info(&store, &store, &[0x34; 32], 0)
+            .unwrap()
+            .is_none());
+        assert!(
+            read_dep_cell_info(&store, &store, &corrupt_tx, 0).is_err(),
+            "a corrupt payload must not read as a missing dep cell"
+        );
     }
 
     #[test]
@@ -1522,10 +1675,12 @@ mod tests {
             DepCellInfo {
                 type_script_hash: Some(type_hash.clone()),
                 data_hash: Some(data_hash_a.clone()),
+                is_code: true,
             },
             DepCellInfo {
                 type_script_hash: Some(type_hash.clone()),
                 data_hash: Some(data_hash_b.clone()),
+                is_code: true,
             },
         ];
 
@@ -1539,14 +1694,17 @@ mod tests {
             DepCellInfo {
                 type_script_hash: None,
                 data_hash: None,
+                is_code: true,
             },
             DepCellInfo {
                 type_script_hash: Some(vec![0xAA; 32]),
                 data_hash: None,
+                is_code: true,
             },
             DepCellInfo {
                 type_script_hash: None,
                 data_hash: Some(vec![0xBB; 32]),
+                is_code: true,
             },
         ];
 

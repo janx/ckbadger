@@ -710,6 +710,34 @@ impl CkbadgerStore {
         Ok(DataHashIndexPage { rows, complete })
     }
 
+    /// Whether the data under `data_hash` is code: `cell_by_data_hash` holds a
+    /// row exactly for each cell whose data is code (`keys::is_code_cell`),
+    /// and cells with the same data hash carry the same bytes, so one seek
+    /// answers for every cell with that data. A row of another width is
+    /// corruption.
+    pub fn is_code_data_hash(&self, data_hash: &[u8]) -> anyhow::Result<bool> {
+        let mut iter = self.iterator_cf(
+            self.cf_cell_by_data_hash(),
+            rocksdb::IteratorMode::From(data_hash, rocksdb::Direction::Forward),
+        );
+        match iter.next() {
+            Some(item) => {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to seek cell_by_data_hash for data hash 0x{}: {e}",
+                        bytes_to_hex(data_hash)
+                    )
+                })?;
+                if !key.starts_with(data_hash) {
+                    return Ok(false);
+                }
+                CellIndex::DataHash.decode_row_key(&key)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     /// Find a cell (live or consumed) by data hash.
     ///
     /// Unlike `list_cells_by_data_hash` which only returns live cells, this method also
@@ -1832,6 +1860,31 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta"));
+    }
+
+    /// Finding 8: whether a data hash names code is the code-cell index's
+    /// answer; a row of the wrong width is corruption.
+    #[test]
+    fn is_code_data_hash_answers_from_the_code_cell_index() {
+        let (_dir, store) = test_store();
+        let code = [0x5au8; 32];
+        let other = [0x5bu8; 32];
+        store
+            .put_cf(
+                store.cf_cell_by_data_hash(),
+                &keys::encode_cell_index_key(&code, 5, &[0x21; 32], 0),
+                &[],
+            )
+            .unwrap();
+        assert!(store.is_code_data_hash(&code).unwrap());
+        assert!(!store.is_code_data_hash(&other).unwrap());
+        assert!(!store.is_code_data_hash(&[0x00; 32]).unwrap());
+        let mut bad = other.to_vec();
+        bad.extend_from_slice(&[1, 2, 3]);
+        store
+            .put_cf(store.cf_cell_by_data_hash(), &bad, &[])
+            .unwrap();
+        assert!(store.is_code_data_hash(&other).is_err());
     }
 
     #[test]

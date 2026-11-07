@@ -2500,8 +2500,12 @@ async fn lookup_scripts(
 
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
     let all_script_infos = load_script_infos_cached(&state)?;
-    let per_tx_mappings =
-        tx_hash.and_then(|tx_hash| resolve_dep_cells_for_transaction(&state, tx_hash));
+    let per_tx_mappings = match tx_hash {
+        Some(tx_hash) => resolve_dep_cells_for_transaction(&state, tx_hash).map_err(|e| {
+            ApiError::internal(format!("failed to resolve cell deps of tx {tx_hash}: {e}"))
+        })?,
+        None => None,
+    };
 
     for code_hash in &code_hash_bytes {
         let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
