@@ -5430,6 +5430,272 @@ mod tests {
         assert_eq!(cf_spec("no_such_cf"), None);
     }
 
+    /// C-5: `docs/STORE_SCHEMA.md`'s "Column Families" table is the reference
+    /// for every column family. It lists exactly the CFs of `CF_SPECS`, each
+    /// once; its title states the per-store counts of `CF_SPECS`; and every
+    /// fixed-width key it states is the width the encoder writes.
+    #[test]
+    fn store_schema_cf_table_matches_cf_specs() {
+        const DOC: &str = include_str!("../../../docs/STORE_SCHEMA.md");
+        let rows = store_schema_cf_table(DOC);
+
+        let mut doc_names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
+        doc_names.sort_unstable();
+        let listed = doc_names.len();
+        doc_names.dedup();
+        assert_eq!(
+            doc_names.len(),
+            listed,
+            "a CF is listed twice in STORE_SCHEMA.md"
+        );
+        let mut spec_names: Vec<&str> = CF_SPECS.iter().map(|spec| spec.name).collect();
+        spec_names.sort_unstable();
+        let missing: Vec<&str> = spec_names
+            .iter()
+            .filter(|name| !doc_names.contains(name))
+            .copied()
+            .collect();
+        let unknown: Vec<&str> = doc_names
+            .iter()
+            .filter(|name| !spec_names.contains(name))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty() && unknown.is_empty(),
+            "STORE_SCHEMA.md CF table vs CF_SPECS: missing {missing:?}, not a CF {unknown:?}"
+        );
+
+        let count = |store: CfStore| CF_SPECS.iter().filter(|spec| spec.store == store).count();
+        let title = format!(
+            "# ckbadger-store Column Families ({} total: {} domain + {} append-only + {} network)",
+            CF_SPECS.len(),
+            count(CfStore::Domain),
+            count(CfStore::AppendOnly),
+            count(CfStore::Network)
+        );
+        assert_eq!(DOC.lines().next(), Some(title.as_str()));
+
+        let fixed_widths: &[(&str, usize)] = &[
+            (CF_CELLS, keys::OUTPOINT_KEY_SIZE),
+            (CF_LIVE_CELLS, keys::OUTPOINT_KEY_SIZE),
+            (CF_CONSUMED_CELLS, keys::OUTPOINT_KEY_SIZE),
+            (CF_REORG_UNDO_LOG_BY_BLOCK, keys::REORG_UNDO_LOG_KEY_SIZE),
+            (CF_BLOCK_HEADERS, keys::BLOCK_NUM_KEY_SIZE),
+            (CF_CELL_BY_LOCK, keys::CELL_INDEX_KEY_SIZE),
+            (CF_CELL_BY_TYPE, keys::CELL_INDEX_KEY_SIZE),
+            (CF_CELL_BY_DATA_HASH, keys::CELL_INDEX_KEY_SIZE),
+            (CF_CELL_BY_LOCK_CODE, keys::CELL_CODE_INDEX_KEY_SIZE),
+            (CF_CELL_BY_TYPE_CODE, keys::CELL_CODE_INDEX_KEY_SIZE),
+            (CF_ADDR_TXS, keys::ADDR_TX_KEY_SIZE),
+            (CF_ADDR_TXS_BY_PREFIX, keys::ADDR_TX_BY_PREFIX_KEY_SIZE),
+            (CF_DAO_DEPOSITS, keys::OUTPOINT_KEY_SIZE),
+            (CF_DAO_BY_WITHDRAW_TX, keys::OUTPOINT_KEY_SIZE),
+            (CF_DAO_BY_BLOCK, keys::DAO_BY_BLOCK_KEY_SIZE),
+            (CF_DAO_BY_LOCK_BLOCK, keys::DAO_BY_LOCK_BLOCK_KEY_SIZE),
+            (CF_DAO_BY_STATUS_BLOCK, keys::DAO_BY_STATUS_BLOCK_KEY_SIZE),
+            (
+                CF_TOKEN_HOLDERS_BY_BALANCE,
+                keys::TOKEN_HOLDER_BALANCE_KEY_SIZE,
+            ),
+            (CF_ADDR_TOKENS_BY_BALANCE, keys::ADDR_TOKEN_BALANCE_KEY_SIZE),
+            (CF_TOKEN_TRANSFERS, keys::TOKEN_TRANSFER_KEY_SIZE),
+            (
+                CF_OBJECT_COLLECTION_ACTIVITIES,
+                keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
+            ),
+            (
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
+                keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
+            ),
+            (
+                CF_COLLECTION_ACTIVITY_DAILY,
+                keys::COLLECTION_ACTIVITY_DAILY_KEY_SIZE,
+            ),
+            (
+                CF_DOTCELL_NAME_BY_OWNER,
+                keys::DOTCELL_NAME_BY_OWNER_KEY_SIZE,
+            ),
+            (CF_TX_ACTIONS, keys::TX_ACTIONS_KEY_SIZE),
+            (CF_TX_ACTIONS_BY_BUCKET, keys::TX_ACTIONS_BY_BUCKET_KEY_SIZE),
+            (CF_FIBER_CHANNELS, keys::FIBER_CHANNEL_KEY_SIZE),
+            (CF_ADDR_FIBER_CHANNELS, keys::ADDR_FIBER_CHANNEL_KEY_SIZE),
+            (CF_REORG_EVENTS, keys::REORG_EVENT_KEY_SIZE),
+            (CF_TX_INDEX, keys::encode_tx_slot_key(0, 0).len()),
+            (CF_TX_GROUP_CYCLES, keys::encode_tx_slot_key(0, 0).len()),
+        ];
+        let wrong: Vec<String> = fixed_widths
+            .iter()
+            .filter_map(|(cf, width)| {
+                let (_, key) = rows
+                    .iter()
+                    .find(|(name, _)| name == cf)
+                    .unwrap_or_else(|| panic!("{cf} is not in the table"));
+                (!states_width(key, *width)).then(|| format!("{cf}: {width}B, table says `{key}`"))
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "STORE_SCHEMA.md key widths differ from the encoders:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// `(cf name, key cell)` of every row of STORE_SCHEMA.md's "Column
+    /// Families" table.
+    fn store_schema_cf_table(doc: &str) -> Vec<(&str, &str)> {
+        let mut lines = doc
+            .lines()
+            .skip_while(|line| *line != "## Column Families")
+            .skip(1)
+            .skip_while(|line| !line.starts_with('|'));
+        let header = lines.next().expect("the Column Families table");
+        assert!(header.starts_with("| Column Family"), "{header}");
+        lines
+            .skip(1)
+            .take_while(|line| line.starts_with('|'))
+            .map(|line| {
+                let cells: Vec<&str> = line.split(" | ").collect();
+                let name = cells[0]
+                    .trim_start_matches('|')
+                    .trim()
+                    .strip_prefix('`')
+                    .and_then(|rest| rest.split('`').next())
+                    .unwrap_or_else(|| panic!("a CF table row without a `name`: {line}"));
+                (name, cells.get(1).map_or("", |key| key.trim()))
+            })
+            .collect()
+    }
+
+    /// C-5: the rollback-class table of `docs/prompts/REORG_HANDLING.md`
+    /// names exactly `CF_SPECS`'s `RangeByBlock` and `Never` CFs (`Journal`
+    /// is "every domain CF not listed below").
+    #[test]
+    fn reorg_handling_class_table_matches_cf_specs() {
+        const DOC: &str = include_str!("../../../docs/prompts/REORG_HANDLING.md");
+        for (class, label) in [
+            (RollbackClass::RangeByBlock, "`RangeByBlock`"),
+            (RollbackClass::Never, "`Never`"),
+        ] {
+            let rows: Vec<&str> = DOC
+                .lines()
+                .filter(|line| {
+                    line.strip_prefix('|')
+                        .is_some_and(|rest| rest.trim_start().starts_with(label))
+                })
+                .collect();
+            assert_eq!(rows.len(), 1, "one {label} row in the class table");
+            let cfs_cell = rows[0].split(" | ").nth(1).expect("the CF cell");
+            let mut listed: Vec<&str> = cfs_cell.split('`').skip(1).step_by(2).collect();
+            listed.sort_unstable();
+            let mut specs: Vec<&str> = CF_SPECS
+                .iter()
+                .filter(|spec| spec.rollback_class == class)
+                .map(|spec| spec.name)
+                .collect();
+            specs.sort_unstable();
+            assert_eq!(listed, specs, "REORG_HANDLING.md {label} row vs CF_SPECS");
+        }
+    }
+
+    /// C-5: every tracked doc that states how many column families there are
+    /// states `CF_SPECS`'s counts: "N domain" is the domain store's count and
+    /// "N CFs total" / "N CFs overall" the count of all three stores.
+    #[test]
+    fn tracked_docs_state_the_cf_specs_counts() {
+        const DOCS: &[(&str, &str)] = &[
+            ("CLAUDE.md", include_str!("../../../CLAUDE.md")),
+            ("README.md", include_str!("../../../README.md")),
+            (
+                "docs/STORE_SCHEMA.md",
+                include_str!("../../../docs/STORE_SCHEMA.md"),
+            ),
+            (
+                "docs/INDEXER_PIPELINE.md",
+                include_str!("../../../docs/INDEXER_PIPELINE.md"),
+            ),
+            (
+                "docs/ARCHITECTURE_MAP.md",
+                include_str!("../../../docs/ARCHITECTURE_MAP.md"),
+            ),
+        ];
+        let domain = CF_SPECS
+            .iter()
+            .filter(|spec| spec.store == CfStore::Domain)
+            .count();
+        let total = CF_SPECS.len();
+        let mut wrong = Vec::new();
+        let mut stated = 0;
+        for (path, doc) in DOCS {
+            for (phrase, expected) in [
+                (" domain", domain),
+                (" CFs total", total),
+                (" CFs overall", total),
+            ] {
+                for count in counts_stated_before(doc, phrase) {
+                    stated += 1;
+                    if count != expected {
+                        wrong.push(format!(
+                            "{path}: \"{count}{phrase}\", CF_SPECS has {expected}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(stated > 0, "no doc states a CF count any more");
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The numbers written directly before `phrase` in `doc` ("74 domain").
+    fn counts_stated_before(doc: &str, phrase: &str) -> Vec<usize> {
+        doc.match_indices(phrase)
+            .filter_map(|(at, _)| {
+                let digits: String = doc[..at]
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                (!digits.is_empty()).then(|| digits.chars().rev().collect::<String>())
+            })
+            .map(|digits| digits.parse().expect("a count"))
+            .collect()
+    }
+
+    #[test]
+    fn store_schema_table_helpers_read_names_key_cells_and_widths() {
+        let doc = "# t\n\n## Column Families\n\n| Column Family | Key | Value |\n| --- | --- | --- |\n\
+                   | `cells` **(append-only store)** | outpoint (34B) | payload |\n\
+                   | `addr_txs` | lock(32) + desc(12) = 44B | v |\n\nafter\n| `not_a_row` | x | y |\n";
+        assert_eq!(
+            store_schema_cf_table(doc),
+            vec![
+                ("cells", "outpoint (34B)"),
+                ("addr_txs", "lock(32) + desc(12) = 44B")
+            ]
+        );
+        assert!(states_width("outpoint (34B)", 34));
+        assert!(!states_width("key (134B)", 34));
+        assert!(!states_width("block_number + tx_index", 12));
+        assert_eq!(
+            counts_stated_before("74 domain + 1 append-only; the 68 domain CFs", " domain"),
+            vec![74, 68]
+        );
+        assert_eq!(
+            counts_stated_before("a domain", " domain"),
+            Vec::<usize>::new()
+        );
+    }
+
+    /// Whether `cell` states `width` bytes (`74B`, not part of `174B`).
+    fn states_width(cell: &str, width: usize) -> bool {
+        let token = format!("{width}B");
+        cell.match_indices(&token).any(|(at, _)| {
+            !cell[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_digit())
+        })
+    }
+
     /// Every OUTSIDE_JOURNAL entry names a `Journal`-class domain CF (the
     /// table is about keys the journal would otherwise own), and no two
     /// entries cover the same key.
