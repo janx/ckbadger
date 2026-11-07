@@ -691,14 +691,36 @@ impl BatchWriter {
     /// small entry per new address and its bucket row, never the bucket-wide
     /// set. A bucket's rows outlive its blocks only until the rollback
     /// coverage floor leaves it ([`Self::stage_activity_addr_retention`]).
+    ///
+    /// `addr_row_floor` is `sync_meta` → `activity_addr_row_floor`: the first
+    /// UTC+8 hour whose address rows are kept (every earlier hour, and every
+    /// day before its day, has none: pruned, or sealed by the bulk build,
+    /// which records the handoff hour). A block landing in such a bucket
+    /// would count every address again, so it is rebuild-required
+    /// (finding 11).
     pub fn update_activity_bucket_stats(
         &self,
         kind: keys::ActivityBucketKind,
         bucket: &str,
         block_stats: &DailyActivityStats,
         block_addrs: &BTreeSet<[u8; 32]>,
+        addr_row_floor: Option<&str>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        if let Some(floor) = addr_row_floor {
+            let first_kept = floor.get(..kind.bucket_len()).ok_or_else(|| {
+                anyhow!("activity address row floor {floor:?} is not a UTC+8 hour label")
+            })?;
+            if bucket < first_kept {
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "{kind:?} activity bucket {bucket} is behind the activity address row \
+                         floor {floor}: its address rows were pruned or sealed, so every \
+                         address of the block would count again"
+                    )),
+                ));
+            }
+        }
         let key = kind.stats_key(bucket)?;
         let existing: Option<DailyActivityStats> = batch
             .get_stats(&key)?
@@ -786,13 +808,14 @@ impl BatchWriter {
             })?;
         let floor_hour = keys::ActivityBucketKind::Hourly.bucket_label(floor_time)?;
         let pruned_to = self.store.get_activity_addr_row_floor()?;
-        match pruned_to.as_deref() {
-            Some(previous) if previous == floor_hour => return Ok(0),
-            Some(previous) if previous > floor_hour.as_str() => bail!(
-                "activity address rows were pruned to hour {previous}, past the coverage floor \
-                 block {coverage_floor}'s hour {floor_hour}: the floor never moves down"
-            ),
-            _ => {}
+        // A record at or past the floor's hour leaves nothing behind the
+        // floor: the bulk build records its handoff hour (finding 11), which
+        // the coverage floor reaches only some 1000 blocks later.
+        if pruned_to
+            .as_deref()
+            .is_some_and(|previous| previous >= floor_hour.as_str())
+        {
+            return Ok(0);
         }
         let mut deleted = 0u64;
         for kind in [
@@ -4170,6 +4193,7 @@ mod activity_stats_tests {
                 "2026030912",
                 &stats,
                 &addrs,
+                None,
                 &mut batch,
             )
             .unwrap();
@@ -4209,6 +4233,7 @@ mod activity_stats_tests {
                 "2026030912",
                 &s1,
                 &addrs1,
+                None,
                 &mut batch,
             )
             .unwrap();
@@ -4235,6 +4260,7 @@ mod activity_stats_tests {
                 "2026030912",
                 &s2,
                 &addrs2,
+                None,
                 &mut batch2,
             )
             .unwrap();
@@ -4274,6 +4300,7 @@ mod activity_stats_tests {
                 "20260309",
                 &block_stats,
                 &addrs,
+                None,
                 &mut batch.at(block),
             )
             .unwrap();
@@ -4379,6 +4406,7 @@ mod activity_stats_tests {
                 "20260311",
                 &DailyActivityStats::default(),
                 &BTreeSet::from([addr(9)]),
+                None,
                 &mut StoreBatch::new(&bulk_store),
             )
             .unwrap_err()
@@ -4519,9 +4547,53 @@ mod activity_stats_tests {
         // A floor block without a header is store corruption.
         let err = prune_result(13).unwrap_err().to_string();
         assert!(err.contains("missing header"), "{err}");
-        // A floor below the recorded hour moved down: an invariant violation.
-        let err = prune_result(9).unwrap_err().to_string();
-        assert!(err.contains("the floor never moves down"), "{err}");
+        // A floor whose hour is before the record (as after a bulk handoff,
+        // which records the handoff hour: finding 11) prunes nothing.
+        assert_eq!(prune(9), 0);
+        assert_eq!(
+            store.get_activity_addr_row_floor().unwrap().as_deref(),
+            Some("2026031000")
+        );
+    }
+
+    /// Finding 11: a block landing in a bucket behind the activity address
+    /// row floor (its rows pruned, or sealed by the bulk build) would count
+    /// every address again: rebuild-required, before any write.
+    #[test]
+    fn a_block_behind_the_activity_addr_row_floor_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let addrs = BTreeSet::from([addr(1)]);
+        let update = |kind: keys::ActivityBucketKind, bucket: &str| {
+            let mut batch = StoreBatch::new(&store);
+            writer.update_activity_bucket_stats(
+                kind,
+                bucket,
+                &DailyActivityStats::default(),
+                &addrs,
+                Some("2026030912"),
+                &mut batch,
+            )
+        };
+        for (kind, bucket) in [
+            (keys::ActivityBucketKind::Hourly, "2026030911"),
+            (keys::ActivityBucketKind::Hourly, "2026030823"),
+            (keys::ActivityBucketKind::Daily, "20260308"),
+        ] {
+            let err = update(kind, bucket).unwrap_err();
+            assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+            assert!(err.to_string().contains(bucket), "{err:#}");
+            assert!(err.to_string().contains("2026030912"), "{err:#}");
+        }
+        // The floor's own hour and day, and later buckets, are kept.
+        for (kind, bucket) in [
+            (keys::ActivityBucketKind::Hourly, "2026030912"),
+            (keys::ActivityBucketKind::Hourly, "2026030913"),
+            (keys::ActivityBucketKind::Daily, "20260309"),
+        ] {
+            update(kind, bucket).unwrap();
+        }
     }
 
     #[test]

@@ -2543,6 +2543,12 @@ impl Indexer {
                 .iter()
                 .map(|(block, changes)| (*block, changes))
                 .collect();
+            // The first UTC+8 hour whose activity address rows are kept (the
+            // last prune's, or the bulk handoff hour): every block of this
+            // batch lands at or after it (finding 11). Read once per batch;
+            // this batch's own prune never moves it past a block above the
+            // coverage floor.
+            let activity_addr_row_floor = self.writer.store().get_activity_addr_row_floor()?;
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 // Protocol state for one block: the longest stretch of the
@@ -3371,6 +3377,7 @@ impl Indexer {
                             bucket,
                             &block_activity,
                             &block_activity_addrs,
+                            activity_addr_row_floor.as_deref(),
                             &mut activity_batch,
                         )?;
                     }

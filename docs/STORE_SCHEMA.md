@@ -405,9 +405,10 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   history is kept.
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
-- activity address-row retention: `activity_addr_row_floor`, the UTC+8 hour the
-  `ACTIVITY_*_ADDR_ROW` rows were last pruned to (see
-  [`stats_chain` activity address rows](#stats_chain-activity-address-rows)), journaled
+- activity address-row retention: `activity_addr_row_floor`, the first UTC+8 hour whose
+  `ACTIVITY_*_ADDR_ROW` rows are kept (every earlier hour, and every day before its day, has
+  none; see [`stats_chain` activity address rows](#stats_chain-activity-address-rows)),
+  journaled; bulk finalize writes the handoff hour
 - derived aggregate state: `derive:<aggregate>` (bincode `DeriveMeta`, see
   [Derived Aggregates](#derived-aggregates))
 - lazy VM results are not in `sync_meta`: see [`tx_group_cycles`](#tx_group_cycles-lazy-vm-results).
@@ -668,7 +669,9 @@ memory, kept only while a block can still reach the bucket (C-3):
 - **Live** (`BatchWriter::update_activity_bucket_stats`, per block): an address is new to a bucket
   iff it has no row; each new one gets its row and raises the bucket's `unique_address_count` by
   one, so a live block journals one small entry per new address and its bucket row. A row of a
-  bucket without its stats row is an error.
+  bucket without its stats row is an error, and so is a block in a bucket before
+  `activity_addr_row_floor` (its rows are gone, so every address would count again):
+  rebuild-required.
 - **Retention** (`BatchWriter::stage_activity_addr_retention`, every live batch, in its first
   block's scope): every block above the rollback coverage floor has a chain time at or after the
   floor block's, and no rollback goes below the floor, so every bucket before the floor block's
@@ -681,7 +684,8 @@ memory, kept only while a block can still reach the bucket (C-3):
 - **Bulk** keeps each bucket's set in memory and drops it when the bucket seals (its end at or
   below the chain-time watermark: no later block reaches it, and bulk records no journal), writing
   only the count row. At finalize it writes the rows of the buckets still open — the handoff tip's
-  day and hour — which live sync continues; live retention deletes them once the floor passes.
+  day and hour — which live sync continues, and `activity_addr_row_floor` = the handoff hour; live
+  retention starts there and deletes them once the floor passes.
 
 `CkbadgerStore::get_activity_bucket_addrs` lists one bucket's rows (tests and diagnostics).
 

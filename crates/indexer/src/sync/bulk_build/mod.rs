@@ -71,6 +71,9 @@ use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PreparedFinalizeArtifacts {
     activity_sealed_rows: Vec<materialize::MaterializedRow>,
+    /// The `activity_addr_row_floor` record (finding 11), a `FinalSnapshot`
+    /// row: none for a run that sealed no block.
+    activity_snapshot_rows: Vec<materialize::MaterializedRow>,
     chain_sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
@@ -1327,6 +1330,7 @@ fn materialize_finalize_phases(
             tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
         perf_stats.record_finalize_step(2, finalize_started.elapsed());
         materializer.stream_sealed_aggregate_rows(&prepared.activity_sealed_rows)?;
+        materializer.materialize_final_snapshot(&prepared.activity_snapshot_rows)?;
     }
 
     // Step 3: chain stats (sealed aggregates)
@@ -1878,6 +1882,25 @@ impl ActivityStatsAccumulator {
             self.collection_daily.split_before(first_open_day),
         )?);
         Ok(rows)
+    }
+
+    /// `sync_meta` → `activity_addr_row_floor` at finalize: the UTC+8 hour of
+    /// the final watermark (the handoff tip's chain time). Every earlier hour,
+    /// and every day before its day, was sealed without address rows, so live
+    /// sync continues from this hour and fails fast on a block before it
+    /// (finding 11); live pruning starts here. `None` for a run that sealed
+    /// no block. Once per finalize: no per-row bulk work.
+    fn addr_row_floor_row(&self) -> Result<Option<materialize::MaterializedRow>> {
+        self.sealed_through_ms
+            .map(|watermark| {
+                let hour = keys::ActivityBucketKind::Hourly.bucket_label(watermark)?;
+                Ok(materialize::MaterializedRow::new(
+                    ckbadger_store::CF_SYNC_META,
+                    keys::sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR.to_vec(),
+                    hour.into_bytes(),
+                ))
+            })
+            .transpose()
     }
 
     /// The rows of the buckets still in memory at finalize: after the last
@@ -3285,6 +3308,11 @@ impl BulkBuildRuntimeState {
     ) -> Result<PreparedFinalizeArtifacts> {
         Ok(PreparedFinalizeArtifacts {
             activity_sealed_rows: self.activity_stats.build_rows()?,
+            activity_snapshot_rows: self
+                .activity_stats
+                .addr_row_floor_row()?
+                .into_iter()
+                .collect(),
             chain_sealed_rows: self.chain_stats.build_rows(virtual_occupied)?,
         })
     }
@@ -9150,6 +9178,38 @@ mod tests {
         assert!(next.is_empty(), "new hour remains open");
         assert!(!acc.hourly_stats.contains_key(&hour_key));
         assert!(acc.daily_stats.contains_key(&day_key));
+    }
+
+    /// Finding 11: bulk finalize records the handoff tip's UTC+8 hour as the
+    /// activity address row floor (every earlier bucket was sealed without
+    /// address rows), a `FinalSnapshot` row; a run that sealed no block
+    /// records none.
+    #[test]
+    fn finalize_records_the_handoff_hour_as_the_activity_addr_row_floor() {
+        assert!(ActivityStatsAccumulator::default()
+            .addr_row_floor_row()
+            .unwrap()
+            .is_none());
+        // 2026-03-09 05:01 UTC+8.
+        let tip_time = 1_772_985_600_000 + 5 * 3_600_000 + 60_000;
+        let mut acc = ActivityStatsAccumulator::default();
+        acc.apply_batch(
+            &[facts::BlockFacts {
+                number: 7,
+                chain_time_ms: tip_time,
+                ..Default::default()
+            }],
+            &[],
+        )
+        .unwrap();
+        let row = acc.addr_row_floor_row().unwrap().expect("a sealed block");
+        assert_eq!(row.cf_name, ckbadger_store::CF_SYNC_META);
+        assert_eq!(row.key, keys::sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR);
+        assert_eq!(row.value, b"2026030905".to_vec());
+        assert_eq!(
+            ckbadger_store::cf_write_policy(row.cf_name),
+            ckbadger_store::CfWritePolicy::FinalSnapshot
+        );
     }
 
     #[test]
