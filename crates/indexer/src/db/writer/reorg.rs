@@ -1182,6 +1182,56 @@ mod tests {
         assert_eq!(store.get_live_cell_summary().unwrap(), None);
     }
 
+    /// Review 27: the branch proof needs a header at every height of the old
+    /// branch; a missing intermediate one is an error naming the height.
+    #[test]
+    fn first_orphan_refuses_a_stored_branch_with_a_missing_header() {
+        use ckbadger_store::types::CachedBlockHeader;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        // Fork point 8, old tip 11; height 10 has no header.
+        for height in [8i64, 9, 11] {
+            batch.put_block_header(
+                height,
+                &CachedBlockHeader {
+                    hash: vec![height as u8; 32],
+                    timestamp: 0,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 100,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms: 0,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        let err = super::first_orphan_of_stored_branch(&store, 8, &[8; 32], 11, &[11; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("the stored chain has no header at 10 (fork point 8, old tip 11)"),
+            "{err}"
+        );
+        // With the header, the first orphan is height 9.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(
+            10,
+            &store.get_block_header(9).unwrap().unwrap(),
+        );
+        batch.commit().unwrap();
+        assert_eq!(
+            super::first_orphan_of_stored_branch(&store, 8, &[8; 32], 11, &[11; 32]).unwrap(),
+            [9; 32]
+        );
+    }
+
     #[tokio::test]
     async fn test_execute_reorg_does_not_persist_event_when_rollback_fails() {
         let dir = tempfile::tempdir().unwrap();

@@ -1319,6 +1319,9 @@ struct ReadCallCounters {
     /// Point reads (`get_cf` and each `multi_get_cf` key), by CF name, so a
     /// test can prove a read path never looks a row up in a CF.
     point_reads: Mutex<std::collections::HashMap<&'static str, u64>>,
+    /// `multi_get_cf` / `multi_get_cf_sorted` calls that read a CF, by CF
+    /// name, so a test can prove a page resolves its pointers with one call.
+    multi_gets: Mutex<std::collections::HashMap<&'static str, u64>>,
 }
 
 #[cfg(any(test, feature = "read-call-counters"))]
@@ -1330,6 +1333,17 @@ impl ReadCallCounters {
             .expect("point-read counter poisoned")
             .entry(cf_name)
             .or_insert(0) += 1;
+    }
+
+    /// One multi-get call over `cf_names` (each CF counted once).
+    fn count_multi_get(&self, cf_names: impl IntoIterator<Item = &'static str>) {
+        let mut counts = self.multi_gets.lock().expect("multi-get counter poisoned");
+        let mut seen = std::collections::HashSet::new();
+        for cf_name in cf_names {
+            if seen.insert(cf_name) {
+                *counts.entry(cf_name).or_insert(0) += 1;
+            }
+        }
     }
 
     fn count_iterated_row(&self, cf_name: &'static str) {
@@ -2345,6 +2359,24 @@ impl CkbadgerStore {
             .lock()
             .expect("point-read counter poisoned")
             .clear();
+        self.read_calls
+            .multi_gets
+            .lock()
+            .expect("multi-get counter poisoned")
+            .clear();
+    }
+
+    /// `multi_get` calls that read column family `cf_name` since the last
+    /// reset (`0` when none did).
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn multi_gets(&self, cf_name: &str) -> u64 {
+        self.read_calls
+            .multi_gets
+            .lock()
+            .expect("multi-get counter poisoned")
+            .get(cf_name)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Point reads of one column family since the last reset (`0` when it
@@ -2503,6 +2535,8 @@ impl CkbadgerStore {
             for (cf, _) in &keys {
                 self.read_calls.count_point_read(self.cf_name_of(cf));
             }
+            self.read_calls
+                .count_multi_get(keys.iter().map(|(cf, _)| self.cf_name_of(cf)));
         }
         self.db.multi_get_cf(keys)
     }
@@ -2521,7 +2555,11 @@ impl CkbadgerStore {
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
         #[cfg(any(test, feature = "read-call-counters"))]
-        self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
+        {
+            self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
+            self.read_calls
+                .count_multi_get(keys.iter().map(|(cf, _)| self.cf_name_of(cf)));
+        }
         let n = keys.len();
         if n <= 1 {
             return self.db.multi_get_cf(keys);
@@ -3940,6 +3978,22 @@ mod tests {
 
     /// The per-CF point-read counter behind the API's "never reads a row
     /// by key" assertions counts both read shapes, per column family.
+    /// Each multi-get call counts once for every column family it reads.
+    #[test]
+    fn multi_gets_are_counted_per_column_family() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        store.reset_read_call_counters();
+        let (index, headers) = (store.cf_tx_index(), store.cf_block_headers());
+        store.multi_get_cf_sorted(vec![(index, b"a".as_slice()), (index, b"b".as_slice())]);
+        store.multi_get_cf(vec![(index, b"a".as_slice()), (headers, b"h".as_slice())]);
+        assert_eq!(store.multi_gets(CF_TX_INDEX), 2);
+        assert_eq!(store.multi_gets(CF_BLOCK_HEADERS), 1);
+        assert_eq!(store.multi_gets(CF_TX_ACTIONS), 0);
+        store.reset_read_call_counters();
+        assert_eq!(store.multi_gets(CF_TX_INDEX), 0);
+    }
+
     #[test]
     fn point_reads_are_counted_per_column_family() {
         let dir = TempDir::new().unwrap();

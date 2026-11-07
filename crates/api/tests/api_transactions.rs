@@ -4454,3 +4454,65 @@ async fn transaction_detail_reads_an_xudt_amount_by_the_indexer_rule() {
     assert_eq!(display["amount"], "100000000000", "{display}");
     assert_eq!(display["noAmountReason"], serde_json::Value::Null);
 }
+
+/// Review P1-1 / 27: a transaction list page reads its `activities` rows with
+/// one multi_get, completed from the entries and block hashes the page
+/// already holds — no `tx_index`, `activities` or `block_headers` read per
+/// row (the latest page reads no header at all; the class filter one batch
+/// of the page's blocks).
+#[tokio::test]
+async fn transaction_list_pages_read_their_actions_once_per_page() {
+    use ckbadger_store::types::TAG_TOKEN;
+    let store = test_store();
+    let cell = LiveCellInfo {
+        capacity: 10_000_000_000,
+        lock_code_hash: [0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0; 20],
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    };
+    for block in 20..30i64 {
+        let tx = [block as u8; 32];
+        seed_committed_activity(&store, &[0x11; 32], &tx, block, 1, 100, TAG_TOKEN);
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cell(&tx, 0, &cell, block);
+        batch.commit().unwrap();
+    }
+    let app = create_router(test_config(store.clone())).await;
+    for (path, header_reads, index_multi_gets) in [
+        ("/transactions?limit=5", 0, 0),
+        // The bucket page completes its rows (one tx_index and one header
+        // batch for its six blocks) and the list reads the page's entries.
+        ("/transactions?activity_type=token&limit=5", 6, 2),
+    ] {
+        store.reset_read_call_counters();
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        assert_eq!(json["data"].as_array().unwrap().len(), 5, "{path}");
+        assert_eq!(
+            store.point_reads(ckbadger_store::CF_TX_INDEX),
+            0,
+            "{path}: no tx_index row read by key"
+        );
+        assert_eq!(
+            store.multi_gets(ckbadger_store::CF_TX_ACTIONS),
+            1,
+            "{path}: one activities read for the page"
+        );
+        assert_eq!(
+            store.multi_gets(ckbadger_store::CF_TX_INDEX),
+            index_multi_gets,
+            "{path}: tx_index reads for the page"
+        );
+        assert_eq!(
+            store.point_reads(ckbadger_store::CF_BLOCK_HEADERS),
+            header_reads,
+            "{path}: header keys read"
+        );
+    }
+}

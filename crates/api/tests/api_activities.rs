@@ -3197,3 +3197,25 @@ async fn address_script_filter_is_type_calls_or_lock_calls() {
         .collect();
     assert_eq!(blocks, vec![54, 51, 50], "{json}");
 }
+
+/// Review P1-1 / 27: one block's activities read the block header once and
+/// the page's `activities` rows with one multi_get, whatever the number of
+/// rows; no `tx_index` row is read by key.
+#[tokio::test]
+async fn block_activities_read_the_header_once_and_the_rows_with_one_multi_get() {
+    let store = test_store();
+    for index in 1..=12i32 {
+        let mut tx = [0x5a; 32];
+        tx[..4].copy_from_slice(&index.to_be_bytes());
+        seed_committed_activity(&store, &[0x11; 32], &tx, 30, index, 100, 0);
+    }
+    let app = create_router(test_config(store.clone())).await;
+    store.reset_read_call_counters();
+    let (status, json) = get_json(&app, "/activities?blockNumber=30&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 10);
+    assert_eq!(store.point_reads(ckbadger_store::CF_BLOCK_HEADERS), 1);
+    assert_eq!(store.point_reads(ckbadger_store::CF_TX_INDEX), 0);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_TX_ACTIONS), 1);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_TX_INDEX), 0);
+}

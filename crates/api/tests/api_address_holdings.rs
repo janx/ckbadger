@@ -546,6 +546,38 @@ async fn address_identity_held_since_follows_self_updates_but_not_transfer_or_re
     }
 }
 
+/// Review 15 / 27: the identity rows of a page resolve every predecessor's
+/// consumer with one `tx_index` read for the page, not one per row.
+#[tokio::test]
+async fn address_identity_histories_resolve_consumers_once_per_page() {
+    let f = fixture().await;
+    let mut b = StoreBatch::new(&f.store);
+    // The fixture's transaction at (7, 0) consumed an earlier incarnation of
+    // the did:ckb (output 8) and of the .bit Cell (output 9).
+    seed_tx_at(&mut b, &f.hash, 7, 0);
+    for (previous, output, id) in [([0xa1u8; 32], 8i16, vec![0x61u8; 20]), ([0xa3; 32], 9, vec![0x62; 32])] {
+        let current = f.store.get_cell(&f.hash, output, &f.store).unwrap().unwrap();
+        b.put_consumed_cell(&previous, 0, &current.cell, 2, 7, 0);
+        b.put_spore_outpoint(&previous, 0, &id);
+    }
+    b.commit().unwrap();
+    f.store.reset_read_call_counters();
+    let (s, j) = get(
+        &f.app,
+        &format!("/api/v1/addresses/{}/cells?class=identity&limit=3", f.owner),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    let held: Vec<_> = j["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["heldSinceBlock"].clone())
+        .collect();
+    assert_eq!(held.iter().filter(|block| **block == 2).count(), 2, "{j}");
+    assert_eq!(f.store.multi_gets(ckbadger_store::CF_TX_INDEX), 1, "{j}");
+}
+
 #[tokio::test]
 async fn address_dao_rows_use_current_lock_owned_cells_including_transferred_requests() {
     let f = fixture().await;

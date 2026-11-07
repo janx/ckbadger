@@ -2761,3 +2761,27 @@ async fn test_xudt_cell_without_an_amount_names_its_token_and_the_reason() {
         })
     );
 }
+
+/// Review P1-2 / 27: the address transactions page reads its positions, then
+/// the page's `tx_index` entries and block headers with one multi_get each —
+/// nothing per row.
+#[tokio::test]
+async fn address_transactions_page_reads_entries_and_headers_once_per_page() {
+    let store = test_store();
+    let lock_hash = [0x43u8; 32];
+    for block in 40..52i64 {
+        seed_committed_activity(&store, &lock_hash, &[block as u8; 32], block, 0, 100, 0);
+    }
+    let app = create_router(test_config(store.clone())).await;
+    store.reset_read_call_counters();
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/transactions?limit=5", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 5);
+    assert_eq!(store.point_reads(ckbadger_store::CF_TX_INDEX), 0);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_TX_INDEX), 1);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_BLOCK_HEADERS), 1);
+}

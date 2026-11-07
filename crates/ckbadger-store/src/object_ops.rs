@@ -1469,6 +1469,55 @@ mod tests {
         assert_eq!((next[0].0, next[0].1), (99, 0));
     }
 
+    /// Review 27: completing a collection page needs the header of every
+    /// row's block; a row whose block has none is an error naming it.
+    #[test]
+    fn a_collection_activity_whose_block_has_no_header_is_an_error() {
+        let (_dir, store) = test_domain_store();
+        let cid = [0x06u8; 32];
+        let entry = make_activity(&[0x10; 32], 100_000, vec![AssetAction::Mint]);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_object_collection_activity(&cid, 100, 1, &entry);
+        super::test_support::index_collection_activity(&mut batch, 100, 1, &entry);
+        batch.commit().unwrap();
+        store
+            .delete_cf(store.cf_block_headers(), &keys::encode_block_num(100))
+            .unwrap();
+        let err = store
+            .list_object_collection_activities(&cid, 10, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("object_collection_activities row at block=100, tx_idx=1 has no block header"),
+            "{err}"
+        );
+    }
+
+    /// Review 16: a collection page comes back with the headers its
+    /// completion read, one per distinct block, for the chain time.
+    #[test]
+    fn a_collection_activity_page_carries_the_headers_it_read() {
+        let (_dir, store) = test_domain_store();
+        let cid = [0x07u8; 32];
+        let mut batch = StoreBatch::new(&store);
+        for (block, tx_idx, tx) in [(100, 1, 0x10u8), (100, 2, 0x11), (99, 0, 0x12)] {
+            let entry = make_activity(&[tx; 32], 100_000 + block, vec![AssetAction::Mint]);
+            batch.put_object_collection_activity(&cid, block, tx_idx, &entry);
+            super::test_support::index_collection_activity(&mut batch, block, tx_idx, &entry);
+        }
+        batch.commit().unwrap();
+        store.reset_read_call_counters();
+        let (rows, headers) = store
+            .list_object_collection_activity_page(&cid, 10, None, None)
+            .unwrap();
+        assert_eq!(store.read_call_counts(), (0, 2), "tx_index + block_headers");
+        assert_eq!(rows.len(), 3);
+        let mut blocks: Vec<i64> = headers.keys().copied().collect();
+        blocks.sort_unstable();
+        assert_eq!(blocks, vec![99, 100]);
+        assert_eq!(headers[&100].chain_time_ms, 100_100);
+    }
+
     #[test]
     fn a_collection_activity_at_a_position_without_a_transaction_is_an_error() {
         let (_dir, store) = test_domain_store();

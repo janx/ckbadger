@@ -827,6 +827,82 @@ mod tests {
         }
     }
 
+    /// Review 27: a caller that names the hash it expects at a position gets
+    /// an error when the position holds another transaction.
+    #[test]
+    fn get_tx_actions_fails_when_the_position_holds_another_transaction() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        seed_activity(&mut batch, &make_tx_actions(5, 1, 0x11));
+        batch.commit().unwrap();
+        let err = store
+            .get_tx_actions(5, 1, &[0x22; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!(
+                "activities at block=5, tx_idx=1 is transaction 0x{}, not 0x{}",
+                "11".repeat(32),
+                "22".repeat(32)
+            )),
+            "{err}"
+        );
+    }
+
+    /// Review 27: an address row of a non-cellbase transaction without its
+    /// `activities` row is a lost row, named with the row kind, the address
+    /// and the position.
+    #[test]
+    fn list_activities_fails_on_a_non_cellbase_position_without_an_activities_row() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = [0xAA; 32];
+        let mut batch = StoreBatch::new(&store);
+        let actions = make_tx_actions(100, 2, 0x33);
+        seed_activity(&mut batch, &actions);
+        batch.put_addr_tx(&lock, 100, 2, &AddrTxValue::new(1, false, true, 0));
+        batch.commit().unwrap();
+        // The activities row goes; the tx_index row and the address row stay.
+        store
+            .delete_cf(store.cf_tx_actions(), &keys::encode_tx_actions_key(100, 2))
+            .unwrap();
+        let err = store
+            .list_activities(&lock, 10, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!(
+                "addr_txs row of 0x{} at block=100, tx_idx=2 (tx 0x{}) has no activities row",
+                "aa".repeat(32),
+                "33".repeat(32)
+            )),
+            "{err}"
+        );
+    }
+
+    /// Review 27: completing a page needs the block header of every row; a
+    /// row whose block has none is an error naming the position.
+    #[test]
+    fn completing_activities_fails_on_a_block_without_its_header() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        seed_activity(&mut batch, &make_tx_actions(100, 0, 0x44));
+        batch.commit().unwrap();
+        store
+            .delete_cf(store.cf_block_headers(), &keys::encode_block_num(100))
+            .unwrap();
+        let err = store
+            .list_tx_actions_recent(10, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("activities row at block=100, tx_idx=0 has no block header"),
+            "{err}"
+        );
+    }
+
     /// Review P1-3: a stale `addr_txs` row (its position now holds a
     /// transaction the address takes no part in) fails the address feed
     /// instead of shortening the page.
