@@ -1381,7 +1381,6 @@ pub(crate) fn normalize_identity_activity_action_filter(
 /// position without a transaction is an error in the store reader.
 pub(crate) fn list_canonical_nft_collection_activities_page(
     store: &CkbadgerStore,
-    _append_only_store: &CkbadgerStore,
     collection_id: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
@@ -4799,7 +4798,6 @@ mod tests {
         // rollback bug: the feed names it instead of hiding it.
         let error = list_canonical_nft_collection_activities_page(
             &domain,
-            &domain,
             &collection_id,
             3,
             None,
@@ -4823,7 +4821,6 @@ mod tests {
             )
             .unwrap();
         let listed = list_canonical_nft_collection_activities_page(
-            &domain,
             &domain,
             &collection_id,
             3,
@@ -4883,7 +4880,6 @@ mod tests {
         domain_batch.commit().unwrap();
 
         let listed = list_canonical_nft_collection_activities_page(
-            &domain,
             &domain,
             &collection_id,
             10,

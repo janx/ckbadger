@@ -1105,8 +1105,9 @@ pub(crate) fn matches_global_activity_filter(actions: &TxActions, filter: Option
 ///
 /// A bucket filter reads `CF_TX_ACTIONS_BY_BUCKET`, which the indexer writes
 /// beside every non-cellbase `TxActions` row and deletes above the fork point
-/// on rollback: each row is canonical by construction and a page costs one
-/// position seek per row. The unfiltered feed walks `CF_TX_ACTIONS`.
+/// on rollback: each row is canonical by construction, and a page costs one
+/// bucket iterator plus one `activities`, one `tx_index` and one
+/// `block_headers` multi_get. The unfiltered feed walks `CF_TX_ACTIONS`.
 pub(crate) fn list_canonical_global_actions_page(
     store: &CkbadgerStore,
     limit: usize,

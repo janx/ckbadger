@@ -166,7 +166,6 @@ fn collection_feed(
         usize::try_from(limit).map_err(|_| ApiError::internal("feed limit overflow"))?;
     let mut rows = assets::list_canonical_nft_collection_activities_page(
         &state.store,
-        &state.append_only_store,
         &id,
         page_size + 1,
         cursor,

@@ -949,9 +949,9 @@ async fn get_cluster_activities(
         }
     }
 
-    // Use pre-computed collection activity index and drop orphaned history rows.
+    // The pre-computed collection activity index: rows keyed by position are
+    // canonical by construction.
     let results = list_canonical_nft_collection_activities_page(
-        state.store.as_ref(),
         state.store.as_ref(),
         &id,
         (limit as usize) + 1,
