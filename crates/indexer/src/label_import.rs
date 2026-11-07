@@ -578,9 +578,18 @@ fn prepare_token_label(
     let args = decode_hex(&deployment.args).map_err(|e| {
         anyhow::anyhow!("invalid type script args for token {}: {}", token.symbol, e)
     })?;
+    // Metadata, not node data: an unknown label is a collected entry error,
+    // checked before the script hash reads it.
+    let hash_type = ckbadger_common::hash_type_from_label(&deployment.hash_type).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid type script hash_type `{}` for token {}",
+            deployment.hash_type,
+            token.symbol
+        )
+    })?;
     Ok(PreparedTokenLabel {
         type_hash: compute_type_hash(deployment)?,
-        hash_type: ScriptParser::parse_hash_type(&deployment.hash_type),
+        hash_type,
         code_hash,
         args,
     })
@@ -2067,13 +2076,26 @@ disabled = true
 
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let mut malformed = token;
+        let mut malformed = token.clone();
         malformed.mainnet.as_mut().unwrap().code_hash = "0xgg".into();
         let result = import_all(&store, "mainnet", &[malformed], &[]).unwrap();
         assert_eq!(result.udt_labels_imported, 0);
         assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
         assert!(
             result.errors[0].contains("invalid type script code_hash"),
+            "{:?}",
+            result.errors
+        );
+
+        // An unknown hash_type label is collected too, never a panic
+        // (delta review: `parse_hash_type` is for node-validated labels).
+        let mut bad_hash_type = token;
+        bad_hash_type.mainnet.as_mut().unwrap().hash_type = "bogus".into();
+        let result = import_all(&store, "mainnet", &[bad_hash_type], &[]).unwrap();
+        assert_eq!(result.udt_labels_imported, 0);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("invalid type script hash_type `bogus`"),
             "{:?}",
             result.errors
         );
