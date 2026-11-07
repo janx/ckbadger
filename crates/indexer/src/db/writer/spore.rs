@@ -1256,12 +1256,18 @@ impl BatchWriter {
             let cid = identity_standard.sentinel_collection_id();
             let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
-                bail!(
-                    "identity live_count underflow on consume: standard={}, identity_id=0x{}, live_count={}",
-                    identity_standard.as_str(),
-                    hex::encode(spore_id),
-                    agg.live_count
-                );
+                // The aggregate no longer counts an identity its rows say is
+                // live: rebuild-required (Lane B carry-over, like B-7 F2).
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "identity live_count underflow on consume: standard={}, identity_id=0x{}, current={}, delta=-1, block={}, tx=0x{}",
+                        identity_standard.as_str(),
+                        hex::encode(spore_id),
+                        agg.live_count,
+                        block_number,
+                        hex::encode(tx_hash)
+                    )),
+                ));
             }
             agg.live_count -= 1;
             self.apply_identity_owner_transition(
@@ -2605,6 +2611,50 @@ mod tests {
         assert!(text.contains("current=0"), "{text}");
         assert!(text.contains("delta=-1"), "{text}");
         assert!(text.contains("consume spore"), "{text}");
+    }
+
+    /// Lane B carry-over 4(a): an identity aggregate that no longer counts a
+    /// live identity the rows say is live is rebuild-required, like the
+    /// cluster aggregate's underflows.
+    #[test]
+    fn an_identity_live_count_underflow_on_consume_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let did = make_parsed_did(&[0x13; 20], &[0x23; 32]);
+        let mut batch = StoreBatch::new(&store);
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        writer
+            .insert_did_ckb_cell(&did, &[0x33; 32], 0, 1, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+        let mut agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.live_count, 1);
+        agg.live_count = 0;
+        let mut seed = StoreBatch::new(&store);
+        seed.put_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION, &agg);
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let err = writer
+            .consume_spore(&did.did_id, 2, &[0x44; 32], &mut batch, &mut state)
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("identity live_count underflow on consume"),
+            "{text}"
+        );
+        assert!(text.contains(&hex::encode(&did.did_id)), "{text}");
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains("block=2"), "{text}");
     }
 
     #[test]

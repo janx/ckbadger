@@ -848,15 +848,19 @@ impl BatchWriter {
             let cid = &DOTBIT_SENTINEL_COLLECTION;
             let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
-                bail!(
-                    "dotbit identity live_count underflow on consume: account_id=0x{}, \
-                     block={}, tx=0x{}, live_count={}, created_at_block={}",
-                    hex::encode(account_id),
-                    block_number,
-                    hex::encode(tx_hash),
-                    agg.live_count,
-                    entry_snapshot.created_at_block
-                );
+                // The aggregate no longer counts an account its rows say is
+                // live: rebuild-required (Lane B carry-over, like B-7 F2).
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "dotbit identity live_count underflow on consume: account_id=0x{}, \
+                         block={}, tx=0x{}, current={}, delta=-1, created_at_block={}",
+                        hex::encode(account_id),
+                        block_number,
+                        hex::encode(tx_hash),
+                        agg.live_count,
+                        entry_snapshot.created_at_block
+                    )),
+                ));
             }
             agg.live_count -= 1;
             let ctx = OwnerTransitionContext {
@@ -1028,6 +1032,64 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         }
+    }
+
+    /// Lane B carry-over 4(a): the `.bit` identity aggregate no longer counts
+    /// a live account the rows say is live: rebuild-required, like the spore
+    /// cluster underflows.
+    #[test]
+    fn an_account_live_count_underflow_on_consume_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let account = ParsedDotbitAccountOutput {
+            output_index: 6,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: vec![0x17; 20],
+                account: Some("carol.bit".to_string()),
+                type_script_hash: vec![0x27; 32],
+                next_account_id: None,
+                expired_at: None,
+                registered_at: None,
+                status: None,
+                owner_lock_hash: vec![0x37; 32],
+            },
+        };
+        let mut batch = StoreBatch::new(writer.store());
+        insert_account(&writer, &account, &[0x47; 32], 1, 0, &mut batch).unwrap();
+        batch.commit().unwrap();
+        let mut agg = store
+            .get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.live_count, 1);
+        agg.live_count = 0;
+        let mut seed = StoreBatch::new(&store);
+        seed.put_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = consume_account(
+            &writer,
+            &account.account.account_id,
+            2,
+            &[0x48; 32],
+            &mut batch,
+        )
+        .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("dotbit identity live_count underflow on consume"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&hex::encode(&account.account.account_id)),
+            "{text}"
+        );
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains("block=2"), "{text}");
     }
 
     #[test]

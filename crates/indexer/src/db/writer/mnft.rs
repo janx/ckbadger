@@ -656,13 +656,19 @@ impl BatchWriter {
                     );
                 };
                 if agg.live_count <= 0 {
-                    bail!(
-                        "mnft collection live_count underflow: class_id=0x{}, live_count={}, block={}, tx=0x{}",
-                        hex::encode(cid),
-                        agg.live_count,
-                        block_number,
-                        hex::encode(tx_hash)
-                    );
+                    // The class aggregate no longer counts a token its rows
+                    // say is live: rebuild-required (Lane B carry-over, like
+                    // B-7 F2).
+                    return Err(anyhow::Error::new(
+                        crate::lifecycle::RebuildRequiredError::new(format!(
+                            "mnft collection live_count underflow: class_id=0x{}, token_id=0x{}, current={}, delta=-1, block={}, tx=0x{}",
+                            hex::encode(cid),
+                            hex::encode(token_id),
+                            agg.live_count,
+                            block_number,
+                            hex::encode(tx_hash)
+                        )),
+                    ));
                 }
                 agg.live_count -= 1;
                 let token_tier = self.resolve_mnft_token_tier(cid, state)?;
@@ -1204,6 +1210,50 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().contains("live_count underflow"));
+    }
+
+    /// Lane B carry-over 4(a): the class aggregate no longer counts a live
+    /// token: rebuild-required, like the spore cluster underflows.
+    #[test]
+    fn a_class_live_count_underflow_on_consume_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let class = sample_class();
+        let token = sample_token(0x14, class.class_id.clone(), 0x44);
+        let tx_hash = vec![0x53; 32];
+        let mut batch = StoreBatch::new(writer.store());
+        in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.insert_mnft_class_with_state(&class, &tx_hash, 7, 1, batch, state)?;
+            writer.insert_mnft_token_with_state(&token, &tx_hash, 8, 1, 0, batch, state)
+        })
+        .unwrap();
+        batch.commit().unwrap();
+        let mut agg = writer
+            .store()
+            .get_mnft_collection_aggregate(&class.class_id)
+            .unwrap()
+            .unwrap();
+        agg.live_count = 0;
+        let mut batch = StoreBatch::new(writer.store());
+        batch.put_mnft_collection_aggregate(&class.class_id, &agg);
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.consume_mnft_token_with_state(&token.token_id, 2, &tx_hash, batch, state)
+        })
+        .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("mnft collection live_count underflow"),
+            "{text}"
+        );
+        assert!(text.contains(&hex::encode(&class.class_id)), "{text}");
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains(&hex::encode(&token.token_id)), "{text}");
     }
 
     #[test]
