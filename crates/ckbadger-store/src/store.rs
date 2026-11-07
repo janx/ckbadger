@@ -5871,6 +5871,24 @@ mod tests {
             "hash (32B) + block (8B BE) + outpoint (34B) = 74B",
             74
         ));
+        // Delta review N8: the components must add up to the stated total,
+        // and every one must state its width.
+        assert!(!states_total(
+            "hash (32B) + block (8B BE) + outpoint (35B) = 74B",
+            74
+        ));
+        assert!(!states_total("hash (32B) + block + outpoint (34B) = 74B", 74));
+        assert!(states_total(
+            "block_number (8B BE) + tx_index (4B BE) = 12B, the canonical slot",
+            12
+        ));
+        assert!(states_total(
+            "collection_id (32B padded) + day YYYYMMDD (4B BE) = 36B",
+            36
+        ));
+        assert_eq!(component_width("blake2b(cell_data) (32B)"), Some(32));
+        assert_eq!(component_width("tx_idx_desc(4)"), Some(4));
+        assert_eq!(component_width("block"), None);
         assert_eq!(
             counts_stated_before("74 domain + 1 append-only; the 68 domain CFs", " domain"),
             vec![74, 68]
@@ -5882,15 +5900,30 @@ mod tests {
     }
 
     /// Whether the key cell `cell` states the key's total width `width`: a
-    /// key of several components (`a + b`) as `= NB`, a one-component key as
-    /// `(NB` on its one component — never a component's width that happens to
-    /// equal the total.
+    /// key of several components (`a + b`) as `= NB`, with every component's
+    /// width stated (`name (NB…)` or `name(N)`) and summing to it; a
+    /// one-component key as `(NB` on its one component — never a component's
+    /// width that happens to equal the total.
     fn states_total(cell: &str, width: usize) -> bool {
-        if cell.contains(" + ") {
-            cell.contains(&format!("= {width}B"))
-        } else {
-            cell.contains(&format!("({width}B"))
+        if !cell.contains(" + ") {
+            return cell.contains(&format!("({width}B"));
         }
+        let Some((components, _)) = cell.split_once(&format!(" = {width}B")) else {
+            return false;
+        };
+        let widths: Option<Vec<usize>> = components.split(" + ").map(component_width).collect();
+        widths.is_some_and(|widths| widths.iter().sum::<usize>() == width)
+    }
+
+    /// The width a key component states in its last parenthesis: `(32B)`,
+    /// `(8B BE)`, `(32B padded)` or `(32)`.
+    fn component_width(component: &str) -> Option<usize> {
+        let (_, inside) = component.trim_end().strip_suffix(')')?.rsplit_once('(')?;
+        let digits: String = inside.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let rest = &inside[digits.len()..];
+        (rest.is_empty() || rest.starts_with('B'))
+            .then(|| digits.parse().ok())
+            .flatten()
     }
 
     /// Every OUTSIDE_JOURNAL entry names a `Journal`-class domain CF (the
