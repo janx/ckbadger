@@ -81,9 +81,7 @@ pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBuc
 pub use network_types::*;
 pub use reorg_ops::{JournalEntry, RollbackResult};
 pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
-pub use stats_ops::{
-    activity_addr_set_count, decode_activity_addr_set, encode_activity_addr_set, DaoDayFacts,
-};
+pub use stats_ops::DaoDayFacts;
 pub use store::{
     cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
     known_domain_secondary_store_paths, secondary_store_path, BufferTier, CfCompaction,

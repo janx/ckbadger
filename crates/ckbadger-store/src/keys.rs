@@ -810,7 +810,7 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 /// - **`HOURLY` (`%Y%m%d%H`)** uses the **UTC** clock: the live writer
 ///   formats the UTC-truncated canonical block hour from
 ///   `ckbadger_common::stats_bucket::stats_hour(chain_time_ms)`.
-/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_SET` (`%Y%m%d%H`)** use the
+/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_ROW` (`%Y%m%d%H`)** use the
 ///   **UTC+8** display of that same canonical hour, keeping the
 ///   hourly activity series aligned with its UTC+8 daily parent.
 ///
@@ -859,25 +859,28 @@ pub mod stats_prefix {
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
     pub const CELL_DISTRIBUTION: u8 = 0x21;
     pub const ADDR_COHORT: u8 = 0x22;
-    /// Persistent address set for daily unique address dedup across batches.
-    /// Value: sorted, concatenated [u8; 32] lock hashes.
-    pub const ACTIVITY_DAILY_ADDR_SET: u8 = 0x23;
-    /// Persistent address set for hourly unique address dedup across batches.
-    pub const ACTIVITY_HOURLY_ADDR_SET: u8 = 0x24;
+    // 0x23 / 0x24 (the retired `ACTIVITY_*_ADDR_SET` blobs: one bucket's
+    // addresses in one value, written by bulk build for every bucket) are
+    // not reused. A bucket's addresses are its `ACTIVITY_*_ADDR_ROW` rows
+    // (C-3).
     /// An output carrying the `.bit` AccountCell type script that the indexer
     /// did not materialize as an account because its data names none (the DAS
     /// root AccountCell with its all-zero account id, or data too short to
     /// name one). Suffix: outpoint. Value: empty.
     pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
-    /// One address of a daily activity bucket that live sync saw first in
-    /// that bucket: neither in the bucket's bulk-written `ACTIVITY_DAILY_ADDR_SET`
-    /// blob nor in an earlier row. Suffix: `%Y%m%d` (UTC+8) + 32B lock hash.
-    /// Value: empty. One row per address keeps a live block's journal to one
-    /// small entry per new address instead of a rewritten bucket-wide blob.
+    /// One unique `Lock` address of a daily activity bucket: the dedup
+    /// memory behind `DailyActivityStats::unique_address_count`. Suffix:
+    /// `%Y%m%d` (UTC+8) + 32B lock hash. Value: empty. Kept only while a
+    /// block can still reach the bucket (C-3): live sync writes one row per
+    /// address the bucket has not seen, in the block's scope, and deletes a
+    /// bucket's rows once the rollback coverage floor's chain time has left
+    /// the bucket; bulk build writes the rows only for the buckets still open
+    /// at the handoff tip. One row per address keeps a live block's journal
+    /// to one small entry per new address.
     pub const ACTIVITY_DAILY_ADDR_ROW: u8 = 0x26;
-    /// One address of an hourly activity bucket that live sync saw first in
-    /// that bucket (see `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the
-    /// **UTC+8** clock + 32B lock hash. Value: empty.
+    /// One unique `Lock` address of an hourly activity bucket (see
+    /// `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the **UTC+8** clock +
+    /// 32B lock hash. Value: empty.
     pub const ACTIVITY_HOURLY_ADDR_ROW: u8 = 0x27;
 }
 
@@ -917,17 +920,13 @@ pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
 pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
 pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
 pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
-pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
-pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
 pub const STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT: u8 = stats_prefix::DOTBIT_UNINDEXED_OUTPOINT;
 pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_ROW;
 pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_ROW;
 
-/// The two activity bucket families and their three row kinds: the bucket's
-/// `DailyActivityStats`, the bulk-written address-set blob, and the live
-/// per-address rows. A bucket's unique addresses are the blob's addresses
-/// plus the rows' addresses; live sync never rewrites the blob and writes a
-/// row only for an address in neither.
+/// The two activity bucket families and their two row kinds: the bucket's
+/// `DailyActivityStats` (kept forever) and its per-address rows (kept while a
+/// block can still reach the bucket; see `stats_prefix::ACTIVITY_DAILY_ADDR_ROW`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityBucketKind {
     /// UTC+8 calendar day, `%Y%m%d`.
@@ -942,14 +941,6 @@ impl ActivityBucketKind {
         match self {
             Self::Daily => stats_prefix::ACTIVITY_DAILY,
             Self::Hourly => stats_prefix::ACTIVITY_HOURLY,
-        }
-    }
-
-    /// Prefix of the bucket's bulk-written address-set blob.
-    pub const fn addr_set_prefix(self) -> u8 {
-        match self {
-            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
         }
     }
 
@@ -987,10 +978,14 @@ impl ActivityBucketKind {
         Ok(encode_stats_key(self.stats_prefix(), bucket.as_bytes()))
     }
 
-    /// Key of the bucket's bulk-written address-set blob.
-    pub fn addr_set_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
-        self.check_bucket(bucket)?;
-        Ok(encode_stats_key(self.addr_set_prefix(), bucket.as_bytes()))
+    /// The bucket of this kind a chain time falls in: its UTC+8 day
+    /// (`%Y%m%d`) or UTC+8 hour (`%Y%m%d%H`), the labels the live writer and
+    /// bulk build key the bucket by. Labels of one kind sort chronologically.
+    pub fn bucket_label(self, chain_time_ms: i64) -> anyhow::Result<String> {
+        match self {
+            Self::Daily => ckbadger_common::stats_bucket::stats_date_key(chain_time_ms),
+            Self::Hourly => ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time_ms),
+        }
     }
 
     /// Key of one live per-address row: prefix ‖ bucket ‖ lock hash.
@@ -2260,6 +2255,14 @@ pub mod sync_meta_keys {
     /// One derived aggregate's derivation state (bincode `DeriveMeta`). The
     /// aggregate name is appended: `derive:dao_live_agg`.
     pub const DERIVE_META_PREFIX: &[u8] = b"derive:";
+    /// The UTC+8 activity hour (`%Y%m%d%H`, 10 ASCII digits) of the rollback
+    /// coverage floor block the activity address rows were last pruned to:
+    /// no `ACTIVITY_HOURLY_ADDR_ROW` row of an earlier hour, and no
+    /// `ACTIVITY_DAILY_ADDR_ROW` row of an earlier day (the hour's first 8
+    /// digits), remains (C-3). Written by the live batch that prunes, in its
+    /// block's scope (journaled), so a rollback of that block restores the
+    /// rows and this bound together.
+    pub const ACTIVITY_ADDR_ROW_FLOOR: &[u8] = b"activity_addr_row_floor";
 }
 
 /// `sync_meta` key of one derived aggregate's `DeriveMeta`.

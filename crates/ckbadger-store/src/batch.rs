@@ -1156,6 +1156,20 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
     }
 
+    /// Persist the UTC+8 activity hour the activity address rows are pruned to
+    /// (`sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR`) in the same atomic batch,
+    /// and the same block scope, as the deletions it describes.
+    pub fn put_activity_addr_row_floor(&mut self, hour_label: &str) {
+        assert!(
+            hour_label.len() == 10 && hour_label.bytes().all(|b| b.is_ascii_digit()),
+            "activity address row floor must be a UTC+8 hour label, got {hour_label:?}"
+        );
+        self.put_sync_meta(
+            keys::sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR,
+            hour_label.as_bytes(),
+        );
+    }
+
     /// Persist one hourly family's retention state in the same atomic batch as
     /// the deletions it describes.
     pub fn put_hourly_retention_state(&mut self, state: &crate::types::HourlyRetentionState) {

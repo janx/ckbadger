@@ -46,6 +46,24 @@ impl CkbadgerStore {
         }
     }
 
+    /// The UTC+8 activity hour the activity address rows were last pruned to
+    /// (`sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR`); `None` before the first
+    /// prune. A value that is not 10 ASCII digits is an error.
+    pub fn get_activity_addr_row_floor(&self) -> anyhow::Result<Option<String>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR)? {
+            Some(value) => {
+                if value.len() != 10 || !value.iter().all(u8::is_ascii_digit) {
+                    anyhow::bail!(
+                        "corrupt activity address row floor: 0x{} is not a UTC+8 hour label",
+                        crate::bytes_to_hex(&value)
+                    );
+                }
+                Ok(Some(String::from_utf8(value).expect("ASCII digits")))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn get_entity_stats_undo_contract(
         &self,
     ) -> anyhow::Result<Option<crate::types::EntityStatsUndoContract>> {

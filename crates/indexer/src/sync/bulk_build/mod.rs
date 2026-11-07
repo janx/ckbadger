@@ -1880,6 +1880,10 @@ impl ActivityStatsAccumulator {
         Ok(rows)
     }
 
+    /// The rows of the buckets still in memory at finalize: after the last
+    /// batch sealed every bucket complete at the final watermark, the buckets
+    /// open at the handoff tip (its UTC+8 day and hour). Each keeps its
+    /// address rows, which live sync continues from.
     fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
         let mut rows = Vec::with_capacity(self.daily_stats.len() + self.hourly_stats.len());
         // The days still open at finalize (the handoff tip's day).
@@ -1907,17 +1911,7 @@ impl ActivityStatsAccumulator {
                 bincode::serialize(&stats)?,
             ));
             if let Some(addrs) = self.daily_addrs.get(&date) {
-                let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
-                sorted.sort_unstable();
-                let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
-                rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_CHAIN,
-                    keys::encode_stats_key(
-                        keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-                        date.as_bytes(),
-                    ),
-                    flat,
-                ));
+                push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Daily, &date, addrs)?;
             }
         }
 
@@ -1938,17 +1932,7 @@ impl ActivityStatsAccumulator {
                 bincode::serialize(&stats)?,
             ));
             if let Some(addrs) = self.hourly_addrs.get(&hour) {
-                let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
-                sorted.sort_unstable();
-                let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
-                rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_CHAIN,
-                    keys::encode_stats_key(
-                        keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
-                        hour.as_bytes(),
-                    ),
-                    flat,
-                ));
+                push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Hourly, &hour, addrs)?;
             }
         }
 
@@ -2000,7 +1984,7 @@ fn drain_activity_bucket_rows(
         .collect::<Result<Vec<_>>>()?;
     sealed_buckets.sort();
 
-    let mut rows = Vec::with_capacity(sealed_buckets.len() * 2);
+    let mut rows = Vec::with_capacity(sealed_buckets.len());
     for bucket in sealed_buckets {
         let mut stats = stats_by_bucket.remove(&bucket).ok_or_else(|| {
             anyhow!(
@@ -2009,8 +1993,11 @@ fn drain_activity_bucket_rows(
                 bucket
             )
         })?;
-        let addrs = addrs_by_bucket.remove(&bucket);
-        stats.unique_address_count = addrs.as_ref().map_or(Ok(0), |set| {
+        // The bucket's address set dies with it (C-3): only its count is
+        // written. A sealed bucket ends at or below the watermark, so no later
+        // block reaches it, and bulk records no journal, so no rollback
+        // reopens it.
+        stats.unique_address_count = addrs_by_bucket.remove(&bucket).map_or(Ok(0), |set| {
             checked_unique_address_count(set.len(), &bucket)
         })?;
         let stats_prefix = if hourly {
@@ -2023,26 +2010,30 @@ fn drain_activity_bucket_rows(
             keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
             bincode::serialize(&stats)?,
         ));
-        if let Some(addrs) = addrs {
-            let mut sorted = addrs.into_iter().collect::<Vec<_>>();
-            sorted.sort_unstable();
-            let mut flat = Vec::with_capacity(sorted.len() * 32);
-            for hash in sorted {
-                flat.extend_from_slice(&hash);
-            }
-            let addr_prefix = if hourly {
-                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET
-            } else {
-                keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET
-            };
-            rows.push(materialize::MaterializedRow::new(
-                CF_STATS_CHAIN,
-                keys::encode_stats_key(addr_prefix, bucket.as_bytes()),
-                flat,
-            ));
-        }
     }
     Ok(rows)
+}
+
+/// One empty `ACTIVITY_*_ADDR_ROW` row per address of a bucket still open at
+/// finalize: live sync continues the bucket and needs its addresses to count
+/// each one once, then deletes the rows once the rollback coverage floor
+/// leaves the bucket.
+fn push_activity_addr_rows(
+    rows: &mut Vec<materialize::MaterializedRow>,
+    kind: keys::ActivityBucketKind,
+    bucket: &str,
+    addrs: &FxHashSet<[u8; 32]>,
+) -> Result<()> {
+    let mut sorted: Vec<&[u8; 32]> = addrs.iter().collect();
+    sorted.sort_unstable();
+    for lock_hash in sorted {
+        rows.push(materialize::MaterializedRow::new(
+            CF_STATS_CHAIN,
+            kind.addr_row_key(bucket, lock_hash)?,
+            Vec::new(),
+        ));
+    }
+    Ok(())
 }
 
 fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
@@ -9126,6 +9117,44 @@ mod tests {
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 
+    /// Whether `key` is an `ACTIVITY_*_ADDR_ROW` row.
+    fn is_activity_addr_row(key: &[u8]) -> bool {
+        matches!(
+            key.first().copied(),
+            Some(
+                keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW
+                    | keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW
+            )
+        )
+    }
+
+    /// The rows of an oracle that never sealed, as bulk build writes them:
+    /// without the address rows of the buckets complete at `watermark_ms`
+    /// (C-3: a bucket's address set dies with it when it seals).
+    fn without_sealed_addr_rows(
+        rows: Vec<materialize::MaterializedRow>,
+        watermark_ms: i64,
+    ) -> Vec<materialize::MaterializedRow> {
+        rows.into_iter()
+            .filter(|row| {
+                let kind = match row.key.first().copied() {
+                    Some(keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW) => {
+                        keys::ActivityBucketKind::Daily
+                    }
+                    Some(keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW) => {
+                        keys::ActivityBucketKind::Hourly
+                    }
+                    _ => return true,
+                };
+                let bucket = std::str::from_utf8(&row.key[1..1 + kind.bucket_len()]).unwrap();
+                let end =
+                    bucket_end_from_utc8_key(bucket, kind == keys::ActivityBucketKind::Hourly)
+                        .unwrap();
+                !is_bucket_complete(end, watermark_ms)
+            })
+            .collect()
+    }
+
     #[test]
     fn activity_stats_seal_only_buckets_older_than_ckb_mtp() {
         let action = TxActions {
@@ -9165,7 +9194,12 @@ mod tests {
         let sealed = acc
             .apply_batch(&[block(1, 7_200_000), block(2, 10_800_000)], &[])
             .unwrap();
-        assert_eq!(sealed.len(), 2, "hourly stats + hourly address set");
+        assert_eq!(
+            sealed.len(),
+            1,
+            "hourly stats only: the address set dies with its sealed bucket"
+        );
+        assert!(!is_activity_addr_row(&sealed[0].key));
         let hour_key = ckbadger_common::block_datetime_from_ms(0)
             .format("%Y%m%d%H")
             .to_string();
@@ -9222,7 +9256,7 @@ mod tests {
         one_shot
             .apply_tx_actions(std::slice::from_ref(&action))
             .unwrap();
-        let mut expected = one_shot.build_rows().unwrap();
+        let expected = one_shot.build_rows().unwrap();
 
         let mut incremental = ActivityStatsAccumulator::default();
         let mut actual = incremental
@@ -9234,6 +9268,14 @@ mod tests {
                 .unwrap(),
         );
         actual.extend(incremental.build_rows().unwrap());
+        // A bucket sealed by the incremental path keeps no address row
+        // (C-3); the one-shot oracle never seals.
+        let mut expected = without_sealed_addr_rows(
+            expected,
+            incremental
+                .sealed_through_ms
+                .expect("batches advanced the watermark"),
+        );
 
         let sort_rows = |rows: &mut Vec<materialize::MaterializedRow>| {
             rows.sort_by(|a, b| {
@@ -10232,7 +10274,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_stats_build_rows_emits_addr_set_entries() {
+    fn activity_stats_build_rows_emits_address_rows_of_open_buckets() {
         let tx_actions = TxActions {
             tx_hash: vec![0x11; 32],
             block_hash: vec![0x22; 32],
@@ -10265,40 +10307,24 @@ mod tests {
             .format("%Y%m%d%H")
             .to_string();
 
-        // Expect: ACTIVITY_DAILY row, ACTIVITY_DAILY_ADDR_SET row,
-        //         ACTIVITY_HOURLY row, ACTIVITY_HOURLY_ADDR_SET row
+        // Every bucket is open at finalize: ACTIVITY_DAILY row and the day's
+        // address row, ACTIVITY_HOURLY row and the hour's address row.
         assert_eq!(
             rows.len(),
             4,
-            "expected 4 rows: daily + daily_addr_set + hourly + hourly_addr_set"
+            "daily + daily address + hourly + hourly address"
         );
-
-        // Verify ACTIVITY_DAILY_ADDR_SET key and value
-        let daily_addr_set_key = keys::encode_stats_key(
-            keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            date_key.as_bytes(),
-        );
-        let daily_addr_row = rows
-            .iter()
-            .find(|r| r.key == daily_addr_set_key)
-            .expect("ACTIVITY_DAILY_ADDR_SET row must exist");
-        assert_eq!(daily_addr_row.cf_name, CF_STATS_CHAIN);
-        // Value is flat sorted 32-byte hashes; 1 participant => 32 bytes
-        assert_eq!(daily_addr_row.value.len(), 32);
-        assert_eq!(&daily_addr_row.value[..32], &[0x33; 32]);
-
-        // Verify ACTIVITY_HOURLY_ADDR_SET key and value
-        let hourly_addr_set_key = keys::encode_stats_key(
-            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
-            hour_key.as_bytes(),
-        );
-        let hourly_addr_row = rows
-            .iter()
-            .find(|r| r.key == hourly_addr_set_key)
-            .expect("ACTIVITY_HOURLY_ADDR_SET row must exist");
-        assert_eq!(hourly_addr_row.cf_name, CF_STATS_CHAIN);
-        assert_eq!(hourly_addr_row.value.len(), 32);
-        assert_eq!(&hourly_addr_row.value[..32], &[0x33; 32]);
+        for (kind, bucket) in [
+            (keys::ActivityBucketKind::Daily, date_key),
+            (keys::ActivityBucketKind::Hourly, hour_key),
+        ] {
+            let row = rows
+                .iter()
+                .find(|r| r.key == kind.addr_row_key(&bucket, &[0x33; 32]).unwrap())
+                .unwrap_or_else(|| panic!("{kind:?} address row must exist"));
+            assert_eq!(row.cf_name, CF_STATS_CHAIN);
+            assert!(row.value.is_empty());
+        }
     }
 
     /// J15: a transaction reaches each activity bucket map ONCE — the day and
@@ -10394,7 +10420,7 @@ mod tests {
     /// blocks share a chain time, one raw timestamp a day behind), repeated
     /// and prefix-only participants, cellbase-only blocks, protocol actions
     /// and script calls, and buckets whose only participants are cellbase or
-    /// prefix-only — which get stats but NO address-set row.
+    /// prefix-only — which get stats but NO address row.
     #[test]
     fn activity_runs_write_the_rows_of_per_transaction_folding() {
         use ckbadger_store::types::{
@@ -10551,30 +10577,44 @@ mod tests {
         let key = |prefix: u8, bucket: String| keys::encode_stats_key(prefix, bucket.as_bytes());
         let day = |t: i64| ckbadger_common::stats_bucket::stats_date_key(t).unwrap();
         let hour = |t: i64| ckbadger_common::stats_bucket::stats_hour_utc8_key(t).unwrap();
-        let row_keys: Vec<Vec<u8>> = expected.iter().map(|row| row.key.clone()).collect();
-        use keys::stats_prefix::{
-            ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_SET,
+        use keys::stats_prefix::{ACTIVITY_DAILY, ACTIVITY_HOURLY};
+        use keys::ActivityBucketKind::{Daily, Hourly};
+        let addr_row = |kind: keys::ActivityBucketKind, bucket: String, byte: u8| {
+            kind.addr_row_key(&bucket, &[byte; 32]).unwrap()
         };
         let mut wanted = vec![
             key(ACTIVITY_DAILY, day(base)),
-            key(ACTIVITY_DAILY_ADDR_SET, day(base)),
             key(ACTIVITY_DAILY, day(base + DAY)),
             key(ACTIVITY_HOURLY, hour(base)),
-            key(ACTIVITY_HOURLY_ADDR_SET, hour(base)),
             key(ACTIVITY_HOURLY, hour(base + HOUR)),
-            key(ACTIVITY_HOURLY_ADDR_SET, hour(base + HOUR)),
             key(ACTIVITY_HOURLY, hour(base + 2 * HOUR)),
             key(ACTIVITY_HOURLY, hour(base + DAY)),
         ];
+        // The oracle never seals, so it keeps every bucket's address rows.
+        // Cellbase (tx index 0) and prefix-only participants are not
+        // addresses.
+        for byte in [0x02, 0x03, 0x04, 0x06] {
+            wanted.push(addr_row(Daily, day(base), byte));
+        }
+        for byte in [0x02, 0x03, 0x04] {
+            wanted.push(addr_row(Hourly, hour(base), byte));
+        }
+        for byte in [0x02, 0x06] {
+            wanted.push(addr_row(Hourly, hour(base + HOUR), byte));
+        }
         wanted.sort();
-        let mut got = row_keys.clone();
+        let mut got: Vec<Vec<u8>> = expected.iter().map(|row| row.key.clone()).collect();
         got.sort();
         assert_eq!(
             got, wanted,
             "chain-time buckets only (none for 101's or 106's raw hour or day), and no \
-             address-set row for hour 08 or day two, whose only participants are \
+             address row for hour 08 or day two, whose only participants are \
              cellbase or prefix-only"
         );
+        // The production path seals every bucket but day two and its hour
+        // (the final watermark's), so it writes no address row (C-3).
+        let expected = without_sealed_addr_rows(expected, base + DAY);
+        assert!(expected.iter().all(|row| !is_activity_addr_row(&row.key)));
 
         // Production path, one batch: the hour and day boundaries fall
         // inside it, so it lands several runs and seals the first day.

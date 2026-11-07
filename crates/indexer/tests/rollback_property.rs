@@ -1106,6 +1106,46 @@ fn transfer_chain(blocks: u64) -> Vec<BlockResponseWithCycles> {
     chain.blocks
 }
 
+/// A chain longer than the rollback coverage window (`blocks` > 1000): ten
+/// minutes a block from `T0`, each block's one transaction moving owner
+/// `n % 8`'s cell back to that owner, less one CKB of fee, so the cells never
+/// run dry and every hour sees six owners.
+fn long_transfer_chain(blocks: u64) -> Vec<BlockResponseWithCycles> {
+    let mut chain = ChainBuilder::new();
+    chain.genesis(
+        T0,
+        (1..=8u8)
+            .map(|owner| (output(10_000, lock(owner), None), "0x".to_string()))
+            .collect(),
+    );
+    let mut cells: Vec<([u8; 32], u64)> = (0..8).map(|_| (tx_hash(0xc000), 10_000)).collect();
+    for n in 1..blocks {
+        let owner = (n as usize) % 8;
+        let (prev_tx, capacity) = cells[owner];
+        let prev_index = if prev_tx == tx_hash(0xc000) {
+            owner as u32
+        } else {
+            0
+        };
+        let tag = 0x4000 + n as u16;
+        chain.push(
+            T0 + n * 10 * MINUTE,
+            vec![tx(
+                tag,
+                vec![input(prev_tx, prev_index)],
+                vec![(
+                    output(capacity - 1, lock(owner as u8 + 1), None),
+                    "0x".to_string(),
+                )],
+                vec![],
+            )],
+        );
+        cells[owner] = (tx_hash(tag), capacity - 1);
+    }
+    let _ = chain.next_number();
+    chain.blocks
+}
+
 // ---------------------------------------------------------------------------
 // The protocol chain: every entity kind, inside the rolled-back ranges
 // ---------------------------------------------------------------------------
@@ -1873,6 +1913,146 @@ async fn plain_transfers_single_block_batches_roll_back_byte_equal() {
     let chain = transfer_chain(12);
     let plan = single_block_plan(chain.len());
     assert_rollback_property(&chain, &plan, 11, 8).await;
+}
+
+/// C-3: the activity address rows of the buckets behind the rollback
+/// coverage floor are deleted by the live batch that moves the floor past
+/// them, in its first block's scope, with the hour they are pruned to. A
+/// rollback of that block writes both back; the replay prunes them again and
+/// ends where the first sync did.
+///
+/// The floor (and the journal rows its advance pruned) never moves back, so
+/// the journal and the coverage contract are outside the rollback comparison,
+/// and the journal outside the replay one (the replay's first batch, not the
+/// original's second, does the prune).
+#[tokio::test]
+async fn activity_address_rows_behind_the_coverage_floor_are_pruned_and_restored() {
+    use keys::ActivityBucketKind::{Daily, Hourly};
+    // Ten minutes a block from 2026-09-22 09:00 UTC+8; block 90 opens
+    // 2026-09-23. Batches of 90 to 1079, then 1080-1179 (floor 79, 22:10 on
+    // the first day) and 1180-1199 (floor 179, 14:50 on the second): the last
+    // batch prunes the first day and the hours 22 to 13 between the floors.
+    let chain = long_transfer_chain(1_200);
+    let mut plan = chunked_plan(1_080, 90);
+    plan.push(1_080..=1_179);
+    plan.push(1_180..=1_199);
+    let (tip, fork) = (1_199usize, 1_175usize);
+    let without_journal = |mut dump: Dump| {
+        dump.retain(|(cf, key), _| {
+            *cf != ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK
+                && !(*cf == ckbadger_store::CF_SYNC_META
+                    && key.as_slice() == sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT)
+        });
+        dump
+    };
+    let address_buckets = |store: &CkbadgerStore| -> Vec<(u8, String)> {
+        let mut buckets = std::collections::BTreeSet::new();
+        for row in store.iterator_cf(store.cf_stats_chain(), rocksdb::IteratorMode::Start) {
+            let (key, _) = row.unwrap();
+            let kind = match key[0] {
+                keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW => Daily,
+                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW => Hourly,
+                _ => continue,
+            };
+            let label = String::from_utf8(key[1..1 + kind.bucket_len()].to_vec()).unwrap();
+            buckets.insert((key[0], label));
+        }
+        buckets.into_iter().collect()
+    };
+    let hour_of = |store: &CkbadgerStore, block: i64| {
+        Hourly
+            .bucket_label(
+                store
+                    .get_block_header(block)
+                    .unwrap()
+                    .unwrap()
+                    .chain_time_ms,
+            )
+            .unwrap()
+    };
+
+    let rolled = open_stores();
+    sync_prefix(&rolled, &chain, &plan, 0, tip).await;
+    let at_tip = dump_domain(&rolled.domain);
+    let floor_hour = hour_of(&rolled.domain, 179);
+    assert_eq!(floor_hour, "2026092314");
+    assert_eq!(
+        rolled
+            .domain
+            .get_activity_addr_row_floor()
+            .unwrap()
+            .as_deref(),
+        Some(floor_hour.as_str())
+    );
+    let kept = address_buckets(&rolled.domain);
+    assert!(kept.contains(&(
+        keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+        floor_hour.clone()
+    )));
+    assert!(
+        kept.iter().all(|(prefix, label)| {
+            if *prefix == keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW {
+                label.as_str() >= &floor_hour[..8]
+            } else {
+                *label >= floor_hour
+            }
+        }),
+        "no address row of a bucket before the floor's hour and day: {kept:?}"
+    );
+
+    reorg_to(&rolled.indexer, fork as i64).await.unwrap();
+    // The rollback undid block 1180's prune: the first day and the hours
+    // between the two floors have their rows again.
+    let restored = address_buckets(&rolled.domain);
+    for bucket in [
+        (
+            keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW,
+            "20260922".to_string(),
+        ),
+        (
+            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+            "2026092222".to_string(),
+        ),
+        (
+            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+            "2026092313".to_string(),
+        ),
+    ] {
+        assert!(
+            restored.contains(&bucket),
+            "{bucket:?} restored: {restored:?}"
+        );
+        assert!(!kept.contains(&bucket));
+    }
+    assert_eq!(
+        rolled
+            .domain
+            .get_activity_addr_row_floor()
+            .unwrap()
+            .as_deref(),
+        Some(hour_of(&rolled.domain, 79).as_str())
+    );
+
+    let reference = open_stores();
+    sync_prefix(&reference, &chain, &plan, 0, fork).await;
+    compare_dumps(
+        &without_journal(dump_domain(&rolled.domain)),
+        &without_journal(dump_domain(&reference.domain)),
+        &format!("rollback {tip} -> {fork}"),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+
+    sync_prefix(&rolled, &chain, &plan, fork + 1, tip).await;
+    let without_journal_only = |mut dump: Dump| {
+        dump.retain(|(cf, _), _| *cf != ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK);
+        dump
+    };
+    compare_dumps(
+        &without_journal_only(dump_domain(&rolled.domain)),
+        &without_journal_only(at_tip),
+        &format!("replay {} ..= {tip} after rollback to {fork}", fork + 1),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
 }
 
 #[tokio::test]

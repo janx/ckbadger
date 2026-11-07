@@ -2554,8 +2554,6 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
-            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
             | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(self.cf_stats_chain()),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -2611,8 +2609,6 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
-            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
             | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(CF_STATS_CHAIN),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
