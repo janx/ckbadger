@@ -38,7 +38,7 @@ On mismatch, it walks backward to find the fork point.
 
 For reorgs up to 36 blocks deep, the indexer:
 
-1. Records a reorg event in `CF_SYNC_META` (`reorg:<timestamp_ms>`), including the first block it
+1. Records a reorg event in `reorg_events` (`reorg:<timestamp_ms>:<uuid>`), including the first block it
    drops (`first_orphan_hash`, read from the stored headers before the rollback)
 2. Calls `rollback_to_block(fork_point)` for atomic multi-CF rollback (through
    `BatchWriter::rollback_to`, see [Rollback Mechanisms](#rollback-mechanisms))
@@ -76,7 +76,7 @@ For reorgs deeper than 36 blocks:
 
 ### `GET /api/v1/forks`
 
-Returns the persisted reorg-event history (`sync_meta` `reorg:<ms>:<uuid>` rows), newest first:
+Returns the persisted reorg-event history (`reorg_events` `reorg:<ms>:<uuid>` rows), newest first:
 automatic switches and deep-fork detections. Each row carries its D7 address facts
 (`firstOrphanHash`, `firstOrphanStatus`) and names related events (`revertedByEvent`,
 `reversesEvents`) by D7 address, never by millisecond id.
@@ -156,7 +156,7 @@ each class one way:
 | -------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `Journal`      | every domain CF not listed below, `dob_decoded` included (the live writer applies a DOB decode, with the spore's media profile and its cluster's tier counts, in a batch's last block's scope; a rollback of that block undoes all three; the worker makes one pass per indexer process, so the spore is decoded again at the next indexer start, and a shutdown drops outcomes still queued, whose spores are decoded again at that start too) | each rolled-back block's journal entries write the key's previous value back; an absent previous value deletes the key                |
 | `RangeByBlock` | `block_headers`, `tx_index`, `tx_group_cycles` (the lazy cycles records, keyed by the tx slot), `activities` (block-descending keys), `reorg_undo_log_by_block` (the journal) | the rolled-back blocks' key range is deleted; nothing is journaled                                                                    |
-| `Never`        | `cells` (append-only store); `pending_proposals`; `net_nodes`, `net_stats`, `net_crawl` (network store)    | not rolled back: an orphaned cell payload is unreachable once its live / consumed marker is gone; the proposal cache writes `pending_proposals` out of band from mempool snapshots with no block context, so a proposal of an orphaned block stays until it is committed or expires (pre-existing); the network store is not chain data |
+| `Never`        | `cells` (append-only store); `pending_proposals`; `reorg_events`; `net_nodes`, `net_stats`, `net_crawl` (network store) | not rolled back: an orphaned cell payload is unreachable once its live / consumed marker is gone; the proposal cache writes `pending_proposals` out of band from mempool snapshots with no block context, so a proposal of an orphaned block stays until it is committed or expires (pre-existing); `reorg_events` is the history of reorgs, which reorg handling writes (a rollback is recorded there, never undone); the network store is not chain data |
 
 `RangeByBlock` is only for CFs whose key opens with the block number;
 `rollback_classes_follow_the_key_layout_rule` pins the table.
@@ -279,8 +279,8 @@ its owner and why a rollback need not restore it, in `OUTSIDE_JOURNAL` beside `C
 (`crates/ckbadger-store/src/store.rs`): the coverage contract; the sync status's runtime part;
 process telemetry (`runtime_status`, `sync_progress`, `memory_stats`, `background_tasks`); the bulk
 session marker; `network_identity`, `genesis_baseline`, `secondary_epoch_reward`; derive state
-(`derive:*`) and the three derived aggregates' rows (derive scheduler and reset); reorg events
-(`reorg:*`, `reorg_reconcile_pending`) and the deep-fork withdrawal of `live_cell_summary:current`;
+(`derive:*`) and the three derived aggregates' rows (derive scheduler and reset); the pending
+reconciliation marker (`reorg_reconcile_pending`) and the deep-fork withdrawal of `live_cell_summary:current`;
 the DAO tip summary's rows; and label import's rows (`tokens`,
 `script_info`, `script_versions` with their label / family indexes, `script_families`,
 `script_family_by_name`). Label metadata is not chain state: a rollback through a block journaled

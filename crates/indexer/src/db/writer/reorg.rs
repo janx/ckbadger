@@ -98,7 +98,7 @@ impl BatchWriter {
         let key = std::str::from_utf8(&event_key)?;
         let bytes = self
             .store
-            .get_cf(self.store.cf_sync_meta(), &event_key)?
+            .get_cf(self.store.cf_reorg_events(), &event_key)?
             .ok_or_else(|| anyhow!("pending reorg event is missing before rollback: key={key}"))?;
         let mut event: ReorgEvent = bincode::deserialize(&bytes)
             .with_context(|| format!("invalid pending reorg event before rollback: key={key}"))?;
@@ -111,7 +111,7 @@ impl BatchWriter {
         }
         event.reconcile_interrupted = true;
         let mut batch = StoreBatch::new(&self.store);
-        batch.put_sync_meta(&event_key, &bincode::serialize(&event)?);
+        batch.put_reorg_event(&event_key, &bincode::serialize(&event)?);
         batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
         batch.commit()?;
         Ok(())
@@ -158,7 +158,7 @@ impl BatchWriter {
         let event_key_str = std::str::from_utf8(&event_key)?;
         let bytes = self
             .store
-            .get_cf(self.store.cf_sync_meta(), &event_key)?
+            .get_cf(self.store.cf_reorg_events(), &event_key)?
             .ok_or_else(|| anyhow!("pending reorg event is missing: key={event_key_str}"))?;
         let mut current: ReorgEvent = bincode::deserialize(&bytes)?;
         if current.kind != ReorgEventKind::Automatic {
@@ -234,12 +234,12 @@ impl BatchWriter {
             if !current.reverses_events.contains(&prior.key) {
                 current.reverses_events.push(prior.key.clone());
             }
-            batch.put_sync_meta(prior.key.as_bytes(), &bincode::serialize(&prior.event)?);
+            batch.put_reorg_event(prior.key.as_bytes(), &bincode::serialize(&prior.event)?);
         }
         current.reverses_events.sort();
         let next_bytes = bincode::serialize(&current)?;
         if next_bytes != bytes {
-            batch.put_sync_meta(&event_key, &next_bytes);
+            batch.put_reorg_event(&event_key, &next_bytes);
         }
         if complete {
             batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
@@ -297,7 +297,7 @@ impl BatchWriter {
             fork_point,
         });
         let mut batch = StoreBatch::new(self.store.as_ref());
-        batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_reorg_event(event_key.as_bytes(), &event_bytes);
         batch.put_sync_runtime(&status.runtime())?;
         // The local node has already reported that this tip is no longer
         // canonical. Keep the API unavailable until an operator resolves the
@@ -407,7 +407,7 @@ impl BatchWriter {
         status.deep_fork_detected = false;
         status.deep_fork_info = None;
         let mut batch = StoreBatch::new(self.store.as_ref());
-        batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_reorg_event(event_key.as_bytes(), &event_bytes);
         batch.put_sync_meta(
             sync_meta_keys::REORG_RECONCILE_PENDING,
             event_key.as_bytes(),
@@ -492,7 +492,7 @@ mod tests {
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -589,7 +589,7 @@ mod tests {
             assert_eq!(first.fork_point, 8);
             assert_eq!(second.fork_point, if deeper { 7 } else { 8 });
             let mut batch = StoreBatch::new(&store);
-            batch.put_sync_meta(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
+            batch.put_reorg_event(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
             batch.put_sync_meta(
                 keys::sync_meta_keys::REORG_RECONCILE_PENDING,
                 first_key.as_bytes(),
@@ -603,7 +603,7 @@ mod tests {
                 writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
                 let middle_key = keys::encode_reorg_event_key(1500, &[3; 16]).unwrap();
                 let mut batch = StoreBatch::new(&store);
-                batch.put_sync_meta(
+                batch.put_reorg_event(
                     middle_key.as_bytes(),
                     &bincode::serialize(&observation(&b, &c, 1)).unwrap(),
                 );
@@ -615,7 +615,7 @@ mod tests {
             }
             writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
             let mut batch = StoreBatch::new(&store);
-            batch.put_sync_meta(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
+            batch.put_reorg_event(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
             batch.put_sync_meta(
                 keys::sync_meta_keys::REORG_RECONCILE_PENDING,
                 second_key.as_bytes(),
@@ -730,7 +730,7 @@ mod tests {
             chain_time_ms: 0,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -802,8 +802,8 @@ mod tests {
             chain_time_ms: 0,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
-        batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -887,7 +887,7 @@ mod tests {
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -982,7 +982,7 @@ mod tests {
             (&unrelated_key, &unrelated),
             (&deep_key, &deep),
         ] {
-            batch.put_sync_meta(key.as_bytes(), &bincode::serialize(event).unwrap());
+            batch.put_reorg_event(key.as_bytes(), &bincode::serialize(event).unwrap());
         }
         batch.put_sync_meta(b"reorg_reconcile_pending", reversal_key.as_bytes());
         for (height, hash) in [(9, vec![9; 32]), (10, vec![0xaa; 32]), (12, vec![0xcc; 32])] {
@@ -1074,7 +1074,7 @@ mod tests {
 
     fn reorg_event_count(store: &CkbadgerStore) -> usize {
         store
-            .iterator_cf(store.cf_sync_meta(), rocksdb::IteratorMode::Start)
+            .iterator_cf(store.cf_reorg_events(), rocksdb::IteratorMode::Start)
             .flatten()
             .filter(|(key, _)| key.starts_with(keys::REORG_EVENT_KEY_PREFIX))
             .count()

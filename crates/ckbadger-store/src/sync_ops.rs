@@ -581,13 +581,14 @@ impl CkbadgerStore {
         }
         let start = cursor_key_exclusive.unwrap_or(keys::REORG_EVENT_KEY_PREFIX_END);
         let iter = self.iterator_cf(
-            self.cf_sync_meta(),
+            self.cf_reorg_events(),
             IteratorMode::From(start, Direction::Reverse),
         );
 
         for item in iter {
-            let (key, value) = item
-                .map_err(|e| anyhow!("failed to iterate sync_meta in list_reorg_events: {}", e))?;
+            let (key, value) = item.map_err(|e| {
+                anyhow!("failed to iterate reorg_events in list_reorg_events: {}", e)
+            })?;
             if !key.starts_with(keys::REORG_EVENT_KEY_PREFIX) {
                 break;
             }
@@ -624,13 +625,17 @@ impl CkbadgerStore {
     /// Exact number of persisted reorg events.
     pub fn count_reorg_events(&self) -> anyhow::Result<i64> {
         let iter = self.iterator_cf(
-            self.cf_sync_meta(),
+            self.cf_reorg_events(),
             IteratorMode::From(keys::REORG_EVENT_KEY_PREFIX, Direction::Forward),
         );
         let mut total = 0i64;
         for item in iter {
-            let (key, _) = item
-                .map_err(|e| anyhow!("failed to iterate sync_meta in count_reorg_events: {}", e))?;
+            let (key, _) = item.map_err(|e| {
+                anyhow!(
+                    "failed to iterate reorg_events in count_reorg_events: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(keys::REORG_EVENT_KEY_PREFIX) {
                 break;
             }
@@ -645,13 +650,13 @@ impl CkbadgerStore {
     pub fn get_reorg_event(&self, detected_at_ms: i64) -> anyhow::Result<Option<ReorgEventRecord>> {
         let prefix = keys::reorg_event_key_ms_prefix(detected_at_ms)?;
         let iter = self.iterator_cf(
-            self.cf_sync_meta(),
+            self.cf_reorg_events(),
             IteratorMode::From(prefix.as_bytes(), Direction::Forward),
         );
         let mut found: Option<ReorgEventRecord> = None;
         for item in iter {
-            let (key, value) =
-                item.map_err(|e| anyhow!("failed to iterate sync_meta in get_reorg_event: {}", e))?;
+            let (key, value) = item
+                .map_err(|e| anyhow!("failed to iterate reorg_events in get_reorg_event: {}", e))?;
             if !key.starts_with(prefix.as_bytes()) {
                 break;
             }
@@ -683,7 +688,7 @@ fn decode_reorg_event_record(key: &[u8], value: &[u8]) -> anyhow::Result<ReorgEv
     let detected_at_ms = keys::decode_reorg_event_key(key)?;
     let event: ReorgEvent = bincode::deserialize(value).map_err(|e| {
         anyhow!(
-            "failed to deserialize reorg event in sync_meta: key=0x{}, error={}",
+            "failed to deserialize reorg event in reorg_events: key=0x{}, error={}",
             crate::bytes_to_hex(key),
             e
         )
@@ -1036,7 +1041,7 @@ mod tests {
         let key = keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
         store
             .put_cf(
-                store.cf_sync_meta(),
+                store.cf_reorg_events(),
                 key.as_bytes(),
                 &bincode::serialize(&event).unwrap(),
             )
@@ -1147,7 +1152,7 @@ mod tests {
         seed_reorg_event(&store, 1_700_000_000_000, 100, 0x01);
         // A key inside the history range that breaks the ordering invariant.
         store
-            .put_cf(store.cf_sync_meta(), b"reorg:bad-ts:1", b"whatever")
+            .put_cf(store.cf_reorg_events(), b"reorg:bad-ts:1", b"whatever")
             .unwrap();
 
         let err = store.list_reorg_events(10, None).unwrap_err();
@@ -1223,13 +1228,13 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let key = keys::encode_reorg_event_key(1_700_000_000_000, &[0x07; 16]).unwrap();
         store
-            .put_cf(store.cf_sync_meta(), key.as_bytes(), b"invalid-payload")
+            .put_cf(store.cf_reorg_events(), key.as_bytes(), b"invalid-payload")
             .unwrap();
 
         let err = store.get_latest_reorg_event().unwrap_err();
         assert!(
             err.to_string()
-                .contains("failed to deserialize reorg event in sync_meta"),
+                .contains("failed to deserialize reorg event in reorg_events"),
             "unexpected error: {err}"
         );
     }

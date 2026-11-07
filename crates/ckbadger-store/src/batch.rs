@@ -1156,6 +1156,13 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
     }
 
+    /// Write one reorg event (`reorg_events`, rollback class `Never`): `key`
+    /// is its `reorg:<ms>:<uuid>` history key, `value` the bincode
+    /// `ReorgEvent`.
+    pub fn put_reorg_event(&mut self, key: &[u8], value: &[u8]) {
+        self.put_cf(self.store.cf_reorg_events(), key, value);
+    }
+
     /// Persist the UTC+8 activity hour the activity address rows are pruned to
     /// (`sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR`) in the same atomic batch,
     /// and the same block scope, as the deletions it describes.

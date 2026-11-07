@@ -2218,8 +2218,11 @@ pub fn encode_tx_slot_key(block_number: i64, tx_idx: i32) -> Vec<u8> {
 }
 
 /// Sync meta keys
+/// The fixed keys of `sync_meta` (C-4b: nothing else is stored there; the
+/// reorg-event history is `reorg_events`). The `derive:` and
+/// `hourly_retention_state:` keys are closed families: one key per derived
+/// aggregate / per hourly retention family.
 pub mod sync_meta_keys {
-    pub const TIP_BLOCK: &[u8] = b"tip_block";
     /// `SyncChainStatus`: tip and totals, journaled per block.
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     /// `SyncRuntimeStatus`: run telemetry, bulk completion and deep-fork
@@ -2228,7 +2231,6 @@ pub mod sync_meta_keys {
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
-    pub const DEEP_FORK: &[u8] = b"deep_fork";
     /// The HODL wave tracker's scalars (bincode `HodlTrackerCursor`): holder
     /// count, open snapshot day, last processed block. Its per-day capacity
     /// is `CF_HODL_CAPACITY_BY_DATE`.

@@ -61,10 +61,6 @@ const VOLATILE_SYNC_META: &[(&[u8], &str)] = &[
     ),
 ];
 
-/// Prefix of the reorg event history (`reorg:<ms>:<uuid>`): the record of the
-/// rollback itself, never chain state.
-const REORG_EVENT_PREFIX: &[u8] = b"reorg:";
-
 /// A derivation's start / finish wall-clock times are telemetry; its state,
 /// version and run counter are compared.
 fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
@@ -121,6 +117,11 @@ fn dump_domain(store: &CkbadgerStore) -> Dump {
     let mut dump = Dump::new();
     let mut undo: BTreeMap<Vec<u8>, Vec<Vec<u8>>> = BTreeMap::new();
     for &cf in DOMAIN_CFS {
+        // The reorg event history (`reorg_events`, `reorg:<ms>:<uuid>`) is
+        // the record of the rollback itself, never chain state.
+        if cf == ckbadger_store::CF_REORG_EVENTS {
+            continue;
+        }
         for row in store.iterator_cf(store.cf(cf), rocksdb::IteratorMode::Start) {
             let (key, value) = row.expect("iterate domain CF");
             let mut value = value.to_vec();
@@ -131,10 +132,9 @@ fn dump_domain(store: &CkbadgerStore) -> Dump {
                 continue;
             }
             if cf == ckbadger_store::CF_SYNC_META {
-                if key.starts_with(REORG_EVENT_PREFIX)
-                    || VOLATILE_SYNC_META
-                        .iter()
-                        .any(|(volatile, _)| key.as_ref() == *volatile)
+                if VOLATILE_SYNC_META
+                    .iter()
+                    .any(|(volatile, _)| key.as_ref() == *volatile)
                 {
                     continue;
                 }
@@ -1701,6 +1701,72 @@ async fn protocol_chain_files_only_its_code_cell_by_data_hash() {
             .unwrap()
             .is_none(),
         "block 16 consumed the code cell; its row stays"
+    );
+}
+
+/// C-4b: `sync_meta` holds only fixed keys — each a `sync_meta_keys`
+/// constant, or one of the closed `derive:<aggregate>` /
+/// `hourly_retention_state:<family>` families — after a live sync with a
+/// derivation and a reorg; the reorg's event lives in `reorg_events`.
+#[tokio::test]
+async fn sync_meta_holds_only_fixed_keys_and_reorg_events_their_own_cf() {
+    let chain = protocol_chain(0);
+    let stores = open_stores();
+    sync_with_derive(
+        &stores,
+        &chain,
+        &single_block_plan(chain.len()),
+        16,
+        Some(Derive::CompleteAt(4)),
+    )
+    .await;
+    reorg_to(&stores.indexer, 13).await.unwrap();
+    let fixed: &[&[u8]] = &[
+        sync_meta_keys::SYNC_STATUS,
+        sync_meta_keys::SYNC_RUNTIME,
+        sync_meta_keys::RUNTIME_STATUS,
+        sync_meta_keys::REORG_RECONCILE_PENDING,
+        sync_meta_keys::HODL_CURSOR,
+        sync_meta_keys::CELL_DIST_CURSOR,
+        sync_meta_keys::SYNC_PROGRESS,
+        sync_meta_keys::MEMORY_STATS,
+        sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+        sync_meta_keys::BACKGROUND_TASKS,
+        sync_meta_keys::NETWORK_IDENTITY,
+        sync_meta_keys::GENESIS_BASELINE,
+        sync_meta_keys::SECONDARY_EPOCH_REWARD,
+        sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
+        sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+        sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR,
+    ];
+    let families: &[&[u8]] = &[
+        sync_meta_keys::DERIVE_META_PREFIX,
+        sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX,
+    ];
+    let store = &stores.domain;
+    let mut keys_seen = Vec::new();
+    for row in store.iterator_cf(store.cf_sync_meta(), rocksdb::IteratorMode::Start) {
+        let (key, _) = row.unwrap();
+        let key = key.to_vec();
+        assert!(
+            fixed.contains(&key.as_slice())
+                || families.iter().any(|family| key.starts_with(family)),
+            "sync_meta key {:?} is not a fixed key",
+            String::from_utf8_lossy(&key)
+        );
+        keys_seen.push(key);
+    }
+    assert!(keys_seen
+        .iter()
+        .any(|key| key.starts_with(sync_meta_keys::DERIVE_META_PREFIX)));
+    let events = store.list_reorg_events(10, None).unwrap();
+    assert_eq!(events.len(), 1, "the reorg's event");
+    assert_eq!(
+        store
+            .iterator_cf(store.cf_reorg_events(), rocksdb::IteratorMode::Start)
+            .count(),
+        1
     );
 }
 

@@ -519,6 +519,9 @@ pub const CF_OBJECT_OUTPOINTS: &str = "object_outpoints";
 /// Object outpoints by id: `kind(1) + id + outpoint(34)` → empty, or the
 /// identity's `AssetAction` byte (C-4b, from `stats_spore` / `stats_mnft`).
 pub const CF_OBJECT_OUTPOINT_BY_ID: &str = "object_outpoint_by_id";
+/// The reorg-event history, `reorg:<ms>:<uuid>` → `ReorgEvent` (C-4b, from
+/// `sync_meta`): the record of each fork switch and deep-fork detection.
+pub const CF_REORG_EVENTS: &str = "reorg_events";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 /// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
@@ -584,7 +587,9 @@ pub enum RollbackClass {
     /// range, nothing is journaled.
     RangeByBlock,
     /// Never rolled back: the append-only `cells` payloads (orphaned payloads
-    /// are unreachable once their markers are gone), the network store, and
+    /// are unreachable once their markers are gone), the network store,
+    /// `reorg_events` (the history of reorgs, written by reorg handling: a
+    /// rollback is itself recorded there, never undone), and
     /// `pending_proposals` (the proposal cache writes it out of band from
     /// mempool snapshots, with no block context; a committed proposal is
     /// removed after its batch commits and an expired one by the cache's
@@ -638,7 +643,7 @@ const fn cf(
 /// then the domain store in open order), then the network store.
 ///
 /// `RangeByBlock` is only for CFs whose key starts with the block number;
-/// `cells` and `pending_proposals` are `Never`, every other domain CF
+/// `cells`, `pending_proposals` and `reorg_events` are `Never`, every other domain CF
 /// (`dob_decoded` included) `Journal`. The network store is not chain data and
 /// is never rolled back.
 pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
@@ -729,6 +734,7 @@ mod cf_table {
         cf(CF_TX_GROUP_CYCLES,                        Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   RangeByBlock),
         cf(CF_OBJECT_OUTPOINTS,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_REORG_EVENTS,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -867,13 +873,6 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         keys::sync_meta_keys::DERIVE_META_PREFIX,
         DERIVE,
         DERIVE_REASON,
-        NEVER,
-    ),
-    outside(
-        CF_SYNC_META,
-        keys::REORG_EVENT_KEY_PREFIX,
-        "reorg handling (event record, reconciliation links)",
-        "the history of reorgs, not undo state",
         NEVER,
     ),
     outside(
@@ -2174,6 +2173,9 @@ impl CkbadgerStore {
     }
     pub fn cf_object_outpoint_by_id(&self) -> &ColumnFamily {
         self.cf(CF_OBJECT_OUTPOINT_BY_ID)
+    }
+    pub fn cf_reorg_events(&self) -> &ColumnFamily {
+        self.cf(CF_REORG_EVENTS)
     }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
@@ -3805,7 +3807,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 73);
+        assert_eq!(DOMAIN_CFS.len(), 74);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5236,8 +5238,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 77);
-        assert_eq!(DOMAIN_CFS.len(), 73);
+        assert_eq!(CF_SPECS.len(), 78);
+        assert_eq!(DOMAIN_CFS.len(), 74);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5423,9 +5425,8 @@ mod tests {
                 | CF_TX_ACTIONS
                 | CF_REORG_UNDO_LOG_BY_BLOCK
                 | CF_TX_GROUP_CYCLES => RollbackClass::RangeByBlock,
-                CF_CELLS | CF_PENDING_PROPOSALS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => {
-                    RollbackClass::Never
-                }
+                CF_CELLS | CF_PENDING_PROPOSALS | CF_REORG_EVENTS | CF_NET_NODES | CF_NET_STATS
+                | CF_NET_CRAWL => RollbackClass::Never,
                 _ => RollbackClass::Journal,
             };
             assert_eq!(spec.rollback_class, expected, "{}", spec.name);
@@ -5439,7 +5440,10 @@ mod tests {
     /// here is an option change, which needs its own paired bulk run. B-4
     /// adds two rows (`hodl_capacity_by_date`, `cell_dist_cohort_by_month`,
     /// the trackers' rows) and B-5c one (`tx_group_cycles`, the lazy cycles
-    /// record moved out of `sync_meta`); every other row is unchanged.
+    /// record moved out of `sync_meta`); C-4b three (`object_outpoints` and
+    /// `object_outpoint_by_id`, the outpoint indexes moved out of
+    /// `stats_spore` / `stats_mnft`, and `reorg_events`, the event history
+    /// moved out of `sync_meta`); every other row is unchanged.
     #[test]
     fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
         let actual = cf_option_snapshot();
@@ -5532,6 +5536,7 @@ mod tests {
     "tx_group_cycles BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "object_outpoints FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "reorg_events BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
