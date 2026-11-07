@@ -2076,8 +2076,9 @@ pub struct CellDetailResponse {
     /// Epoch of the creating block, from its indexed header.
     pub created_epoch: CellEpochResponse,
     /// The data hash a script references for this cell's data (CKB's
-    /// `CellOutput::calc_data_hash`: 32 zero bytes for empty data); `None`
-    /// only when the cell's bytes are unavailable.
+    /// `CellOutput::calc_data_hash`: 32 zero bytes for empty data), from
+    /// `LiveCellInfo::script_data_hash`; `None` only for a payload with data
+    /// and no stored hash.
     pub data_hash: Option<String>,
     pub status: String,
     pub consumed_at_block: Option<i64>,
@@ -4199,12 +4200,10 @@ async fn get_cell(
         created_at_block: info.created_at_block,
         created_timestamp,
         created_epoch,
-        data_hash: cell_data.as_ref().map(|bytes| {
-            format!(
-                "0x{}",
-                hex::encode(ckb_types::packed::CellOutput::calc_data_hash(bytes).as_slice())
-            )
-        }),
+        // The bytes were checked against the indexed hash above.
+        data_hash: info
+            .script_data_hash()
+            .map(|hash| format!("0x{}", hex::encode(hash))),
         status: status_str.to_string(),
         consumed_at_block,
         consumed_by_tx,

@@ -217,6 +217,21 @@ impl LiveCellInfo {
             ckbadger_common::script_hash(code_hash, script_hash_type_byte(hash_type, "type"), args)
         })
     }
+
+    /// The data hash a script references for this cell's data, by CKB's
+    /// convention (`CellOutput::calc_data_hash`): 32 zero bytes for empty
+    /// data, else the stored blake2b of the data. The stored `data_hash` of an
+    /// empty cell is the blake2b of zero bytes (the indexer hashes every
+    /// output's data the same way, and the payload keeps it); every response
+    /// that names a cell's data hash reads it here. `None` only for a payload
+    /// with data and no stored hash.
+    pub fn script_data_hash(&self) -> Option<[u8; 32]> {
+        if self.data_size == 0 {
+            Some([0; 32])
+        } else {
+            self.data_hash
+        }
+    }
 }
 
 /// Every stored payload passed `check_fields` when it was written and
@@ -4303,6 +4318,22 @@ mod tests {
             udt_amount: with_udt.then_some(1_000_000_000_000_000_000_000_000u128),
             data_hash: with_data_hash.then_some([0x44; 32]),
         }
+    }
+
+    /// 4(b): a cell's data hash as scripts reference it: zero for empty
+    /// data, whatever the payload stores for it; the stored hash otherwise.
+    #[test]
+    fn script_data_hash_is_zero_for_empty_data_and_the_stored_hash_otherwise() {
+        let mut empty = v2_cell(false, false, true);
+        empty.data_size = 0;
+        empty.data_hash = Some(ckb_hash::blake2b_256([]));
+        assert_eq!(empty.script_data_hash(), Some([0; 32]));
+        let mut code = v2_cell(false, false, true);
+        code.data_size = 4;
+        code.data_hash = Some([0x44; 32]);
+        assert_eq!(code.script_data_hash(), Some([0x44; 32]));
+        code.data_hash = None;
+        assert_eq!(code.script_data_hash(), None);
     }
 
     #[test]

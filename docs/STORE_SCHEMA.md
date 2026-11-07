@@ -23,8 +23,10 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 `cells` values are the `LiveCellInfo` v2 layout (2026-11-05), in this field order:
 `capacity` i64, `lock_code_hash` `[u8; 32]`, `lock_hash_type` i16, `lock_args` bytes,
 `type_code_hash` `Option<[u8; 32]>`, `type_hash_type` `Option<i16>`, `type_args` `Option<bytes>`,
-`data_size` i32, `udt_amount` `Option<u128>`, `data_hash` `Option<[u8; 32]>` (a plain secp256k1
-cell encodes in 101 bytes). They are written only by `LiveCellInfo::encode` and read only by
+`data_size` i32, `udt_amount` `Option<u128>`, `data_hash` `Option<[u8; 32]>` (the blake2b of the
+data, the blake2b of zero bytes for an empty cell; a response that names a cell's data hash reads
+`LiveCellInfo::script_data_hash()`, CKB's convention, which is 32 zero bytes for empty data; a
+plain secp256k1 cell encodes in 101 bytes). They are written only by `LiveCellInfo::encode` and read only by
 `LiveCellInfo::decode` (bincode `DefaultOptions`: varint integers, little endian, trailing bytes
 rejected; the type implements no serde traits, so no second codec exists). Nothing derivable from
 these fields is stored: `lock_script_hash()` / `type_script_hash()` derive the script hashes with

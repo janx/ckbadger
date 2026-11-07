@@ -130,6 +130,39 @@ async fn cell_versions_exact_same_block_order_capacity_and_current_owner() {
     );
 }
 
+/// Lane B carry-over 4(b): a cell's data hash is the one a script references
+/// (CKB's `calc_data_hash`): 32 zero bytes for empty data, as the cell page
+/// serves it — not the blake2b of zero bytes the payload stores for every
+/// empty cell. The fixture's payloads carry the indexer's stored value.
+#[tokio::test]
+async fn cell_versions_serve_the_zero_data_hash_of_an_empty_cell() {
+    let (store, id) = history_fixture();
+    let stored_empty_hash: [u8; 32] = ckb_hash::blake2b_256([]);
+    assert_ne!(stored_empty_hash, [0; 32]);
+    let (mint, transfer) = (vec![0x51; 32], vec![0x52; 32]);
+    let mut batch = StoreBatch::new(&store);
+    let mut consumed = cell(&id, 307_00000000, 1);
+    consumed.data_hash = Some(stored_empty_hash);
+    let mut current = cell(&id, 320_00000000, 2);
+    current.data_hash = Some(stored_empty_hash);
+    batch.put_consumed_cell_with_consumer(&mint, 0, &consumed, 100, 100, Some(&transfer));
+    batch.put_cell(&transfer, 0, &current, 100);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/cell-versions",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let zero = format!("0x{}", "00".repeat(32));
+    assert_eq!(json["data"][0]["dataHash"], zero.as_str(), "{json}");
+    assert_eq!(json["data"][1]["dataHash"], zero.as_str(), "{json}");
+}
+
 #[tokio::test]
 async fn did_detail_has_current_canonical_outpoint() {
     let (store, id) = history_fixture();
