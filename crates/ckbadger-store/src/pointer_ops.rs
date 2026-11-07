@@ -37,6 +37,15 @@ impl CkbadgerStore {
         if positions.is_empty() {
             return Ok(Vec::new());
         }
+        // A pointer is a real position: a negative one is a corrupt row (and
+        // would not encode as a key).
+        for (i, (block, tx_idx)) in positions.iter().enumerate() {
+            anyhow::ensure!(
+                *block >= 0 && *tx_idx >= 0,
+                "{} points at block={block}, tx_idx={tx_idx}: a negative position is a corrupt row",
+                row(i)
+            );
+        }
         let cf = self.cf_tx_index();
         let keys: Vec<Vec<u8>> = positions
             .iter()
@@ -170,6 +179,23 @@ mod tests {
             err.contains("addr_txs_by_prefix row of 0xaa points at block=11, tx_idx=2"),
             "{err}"
         );
+    }
+
+    /// Review 21: a negative position is refused before it is encoded.
+    #[test]
+    fn a_negative_position_is_a_corrupt_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        for position in [(10, -1), (-1, 0)] {
+            let err = store
+                .consumer_tx_hashes(&[position])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("a negative position is a corrupt row"),
+                "{position:?}: {err}"
+            );
+        }
     }
 
     #[test]

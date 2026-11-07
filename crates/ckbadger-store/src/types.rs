@@ -511,7 +511,9 @@ impl ConsumedCellInfo {
 /// Decode a `consumed_cells` value. Anything but the
 /// [`CONSUMED_CELL_META_SIZE`]-byte layout — the earlier one stored the
 /// consuming transaction's hash (17 or 57 bytes), the one before it the whole
-/// cell — was written by an older layout: re-sync required.
+/// cell — was written by an older layout: re-sync required. The writers store
+/// a real position, consumed at or after creation; a negative position or a
+/// consumption before the creation is a corrupt row.
 pub fn decode_consumed_cell_meta(value: &[u8]) -> anyhow::Result<ConsumedCellMeta> {
     anyhow::ensure!(
         value.len() == CONSUMED_CELL_META_SIZE,
@@ -520,7 +522,22 @@ pub fn decode_consumed_cell_meta(value: &[u8]) -> anyhow::Result<ConsumedCellMet
         value.len(),
         CONSUMED_CELL_META_SIZE
     );
-    Ok(bincode::deserialize::<ConsumedCellMeta>(value)?)
+    let meta = bincode::deserialize::<ConsumedCellMeta>(value)?;
+    anyhow::ensure!(
+        meta.created_at_block >= 0 && meta.consumed_tx_idx >= 0,
+        "consumed_cells value holds a negative position (created_at_block={}, \
+         consumed_tx_idx={}): a corrupt row",
+        meta.created_at_block,
+        meta.consumed_tx_idx
+    );
+    anyhow::ensure!(
+        meta.consumed_at_block >= meta.created_at_block,
+        "consumed_cells value is consumed at block {} before its creation at block {}: a \
+         corrupt row",
+        meta.consumed_at_block,
+        meta.created_at_block
+    );
+    Ok(meta)
 }
 
 /// Decode created_at_block from the live cell marker value (8 bytes LE).
@@ -3809,6 +3826,34 @@ mod tests {
         let bytes = encode_live_cell_marker(123);
         let decoded = decode_live_cell_marker(&bytes).unwrap();
         assert_eq!(decoded, 123);
+    }
+
+    /// Review 21: a negative consumer index or a consumption before the
+    /// creation is a corrupt row, refused at decode (it would otherwise be
+    /// reported as a missing transaction, or not at all).
+    #[test]
+    fn decode_consumed_cell_meta_refuses_impossible_positions() {
+        let encode = |created_at_block, consumed_at_block, consumed_tx_idx| {
+            bincode::serialize(&ConsumedCellMeta {
+                created_at_block,
+                consumed_at_block,
+                consumed_tx_idx,
+            })
+            .unwrap()
+        };
+        let negative = decode_consumed_cell_meta(&encode(5, 9, -1))
+            .unwrap_err()
+            .to_string();
+        assert!(negative.contains("negative position"), "{negative}");
+        let backwards = decode_consumed_cell_meta(&encode(9, 5, 0))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            backwards.contains("consumed at block 5 before its creation at block 9"),
+            "{backwards}"
+        );
+        let same_block = decode_consumed_cell_meta(&encode(9, 9, 0)).unwrap();
+        assert_eq!(same_block.consumer_position(), (9, 0));
     }
 
     #[test]
