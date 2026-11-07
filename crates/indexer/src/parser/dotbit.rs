@@ -142,7 +142,7 @@ impl DotbitParser {
     /// paths hand over the id the cell was indexed under when it was created
     /// (live: `CF_DOTBIT_OUTPOINT`; bulk: the cell's protocol facts), and an
     /// empty slice for a cell creation did not index (see
-    /// `keys::stats_prefix::DOTBIT_UNINDEXED_OUTPOINT`). The tx-pool mirror
+    /// `keys::object_outpoint_kind::DOTBIT_UNINDEXED`). The tx-pool mirror
     /// holds the consumed cell's real data and passes that instead; it is
     /// parsed exactly like an output.
     pub(crate) fn resolve_account_id(

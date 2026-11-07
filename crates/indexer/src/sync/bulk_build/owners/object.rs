@@ -71,11 +71,6 @@ pub(crate) struct ObjectOwner {
     dotcell_namespaces: BTreeSet<Vec<u8>>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
     bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
-    /// `DOTBIT_UNINDEXED_OUTPOINT` keys: AccountCell-typed outputs whose
-    /// protocol facts named no account (the DAS root AccountCell, data too
-    /// short to name one). Live sync consumes
-    /// these after the handoff and must find them recorded.
-    dotbit_unindexed_outpoints: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
     /// Daily capacity deltas keyed by (collection_id, date_yyyymmdd).
@@ -270,9 +265,6 @@ impl ObjectOwner {
                 key.clone(),
                 count.to_le_bytes().to_vec(),
             ))?;
-        }
-        for key in &self.dotbit_unindexed_outpoints {
-            emit(MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new()))?;
         }
         for (key, count) in &self.dotbit_hourly_transfers {
             emit(MaterializedRow::new(
@@ -593,9 +585,6 @@ impl ObjectOwner {
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.bit_cell_owner_counts,
             )
-            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
-                &self.dotbit_unindexed_outpoints,
-            )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_hourly_transfers,
             )
@@ -748,13 +737,18 @@ impl ObjectOwner {
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
             if cell.semantic_tag == CellSemanticTag::Dotbit {
+                // An AccountCell-typed output whose facts name no account
+                // (the DAS root AccountCell, data too short to name one):
+                // live sync consumes these after the handoff and must find
+                // them recorded (`object_outpoints`, kind DOTBIT_UNINDEXED).
                 let output_index = Self::as_i16_outpoint_index(&cell.outpoint, ".bit")?;
-                self.dotbit_unindexed_outpoints.insert(
+                self.object_outpoints.insert(
                     keys::encode_dotbit_unindexed_outpoint_key(
                         &cell.outpoint.tx_hash,
                         output_index,
                     )
                     .to_vec(),
+                    Vec::new(),
                 );
             }
             return Ok(());
@@ -4658,10 +4652,20 @@ mod tests {
                 Ok(())
             })
             .expect("emit sealed rows");
+        owner
+            .emit_snapshot_rows(|row| {
+                rows.push(row);
+                Ok(())
+            })
+            .expect("emit snapshot rows");
         let marker = keys::encode_dotbit_unindexed_outpoint_key(&[0x35; 32], 1).to_vec();
+        assert!(
+            !rows.iter().any(|row| row.cf_name == CF_STATS_MNFT),
+            "stats_mnft holds statistics only"
+        );
         let marker_rows: Vec<_> = rows
             .iter()
-            .filter(|row| row.cf_name == CF_STATS_MNFT && row.key == marker)
+            .filter(|row| row.cf_name == CF_OBJECT_OUTPOINTS && row.key == marker)
             .collect();
         assert_eq!(marker_rows.len(), 1, "one marker row for the root cell");
         assert!(marker_rows[0].value.is_empty());

@@ -2682,7 +2682,6 @@ impl CkbadgerStore {
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
@@ -2731,7 +2730,6 @@ impl CkbadgerStore {
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(CF_STATS_MNFT),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
