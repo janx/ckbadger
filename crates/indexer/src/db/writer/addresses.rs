@@ -1647,7 +1647,7 @@ impl BatchWriter {
                     .as_deref()
                     .zip(cell.type_hash_type)
                     .is_some_and(|(hash, kind)| crate::parser::script::is_type_id(hash, kind))
-                    || !cell.data.starts_with(b"\x7fELF")
+                    || !ckbadger_store::keys::is_code_cell(&cell.data)
                 {
                     continue;
                 }

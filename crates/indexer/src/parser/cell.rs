@@ -24,8 +24,7 @@ impl ParsedCell {
     /// Whether this output is a code cell, which `cell_by_data_hash` indexes
     /// (the one rule: [`ckbadger_store::keys::is_code_cell`]).
     pub fn is_code_cell(&self) -> bool {
-        let type_script = self.type_code_hash.as_deref().zip(self.type_hash_type);
-        ckbadger_store::keys::is_code_cell(&self.data, type_script)
+        ckbadger_store::keys::is_code_cell(&self.data)
     }
 
     /// The `cells` payload of this output: the one conversion from a parsed

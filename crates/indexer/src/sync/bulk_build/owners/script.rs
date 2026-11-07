@@ -508,7 +508,7 @@ impl BulkReducer for ScriptOwner {
                     tx.block_number
                 );
             }
-            if native_type_id && cell.data.starts_with(b"\x7fELF") {
+            if native_type_id && ckbadger_store::keys::is_code_cell(&cell.data) {
                 let reference = cell.type_script_hash_id.ok_or_else(|| {
                     anyhow!(
                         "TYPE_ID ELF output lacks type hash at block {}",

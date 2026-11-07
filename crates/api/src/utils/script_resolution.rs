@@ -451,14 +451,11 @@ pub fn resolve_live_type_reference_matches(
             tx_hash,
             output_index,
             version_hash,
-            native_type_id: cell.type_hash_type == Some(1)
-                && cell
-                    .type_code_hash
-                    .as_ref()
-                    .map(|hash| hash.as_slice())
-                    .is_some_and(|hash| {
-                        hash.len() == 32 && hash[..25] == [0; 25] && &hash[25..] == b"TYPE_ID"
-                    }),
+            native_type_id: cell
+                .type_code_hash
+                .as_ref()
+                .zip(cell.type_hash_type)
+                .is_some_and(|(hash, kind)| ckbadger_store::keys::is_type_id_script(hash, kind)),
         });
     }
     Ok(matches)
