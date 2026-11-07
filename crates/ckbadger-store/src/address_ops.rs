@@ -1,7 +1,7 @@
 //! Address balance operations.
 
 use crate::store::CkbadgerStore;
-use crate::types::{AddrPrefixStats, AddrTxValue, AddressBalance, LockScriptEntry};
+use crate::types::{AddrPrefixStats, AddrTxValue, AddressBalance, LockScriptEntry, TxIndexEntry};
 
 use crate::bytes_to_hex;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -36,11 +36,8 @@ impl CkbadgerStore {
         self.put_cf(self.cf_addr_balance(), lock_hash, &value)
     }
 
-    /// List transactions for an address (newest first), each with its hash.
-    ///
-    /// [`Self::list_addr_tx_positions_recent`]'s page with the transaction
-    /// hashes resolved from the positions through `tx_index`, one `multi_get`
-    /// for the page.
+    /// List transactions for an address (newest first), each with its hash:
+    /// [`Self::list_addr_tx_entries_recent`]'s hashes.
     #[allow(clippy::type_complexity)]
     pub fn list_addr_txs_recent(
         &self,
@@ -48,8 +45,31 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, Vec<u8>, AddrTxValue)>> {
+        Ok(self
+            .list_addr_tx_entries_recent(lock_hash, limit, cursor)?
+            .into_iter()
+            .map(|(block, tx_idx, entry, value)| (block, tx_idx, entry.tx_hash.to_vec(), value))
+            .collect())
+    }
+
+    /// List transactions for an address (newest first), each with its
+    /// `tx_index` entry: [`Self::list_addr_tx_positions_recent`]'s page
+    /// resolved with one `tx_index` `multi_get` for the page.
+    #[allow(clippy::type_complexity)]
+    pub fn list_addr_tx_entries_recent(
+        &self,
+        lock_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(i64, i32, TxIndexEntry, AddrTxValue)>> {
         let rows = self.list_addr_tx_positions_recent(lock_hash, limit, cursor)?;
-        self.with_addr_tx_hashes("addr_txs", rows)
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
+        let entries = self.tx_index_entries_at("addr_txs", &positions)?;
+        Ok(rows
+            .into_iter()
+            .zip(entries)
+            .map(|((block, tx_idx, value), entry)| (block, tx_idx, entry, value))
+            .collect())
     }
 
     /// The positions of an address's transactions (newest first).
@@ -622,6 +642,34 @@ mod tests {
         assert_eq!((rows[1].0, rows[1].1), (99, 0));
         assert_eq!(rows[1].2, vec![0x20; 32]);
         assert_eq!(store.read_call_counts(), (0, 1), "(get_cf, multi_get_cf)");
+    }
+
+    /// Review P1-2: the address transactions page reads its positions and
+    /// then the whole `tx_index` entries of the page with one `multi_get`
+    /// (the page serves fee, counts, size and cycles from them).
+    #[test]
+    fn list_addr_tx_entries_recent_keeps_the_page_entries_from_one_tx_index_read() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock = [0xAC; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 100, 1, &AddrTxValue::new(5, false, true, 0));
+        batch.put_addr_tx(&lock, 99, 0, &AddrTxValue::new(-5, false, true, 0));
+        index_tx(&mut batch, 100, 1, [0x10; 32]);
+        index_tx(&mut batch, 99, 0, [0x20; 32]);
+        batch.commit().unwrap();
+
+        store.reset_read_call_counters();
+        let rows = store.list_addr_tx_entries_recent(&lock, 10, None).unwrap();
+        assert_eq!(store.read_call_counts(), (0, 1), "(get_cf, multi_get_cf)");
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].0, rows[0].1), (100, 1));
+        assert_eq!(rows[0].2.tx_hash, [0x10; 32]);
+        assert_eq!(rows[0].3.capacity_change, 5);
+        assert_eq!((rows[1].0, rows[1].1), (99, 0));
+        assert_eq!(rows[1].2.tx_hash, [0x20; 32]);
+        assert_eq!(rows[1].3.capacity_change, -5);
     }
 
     #[test]

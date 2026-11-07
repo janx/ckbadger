@@ -4554,13 +4554,22 @@ async fn get_address_transactions(
     };
 
     // The address's recent transactions (newest first), each with its
-    // AddrTxValue (capacity_change, tx_type). Every row is canonical: its key is
-    // the transaction's position, whose hash `tx_index` resolves (a position
-    // with no transaction is an error, never a row to skip).
+    // AddrTxValue (capacity_change, tx_type) and its `tx_index` entry. Every
+    // row is canonical: its key is the transaction's position, which
+    // `tx_index` resolves (a position with no transaction is an error, never
+    // a row to skip). The page reads two iterators, one `tx_index` multi_get
+    // and one `block_headers` multi_get — nothing per row.
     let store = state.store.clone();
     let lock_hash_c = lock_hash.clone();
-    let addr_txs = tokio::task::spawn_blocking(move || {
-        store.list_addr_txs_recent(&lock_hash_c, limit + 1, cursor)
+    let (addr_txs, headers) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let rows = store.list_addr_tx_entries_recent(&lock_hash_c, limit + 1, cursor)?;
+        let mut blocks: Vec<i64> = rows.iter().take(limit).map(|(bn, _, _, _)| *bn).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        let headers = store.get_block_headers_batch(&blocks).map_err(|e| {
+            anyhow::anyhow!("failed to read block headers (address transactions): {e:#}")
+        })?;
+        Ok((rows, headers))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -4577,31 +4586,19 @@ async fn get_address_transactions(
         None
     };
 
-    // Deduplicate block header lookups: collect unique block numbers first.
-    let unique_blocks: Vec<i64> = {
-        let mut blocks: Vec<i64> = addr_txs.iter().map(|(bn, _, _, _)| *bn).collect();
-        blocks.sort_unstable();
-        blocks.dedup();
-        blocks
-    };
-    // Every row here is canonical, so its block header exists; a read failure,
-    // a missing header or an unrenderable timestamp is store corruption,
-    // reported with the block rather than served as an empty timestamp.
-    let mut block_timestamps: HashMap<i64, String> = HashMap::with_capacity(unique_blocks.len());
-    for block_num in unique_blocks {
-        let header = state
-            .store
-            .get_block_header(block_num)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to read block header for block {block_num} (address transactions): {e}"
-                ))
-            })?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing block header for block {block_num}, which holds a canonical address transaction"
-                ))
-            })?;
+    // Every row here is canonical, so its block header exists; a missing
+    // header or an unrenderable timestamp is store corruption, reported with
+    // the block rather than served as an empty timestamp.
+    let mut block_timestamps: HashMap<i64, String> = HashMap::with_capacity(headers.len());
+    for block_num in addr_txs.iter().map(|(block_num, ..)| *block_num) {
+        if block_timestamps.contains_key(&block_num) {
+            continue;
+        }
+        let header = headers.get(&block_num).ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing block header for block {block_num}, which holds a canonical address transaction"
+            ))
+        })?;
         let ts = chrono::DateTime::from_timestamp_millis(header.timestamp)
             .ok_or_else(|| {
                 ApiError::internal(format!(
@@ -4616,7 +4613,7 @@ async fn get_address_transactions(
     let committed_txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
         .map(
-            |(block_number, tx_idx, tx_hash, addr_val)| -> Result<
+            |(block_number, _tx_idx, tx_entry, addr_val)| -> Result<
                 AddressTransactionResponse,
                 (axum::http::StatusCode, axum::Json<ApiError>),
             > {
@@ -4625,27 +4622,7 @@ async fn get_address_transactions(
                         "address transaction at block {block_number} has no resolved block timestamp"
                     ))
                 })?;
-
-                let tx_entry = state
-                    .store
-                    .get_tx_index(block_number, tx_idx)
-                    .map_err(|e| {
-                        ApiError::internal(format!(
-                            "failed to read tx_index for tx 0x{} at block {}:{}: {}",
-                            hex::encode(&tx_hash),
-                            block_number,
-                            tx_idx,
-                            e
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "missing tx_index for canonical tx 0x{} at block {}:{}",
-                            hex::encode(&tx_hash),
-                            block_number,
-                            tx_idx
-                        ))
-                    })?;
+                let tx_hash = tx_entry.tx_hash;
 
                 // capacity_change and tx_type come from materialized AddrTxValue — no cell reads needed.
                 let capacity_change = addr_val.capacity_change;
@@ -4669,7 +4646,7 @@ async fn get_address_transactions(
                 let script_labels = script_labels_from_semantic_tags(tx_entry.semantic_tags);
 
                 Ok(AddressTransactionResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
+                    tx_hash: format!("0x{}", hex::encode(tx_hash)),
                     block_number: Some(block_number),
                     tx_type: tx_type.to_string(),
                     capacity_change: (capacity_change as i128).to_string(),
