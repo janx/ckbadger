@@ -572,15 +572,21 @@ impl BatchWriter {
                 context
             )
         })?;
+        // Every caller decrements the tier a spore's stored rows say it is
+        // live with in this cluster (consume, cluster move, in-place tier
+        // update, DOB outcome), so a negative count means the aggregate no
+        // longer matches the chain: rebuild-required on every path (B-6, E5).
         if next < 0 {
-            bail!(
-                "cluster tier count underflow: cluster_id=0x{}, tier={}, current={}, delta={}, context={}",
-                hex::encode(cluster_id),
-                tier.as_str(),
-                *slot,
-                delta,
-                context
-            );
+            return Err(anyhow::Error::new(
+                crate::lifecycle::RebuildRequiredError::new(format!(
+                    "cluster tier count underflow: cluster_id=0x{}, tier={}, current={}, delta={}, context={}",
+                    hex::encode(cluster_id),
+                    tier.as_str(),
+                    *slot,
+                    delta,
+                    context
+                )),
+            ));
         }
         *slot = next;
         Ok(())
@@ -597,7 +603,11 @@ impl BatchWriter {
     ///
     /// A decoded outcome merges the media sources into the profile (an
     /// empty list still clears `DecodePending`); a deterministic failure moves
-    /// the tier to `Unknown`. A live spore whose tier changes moves between its
+    /// the tier to `Unknown`. An object at the id that is the decoded
+    /// instance but not a spore, a live spore without a collection id, a
+    /// missing cluster aggregate or a tier count going negative means the
+    /// store's derived state no longer matches the chain: a
+    /// `RebuildRequiredError` naming the spore and cluster (B-6, E5). A live spore whose tier changes moves between its
     /// cluster's tier counts. A spore that no longer exists (orphaned since it
     /// was decoded) has nothing to update and gets no `dob_decoded` row, and
     /// so does an outcome whose object is no longer the decoded instance (its
@@ -619,11 +629,13 @@ impl BatchWriter {
             return Ok(false);
         }
         let ObjectExtra::Spore { media_profile, .. } = &mut entry.extra else {
-            bail!(
-                "DOB decode outcome for an object that is not a spore: spore_id=0x{}, standard={:?}",
-                hex::encode(spore_id),
-                entry.standard
-            );
+            return Err(anyhow::Error::new(
+                crate::lifecycle::RebuildRequiredError::new(format!(
+                    "DOB decode outcome for an object that is not a spore: spore_id=0x{}, standard={:?}",
+                    hex::encode(spore_id),
+                    entry.standard
+                )),
+            ));
         };
         let old_tier = media_profile.tier;
         // A decode rewrites the profile (its sources may grow at an unchanged
@@ -640,20 +652,20 @@ impl BatchWriter {
         };
         let new_tier = media_profile.tier;
         if old_tier != new_tier && entry.is_live {
-            let cluster_id = entry.collection_id.clone().with_context(|| {
-                format!(
+            let cluster_id = entry.collection_id.clone().ok_or_else(|| {
+                anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(format!(
                     "live spore has no collection_id while applying its DOB decode: spore_id=0x{}",
                     hex::encode(spore_id)
-                )
+                )))
             })?;
             let mut agg = state
                 .existing_cluster_aggregate(&self.store, &cluster_id)?
                 .ok_or_else(|| {
-                    anyhow::anyhow!(
+                    anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(format!(
                         "missing cluster aggregate while applying a DOB decode outcome: spore_id=0x{}, cluster_id=0x{}",
                         hex::encode(spore_id),
                         hex::encode(&cluster_id)
-                    )
+                    )))
                 })?;
             self.adjust_cluster_tier_count(
                 &cluster_id,

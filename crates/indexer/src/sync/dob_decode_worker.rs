@@ -1659,6 +1659,107 @@ mod tests {
         assert!(store.get_dob_decode_outcome(&spore_id).unwrap().is_none());
     }
 
+    /// B-6 (E5): a live spore with a collection id, no cluster aggregate row
+    /// and a decode that changes its tier is a store whose derived state no
+    /// longer matches the chain: rebuild-required, not a plain batch error.
+    #[test]
+    fn a_missing_cluster_aggregate_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cluster_id = [0x61u8; 32];
+        let spore_id = [0x62u8; 32];
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &cluster_id);
+        store
+            .delete_cf(store.cf_cluster_agg(), &cluster_id)
+            .unwrap();
+
+        let error = try_apply_in_block(&store, 7, &[decoded(&spore_id, vec![])]).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let text = error.to_string();
+        assert!(text.contains("missing cluster aggregate"), "{text}");
+        assert!(text.contains(&hex::encode(spore_id)), "{text}");
+        assert!(text.contains(&hex::encode(cluster_id)), "{text}");
+    }
+
+    /// B-6 (E5): a tier count that would go negative is rebuild-required,
+    /// with every context field kept.
+    #[test]
+    fn a_negative_tier_count_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cluster_id = [0x63u8; 32];
+        let spore_id = [0x64u8; 32];
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &cluster_id);
+        // The aggregate no longer counts the DecodePending spore.
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cluster_aggregate(
+            &cluster_id,
+            &ckbadger_store::types::ClusterAggregate {
+                total_count: 1,
+                live_count: 1,
+                owner_count: 1,
+                unknown_count: 0,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+
+        let error = try_apply_in_block(&store, 7, &[decoded(&spore_id, vec![])]).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let text = error.to_string();
+        assert!(text.contains("cluster tier count underflow"), "{text}");
+        assert!(text.contains(&hex::encode(cluster_id)), "{text}");
+        assert!(text.contains("tier=decode_pending"), "{text}");
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+    }
+
+    /// B-6 (E5): the decoded instance itself is not a spore, or a live spore
+    /// has no collection id: both rebuild-required, naming the object.
+    #[test]
+    fn a_non_spore_instance_and_a_clusterless_live_spore_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+
+        // Same creating tx as the outcome, but a cluster: not a stale outcome.
+        let cluster_at_id = [0x65u8; 32];
+        store
+            .put_spore_direct(
+                &cluster_at_id,
+                &ckbadger_store::types::ObjectEntry {
+                    standard: ckbadger_store::types::ObjectStandard::SporeCluster,
+                    collection_id: None,
+                    token_id: None,
+                    owner_lock_hash: Some(vec![0x22; 32]),
+                    name: None,
+                    description: None,
+                    is_live: true,
+                    created_at_block: 5,
+                    created_at_tx: SEED_TX.to_vec(),
+                    extra: ObjectExtra::SporeCluster,
+                },
+            )
+            .unwrap();
+        let error = try_apply_in_block(&store, 7, &[decoded(&cluster_at_id, vec![])]).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let text = error.to_string();
+        assert!(text.contains("not a spore"), "{text}");
+        assert!(text.contains(&hex::encode(cluster_at_id)), "{text}");
+        assert!(text.contains("SporeCluster"), "{text}");
+
+        // A live DecodePending spore with no collection id.
+        let spore_id = [0x66u8; 32];
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &[0x67u8; 32]);
+        let mut entry = store.get_spore(&spore_id).unwrap().unwrap();
+        entry.collection_id = None;
+        store.put_spore_direct(&spore_id, &entry).unwrap();
+        let error = try_apply_in_block(&store, 8, &[decoded(&spore_id, vec![])]).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let text = error.to_string();
+        assert!(text.contains("no collection_id"), "{text}");
+        assert!(text.contains(&hex::encode(spore_id)), "{text}");
+    }
+
     #[test]
     fn test_decode_hex_field() {
         assert_eq!(decode_hex_field("0xabcd").unwrap(), vec![0xAB, 0xCD]);
