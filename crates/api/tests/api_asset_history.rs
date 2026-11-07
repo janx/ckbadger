@@ -135,6 +135,40 @@ async fn cell_versions_exact_same_block_order_capacity_and_current_owner() {
     );
 }
 
+/// Lane B carry-over 4(b): a cell's data hash is the one a script references
+/// (CKB's `calc_data_hash`): 32 zero bytes for empty data, as the cell page
+/// serves it — not the blake2b of zero bytes the payload stores for every
+/// empty cell. The fixture's payloads carry the indexer's stored value.
+#[tokio::test]
+async fn cell_versions_serve_the_zero_data_hash_of_an_empty_cell() {
+    let (store, id) = history_fixture();
+    let stored_empty_hash: [u8; 32] = ckb_hash::blake2b_256([]);
+    assert_ne!(stored_empty_hash, [0; 32]);
+    let (mint, transfer) = (vec![0x51; 32], vec![0x52; 32]);
+    let mut batch = StoreBatch::new(&store);
+    let mut consumed = cell(&id, 307_00000000, 1);
+    consumed.data_hash = Some(stored_empty_hash);
+    let mut current = cell(&id, 320_00000000, 2);
+    current.data_hash = Some(stored_empty_hash);
+    // Consumed by `transfer`, which `history_fixture` indexes at (100, 2).
+    batch.put_consumed_cell(&mint, 0, &consumed, 100, 100, 2);
+    batch.put_cell(&transfer, 0, &current, 100);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/cell-versions",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let zero = format!("0x{}", "00".repeat(32));
+    assert_eq!(json["data"][0]["dataHash"], zero.as_str(), "{json}");
+    assert_eq!(json["data"][1]["dataHash"], zero.as_str(), "{json}");
+}
+
 #[tokio::test]
 async fn did_detail_has_current_canonical_outpoint() {
     let (store, id) = history_fixture();
@@ -713,7 +747,7 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -1163,7 +1197,7 @@ async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() 
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -1275,7 +1309,7 @@ async fn protocol_fixture(
             batch.put_dotbit_account_outpoint(&hash, 0, &id);
             batch
                 .put_raw_cf_by_name(
-                    ckbadger_store::CF_STATS_MNFT,
+                    ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                     &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(&id, &hash, 0),
                     &[AssetAction::Mint.compact()],
                 )
@@ -1418,7 +1452,7 @@ fn seed_item_versions(
         if let Some(action) = version.item_action {
             batch
                 .put_raw_cf_by_name(
-                    ckbadger_store::CF_STATS_SPORE,
+                    ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                     &ckbadger_store::keys::encode_spore_outpoint_by_id_key(id, hash, 0),
                     &[action.compact()],
                 )
@@ -1663,7 +1697,7 @@ async fn did_feed_row_with_unchanged_data_has_an_unchanged_handle() {
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -2062,7 +2096,7 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
         // outpoint (what the item and collection feeds read).
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&[0x44; 20], &hash, 0),
                 &[action.compact()],
             )

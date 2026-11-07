@@ -102,7 +102,9 @@ See [docs/INDEXER_PIPELINE.md](../INDEXER_PIPELINE.md) for runtime architecture 
   when time bucket closes), Class D (disabled during bulk sync).
 - Activity Class C buckets seal only when their exact UTC+8 bucket end is at or below the persisted
   running-maximum chain time. This bounds unique-address
-  sets without allowing a later valid block to modify an already-written bucket.
+  sets without allowing a later valid block to modify an already-written bucket. A sealed
+  bucket writes only its count row; its address set is dropped with it. Only the buckets open at
+  the handoff tip write their address rows, which live sync continues.
 - Class B owners and live-cell indexes emit sequentially through domain-store batches capped at
   32 MiB. `CF_CELLS` remains on the separate append-only history path and is never targeted by
   finalize materialization.

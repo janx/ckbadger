@@ -11,61 +11,15 @@ use ckbadger_common::dao::{calculate_miner_secondary_issuance, secondary_block_i
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
-// Activity address sets (ACTIVITY_*_ADDR_SET blobs + ACTIVITY_*_ADDR_ROW rows)
+// Activity address rows (ACTIVITY_*_ADDR_ROW)
 //
-// The per-bucket address set is the dedup memory behind
-// `DailyActivityStats::unique_address_count`. It has two parts: the blob bulk
-// build writes once per bucket (`ACTIVITY_*_ADDR_SET`, whose on-disk form and
-// count derivation are the functions below), and one empty row per address
-// live sync saw first in the bucket (`ACTIVITY_*_ADDR_ROW`, see
-// `keys::ActivityBucketKind`). Live sync never rewrites the blob, and writes a
-// row only for an address in neither part, so the bucket's set is their
-// disjoint union and `unique_address_count` is the blob's count plus the rows.
+// A bucket's unique `Lock` addresses — the dedup memory behind
+// `DailyActivityStats::unique_address_count` — are one empty row per address
+// (`keys::ActivityBucketKind::addr_row_key`), kept only while a block can still
+// reach the bucket (C-3): bulk build writes them for the buckets open at the
+// handoff tip, live sync adds a row per new address and deletes a bucket's rows
+// once the rollback coverage floor's chain time has left it.
 // ---------------------------------------------------------------------------
-
-/// Canonical on-disk encoding of an activity address-set row: the bucket's
-/// 32-byte lock hashes, deduplicated and sorted, concatenated.
-pub fn encode_activity_addr_set<I: IntoIterator<Item = [u8; 32]>>(addrs: I) -> Vec<u8> {
-    let mut sorted: Vec<[u8; 32]> = addrs.into_iter().collect();
-    sorted.sort_unstable();
-    sorted.dedup();
-    sorted.into_iter().flatten().collect()
-}
-
-/// Decode a persisted activity address-set row.
-///
-/// A length that is not a whole number of 32-byte hashes means the row was
-/// written by something other than `encode_activity_addr_set` — fail with the
-/// bucket rather than silently dropping the trailing partial hash, which would
-/// undercount `unique_address_count` forever.
-pub fn decode_activity_addr_set(
-    raw: &[u8],
-    bucket: &str,
-) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
-    if !raw.len().is_multiple_of(32) {
-        anyhow::bail!(
-            "corrupt activity addr set row: bucket={}, len={} (not a multiple of 32)",
-            bucket,
-            raw.len()
-        );
-    }
-    let mut set = std::collections::HashSet::with_capacity(raw.len() / 32);
-    for hash in raw.as_chunks::<32>().0 {
-        set.insert(*hash);
-    }
-    Ok(set)
-}
-
-/// Derive `unique_address_count` from an address-set size.
-pub fn activity_addr_set_count(len: usize, bucket: &str) -> anyhow::Result<u32> {
-    u32::try_from(len).map_err(|_| {
-        anyhow::anyhow!(
-            "unique_address_count exceeds u32: bucket={}, count={}",
-            bucket,
-            len
-        )
-    })
-}
 
 impl CkbadgerStore {
     // ---- Daily stats ----
@@ -788,30 +742,15 @@ impl CkbadgerStore {
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
-    /// The bucket's bulk-written address-set blob, decoded; empty when the
-    /// bucket has none (every bucket live sync opened).
-    pub fn get_activity_addr_set_blob(
-        &self,
-        kind: keys::ActivityBucketKind,
-        bucket: &str,
-    ) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
-        let key = kind.addr_set_key(bucket)?;
-        match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(raw) => decode_activity_addr_set(&raw, bucket),
-            None => Ok(std::collections::HashSet::new()),
-        }
-    }
-
-    /// Every unique address of an activity bucket: the bulk-written blob's
-    /// addresses plus the live per-address rows'. Fails if an address is in
-    /// both (live sync writes a row only for an address the blob lacks).
+    /// Every unique address of an activity bucket: its per-address rows.
+    /// Empty for a bucket whose rows were never written or have been pruned.
     pub fn get_activity_bucket_addrs(
         &self,
         kind: keys::ActivityBucketKind,
         bucket: &str,
-    ) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
-        let mut addrs = self.get_activity_addr_set_blob(kind, bucket)?;
+    ) -> anyhow::Result<std::collections::BTreeSet<[u8; 32]>> {
         let prefix = kind.addr_row_bucket_prefix(bucket)?;
+        let mut addrs = std::collections::BTreeSet::new();
         for item in self.prefix_iterator_cf(self.cf_stats_chain(), &prefix) {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -824,15 +763,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let lock_hash = kind.decode_addr_row_key(bucket, &key)?;
-            if !addrs.insert(lock_hash) {
-                anyhow::bail!(
-                    "{:?} activity bucket {} has address 0x{} both in its address-set blob and as a row",
-                    kind,
-                    bucket,
-                    hex::encode(lock_hash)
-                );
-            }
+            addrs.insert(kind.decode_addr_row_key(bucket, &key)?);
         }
         Ok(addrs)
     }
@@ -1679,54 +1610,6 @@ mod tests {
     use crate::CkbadgerStore;
 
     #[test]
-    fn test_activity_addr_set_encode_decode_roundtrip() {
-        let addrs = std::collections::HashSet::from([[0xC3u8; 32], [0xA1u8; 32], [0xB2u8; 32]]);
-        let encoded = encode_activity_addr_set(addrs.iter().copied());
-        assert_eq!(encoded.len(), 96);
-        // Deterministic sorted layout, regardless of iteration order.
-        assert_eq!(&encoded[0..32], &[0xA1u8; 32]);
-        assert_eq!(&encoded[32..64], &[0xB2u8; 32]);
-        assert_eq!(&encoded[64..96], &[0xC3u8; 32]);
-        let decoded = decode_activity_addr_set(&encoded, "20260210").unwrap();
-        assert_eq!(decoded, addrs);
-        assert_eq!(
-            activity_addr_set_count(decoded.len(), "20260210").unwrap(),
-            3
-        );
-    }
-
-    #[test]
-    fn test_activity_addr_set_encode_dedups_repeats() {
-        let encoded = encode_activity_addr_set([[0xA1u8; 32], [0xA1u8; 32], [0xB2u8; 32]]);
-        assert_eq!(
-            encoded.len(),
-            64,
-            "repeated hashes must collapse to one row"
-        );
-        assert_eq!(
-            decode_activity_addr_set(&encoded, "2026021015")
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn test_activity_addr_set_decode_rejects_partial_hash() {
-        let mut raw = vec![0xA1u8; 32];
-        raw.extend_from_slice(&[0xB2u8; 7]); // truncated trailing hash
-        let err = decode_activity_addr_set(&raw, "20260210").unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("corrupt activity addr set row")
-                && msg.contains("20260210")
-                && msg.contains("39"),
-            "decode must fail fast with bucket + length context, got: {}",
-            msg
-        );
-    }
-
-    #[test]
     fn activity_addr_row_keys_encode_bucket_then_lock_hash() {
         use crate::keys::ActivityBucketKind;
         let lock = [0xA7u8; 32];
@@ -1781,71 +1664,53 @@ mod tests {
     }
 
     #[test]
-    fn activity_bucket_addrs_are_the_blob_plus_the_rows() {
+    fn activity_bucket_addrs_are_the_buckets_rows() {
         use crate::keys::ActivityBucketKind;
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let (a, b, c) = ([0xA1u8; 32], [0xB2u8; 32], [0xC3u8; 32]);
-        let put_blob = |kind: ActivityBucketKind, bucket: &str, addrs: &[[u8; 32]]| {
-            store
-                .put_stats_key(
-                    &kind.addr_set_key(bucket).unwrap(),
-                    &encode_activity_addr_set(addrs.iter().copied()),
-                )
-                .unwrap();
-        };
         let put_row = |kind: ActivityBucketKind, bucket: &str, addr: &[u8; 32]| {
             store
                 .put_stats_key(&kind.addr_row_key(bucket, addr).unwrap(), &[])
                 .unwrap();
         };
-        // A new bucket: neither part.
         assert!(store
             .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
             .unwrap()
             .is_empty());
-        // Blob only (a bulk-built bucket).
-        put_blob(ActivityBucketKind::Daily, "20260210", &[a, b]);
+        put_row(ActivityBucketKind::Daily, "20260210", &a);
+        put_row(ActivityBucketKind::Daily, "20260210", &b);
+        // A neighbour bucket's row, and the other family's, are not this
+        // bucket's.
+        put_row(ActivityBucketKind::Daily, "20260211", &c);
+        put_row(ActivityBucketKind::Hourly, "2026021015", &c);
         assert_eq!(
             store
                 .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
                 .unwrap(),
-            std::collections::HashSet::from([a, b])
+            std::collections::BTreeSet::from([a, b])
         );
-        // Rows only (a bucket live sync opened); a neighbour bucket's row is
-        // not this bucket's.
-        put_row(ActivityBucketKind::Hourly, "2026021015", &c);
-        put_row(ActivityBucketKind::Hourly, "2026021016", &a);
         assert_eq!(
             store
                 .get_activity_bucket_addrs(ActivityBucketKind::Hourly, "2026021015")
                 .unwrap(),
-            std::collections::HashSet::from([c])
-        );
-        // Both: the bulk blob plus the rows live sync added after it.
-        put_row(ActivityBucketKind::Daily, "20260210", &c);
-        assert_eq!(
-            store
-                .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
-                .unwrap(),
-            std::collections::HashSet::from([a, b, c])
-        );
-        // An address in both parts is a broken invariant.
-        put_row(ActivityBucketKind::Daily, "20260210", &a);
-        let err = store
-            .get_activity_bucket_addrs(ActivityBucketKind::Daily, "20260210")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("both in its address-set blob and as a row"),
-            "{err}"
+            std::collections::BTreeSet::from([c])
         );
     }
 
     #[test]
-    fn test_activity_addr_set_count_rejects_overflow() {
-        let err = activity_addr_set_count(u32::MAX as usize + 1, "20260210").unwrap_err();
-        assert!(err.to_string().contains("unique_address_count exceeds u32"));
+    fn activity_bucket_labels_follow_the_utc8_day_and_hour() {
+        use crate::keys::ActivityBucketKind;
+        // 2023-11-14 22:13:20 UTC = 2023-11-15 06:13:20 UTC+8.
+        let t = 1_700_000_000_000;
+        assert_eq!(
+            ActivityBucketKind::Daily.bucket_label(t).unwrap(),
+            "20231115"
+        );
+        assert_eq!(
+            ActivityBucketKind::Hourly.bucket_label(t).unwrap(),
+            "2023111506"
+        );
     }
 
     #[test]

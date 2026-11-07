@@ -3649,7 +3649,7 @@ fn seed_reorg_event_of_kind(
     let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&event).unwrap(),
         )
@@ -3732,7 +3732,7 @@ fn seed_retained_reorg_list_history(store: &Arc<CkbadgerStore>) -> TestCkbChain 
         let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
         store
             .put_cf(
-                store.cf_sync_meta(),
+                store.cf_reorg_events(),
                 key.as_bytes(),
                 &bincode::serialize(&event).unwrap(),
             )
@@ -4126,7 +4126,7 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&event).unwrap(),
         )

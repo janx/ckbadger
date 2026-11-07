@@ -263,8 +263,7 @@ fn canonical_version_from_marker(
                 data_bytes,
             },
             data_hash: cell
-                .data_hash
-                .as_ref()
+                .script_data_hash()
                 .map(|h| format!("0x{}", hex::encode(h))),
             lock_name: state
                 .store

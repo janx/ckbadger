@@ -486,7 +486,7 @@ fn classify(
         Some(ProtocolScript::MnftToken) => {
             let id = store
                 .get_cf(
-                    store.cf_stats_mnft(),
+                    store.cf_object_outpoints(),
                     &keys::encode_mnft_token_outpoint_key(hash, index),
                 )?
                 .context("missing indexed mNFT outpoint")?;

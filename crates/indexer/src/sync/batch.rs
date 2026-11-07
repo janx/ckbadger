@@ -1926,9 +1926,6 @@ impl Indexer {
         let commit_phase_total_ms: f64;
         let tracker_state_bytes: usize;
         let mut batch_stats;
-        // The bulk-written unique-address blobs of the activity buckets this
-        // batch touches, decoded once (live sync never rewrites them).
-        let mut frozen_activity_addr_sets = crate::db::writer::FrozenActivityAddrSets::default();
         // ONE block overlay for the batch: every write to a `Journal`-class
         // domain CF, from any of the batch's sub-batches, goes through it, is
         // journaled per block (`UndoSeqScope::Journal`) and staged once, just
@@ -3374,7 +3371,6 @@ impl Indexer {
                             bucket,
                             &block_activity,
                             &block_activity_addrs,
-                            &mut frozen_activity_addr_sets,
                             &mut activity_batch,
                         )?;
                     }
@@ -4057,17 +4053,39 @@ impl Indexer {
                 // The coverage contract describes which journal rows exist,
                 // and the rows it prunes are never restored, so it is written
                 // outside the journal: no rollback restores an older floor.
-                stage_entity_stats_undo_retention(
+                let floor_advance = stage_entity_stats_undo_retention(
                     self.writer.store(),
                     &mut data_batch,
                     committed_tip,
                 )?;
-                // The hourly retention step depends only on the committed tip
-                // this batch builds on, so its writes (the retention state,
-                // the expired hourly rows) belong to the batch's first block:
-                // rolling back to any block of the batch keeps them, rolling
-                // back below it undoes them.
+                // The hourly retention step and the activity address-row
+                // retention depend only on the committed tip this batch builds
+                // on, so their writes (the retention state, the expired hourly
+                // rows, the address rows of buckets the floor left) belong to
+                // the batch's first block: rolling back to any block of the
+                // batch keeps them, rolling back below it undoes them.
                 let mut data_batch = data_batch.at(first_block);
+                // The floor this batch commits: the advanced one, else the
+                // committed contract's; a store without one (its first live
+                // batch, whose contract is staged above) commits floor -1.
+                let coverage_floor = match floor_advance {
+                    Some(advance) => *advance.end(),
+                    None => self
+                        .writer
+                        .store()
+                        .get_entity_stats_undo_contract()?
+                        .map_or(-1, |contract| contract.coverage_floor_block),
+                };
+                let deleted = self
+                    .writer
+                    .stage_activity_addr_retention(&mut data_batch, coverage_floor)?;
+                if deleted > 0 {
+                    debug!(
+                        deleted,
+                        coverage_floor,
+                        "Activity address rows behind the coverage floor staged for deletion"
+                    );
+                }
 
                 // One bounded hourly-retention step, if the periodic task asked
                 // for one. Deletions and the advanced retention state go into the
@@ -9240,7 +9258,7 @@ mod tests {
             let set = store
                 .get_activity_bucket_addrs(ckbadger_store::keys::ActivityBucketKind::Daily, &date)
                 .unwrap();
-            let mut expected = std::collections::HashSet::new();
+            let mut expected = std::collections::BTreeSet::new();
             expected.insert(<[u8; 32]>::try_from(lock_a.as_slice()).unwrap());
             expected.insert(<[u8; 32]>::try_from(lock_b.as_slice()).unwrap());
             assert_eq!(set, expected);
@@ -12638,10 +12656,11 @@ mod tests {
 
         /// J15: `ACTIVITY_DAILY` / `ACTIVITY_HOURLY` rows are byte-identical
         /// from bulk build and from the live writer (one block per batch, and
-        /// one multi-block batch), and every bucket has the same unique
-        /// address set — bulk as one `ACTIVITY_*_ADDR_SET` blob per bucket,
-        /// live as one `ACTIVITY_*_ADDR_ROW` row per address (the layouts
-        /// differ by design: live journals per block) — over blocks across
+        /// one multi-block batch), and every bucket open at the tip has the
+        /// same `ACTIVITY_*_ADDR_ROW` address rows (C-3: bulk drops a bucket's
+        /// addresses when it seals; live keeps them until the coverage floor
+        /// leaves the bucket, which these four blocks never move) — over
+        /// blocks across
         /// UTC+8 hour boundaries — one with a raw timestamp behind its chain
         /// time — with cellbase, `Lock` and prefix-only (`LockPrefix`)
         /// participants, `.bit` transactions (`dotbit:*` counters) and plain
@@ -12649,8 +12668,7 @@ mod tests {
         #[tokio::test]
         async fn bulk_and_live_write_identical_activity_bucket_rows() {
             use ckbadger_store::keys::stats_prefix::{
-                ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY,
-                ACTIVITY_HOURLY_ADDR_ROW, ACTIVITY_HOURLY_ADDR_SET,
+                ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_ROW,
             };
             use ckbadger_store::keys::ActivityBucketKind;
             let _guard = crate::db::writer::activities::test_detector_override::install(
@@ -12733,8 +12751,6 @@ mod tests {
                             Some(
                                 ACTIVITY_DAILY
                                     | ACTIVITY_HOURLY
-                                    | ACTIVITY_DAILY_ADDR_SET
-                                    | ACTIVITY_HOURLY_ADDR_SET
                                     | ACTIVITY_DAILY_ADDR_ROW
                                     | ACTIVITY_HOURLY_ADDR_ROW
                             )
@@ -12749,34 +12765,33 @@ mod tests {
                     .cloned()
                     .collect()
             };
-            // Every bucket's unique addresses, from blobs and rows alike.
+            // The tip's chain time (block 103's), and the buckets open there.
+            let tip_chain_time = 1_700_006_405_000;
+            // Every bucket's unique addresses from its rows; with `open_only`,
+            // only the buckets open at the tip.
             type BucketSets =
                 std::collections::BTreeMap<(u8, Vec<u8>), std::collections::BTreeSet<[u8; 32]>>;
-            let bucket_sets = |rows: &[(Vec<u8>, Vec<u8>)]| -> BucketSets {
+            let bucket_sets = |rows: &[(Vec<u8>, Vec<u8>)], open_only: bool| -> BucketSets {
                 let mut sets = BucketSets::new();
                 for (key, value) in rows {
-                    let (kind, is_row) = match key[0] {
-                        ACTIVITY_DAILY_ADDR_SET => (ActivityBucketKind::Daily, false),
-                        ACTIVITY_HOURLY_ADDR_SET => (ActivityBucketKind::Hourly, false),
-                        ACTIVITY_DAILY_ADDR_ROW => (ActivityBucketKind::Daily, true),
-                        ACTIVITY_HOURLY_ADDR_ROW => (ActivityBucketKind::Hourly, true),
+                    let kind = match key[0] {
+                        ACTIVITY_DAILY_ADDR_ROW => ActivityBucketKind::Daily,
+                        ACTIVITY_HOURLY_ADDR_ROW => ActivityBucketKind::Hourly,
                         _ => continue,
                     };
                     let bucket = key[1..1 + kind.bucket_len()].to_vec();
-                    let set = sets
-                        .entry((kind.stats_prefix(), bucket.clone()))
-                        .or_default();
-                    let label = String::from_utf8(bucket).unwrap();
-                    if is_row {
-                        assert!(value.is_empty(), "address rows are empty");
-                        assert!(set.insert(kind.decode_addr_row_key(&label, key).unwrap()));
-                    } else {
-                        set.extend(
-                            ckbadger_store::decode_activity_addr_set(value, &label).unwrap(),
-                        );
+                    if open_only
+                        && bucket.as_slice() < kind.bucket_label(tip_chain_time).unwrap().as_bytes()
+                    {
+                        continue;
                     }
+                    let label = String::from_utf8(bucket.clone()).unwrap();
+                    assert!(value.is_empty(), "address rows are empty");
+                    assert!(sets
+                        .entry((kind.stats_prefix(), bucket))
+                        .or_default()
+                        .insert(kind.decode_addr_row_key(&label, key).unwrap()));
                 }
-                sets.retain(|_, set| !set.is_empty());
                 sets
             };
             let count_prefix = |rows: &[(Vec<u8>, Vec<u8>)], prefixes: [u8; 2]| {
@@ -12858,18 +12873,22 @@ mod tests {
                 .iter()
                 .filter(|(key, _)| key[0] == ACTIVITY_HOURLY)
                 .count();
-            let hourly_sets = bulk
-                .iter()
-                .filter(|(key, _)| key[0] == ACTIVITY_HOURLY_ADDR_SET)
-                .count();
-            assert_eq!((hourly_rows, hourly_sets), (3, 3), "hours 06, 07, 08");
-
+            assert_eq!(hourly_rows, 3, "hours 06, 07, 08");
+            let hour_08 = ActivityBucketKind::Hourly
+                .bucket_label(tip_chain_time)
+                .unwrap()
+                .into_bytes();
+            let bulk_sets = bucket_sets(&bulk, false);
             assert_eq!(
-                count_prefix(&bulk, [ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_HOURLY_ADDR_ROW]),
-                0,
-                "bulk writes blobs only"
+                bulk_sets.keys().cloned().collect::<Vec<_>>(),
+                vec![
+                    (ACTIVITY_DAILY, day.clone().into_bytes()),
+                    (ACTIVITY_HOURLY, hour_08),
+                ],
+                "bulk keeps the address rows of the day and hour open at the tip only: \
+                 hours 06 and 07 sealed"
             );
-            assert!(!bucket_sets(&bulk).is_empty());
+            assert!(count_prefix(&bulk, [ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_HOURLY_ADDR_ROW]) > 0);
             for (live, shape) in [
                 (live_rows(&single), "single-block live"),
                 (live_rows(&multi), "multi-block live"),
@@ -12880,14 +12899,14 @@ mod tests {
                     "bulk vs {shape}"
                 );
                 assert_eq!(
-                    bucket_sets(&live),
-                    bucket_sets(&bulk),
-                    "bucket address sets, bulk vs {shape}"
+                    bucket_sets(&live, true),
+                    bulk_sets,
+                    "address rows of the buckets open at the tip, bulk vs {shape}"
                 );
                 assert_eq!(
-                    count_prefix(&live, [ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY_ADDR_SET]),
-                    0,
-                    "live never writes an address-set blob ({shape})"
+                    bucket_sets(&live, false).len(),
+                    4,
+                    "live keeps every bucket's rows: the day and hours 06, 07, 08 ({shape})"
                 );
             }
         }
@@ -14243,16 +14262,23 @@ mod tests {
             }
         }
 
-        /// Block 100 funds, block 101 creates a cell carrying data (so it has a
-        /// `cell_by_data_hash` row), block 102 consumes it.
+        /// A RISC-V binary: a code cell, so it has a `cell_by_data_hash` row.
+        const CODE_CELL_DATA: &str = "0x7f454c460201010000";
+        /// Data that is not code: no `cell_by_data_hash` row (C-2).
+        const NON_CODE_DATA: &str = "0xdeadbeefcafe";
+
+        /// Block 100 funds, block 101 creates a code cell (so it has a
+        /// `cell_by_data_hash` row) and a data cell that is not code (no
+        /// row), block 102 consumes the code cell.
         fn blocks() -> Vec<BlockResponseWithCycles> {
             let create = tx(
                 0xe1,
                 vec![input(0xc0, 0)],
                 vec![
-                    (output(DATA_CELL_CAPACITY, lock_script()), "0xdeadbeefcafe"),
+                    (output(DATA_CELL_CAPACITY, lock_script()), CODE_CELL_DATA),
+                    (output(DATA_CELL_CAPACITY, lock_script()), NON_CODE_DATA),
                     (
-                        output(FUNDING_CAPACITY - DATA_CELL_CAPACITY, lock_script()),
+                        output(FUNDING_CAPACITY - 2 * DATA_CELL_CAPACITY, lock_script()),
                         "0x",
                     ),
                 ],
@@ -14327,7 +14353,7 @@ mod tests {
             assert_eq!(
                 data_hash_rows(&store),
                 1,
-                "fixture: the consumed data cell keeps its data-hash row"
+                "fixture: the consumed code cell keeps its data-hash row"
             );
 
             // Fork after block 101: the cell survives, its consumption does not.
@@ -14351,10 +14377,11 @@ mod tests {
             );
         }
 
-        /// D-2: a `cell_by_data_hash` row exists iff the cell has data, on both
-        /// write paths. Bulk used to file one row per created cell — every
-        /// empty-data cell under the hash of empty data — where live files
-        /// only the data cell.
+        /// D-2 / C-2: a `cell_by_data_hash` row exists iff the cell is a code
+        /// cell, on both write paths. Bulk used to file one row per created
+        /// cell — every empty-data cell under the hash of empty data — where
+        /// live filed only the data cells; now both file the code cell only,
+        /// not the data cell that is not code.
         #[tokio::test]
         async fn bulk_and_live_write_identical_data_hash_rows() {
             let all = blocks();
@@ -14369,15 +14396,15 @@ mod tests {
             let mut bulk_rows: Vec<Vec<u8>> = bulk.cell_by_data_hash.into_iter().collect();
             bulk_rows.sort();
 
-            let data_cell_row = ckbadger_store::keys::encode_cell_index_key(
-                &crate::parser::ScriptParser::compute_data_hash(&[
-                    0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe,
-                ]),
+            let code_cell_row = ckbadger_store::keys::encode_cell_index_key(
+                &crate::parser::ScriptParser::compute_data_hash(&crate::rpc::parse_hex_to_bytes(
+                    CODE_CELL_DATA,
+                )),
                 101,
                 &[0xe1; 32],
                 0,
             );
-            assert_eq!(live_rows, vec![data_cell_row], "live: the data cell only");
+            assert_eq!(live_rows, vec![code_cell_row], "live: the code cell only");
             assert_eq!(
                 bulk_rows.iter().map(hex::encode).collect::<Vec<_>>(),
                 live_rows.iter().map(hex::encode).collect::<Vec<_>>(),
@@ -14455,7 +14482,10 @@ mod tests {
         fn stats_dao_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
             let mut rows = Vec::new();
             for &name in ckbadger_store::DOMAIN_CFS {
-                if name.starts_with("stats_") || name.starts_with("dao_") {
+                if name.starts_with("stats_")
+                    || name.starts_with("dao_")
+                    || name.starts_with("object_outpoint")
+                {
                     for row in store.iterator_cf(store.cf(name), rocksdb::IteratorMode::Start) {
                         let (key, value) = row.unwrap();
                         rows.push((name, key.to_vec(), value.to_vec()));
@@ -14465,45 +14495,34 @@ mod tests {
             rows
         }
 
-        /// Bulk keeps each activity bucket's unique addresses in one
-        /// `ACTIVITY_*_ADDR_SET` blob, live in one `ACTIVITY_*_ADDR_ROW` row
-        /// per address (it journals per block): the blobs as rows, so both
-        /// layouts compare row for row. Every other row is kept as it is.
-        fn activity_addr_sets_as_rows(
+        /// The rows without the activity address rows of the buckets before
+        /// the tip's: bulk writes the address rows only for the buckets open
+        /// at the handoff tip (C-3), live keeps every bucket's until the
+        /// coverage floor leaves it, which a chain this short never moves.
+        fn without_closed_activity_addr_rows(
             rows: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
+            tip_chain_time_ms: i64,
         ) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
             use ckbadger_store::keys::{stats_prefix, ActivityBucketKind};
-            let cf_rank = |cf: &str| {
-                ckbadger_store::DOMAIN_CFS
-                    .iter()
-                    .position(|name| *name == cf)
-                    .expect("domain CF")
-            };
-            let mut out = Vec::with_capacity(rows.len());
-            for (cf, key, value) in rows {
-                let kind = match key.first().copied() {
-                    Some(stats_prefix::ACTIVITY_DAILY_ADDR_SET)
-                        if cf == ckbadger_store::CF_STATS_CHAIN =>
-                    {
-                        ActivityBucketKind::Daily
-                    }
-                    Some(stats_prefix::ACTIVITY_HOURLY_ADDR_SET)
-                        if cf == ckbadger_store::CF_STATS_CHAIN =>
-                    {
-                        ActivityBucketKind::Hourly
-                    }
-                    _ => {
-                        out.push((cf, key, value));
-                        continue;
-                    }
-                };
-                let bucket = std::str::from_utf8(&key[1..]).unwrap();
-                for addr in ckbadger_store::decode_activity_addr_set(&value, bucket).unwrap() {
-                    out.push((cf, kind.addr_row_key(bucket, &addr).unwrap(), Vec::new()));
-                }
-            }
-            out.sort_by(|a, b| (cf_rank(a.0), &a.1).cmp(&(cf_rank(b.0), &b.1)));
-            out
+            rows.into_iter()
+                .filter(|(cf, key, _)| {
+                    let kind = match key.first().copied() {
+                        Some(stats_prefix::ACTIVITY_DAILY_ADDR_ROW)
+                            if *cf == ckbadger_store::CF_STATS_CHAIN =>
+                        {
+                            ActivityBucketKind::Daily
+                        }
+                        Some(stats_prefix::ACTIVITY_HOURLY_ADDR_ROW)
+                            if *cf == ckbadger_store::CF_STATS_CHAIN =>
+                        {
+                            ActivityBucketKind::Hourly
+                        }
+                        _ => return true,
+                    };
+                    let bucket = &key[1..1 + kind.bucket_len()];
+                    bucket >= kind.bucket_label(tip_chain_time_ms).unwrap().as_bytes()
+                })
+                .collect()
         }
 
         fn cell_payload_rows(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -14519,23 +14538,17 @@ mod tests {
         fn assert_stats_dao_rows_eq(
             actual: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
             expected: &[(&'static str, Vec<u8>, Vec<u8>)],
+            tip_chain_time_ms: i64,
             phase: &str,
         ) {
-            assert!(
-                !actual.iter().any(|(cf, key, _)| {
-                    *cf == ckbadger_store::CF_STATS_CHAIN
-                        && matches!(
-                            key.first().copied(),
-                            Some(
-                                ckbadger_store::keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-                                    | ckbadger_store::keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
-                            )
-                        )
-                }),
-                "{phase}: live never writes an activity address-set blob"
+            let actual = without_closed_activity_addr_rows(actual, tip_chain_time_ms);
+            let filtered = without_closed_activity_addr_rows(expected.to_vec(), tip_chain_time_ms);
+            assert_eq!(
+                filtered.len(),
+                expected.len(),
+                "{phase}: bulk writes no address row of a sealed bucket"
             );
-            let actual = activity_addr_sets_as_rows(actual);
-            let expected = activity_addr_sets_as_rows(expected.to_vec());
+            let expected = filtered;
             for (actual_row, expected_row) in actual.iter().zip(&expected) {
                 assert_eq!(
                     actual_row,
@@ -14609,8 +14622,26 @@ mod tests {
             assert!(expected.iter().any(|(cf, _, _)| cf.starts_with("dao_")));
             assert!(!bulk.token_rows.tokens.is_empty());
             assert!(!bulk.dotcell.identity_data.is_empty());
-            assert_stats_dao_rows_eq(stats_dao_rows(&single), &expected, "bulk vs single live");
-            assert_stats_dao_rows_eq(stats_dao_rows(&multi), &expected, "bulk vs multi live");
+            let tip_chain_time_ms = *raw_times.iter().max().unwrap() as i64;
+            assert!(
+                expected.iter().any(|(_, key, _)| matches!(
+                    key.first().copied(),
+                    Some(ckbadger_store::keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW)
+                )),
+                "the fixture's open day has address rows"
+            );
+            assert_stats_dao_rows_eq(
+                stats_dao_rows(&single),
+                &expected,
+                tip_chain_time_ms,
+                "bulk vs single live",
+            );
+            assert_stats_dao_rows_eq(
+                stats_dao_rows(&multi),
+                &expected,
+                tip_chain_time_ms,
+                "bulk vs multi live",
+            );
 
             let immutable_before = cell_payload_rows(&multi);
             assert!(!immutable_before.is_empty());
@@ -14641,7 +14672,12 @@ mod tests {
             )
             .await
             .expect("live replay after shallow fork");
-            assert_stats_dao_rows_eq(stats_dao_rows(&multi), &expected, "bulk vs rollback/replay");
+            assert_stats_dao_rows_eq(
+                stats_dao_rows(&multi),
+                &expected,
+                tip_chain_time_ms,
+                "bulk vs rollback/replay",
+            );
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 

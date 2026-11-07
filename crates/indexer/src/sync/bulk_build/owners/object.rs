@@ -18,7 +18,8 @@ use ckbadger_store::types::{
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_MNFT_COLLECTION_AGG,
-    CF_MNFT_DATA, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS_MNFT, CF_STATS_SPORE,
+    CF_MNFT_DATA, CF_OBJECT_OUTPOINTS, CF_OBJECT_OUTPOINT_BY_ID, CF_SPORE_BY_CLUSTER,
+    CF_SPORE_DATA, CF_STATS_MNFT, CF_STATS_SPORE,
 };
 use rocksdb::IteratorMode;
 
@@ -49,8 +50,12 @@ pub(crate) struct ObjectOwner {
     stats_spore_rows: BTreeMap<Vec<u8>, Vec<u8>>,
     mnft_by_collection: BTreeSet<Vec<u8>>,
     mnft_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
-    mnft_class_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
-    mnft_token_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// `CF_OBJECT_OUTPOINTS` rows: kind ‖ outpoint → object id (spore items,
+    /// mNFT classes and tokens, `.bit` accounts).
+    object_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// `CF_OBJECT_OUTPOINT_BY_ID` rows: kind ‖ id ‖ outpoint → empty, or the
+    /// identity's `AssetAction` byte.
+    object_outpoint_by_id: BTreeMap<Vec<u8>, Vec<u8>>,
     mnft_type_indexes: BTreeMap<Vec<u8>, MnftTypeIndex>,
     mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     spore_hourly_transfers: BTreeMap<Vec<u8>, i64>,
@@ -66,13 +71,6 @@ pub(crate) struct ObjectOwner {
     dotcell_namespaces: BTreeSet<Vec<u8>>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
     bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
-    dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
-    dotbit_outpoints_by_account: BTreeMap<Vec<u8>, u8>,
-    /// `DOTBIT_UNINDEXED_OUTPOINT` keys: AccountCell-typed outputs whose
-    /// protocol facts named no account (the DAS root AccountCell, data too
-    /// short to name one). Live sync consumes
-    /// these after the handoff and must find them recorded.
-    dotbit_unindexed_outpoints: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
     /// Daily capacity deltas keyed by (collection_id, date_yyyymmdd).
@@ -254,20 +252,6 @@ impl ObjectOwner {
                 count.to_le_bytes().to_vec(),
             ))?;
         }
-        for (key, value) in &self.mnft_class_outpoints {
-            emit(MaterializedRow::new(
-                CF_STATS_MNFT,
-                key.clone(),
-                value.clone(),
-            ))?;
-        }
-        for (key, value) in &self.mnft_token_outpoints {
-            emit(MaterializedRow::new(
-                CF_STATS_MNFT,
-                key.clone(),
-                value.clone(),
-            ))?;
-        }
         for (type_hash, index) in &self.mnft_type_indexes {
             emit(MaterializedRow::new(
                 CF_STATS_MNFT,
@@ -281,23 +265,6 @@ impl ObjectOwner {
                 key.clone(),
                 count.to_le_bytes().to_vec(),
             ))?;
-        }
-        for (key, value) in &self.dotbit_outpoints {
-            emit(MaterializedRow::new(
-                CF_STATS_MNFT,
-                key.clone(),
-                value.clone(),
-            ))?;
-        }
-        for (key, action) in &self.dotbit_outpoints_by_account {
-            emit(MaterializedRow::new(
-                CF_STATS_MNFT,
-                key.clone(),
-                vec![*action],
-            ))?;
-        }
-        for key in &self.dotbit_unindexed_outpoints {
-            emit(MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new()))?;
         }
         for (key, count) in &self.dotbit_hourly_transfers {
             emit(MaterializedRow::new(
@@ -372,6 +339,20 @@ impl ObjectOwner {
     where
         F: FnMut(MaterializedRow) -> Result<()>,
     {
+        for (key, id) in &self.object_outpoints {
+            emit(MaterializedRow::new(
+                CF_OBJECT_OUTPOINTS,
+                key.clone(),
+                id.clone(),
+            ))?;
+        }
+        for (key, value) in &self.object_outpoint_by_id {
+            emit(MaterializedRow::new(
+                CF_OBJECT_OUTPOINT_BY_ID,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
         for (id, entry) in &self.spore_entries {
             emit(MaterializedRow::new(
                 CF_SPORE_DATA,
@@ -581,10 +562,10 @@ impl ObjectOwner {
                 &self.mnft_owner_counts,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
-                &self.mnft_class_outpoints,
+                &self.object_outpoints,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
-                &self.mnft_token_outpoints,
+                &self.object_outpoint_by_id,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.mnft_type_indexes,
@@ -603,15 +584,6 @@ impl ObjectOwner {
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.bit_cell_owner_counts,
-            )
-            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
-                &self.dotbit_outpoints,
-            )
-            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
-                &self.dotbit_outpoints_by_account,
-            )
-            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
-                &self.dotbit_unindexed_outpoints,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_hourly_transfers,
@@ -765,13 +737,18 @@ impl ObjectOwner {
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
             if cell.semantic_tag == CellSemanticTag::Dotbit {
+                // An AccountCell-typed output whose facts name no account
+                // (the DAS root AccountCell, data too short to name one):
+                // live sync consumes these after the handoff and must find
+                // them recorded (`object_outpoints`, kind DOTBIT_UNINDEXED).
                 let output_index = Self::as_i16_outpoint_index(&cell.outpoint, ".bit")?;
-                self.dotbit_unindexed_outpoints.insert(
+                self.object_outpoints.insert(
                     keys::encode_dotbit_unindexed_outpoint_key(
                         &cell.outpoint.tx_hash,
                         output_index,
                     )
                     .to_vec(),
+                    Vec::new(),
                 );
             }
             return Ok(());
@@ -1656,7 +1633,7 @@ impl ObjectOwner {
         }
 
         let output_index = Self::as_i16_outpoint_index(&cell.outpoint, "mNFT class")?;
-        self.mnft_class_outpoints.insert(
+        self.object_outpoints.insert(
             keys::encode_mnft_class_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
             class_id,
         );
@@ -1839,7 +1816,7 @@ impl ObjectOwner {
         self.insert_mnft_type_index(type_script_hash, &class_id, &token_id, tx.block_number)?;
 
         let output_index = Self::as_i16_outpoint_index(&cell.outpoint, "mNFT token")?;
-        self.mnft_token_outpoints.insert(
+        self.object_outpoints.insert(
             keys::encode_mnft_token_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
             token_id,
         );
@@ -2828,11 +2805,11 @@ impl ObjectOwner {
                 cell.outpoint.index
             )
         })?;
-        self.stats_spore_rows.insert(
+        self.object_outpoints.insert(
             keys::encode_spore_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
             spore_id.to_vec(),
         );
-        self.stats_spore_rows.insert(
+        self.object_outpoint_by_id.insert(
             keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index),
             action.map_or_else(Vec::new, |action| vec![action.compact()]),
         );
@@ -2846,18 +2823,18 @@ impl ObjectOwner {
         action: ckbadger_store::AssetAction,
     ) -> Result<()> {
         let output_index = Self::as_i16_outpoint_index(&cell.outpoint, ".bit")?;
-        self.dotbit_outpoints.insert(
+        self.object_outpoints.insert(
             keys::encode_dotbit_account_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
             account_id.to_vec(),
         );
-        self.dotbit_outpoints_by_account.insert(
+        self.object_outpoint_by_id.insert(
             keys::encode_dotbit_outpoint_by_account_id_key(
                 account_id,
                 &cell.outpoint.tx_hash,
                 output_index,
             )
             .to_vec(),
-            action.compact(),
+            vec![action.compact()],
         );
         Ok(())
     }
@@ -3292,43 +3269,46 @@ pub(crate) fn materialize_object_state_for_test(
             domain_store.iterator_cf(domain_store.cf_stats_mnft(), IteratorMode::Start);
         for item in &mut stats_object_iter {
             let (key, value) = item?;
-            match key.first().copied() {
-                Some(keys::STATS_PREFIX_OBJECT_TYPE_INDEX) => {
-                    if key.len() != keys::OBJECT_TYPE_INDEX_KEY_SIZE {
-                        bail!(
-                            "invalid object type index key length in object snapshot helper: len={}",
-                            key.len()
-                        );
-                    }
-                    let type_hash = key[1..33].to_vec();
-                    let index: MnftTypeIndex =
-                        bincode::deserialize(&value).map_err(|e| {
-                            anyhow!(
-                                "failed to deserialize MnftTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
-                                hex::encode(&type_hash),
-                                e
-                            )
-                        })?;
-                    object_type_indexes.insert(type_hash, index);
-                }
-                Some(keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT) => {
-                    if key.len() != keys::MNFT_CLASS_OUTPOINT_KEY_SIZE {
-                        bail!(
-                            "invalid mNFT class outpoint key length in object snapshot helper: len={}",
-                            key.len()
-                        );
-                    }
-                    if value.is_empty() {
-                        bail!("empty mNFT class outpoint value in object snapshot helper");
-                    }
-                    let outpoint = keys::decode_outpoint(&key[1..35]);
-                    mnft_class_outpoints
-                        .entry(value.to_vec())
-                        .or_default()
-                        .push(outpoint);
-                }
-                _ => {}
+            if key.first().copied() != Some(keys::STATS_PREFIX_OBJECT_TYPE_INDEX) {
+                continue;
             }
+            if key.len() != keys::OBJECT_TYPE_INDEX_KEY_SIZE {
+                bail!(
+                    "invalid object type index key length in object snapshot helper: len={}",
+                    key.len()
+                );
+            }
+            let type_hash = key[1..33].to_vec();
+            let index: MnftTypeIndex = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize MnftTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
+                    hex::encode(&type_hash),
+                    e
+                )
+            })?;
+            object_type_indexes.insert(type_hash, index);
+        }
+        let class_kind = [keys::object_outpoint_kind::MNFT_CLASS];
+        for item in domain_store.prefix_iterator_cf(domain_store.cf_object_outpoints(), &class_kind)
+        {
+            let (key, value) = item?;
+            if !key.starts_with(&class_kind) {
+                break;
+            }
+            if key.len() != keys::MNFT_CLASS_OUTPOINT_KEY_SIZE {
+                bail!(
+                    "invalid mNFT class outpoint key length in object snapshot helper: len={}",
+                    key.len()
+                );
+            }
+            if value.is_empty() {
+                bail!("empty mNFT class outpoint value in object snapshot helper");
+            }
+            let outpoint = keys::decode_outpoint(&key[1..35]);
+            mnft_class_outpoints
+                .entry(value.to_vec())
+                .or_default()
+                .push(outpoint);
         }
         for outpoints in mnft_class_outpoints.values_mut() {
             outpoints.sort();
@@ -3851,7 +3831,7 @@ mod tests {
         );
         // Outpoint rows are keyed by the same verbatim id.
         assert!(owner
-            .stats_spore_rows
+            .object_outpoint_by_id
             .contains_key(&keys::encode_spore_outpoint_by_id_key(&did_id, &tx_hash, 0)));
     }
 
@@ -4672,10 +4652,20 @@ mod tests {
                 Ok(())
             })
             .expect("emit sealed rows");
+        owner
+            .emit_snapshot_rows(|row| {
+                rows.push(row);
+                Ok(())
+            })
+            .expect("emit snapshot rows");
         let marker = keys::encode_dotbit_unindexed_outpoint_key(&[0x35; 32], 1).to_vec();
+        assert!(
+            !rows.iter().any(|row| row.cf_name == CF_STATS_MNFT),
+            "stats_mnft holds statistics only"
+        );
         let marker_rows: Vec<_> = rows
             .iter()
-            .filter(|row| row.cf_name == CF_STATS_MNFT && row.key == marker)
+            .filter(|row| row.cf_name == CF_OBJECT_OUTPOINTS && row.key == marker)
             .collect();
         assert_eq!(marker_rows.len(), 1, "one marker row for the root cell");
         assert!(marker_rows[0].value.is_empty());

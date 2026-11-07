@@ -7,7 +7,6 @@ use crate::parser::{
 };
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::CF_STATS_SPORE;
 use ckbadger_store::types::{
     ClusterAggregate, CompositionTier, DotCellRingRoot, IdentityCollectionAggregate, IdentityEntry,
     IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
@@ -793,8 +792,7 @@ impl BatchWriter {
         batch.put_identity(&did.did_id, &identity);
         state.put_identity(&did.did_id, identity);
         self.put_object_outpoint_rows(&did.did_id, tx_hash, output_index, batch, state)?;
-        let action_key = keys::encode_spore_outpoint_by_id_key(&did.did_id, tx_hash, output_index);
-        batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
+        batch.put_spore_item_action(&did.did_id, tx_hash, output_index, item_action);
 
         // Update identity collection aggregate
         let cid = &DID_CKB_SENTINEL_COLLECTION;
@@ -1161,8 +1159,7 @@ impl BatchWriter {
         });
         state.put_identity(identity_id, identity);
         self.put_object_outpoint_rows(identity_id, tx_hash, output_index, batch, state)?;
-        let action_key = keys::encode_spore_outpoint_by_id_key(identity_id, tx_hash, output_index);
-        batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
+        batch.put_spore_item_action(identity_id, tx_hash, output_index, item_action);
 
         let collection_id = &BIT_CELL_SENTINEL_COLLECTION;
         let mut aggregate = state.get_identity_agg(self.store.as_ref(), collection_id)?;
@@ -1259,12 +1256,18 @@ impl BatchWriter {
             let cid = identity_standard.sentinel_collection_id();
             let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
-                bail!(
-                    "identity live_count underflow on consume: standard={}, identity_id=0x{}, live_count={}",
-                    identity_standard.as_str(),
-                    hex::encode(spore_id),
-                    agg.live_count
-                );
+                // The aggregate no longer counts an identity its rows say is
+                // live: rebuild-required (Lane B carry-over, like B-7 F2).
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "identity live_count underflow on consume: standard={}, identity_id=0x{}, current={}, delta=-1, block={}, tx=0x{}",
+                        identity_standard.as_str(),
+                        hex::encode(spore_id),
+                        agg.live_count,
+                        block_number,
+                        hex::encode(tx_hash)
+                    )),
+                ));
             }
             agg.live_count -= 1;
             self.apply_identity_owner_transition(
@@ -2609,6 +2612,50 @@ mod tests {
         assert!(text.contains("consume spore"), "{text}");
     }
 
+    /// Lane B carry-over 4(a): an identity aggregate that no longer counts a
+    /// live identity the rows say is live is rebuild-required, like the
+    /// cluster aggregate's underflows.
+    #[test]
+    fn an_identity_live_count_underflow_on_consume_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let did = make_parsed_did(&[0x13; 20], &[0x23; 32]);
+        let mut batch = StoreBatch::new(&store);
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        writer
+            .insert_did_ckb_cell(&did, &[0x33; 32], 0, 1, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+        let mut agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.live_count, 1);
+        agg.live_count = 0;
+        let mut seed = StoreBatch::new(&store);
+        seed.put_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION, &agg);
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let err = writer
+            .consume_spore(&did.did_id, 2, &[0x44; 32], &mut batch, &mut state)
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("identity live_count underflow on consume"),
+            "{text}"
+        );
+        assert!(text.contains(&hex::encode(&did.did_id)), "{text}");
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains("block=2"), "{text}");
+    }
+
     #[test]
     fn test_consume_spore_errors_on_live_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
@@ -2807,7 +2854,10 @@ mod tests {
         batch.commit().unwrap();
         let key = keys::encode_spore_outpoint_by_id_key(&did.did_id, &[0x44; 32], 0);
         assert_eq!(
-            store.get_cf(store.cf_stats_spore(), &key).unwrap().unwrap(),
+            store
+                .get_cf(store.cf_object_outpoint_by_id(), &key)
+                .unwrap()
+                .unwrap(),
             vec![5],
             "same-owner document edit is Update"
         );
@@ -3590,13 +3640,20 @@ mod tests {
                 ckbadger_store::block_overlay::journal_seq(&mut counters, block)
             })
             .expect_err("a failed previous-value read must not be journaled as an absent row");
+        // Both rows `put_object_outpoint_rows` writes sit in the corrupted
+        // SSTs (C-4b: one CF each); the overlay names whichever read failed
+        // first, with its CF and key.
         let message = format!("{err:#}");
-        assert!(message.contains("cf=stats_spore"), "{message}");
+        let named =
+            |cf: &str, key: &[u8]| message.contains(&format!("cf={cf} key=0x{}", hex::encode(key)));
         assert!(
-            message.contains(&format!(
-                "key=0x{}",
-                hex::encode(keys::encode_spore_outpoint_key(&tx_hash, 0))
-            )),
+            named(
+                ckbadger_store::CF_OBJECT_OUTPOINTS,
+                &keys::encode_spore_outpoint_key(&tx_hash, 0)
+            ) || named(
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
+                &keys::encode_spore_outpoint_by_id_key(&item_id, &tx_hash, 0)
+            ),
             "{message}"
         );
     }

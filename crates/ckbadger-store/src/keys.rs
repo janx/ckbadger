@@ -382,28 +382,49 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
         .expect("fixed-width complemented token balance must decode")
 }
 
-/// Encode a cell-by-lock/type index key:
-/// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+/// The first four bytes of every RISC-V binary CKB-VM runs (ELF magic).
+pub const ELF_MAGIC: [u8; 4] = *b"\x7fELF";
+
+/// Whether `(code_hash, hash_type)` is the consensus Type ID script: the
+/// all-zero code hash ending in `TYPE_ID`, referenced by type (hash_type 1).
+pub fn is_type_id_script(code_hash: &[u8], hash_type: i16) -> bool {
+    hash_type == 1
+        && code_hash.len() == HASH32_LEN
+        && code_hash[..25] == [0; 25]
+        && &code_hash[25..] == b"TYPE_ID"
+}
+
+/// Whether a cell is a code cell, and so has a `cell_by_data_hash` row: it
+/// carries data, and the data is a RISC-V binary (it starts with
+/// [`ELF_MAGIC`]) or the cell's type script is Type ID (an upgradable
+/// deployment).
 ///
-/// # Invariant
-///
-/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
-/// fixed, so a longer hash is truncated into the block-number bytes of another
-/// script's row and the scan answers for a different cell owner.
-/// Whether a cell has a `cell_by_data_hash` row: exactly when it carries data.
-///
-/// The one rule for every writer and reader of that index — the live cell
-/// writer, the bulk build, rollback and verify. An empty-data cell has no row
-/// (its data hash, the hash of empty data, would otherwise index every plain
-/// cell of the chain under one key).
-pub fn cell_has_data_hash_row(data_size: i32) -> bool {
-    data_size > 0
+/// The one rule for every writer and checker of that index — the live cell
+/// writer, the bulk build and verify F8. Its readers look up code by a
+/// script's data-hash reference (script resolution, the code-cells endpoint,
+/// the DOB decoder's decoder binary), and a script executes only a binary, so
+/// a cell that is not code is never what they look for. An empty-data cell
+/// has no row: its data hash would index every plain cell of the chain under
+/// one key. `type_script` is the cell's type `(code_hash, hash_type)`.
+pub fn is_code_cell(data: &[u8], type_script: Option<(&[u8], i16)>) -> bool {
+    !data.is_empty()
+        && (data.starts_with(&ELF_MAGIC)
+            || type_script
+                .is_some_and(|(code_hash, hash_type)| is_type_id_script(code_hash, hash_type)))
 }
 
 /// Width of a `cell_by_lock` / `cell_by_type` / `cell_by_data_hash` key:
 /// `hash(32) + block(8 BE) + outpoint(34)`.
 pub const CELL_INDEX_KEY_SIZE: usize = 74;
 
+/// Encode a cell-by-lock/type/data-hash index key:
+/// hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+///
+/// # Invariant
+///
+/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
+/// fixed, so a longer hash is truncated into the block-number bytes of another
+/// script's row and the scan answers for a different cell owner.
 pub fn encode_cell_index_key(
     script_hash: &[u8],
     block_num: i64,
@@ -784,7 +805,7 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 /// - **`HOURLY` (`%Y%m%d%H`)** uses the **UTC** clock: the live writer
 ///   formats the UTC-truncated canonical block hour from
 ///   `ckbadger_common::stats_bucket::stats_hour(chain_time_ms)`.
-/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_SET` (`%Y%m%d%H`)** use the
+/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_ROW` (`%Y%m%d%H`)** use the
 ///   **UTC+8** display of that same canonical hour, keeping the
 ///   hourly activity series aligned with its UTC+8 daily parent.
 ///
@@ -814,14 +835,14 @@ pub mod stats_prefix {
     pub const TOKEN_DAILY: u8 = 0x10;
     pub const CLUSTER_DAILY: u8 = 0x11;
     pub const SPORE_DAILY: u8 = 0x12;
-    pub const SPORE_OUTPOINT: u8 = 0x13;
+    // 0x13 / 0x1A (spore item outpoint and its by-id reverse index), 0x17 /
+    // 0x18 (mNFT class / token outpoint) and 0x19 / 0x1F (`.bit` account
+    // outpoint and its by-account reverse index) moved to the
+    // `object_outpoints` / `object_outpoint_by_id` CFs (C-4b; see
+    // `object_outpoint_kind`) and are not reused.
     pub const SPORE_TYPE_INDEX: u8 = 0x14;
     pub const OBJECT_DAILY: u8 = 0x15;
     pub const OBJECT_TYPE_INDEX: u8 = 0x16;
-    pub const MNFT_CLASS_OUTPOINT: u8 = 0x17;
-    pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
-    pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
-    pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
     pub const OBJECT_COLLECTION_OWNER: u8 = 0x1C;
     /// Activity daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
@@ -829,29 +850,29 @@ pub mod stats_prefix {
     /// Activity hourly stats. Suffix: `%Y%m%d%H` on the **UTC+8** clock
     /// (unlike chain-level `HOURLY`, which is UTC).
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
-    pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
     pub const CELL_DISTRIBUTION: u8 = 0x21;
     pub const ADDR_COHORT: u8 = 0x22;
-    /// Persistent address set for daily unique address dedup across batches.
-    /// Value: sorted, concatenated [u8; 32] lock hashes.
-    pub const ACTIVITY_DAILY_ADDR_SET: u8 = 0x23;
-    /// Persistent address set for hourly unique address dedup across batches.
-    pub const ACTIVITY_HOURLY_ADDR_SET: u8 = 0x24;
-    /// An output carrying the `.bit` AccountCell type script that the indexer
-    /// did not materialize as an account because its data names none (the DAS
-    /// root AccountCell with its all-zero account id, or data too short to
-    /// name one). Suffix: outpoint. Value: empty.
-    pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
-    /// One address of a daily activity bucket that live sync saw first in
-    /// that bucket: neither in the bucket's bulk-written `ACTIVITY_DAILY_ADDR_SET`
-    /// blob nor in an earlier row. Suffix: `%Y%m%d` (UTC+8) + 32B lock hash.
-    /// Value: empty. One row per address keeps a live block's journal to one
-    /// small entry per new address instead of a rewritten bucket-wide blob.
+    // 0x23 / 0x24 (the retired `ACTIVITY_*_ADDR_SET` blobs: one bucket's
+    // addresses in one value, written by bulk build for every bucket) are
+    // not reused. A bucket's addresses are its `ACTIVITY_*_ADDR_ROW` rows
+    // (C-3).
+    // 0x25 (the unindexed `.bit` AccountCell marker) moved to
+    // `object_outpoints` as `object_outpoint_kind::DOTBIT_UNINDEXED` and is
+    // not reused.
+    /// One unique `Lock` address of a daily activity bucket: the dedup
+    /// memory behind `DailyActivityStats::unique_address_count`. Suffix:
+    /// `%Y%m%d` (UTC+8) + 32B lock hash. Value: empty. Kept only while a
+    /// block can still reach the bucket (C-3): live sync writes one row per
+    /// address the bucket has not seen, in the block's scope, and deletes a
+    /// bucket's rows once the rollback coverage floor's chain time has left
+    /// the bucket; bulk build writes the rows only for the buckets still open
+    /// at the handoff tip. One row per address keeps a live block's journal
+    /// to one small entry per new address.
     pub const ACTIVITY_DAILY_ADDR_ROW: u8 = 0x26;
-    /// One address of an hourly activity bucket that live sync saw first in
-    /// that bucket (see `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the
-    /// **UTC+8** clock + 32B lock hash. Value: empty.
+    /// One unique `Lock` address of an hourly activity bucket (see
+    /// `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the **UTC+8** clock +
+    /// 32B lock hash. Value: empty.
     pub const ACTIVITY_HOURLY_ADDR_ROW: u8 = 0x27;
 }
 
@@ -874,34 +895,22 @@ pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
 pub const STATS_PREFIX_TOKEN_DAILY: u8 = stats_prefix::TOKEN_DAILY;
 pub const STATS_PREFIX_CLUSTER_DAILY: u8 = stats_prefix::CLUSTER_DAILY;
 pub const STATS_PREFIX_SPORE_DAILY: u8 = stats_prefix::SPORE_DAILY;
-pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
 pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
 pub const STATS_PREFIX_OBJECT_DAILY: u8 = stats_prefix::OBJECT_DAILY;
 pub const STATS_PREFIX_OBJECT_TYPE_INDEX: u8 = stats_prefix::OBJECT_TYPE_INDEX;
-pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOINT;
-pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
-pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
-pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
 pub const STATS_PREFIX_OBJECT_COLLECTION_OWNER: u8 = stats_prefix::OBJECT_COLLECTION_OWNER;
 pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
-pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
-    stats_prefix::DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
 pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
 pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
 pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
-pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
-pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
-pub const STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT: u8 = stats_prefix::DOTBIT_UNINDEXED_OUTPOINT;
 pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_ROW;
 pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_ROW;
 
-/// The two activity bucket families and their three row kinds: the bucket's
-/// `DailyActivityStats`, the bulk-written address-set blob, and the live
-/// per-address rows. A bucket's unique addresses are the blob's addresses
-/// plus the rows' addresses; live sync never rewrites the blob and writes a
-/// row only for an address in neither.
+/// The two activity bucket families and their two row kinds: the bucket's
+/// `DailyActivityStats` (kept forever) and its per-address rows (kept while a
+/// block can still reach the bucket; see `stats_prefix::ACTIVITY_DAILY_ADDR_ROW`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityBucketKind {
     /// UTC+8 calendar day, `%Y%m%d`.
@@ -916,14 +925,6 @@ impl ActivityBucketKind {
         match self {
             Self::Daily => stats_prefix::ACTIVITY_DAILY,
             Self::Hourly => stats_prefix::ACTIVITY_HOURLY,
-        }
-    }
-
-    /// Prefix of the bucket's bulk-written address-set blob.
-    pub const fn addr_set_prefix(self) -> u8 {
-        match self {
-            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
         }
     }
 
@@ -961,10 +962,14 @@ impl ActivityBucketKind {
         Ok(encode_stats_key(self.stats_prefix(), bucket.as_bytes()))
     }
 
-    /// Key of the bucket's bulk-written address-set blob.
-    pub fn addr_set_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
-        self.check_bucket(bucket)?;
-        Ok(encode_stats_key(self.addr_set_prefix(), bucket.as_bytes()))
+    /// The bucket of this kind a chain time falls in: its UTC+8 day
+    /// (`%Y%m%d`) or UTC+8 hour (`%Y%m%d%H`), the labels the live writer and
+    /// bulk build key the bucket by. Labels of one kind sort chronologically.
+    pub fn bucket_label(self, chain_time_ms: i64) -> anyhow::Result<String> {
+        match self {
+            Self::Daily => ckbadger_common::stats_bucket::stats_date_key(chain_time_ms),
+            Self::Hourly => ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time_ms),
+        }
     }
 
     /// Key of one live per-address row: prefix ‖ bucket ‖ lock hash.
@@ -1156,7 +1161,31 @@ pub fn decode_spore_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     (spore_id, date)
 }
 
-/// Spore outpoint lookup key: prefix(1B) + outpoint(34B)
+/// The kind of object a row of `object_outpoints` / `object_outpoint_by_id`
+/// indexes: the first byte of every key of both CFs (C-4b). Every reader asks
+/// for one kind, so each kind's rows are one contiguous key range (the mNFT
+/// token scans and the per-transaction class seek read only their kind).
+pub mod object_outpoint_kind {
+    /// Spore, did:ckb and `.bit Cell` items, which share one id space: the
+    /// item id at its natural width (32 bytes; did:ckb also 20). By-id rows
+    /// carry the item's `AssetAction` byte for an identity, nothing for a
+    /// spore.
+    pub const SPORE_ITEM: u8 = 0x01;
+    /// mNFT classes (outpoint rows only).
+    pub const MNFT_CLASS: u8 = 0x02;
+    /// mNFT tokens (outpoint rows only).
+    pub const MNFT_TOKEN: u8 = 0x03;
+    /// `.bit` accounts (20-byte account id); by-id rows carry the
+    /// `AssetAction` byte.
+    pub const DOTBIT_ACCOUNT: u8 = 0x04;
+    /// An output carrying the `.bit` AccountCell type script that names no
+    /// account (the DAS root AccountCell with its all-zero account id, or data
+    /// too short to name one); value empty, outpoint rows only. A consumed
+    /// AccountCell has exactly one of a `DOTBIT_ACCOUNT` row and this one.
+    pub const DOTBIT_UNINDEXED: u8 = 0x05;
+}
+
+/// Spore item outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const SPORE_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_spore_outpoint_key(
@@ -1164,7 +1193,7 @@ pub fn encode_spore_outpoint_key(
     output_index: i16,
 ) -> [u8; SPORE_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; SPORE_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_SPORE_OUTPOINT;
+    key[0] = object_outpoint_kind::SPORE_ITEM;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
@@ -1173,8 +1202,8 @@ pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
-/// Spore/identity outpoint reverse index key:
-/// `prefix(1B) + id(1..=32B, verbatim) + outpoint(34B)`
+/// Spore/identity outpoint reverse index key (`object_outpoint_by_id`):
+/// `kind(1B) + id(1..=32B, verbatim) + outpoint(34B)`
 ///
 /// The id component is VARIABLE width. Spore and `.bit Cell` ids are always 32
 /// bytes, but did:ckb item ids are the type-script args verbatim and occur on
@@ -1220,7 +1249,7 @@ pub fn encode_spore_outpoint_by_id_key(
 ) -> Vec<u8> {
     assert_by_id_len("encode_spore_outpoint_by_id_key", spore_id.len());
     let mut key = Vec::with_capacity(spore_outpoint_by_id_key_len(spore_id.len()));
-    key.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    key.push(object_outpoint_kind::SPORE_ITEM);
     key.extend_from_slice(spore_id);
     key.extend_from_slice(&encode_outpoint(tx_hash, output_index));
     key
@@ -1229,7 +1258,7 @@ pub fn encode_spore_outpoint_by_id_key(
 pub fn encode_spore_outpoint_by_id_prefix(spore_id: &[u8]) -> Vec<u8> {
     assert_by_id_len("encode_spore_outpoint_by_id_prefix", spore_id.len());
     let mut prefix = Vec::with_capacity(1 + spore_id.len());
-    prefix.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    prefix.push(object_outpoint_kind::SPORE_ITEM);
     prefix.extend_from_slice(spore_id);
     prefix
 }
@@ -1244,7 +1273,7 @@ pub fn decode_spore_outpoint_by_id_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[key.len() - OUTPOINT_KEY_SIZE..])
 }
 
-/// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
+/// mNFT class outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const MNFT_CLASS_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_mnft_class_outpoint_key(
@@ -1252,13 +1281,13 @@ pub fn encode_mnft_class_outpoint_key(
     output_index: i16,
 ) -> [u8; MNFT_CLASS_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; MNFT_CLASS_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    key[0] = object_outpoint_kind::MNFT_CLASS;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
 /// The prefix of every mNFT class outpoint key one transaction created:
-/// prefix(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
+/// kind(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
 /// lists exactly that transaction's class outputs.
 pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
     assert_key_component_len(
@@ -1268,12 +1297,12 @@ pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
         HASH32_LEN,
     );
     let mut prefix = [0u8; 33];
-    prefix[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    prefix[0] = object_outpoint_kind::MNFT_CLASS;
     prefix[1..].copy_from_slice(tx_hash);
     prefix
 }
 
-/// mNFT token outpoint lookup key: prefix(1B) + outpoint(34B)
+/// mNFT token outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const MNFT_TOKEN_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_mnft_token_outpoint_key(
@@ -1281,12 +1310,12 @@ pub fn encode_mnft_token_outpoint_key(
     output_index: i16,
 ) -> [u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_MNFT_TOKEN_OUTPOINT;
+    key[0] = object_outpoint_kind::MNFT_TOKEN;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
-/// .bit account outpoint lookup key: prefix(1B) + outpoint(34B)
+/// .bit account outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_dotbit_account_outpoint_key(
@@ -1294,7 +1323,7 @@ pub fn encode_dotbit_account_outpoint_key(
     output_index: i16,
 ) -> [u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT;
+    key[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
@@ -1303,9 +1332,9 @@ pub fn decode_dotbit_account_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
-/// Unindexed `.bit` AccountCell outpoint marker key: prefix(1B) + outpoint(34B).
-/// The positive record that lets a later consumption of the cell tell "never an
-/// account" apart from a lost `DOTBIT_ACCOUNT_OUTPOINT` row.
+/// Unindexed `.bit` AccountCell outpoint marker key (`object_outpoints`):
+/// kind(1B) + outpoint(34B). The positive record that lets a later consumption
+/// of the cell tell "never an account" apart from a lost account outpoint row.
 pub const DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_dotbit_unindexed_outpoint_key(
@@ -1313,15 +1342,16 @@ pub fn encode_dotbit_unindexed_outpoint_key(
     output_index: i16,
 ) -> [u8; DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT;
+    key[0] = object_outpoint_kind::DOTBIT_UNINDEXED;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
-/// .bit outpoint reverse index key: prefix(1B) + account_id(20B) + outpoint(34B)
+/// .bit outpoint reverse index key (`object_outpoint_by_id`):
+/// kind(1B) + account_id(20B) + outpoint(34B)
 pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE: usize = 55;
 
-/// Prefix for scanning all outpoints of a given .bit account: prefix(1B) + account_id(20B)
+/// Prefix for scanning all outpoints of a given .bit account: kind(1B) + account_id(20B)
 pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE: usize = 21;
 
 pub fn encode_dotbit_outpoint_by_account_id_key(
@@ -1336,7 +1366,7 @@ pub fn encode_dotbit_outpoint_by_account_id_key(
         DOTBIT_ACCOUNT_ID_LEN,
     );
     let mut key = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    key[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     key[1..21].copy_from_slice(&account_id[..20]);
     key[21..55].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
@@ -1352,7 +1382,7 @@ pub fn encode_dotbit_outpoint_by_account_id_prefix(
         DOTBIT_ACCOUNT_ID_LEN,
     );
     let mut prefix = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE];
-    prefix[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    prefix[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     prefix[1..21].copy_from_slice(&account_id[..20]);
     prefix
 }
@@ -2150,8 +2180,11 @@ pub fn encode_tx_slot_key(block_number: i64, tx_idx: i32) -> Vec<u8> {
 }
 
 /// Sync meta keys
+/// The fixed keys of `sync_meta` (C-4b: nothing else is stored there; the
+/// reorg-event history is `reorg_events`). The `derive:` and
+/// `hourly_retention_state:` keys are closed families: one key per derived
+/// aggregate / per hourly retention family.
 pub mod sync_meta_keys {
-    pub const TIP_BLOCK: &[u8] = b"tip_block";
     /// `SyncChainStatus`: tip and totals, journaled per block.
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     /// `SyncRuntimeStatus`: run telemetry, bulk completion and deep-fork
@@ -2160,7 +2193,6 @@ pub mod sync_meta_keys {
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
-    pub const DEEP_FORK: &[u8] = b"deep_fork";
     /// The HODL wave tracker's scalars (bincode `HodlTrackerCursor`): holder
     /// count, open snapshot day, last processed block. Its per-day capacity
     /// is `CF_HODL_CAPACITY_BY_DATE`.
@@ -2199,6 +2231,14 @@ pub mod sync_meta_keys {
     /// One derived aggregate's derivation state (bincode `DeriveMeta`). The
     /// aggregate name is appended: `derive:dao_live_agg`.
     pub const DERIVE_META_PREFIX: &[u8] = b"derive:";
+    /// The UTC+8 activity hour (`%Y%m%d%H`, 10 ASCII digits) of the rollback
+    /// coverage floor block the activity address rows were last pruned to:
+    /// no `ACTIVITY_HOURLY_ADDR_ROW` row of an earlier hour, and no
+    /// `ACTIVITY_DAILY_ADDR_ROW` row of an earlier day (the hour's first 8
+    /// digits), remains (C-3). Written by the live batch that prunes, in its
+    /// block's scope (journaled), so a rollback of that block restores the
+    /// rows and this bound together.
+    pub const ACTIVITY_ADDR_ROW_FLOOR: &[u8] = b"activity_addr_row_floor";
 }
 
 /// `sync_meta` key of one derived aggregate's `DeriveMeta`.
@@ -2405,6 +2445,57 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C-2: `cell_by_data_hash` indexes code cells only — a RISC-V binary, or
+    /// any non-empty cell under a Type ID type script.
+    #[test]
+    fn is_code_cell_is_elf_data_or_a_type_id_cell_with_data() {
+        let mut type_id = [0u8; 32];
+        type_id[25..].copy_from_slice(b"TYPE_ID");
+        let elf = b"\x7fELF\x02\x01\x01rest";
+        let state = b"{\"json\":1}";
+
+        assert!(is_code_cell(elf, None), "an ELF binary is code");
+        assert!(
+            is_code_cell(elf, Some((&[0x11; 32], 1))),
+            "an ELF binary is code under any type script"
+        );
+        assert!(
+            is_code_cell(state, Some((&type_id, 1))),
+            "a Type ID cell with data is a deployment"
+        );
+        assert!(!is_code_cell(state, None), "plain data is not code");
+        assert!(
+            !is_code_cell(&[0x7f, b'E', b'L'], None),
+            "a truncated magic is not code"
+        );
+        assert!(
+            !is_code_cell(&100u128.to_le_bytes(), Some((&[0x22; 32], 1))),
+            "a UDT amount is not code"
+        );
+        assert!(
+            !is_code_cell(state, Some((&type_id, 0))),
+            "the Type ID code hash referenced by data is not the Type ID script"
+        );
+        assert!(!is_code_cell(&[], None), "an empty cell has no row");
+        assert!(
+            !is_code_cell(&[], Some((&type_id, 1))),
+            "an empty Type ID cell has no row (nothing to index)"
+        );
+    }
+
+    #[test]
+    fn is_type_id_script_requires_the_exact_code_hash_and_hash_type_type() {
+        let mut type_id = [0u8; 32];
+        type_id[25..].copy_from_slice(b"TYPE_ID");
+        assert!(is_type_id_script(&type_id, 1));
+        assert!(!is_type_id_script(&type_id, 0));
+        assert!(!is_type_id_script(&type_id, 2));
+        assert!(!is_type_id_script(&type_id[1..], 1));
+        let mut other = type_id;
+        other[0] = 1;
+        assert!(!is_type_id_script(&other, 1));
+    }
 
     #[test]
     fn test_reorg_event_key_roundtrip_and_shape() {
@@ -2834,7 +2925,7 @@ mod tests {
         let tx_hash = [0xABu8; 32];
         let key = encode_spore_outpoint_key(&tx_hash, 7);
         assert_eq!(key.len(), SPORE_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 7);
@@ -2847,7 +2938,7 @@ mod tests {
         let key = encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, 3);
         assert_eq!(key.len(), spore_outpoint_by_id_key_len(spore_id.len()));
         assert_eq!(key.len(), 67);
-        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+        assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
         assert_eq!(&key[1..33], &spore_id);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_by_id_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
@@ -2871,7 +2962,7 @@ mod tests {
             let key = encode_spore_outpoint_by_id_key(&id, &tx_hash, 5);
             assert_eq!(key.len(), 1 + id_len + OUTPOINT_KEY_SIZE);
             assert_eq!(key.len(), spore_outpoint_by_id_key_len(id_len));
-            assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+            assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
             assert_eq!(&key[1..1 + id_len], id.as_slice());
 
             let prefix = encode_spore_outpoint_by_id_prefix(&id);
@@ -2932,7 +3023,7 @@ mod tests {
         let tx_hash = [0xACu8; 32];
         let key = encode_mnft_class_outpoint_key(&tx_hash, 8);
         assert_eq!(key.len(), MNFT_CLASS_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_MNFT_CLASS_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::MNFT_CLASS);
         let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 8);
@@ -2943,7 +3034,7 @@ mod tests {
         let tx_hash = [0xADu8; 32];
         let key = encode_mnft_token_outpoint_key(&tx_hash, 9);
         assert_eq!(key.len(), MNFT_TOKEN_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_MNFT_TOKEN_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::MNFT_TOKEN);
         let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 9);
@@ -2954,7 +3045,7 @@ mod tests {
         let tx_hash = [0xAEu8; 32];
         let key = encode_dotbit_account_outpoint_key(&tx_hash, 10);
         assert_eq!(key.len(), DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_ACCOUNT);
         let (decoded_tx_hash, decoded_output_index) = decode_dotbit_account_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 10);
@@ -2965,11 +3056,12 @@ mod tests {
         let tx_hash = [0xA7u8; 32];
         let key = encode_dotbit_unindexed_outpoint_key(&tx_hash, 3);
         assert_eq!(key.len(), DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_UNINDEXED);
         assert_eq!(&key[1..35], encode_outpoint(&tx_hash, 3).as_slice());
         assert_ne!(
-            key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT,
-            "the marker never shares the account outpoint family"
+            key[0],
+            encode_dotbit_account_outpoint_key(&tx_hash, 3)[0],
+            "the marker never shares the indexed account kind"
         );
     }
 
@@ -2979,7 +3071,7 @@ mod tests {
         let tx_hash = [0xBBu8; 32];
         let key = encode_dotbit_outpoint_by_account_id_key(&account_id, &tx_hash, 5);
         assert_eq!(key.len(), DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_ACCOUNT);
         assert_eq!(&key[1..21], &account_id);
         let (decoded_tx_hash, decoded_output_index) =
             decode_dotbit_outpoint_by_account_id_key(&key);

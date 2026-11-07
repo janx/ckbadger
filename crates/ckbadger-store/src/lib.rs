@@ -82,14 +82,13 @@ pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBuc
 pub use network_types::*;
 pub use reorg_ops::{JournalEntry, RollbackResult};
 pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
-pub use stats_ops::{
-    activity_addr_set_count, decode_activity_addr_set, encode_activity_addr_set, DaoDayFacts,
-};
+pub use stats_ops::DaoDayFacts;
 pub use store::{
     cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
     known_domain_secondary_store_paths, secondary_store_path, BufferTier, CfCompaction,
     CfCompression, CfSpec, CfStore, CfWritePolicy, CkbadgerStore, FlushStats, MemoryProfile,
-    RollbackClass, SecondaryStoreOwner, StoreRuntimeConfig, ALL_CFS, CF_SPECS,
+    OutsideJournalScope, OutsideWriter, RollbackClass, SecondaryStoreOwner, StoreRuntimeConfig,
+    ALL_CFS, CF_SPECS,
 };
 pub use store::{
     APPEND_CFS, CF_ADDR_BALANCE, CF_ADDR_FIBER_CHANNELS, CF_ADDR_PREFIX_STATS,
@@ -103,8 +102,9 @@ pub use store::{
     CF_IDENTITY_COLLECTION_ACTIVITIES, CF_IDENTITY_DATA, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
     CF_MNFT_BY_COLLECTION, CF_MNFT_COLLECTION_AGG, CF_MNFT_DATA, CF_NET_CRAWL, CF_NET_NODES,
     CF_NET_STATS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-    CF_PENDING_PROPOSALS, CF_REORG_UNDO_LOG_BY_BLOCK, CF_SCRIPT_FAMILIES, CF_SCRIPT_FAMILY_BY_NAME,
-    CF_SCRIPT_INFO, CF_SCRIPT_REFERENCE_INFO, CF_SCRIPT_REFERENCE_TO_VERSION, CF_SCRIPT_VERSIONS,
+    CF_OBJECT_OUTPOINTS, CF_OBJECT_OUTPOINT_BY_ID, CF_PENDING_PROPOSALS, CF_REORG_EVENTS,
+    CF_REORG_UNDO_LOG_BY_BLOCK, CF_SCRIPT_FAMILIES, CF_SCRIPT_FAMILY_BY_NAME, CF_SCRIPT_INFO,
+    CF_SCRIPT_REFERENCE_INFO, CF_SCRIPT_REFERENCE_TO_VERSION, CF_SCRIPT_VERSIONS,
     CF_SCRIPT_VERSIONS_BY_FAMILY, CF_SCRIPT_VERSIONS_BY_LABEL, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA,
     CF_STATS_CHAIN, CF_STATS_DAO, CF_STATS_HODL, CF_STATS_MNFT, CF_STATS_SCRIPT, CF_STATS_SPORE,
     CF_STATS_TOKEN, CF_SYNC_META, CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,

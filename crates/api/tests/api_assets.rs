@@ -1505,7 +1505,7 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &mint_tx, 0),
             &[0],
         )
@@ -1513,7 +1513,7 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
     batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
             &[1],
         )
@@ -1625,7 +1625,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &mint_tx, 0),
             &[0],
         )
@@ -1633,7 +1633,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
             &[1],
         )
@@ -1693,7 +1693,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     seed_did_live_cell(&mut batch, &did_id, &transfer_tx, 200);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
             &[AssetAction::Transfer.compact()],
         )
@@ -2103,7 +2103,7 @@ async fn test_assets_bit_cell_item_activities() {
     batch.put_spore_outpoint(&mint_tx, 0, &identity_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&identity_id, &mint_tx, 0),
             &[0],
         )
@@ -2111,7 +2111,7 @@ async fn test_assets_bit_cell_item_activities() {
     batch.put_spore_outpoint(&transfer_tx, 0, &identity_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&identity_id, &transfer_tx, 0),
             &[1],
         )
@@ -5410,7 +5410,7 @@ async fn redesign_identity_item_uses_persisted_update_action() {
     batch.put_spore_outpoint(&tx, 0, &id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &tx, 0),
             &[5],
         )

@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (75 total: 71 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (78 total: 74 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 71 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 74 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -23,8 +23,10 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 `cells` values are the `LiveCellInfo` v2 layout (2026-11-05), in this field order:
 `capacity` i64, `lock_code_hash` `[u8; 32]`, `lock_hash_type` i16, `lock_args` bytes,
 `type_code_hash` `Option<[u8; 32]>`, `type_hash_type` `Option<i16>`, `type_args` `Option<bytes>`,
-`data_size` i32, `udt_amount` `Option<u128>`, `data_hash` `Option<[u8; 32]>` (a plain secp256k1
-cell encodes in 101 bytes). They are written only by `LiveCellInfo::encode` and read only by
+`data_size` i32, `udt_amount` `Option<u128>`, `data_hash` `Option<[u8; 32]>` (the blake2b of the
+data, the blake2b of zero bytes for an empty cell; a response that names a cell's data hash reads
+`LiveCellInfo::script_data_hash()`, CKB's convention, which is 32 zero bytes for empty data; a
+plain secp256k1 cell encodes in 101 bytes). They are written only by `LiveCellInfo::encode` and read only by
 `LiveCellInfo::decode` (bincode `DefaultOptions`: varint integers, little endian, trailing bytes
 rejected; the type implements no serde traits, so no second codec exists). Nothing derivable from
 these fields is stored: `lock_script_hash()` / `type_script_hash()` derive the script hashes with
@@ -54,7 +56,7 @@ requires re-sync from genesis; there is no migration.
 | `cell_by_type`                   | type_script_hash + outpoint                                                   | empty                                                                          | Cell index by type script                                                                                                                                                                                                                                  |
 | `cell_by_lock_code`              | lock_code_hash (32B) + hash_type (1B) + block (8B BE) + outpoint              | empty                                                                          | Cell index by lock script reference form `(code_hash, hash_type)`                                                                                                                                                                                          |
 | `cell_by_type_code`              | type_code_hash (32B) + hash_type (1B) + block (8B BE) + outpoint              | empty                                                                          | Cell index by type script reference form `(code_hash, hash_type)`                                                                                                                                                                                          |
-| `cell_by_data_hash`              | blake2b(cell_data) + outpoint                                                 | empty                                                                          | Cell index by data hash (code cell resolution)                                                                                                                                                                                                             |
+| `cell_by_data_hash`              | blake2b(cell_data) (32B) + block (8B BE) + outpoint (74B)                     | empty                                                                          | Code cells only (`keys::is_code_cell`: data starting with the ELF magic `7f 45 4c 46`, or a Type ID type script, and non-empty data), kept when the cell is consumed: the code a script's data-hash reference names (script resolution, the code-cells endpoint, the DOB decoder) |
 | `tx_index`                       | block_number + tx_index                                                       | TxIndexEntry { tx_hash: [u8; 32], fee, size, counts, cycles, tags, timestamp } | Domain transaction order and canonical hash pointer; written by the indexer in live and bulk paths                                                                                                                                                         |
 | `tx_hash_map`                    | tx_hash (32B)                                                                 | block_number + tx_index                                                        | Reverse lookup: tx_hash -> position                                                                                                                                                                                                                        |
 | `addr_balance`                   | lock_script_hash (32B)                                                        | AddressBalance                                                                 | Address balance, cell counts, `txs_count` and `cellbase_txs_count` (the cellbase txs among them; activity total = `address_tx_count - cellbase_txs_count`); first / last transaction as positions `(block, tx_idx)`                                     |
@@ -100,8 +102,8 @@ requires re-sync from genesis; there is no migration.
 | `cell_dist_cohort_by_month`      | cohort month `YYYY-MM` (7B ASCII)                                             | (used, balance): 2 × i128 LE (32B), >= 0                                       | Cell-distribution tracker: address cohort accumulator by first-seen month; bucket totals in `sync_meta` `cell_dist_cursor`. Written per block that moves it (B-4)                                                                                          |
 | `stats_script`                   | prefixed keys                                                                 | ScriptDailyDelta                                                               | Script daily deltas (per `code_hash` + `hash_type` + lock/type + day; sealed in bulk build)                                                                                                                                                                |
 | `stats_token`                    | prefixed keys                                                                 | token rollups + deltas                                                         | Token transfer totals, hourly buckets, and daily deltas (sealed in bulk build)                                                                                                                                                                             |
-| `stats_spore`                    | prefixed keys                                                                 | spore rollups/indexes                                                          | Spore/cluster daily + owner/index stats                                                                                                                                                                                                                    |
-| `stats_mnft`                     | prefixed keys                                                                 | mNFT rollups/indexes                                                           | mNFT daily + hourly + owner/index stats                                                                                                                                                                                                                    |
+| `stats_spore`                    | prefixed keys                                                                 | spore rollups/indexes                                                          | Spore/cluster daily + hourly + owner stats and the spore type index (the outpoint indexes moved to `object_outpoints` / `object_outpoint_by_id`, C-4b) |
+| `stats_mnft`                     | prefixed keys                                                                 | mNFT rollups/indexes                                                           | mNFT daily + hourly + owner stats and the object type index (statistics only: the outpoint indexes and the unindexed `.bit` marker moved to `object_outpoints` / `object_outpoint_by_id`, C-4b) |
 | `script_versions`                | version_hash                                                                  | ScriptVersionInfo                                                              | Canonical script code version rows keyed by `H(script_code)`                                                                                                                                                                                               |
 | `script_versions_by_label`       | label_len + label_key + version_hash                                          | empty                                                                          | Label-to-version index for named script family lookups                                                                                                                                                                                                     |
 | `script_families`                | family_id (string)                                                            | ScriptFamilyInfo                                                               | Script family metadata (groups related script versions)                                                                                                                                                                                                    |
@@ -109,13 +111,16 @@ requires re-sync from genesis; there is no migration.
 | `script_reference_info`          | reference_hash + hash_type (33B)                                              | ScriptReferenceInfo                                                            | Script reference aggregate stats (cell/capacity counts per lock/type)                                                                                                                                                                                      |
 | `script_reference_to_version`    | reference_hash + hash_type (33B)                                              | version_hash                                                                   | Script reference to version mapping                                                                                                                                                                                                                        |
 | `script_family_by_name`          | family_name (string)                                                          | family_id                                                                      | Reverse lookup: family name -> family ID                                                                                                                                                                                                                   |
-| `sync_meta`                      | fixed keys                                                                    | Typed records / JSON monitoring bytes                                          | Tip/status/runtime/progress/memory, reorg/deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                                                                                          |
+| `sync_meta`                      | fixed keys                                                                    | Typed records / JSON monitoring bytes                                          | Fixed keys only: tip/status/runtime/progress/memory, the pending fork reconciliation, deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                                                                                          |
 | `dob_decoded`                    | spore_id (32B)                                                                | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure))           | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted. Rollback class `Journal`: the DOB decode worker only queues outcomes; the live writer applies each one, together with the spore's media profile (`spore_data`) and its cluster's tier counts (`cluster_agg`), in a live batch's last block's scope, so a rollback of that block undoes all three. The worker makes one pass per indexer process: a decode a rollback undid is decoded again at the next indexer start, and outcomes still queued at a shutdown (the queue is in memory) are dropped, their spores decoded again at the next start. An outcome names the decoded instance by its creating transaction; against an object the id no longer names (a reorg recreated it) it writes nothing. All pending outcomes are applied by the next live batch in one block's scope, with no cap: measured on mainnet 2026-11-05, the post-bulk pass over 32,789 spores journaled about 66k entries / 10.8 MB in its two live batches (8.59 MB in one block); at that rate the 30 MB per 1,000 blocks journal budget is reached at roughly 75,000 pending outcomes.                                                                     |
 | `lock_scripts`                   | lock_hash (32B)                                                               | LockScriptEntry                                                                | Lock script components by hash (survives cell consumption for address resolution)                                                                                                                                                                          |
 | `dao_live_agg`                   | kind(1B) + kind-specific key (see [Derived Aggregates](#derived-aggregates))  | signed components, 16B LE each                                                 | **Derived** (bulk-disabled): live NervosDAO cells by depositor lock, deposit epoch and (deposit, request) epoch, plus one global row                                                                                                                       |
 | `object_collection_activity_count` | collection_id (32B, padded)                                                 | `[count]` (16B LE)                                                             | **Derived** (bulk-disabled): `object_collection_activities` rows per collection — the Spore cluster `activitiesCount`                                                                                                                                      |
 | `bit_cell_by_account`            | account_id (20B) + `.bit Cell` identity id (32B)                              | `[1]` (16B LE)                                                                 | **Derived** (bulk-disabled): live `.bit Cell` items naming each `.bit` account                                                                                                                                                                            |
 | `tx_group_cycles`               | block_number + tx_index (12B, the canonical slot)                             | TxGroupCyclesRecord (Complete(TransactionCycles) \| Failed)                   | Lazy script-group cycles of one transaction, written by the on-demand cycles worker after the block committed (bulk-disabled); `RangeByBlock`: removed with its block on rollback |
+| `object_outpoints`               | kind (1B) + outpoint (34B)                                                    | the object id, verbatim                                                        | Object outpoint index (C-4b, from `stats_spore` 0x13 / `stats_mnft` 0x17, 0x18, 0x19, 0x25): which object an output carries. Kind (`keys::object_outpoint_kind`): `0x01` Spore / did:ckb / `.bit Cell` item, `0x02` mNFT class, `0x03` mNFT token, `0x04` `.bit` account, `0x05` unindexed `.bit` AccountCell marker (empty value). Written once per object output (live: in its block's scope; bulk: final snapshot); rollback class `Journal` |
+| `object_outpoint_by_id`           | kind (1B) + id (1–32B, verbatim) + outpoint (34B)                             | empty (spore), or one `AssetAction` byte (identity, `.bit` account)            | Every outpoint of one object (C-4b, from `stats_spore` 0x1A / `stats_mnft` 0x1F), and an identity's output action. Ids are variable-width: a reader bounds the scan by kind + id and keeps only keys of its exact length. Rollback class `Journal` |
+| `reorg_events`                   | `reorg:<13-digit ms>:<32 hex uuid>` (52B ASCII, chronological)               | ReorgEvent                                                                     | The reorg-event history (C-4b, from `sync_meta`): each automatic fork switch and deep-fork detection, with its reconciliation links. Written by reorg handling only, outside any journal; rollback class `Never` (a rollback is recorded here, never undone); bulk-disabled |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                                           | NodeRecord                                                                     | TTL-retained same-network crawler-Identify records, latest dialability, and exact Discovery evidence                                                                                                                                                       |
 | `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)                        | LatestStatus / HistoryPoint                                                    | Checked completed dial/session/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                                                                                                    |
 | `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                                         | ActiveCrawl / CrawlCandidate                                                   | Durable logical-round state: dial aliases, target-centric advertisements, direct sessions, active probes, and stable completed evidence                                                                                                                    |
@@ -325,18 +330,18 @@ On the test fixture chains an entry averages ~110 bytes, 4.8–8.0 KB per block.
 ### Protocol history and Type ID lineage
 
 `.bit` AccountCell outputs whose data names no account — the DAS root AccountCell (all-zero
-account id; it is re-created on mainnet) or data too short to name one — get no
-`DOTBIT_ACCOUNT_OUTPOINT` row. An account whose name the DAS witness does not carry is still an
-account (indexed under its id), because the activity builder counts identities from the data
-alone. They get an empty
-`STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT` row (domain `stats_mnft`, key prefix `0x25` + outpoint)
-instead, written by live sync in its block's scope (journaled) and by bulk build from the cell's
+account id; it is re-created on mainnet) or data too short to name one — get no `.bit` account
+outpoint row (`object_outpoints` kind `0x04`). An account whose name the DAS witness does not
+carry is still an account (indexed under its id), because the activity builder counts identities
+from the data alone. They get an empty unindexed marker row (`object_outpoints`, kind `0x05` +
+outpoint; it was `stats_mnft` `0x25` before C-4b) instead, so a consumed AccountCell has exactly
+one of the two rows (the writers emit one or the other per output), written by live sync in its block's scope (journaled) and by bulk build from the cell's
 missing protocol facts. Consuming an AccountCell that has neither row is a lost index row and
 stops the live batch; consuming one with the marker moves no `.bit` identity on either sync path,
 exactly as its creation moved none.
 
-Identity output history rows keep the same keys in domain `stats_spore` (did:ckb / .bit Cell)
-and `stats_mnft` (.bit AccountCell). Their value is now one `AssetAction` byte: mint 0, transfer 1,
+Identity output history rows are the identity's `object_outpoint_by_id` rows (kind `0x01` for
+did:ckb / .bit Cell, `0x04` for .bit AccountCell). Their value is one `AssetAction` byte: mint 0, transfer 1,
 burn 2, recycle 3, renew 4, update 5. Bulk and live use the same prior-owner/expiry classifier;
 transaction-wide .bit actions cannot turn a recreated neighbour into a mint or transfer.
 
@@ -376,7 +381,9 @@ namespace includes:
 - every `sync_meta` key written outside the block journal is listed, with its owner and reason,
   in `OUTSIDE_JOURNAL` (`crates/ckbadger-store/src/store.rs`; `docs/prompts/REORG_HANDLING.md` →
   Outside the journal)
-- rollback state: the reorg event records (`reorg:*`); the deep-fork state is in `sync_runtime`
+- rollback state: the pending reconciliation marker (`reorg_reconcile_pending`, below); the
+  deep-fork state is in `sync_runtime`; the reorg event records are not here but in
+  [`reorg_events`](#column-families) (C-4b: `sync_meta` holds fixed keys only)
 - bulk-build state: the session-in-progress marker
 - materialization tracker cursors: `hodl_cursor` (bincode `HodlTrackerCursor`: holder count,
   open snapshot day, last processed block) and `cell_dist_cursor` (bincode
@@ -398,6 +405,9 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   history is kept.
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
+- activity address-row retention: `activity_addr_row_floor`, the UTC+8 hour the
+  `ACTIVITY_*_ADDR_ROW` rows were last pruned to (see
+  [`stats_chain` activity address rows](#stats_chain-activity-address-rows)), journaled
 - derived aggregate state: `derive:<aggregate>` (bincode `DeriveMeta`, see
   [Derived Aggregates](#derived-aggregates))
 - lazy VM results are not in `sync_meta`: see [`tx_group_cycles`](#tx_group_cycles-lazy-vm-results).
@@ -641,24 +651,39 @@ other field an aggregate feeds (a cluster's `activitiesCount`, a feed's `total`,
 account's `bitCells`) is `null` (unknown) in an otherwise normal response.
 Progress is mirrored to `background_tasks` as `derive:<aggregate>` (TUI, `/pipeline`).
 
-### `stats_chain` activity address sets
+### `stats_chain` activity address rows
 
-`ACTIVITY_DAILY` (`0x1D`) / `ACTIVITY_HOURLY` (`0x1E`) rows carry `unique_address_count`; the
-addresses behind it are kept per bucket in two forms (`Lock` participants only):
+`ACTIVITY_DAILY` (`0x1D`) / `ACTIVITY_HOURLY` (`0x1E`) rows carry `unique_address_count` and are
+kept forever. The addresses behind the count (`Lock` participants only) are the bucket's dedup
+memory, kept only while a block can still reach the bucket (C-3):
 
-| Prefix | Constant                   | Key suffix                           | Value                                    | Written by                                                                                  |
-| ------ | -------------------------- | ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `0x23` | `ACTIVITY_DAILY_ADDR_SET`  | `%Y%m%d` (UTC+8)                     | sorted, concatenated 32-byte lock hashes | bulk build, once per bucket; live sync never rewrites it                                    |
-| `0x24` | `ACTIVITY_HOURLY_ADDR_SET` | `%Y%m%d%H` (UTC+8)                   | sorted, concatenated 32-byte lock hashes | bulk build, once per bucket; live sync never rewrites it                                    |
-| `0x26` | `ACTIVITY_DAILY_ADDR_ROW`  | `%Y%m%d` (UTC+8) + lock hash (32B)   | empty                                    | live sync: one row per address it saw first in the bucket, in the block's scope (journaled) |
-| `0x27` | `ACTIVITY_HOURLY_ADDR_ROW` | `%Y%m%d%H` (UTC+8) + lock hash (32B) | empty                                    | live sync: one row per address it saw first in the bucket, in the block's scope (journaled) |
+| Prefix | Constant                   | Key suffix                           | Value | Written by                                                                                                               |
+| ------ | -------------------------- | ------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------ |
+| `0x26` | `ACTIVITY_DAILY_ADDR_ROW`  | `%Y%m%d` (UTC+8) + lock hash (32B)   | empty | live sync: one row per address new to the bucket, in the block's scope (journaled); bulk: the bucket open at the handoff |
+| `0x27` | `ACTIVITY_HOURLY_ADDR_ROW` | `%Y%m%d%H` (UTC+8) + lock hash (32B) | empty | likewise, per UTC+8 hour                                                                                                 |
 
-An address is new to a bucket when it is in neither the bucket's blob nor an earlier row; each new
-one gets its row and raises the bucket's `unique_address_count` by one
-(`BatchWriter::update_activity_bucket_stats`, per block). So a live block journals one small entry
-per new address and its bucket row, never the bucket-wide set. A bucket's addresses are the blob
-plus its rows (`CkbadgerStore::get_activity_bucket_addrs`, which fails on an address in both); a
-blob without its bucket's stats row is an error.
+(`0x23` / `0x24`, the retired `ACTIVITY_*_ADDR_SET` blobs that bulk build wrote for every bucket —
+459 + 614 MB on mainnet — are not reused.)
+
+- **Live** (`BatchWriter::update_activity_bucket_stats`, per block): an address is new to a bucket
+  iff it has no row; each new one gets its row and raises the bucket's `unique_address_count` by
+  one, so a live block journals one small entry per new address and its bucket row. A row of a
+  bucket without its stats row is an error.
+- **Retention** (`BatchWriter::stage_activity_addr_retention`, every live batch, in its first
+  block's scope): every block above the rollback coverage floor has a chain time at or after the
+  floor block's, and no rollback goes below the floor, so every bucket before the floor block's
+  UTC+8 hour (and day) is final. The batch deletes those buckets' rows (journaled) and records the
+  hour it pruned to in `sync_meta` → `activity_addr_row_floor` (journaled too; the next batch
+  scans only from there). A rollback of the pruning block restores the rows and the older record;
+  the next batch prunes them again. The floor sits `ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
+  about 2.7 hours) below the committed tip, so steady state is the current UTC+8 day's rows (plus
+  the previous day's for the first ~3 hours after midnight) and the last ~4 hours' rows.
+- **Bulk** keeps each bucket's set in memory and drops it when the bucket seals (its end at or
+  below the chain-time watermark: no later block reaches it, and bulk records no journal), writing
+  only the count row. At finalize it writes the rows of the buckets still open — the handoff tip's
+  day and hour — which live sync continues; live retention deletes them once the floor passes.
+
+`CkbadgerStore::get_activity_bucket_addrs` lists one bucket's rows (tests and diagnostics).
 
 ### stats_hodl Key Prefixes
 
@@ -905,7 +930,7 @@ Memory sizing is per network rather than a fixed host-wide peak:
 ### Live Write Buffers and Flush Frequency
 
 `atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
-**whole** database, so the smallest per-CF buffer decides how often all 71 CFs flush together.
+**whole** database, so the smallest per-CF buffer decides how often all 74 CFs flush together.
 
 - Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
   (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)

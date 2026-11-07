@@ -18,7 +18,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_mnft(), &key)? {
+        match self.get_cf(self.cf_object_outpoints(), &key)? {
             Some(value) if value.is_empty() => anyhow::bail!(
                 "empty mnft class id for outpoint: tx_hash=0x{}, output_index={}",
                 bytes_to_hex(tx_hash),
@@ -38,7 +38,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Vec<(i16, Vec<u8>)>> {
         let prefix = keys::encode_mnft_class_outpoint_tx_prefix(tx_hash);
         let mut outputs = Vec::new();
-        for item in self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix) {
+        for item in self.prefix_iterator_cf(self.cf_object_outpoints(), &prefix) {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
                     "failed to iterate mnft class outpoints of tx 0x{}: {}",
@@ -74,7 +74,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_mnft(), &key)? {
+        match self.get_cf(self.cf_object_outpoints(), &key)? {
             Some(value) if value.is_empty() => anyhow::bail!(
                 "empty mnft token id for outpoint: tx_hash=0x{}, output_index={}",
                 bytes_to_hex(tx_hash),
@@ -89,7 +89,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<Vec<MnftOutpointLookup>> {
-        let cf = self.cf_stats_mnft();
+        let cf = self.cf_object_outpoints();
         let keys: Vec<[u8; keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_mnft_token_outpoint_key(tx_hash, *idx))
@@ -128,7 +128,7 @@ impl CkbadgerStore {
 
     /// Resolve live mNFT token outpoints by token IDs.
     ///
-    /// Scans mNFT token outpoint index in `stats` and validates liveness via `live_cells`.
+    /// Scans the mNFT token rows of `object_outpoints` and validates liveness via `live_cells`.
     /// Returns token_id -> (tx_hash, output_index) for tokens that currently have
     /// a live outpoint.
     pub fn get_live_mnft_token_outpoints_by_token_ids(
@@ -141,18 +141,18 @@ impl CkbadgerStore {
             return Ok(HashMap::new());
         }
 
-        let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
+        let prefix = [keys::object_outpoint_kind::MNFT_TOKEN];
+        let iter = self.prefix_iterator_cf(self.cf_object_outpoints(), &prefix);
         let mut resolved: MnftLiveOutpointMap = HashMap::with_capacity(targets.len());
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in get_live_mnft_token_outpoints_by_token_ids: {}",
+                    "failed to iterate object_outpoints in get_live_mnft_token_outpoints_by_token_ids: {}",
                     e
                 )
             })?;
-            if key.first() != Some(&keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT) {
+            if key.first() != Some(&keys::object_outpoint_kind::MNFT_TOKEN) {
                 break;
             }
             if key.len() != keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE {
@@ -202,18 +202,18 @@ impl CkbadgerStore {
         &self,
         token_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
-        let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
+        let prefix = [keys::object_outpoint_kind::MNFT_TOKEN];
+        let iter = self.prefix_iterator_cf(self.cf_object_outpoints(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_mnft_token_outpoints_by_token_id: {}",
+                    "failed to iterate object_outpoints in list_mnft_token_outpoints_by_token_id: {}",
                     e
                 )
             })?;
-            if key.first() != Some(&keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT) {
+            if key.first() != Some(&keys::object_outpoint_kind::MNFT_TOKEN) {
                 break;
             }
             if key.len() != keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE {
@@ -305,7 +305,9 @@ mod tests {
             .is_empty());
 
         let key = keys::encode_mnft_class_outpoint_key(&next, 3);
-        store.put_cf(store.cf_stats_mnft(), &key, b"").unwrap();
+        store
+            .put_cf(store.cf_object_outpoints(), &key, b"")
+            .unwrap();
         let err = store.list_mnft_class_outputs_of_tx(&next).unwrap_err();
         assert!(err.to_string().contains("empty mnft class id"), "{err}");
     }
@@ -315,7 +317,9 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_a = [0xC1u8; 32];
         let key = keys::encode_mnft_token_outpoint_key(&tx_a, 4);
-        store.put_cf(store.cf_stats_mnft(), &key, b"").unwrap();
+        store
+            .put_cf(store.cf_object_outpoints(), &key, b"")
+            .unwrap();
 
         let mnft_outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 4)];
         let err = store

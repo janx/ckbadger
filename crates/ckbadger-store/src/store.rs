@@ -513,6 +513,15 @@ pub const CF_DOB_DECODED: &str = "dob_decoded";
 /// its canonical slot (`block ‖ tx_idx`): written by the on-demand cycles
 /// worker after the block committed, removed with the block on rollback.
 pub const CF_TX_GROUP_CYCLES: &str = "tx_group_cycles";
+/// Object outpoint index: `kind(1) + outpoint(34)` → the object id
+/// (`keys::object_outpoint_kind`; C-4b, from `stats_spore` / `stats_mnft`).
+pub const CF_OBJECT_OUTPOINTS: &str = "object_outpoints";
+/// Object outpoints by id: `kind(1) + id + outpoint(34)` → empty, or the
+/// identity's `AssetAction` byte (C-4b, from `stats_spore` / `stats_mnft`).
+pub const CF_OBJECT_OUTPOINT_BY_ID: &str = "object_outpoint_by_id";
+/// The reorg-event history, `reorg:<ms>:<uuid>` → `ReorgEvent` (C-4b, from
+/// `sync_meta`): the record of each fork switch and deep-fork detection.
+pub const CF_REORG_EVENTS: &str = "reorg_events";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 /// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
@@ -578,7 +587,9 @@ pub enum RollbackClass {
     /// range, nothing is journaled.
     RangeByBlock,
     /// Never rolled back: the append-only `cells` payloads (orphaned payloads
-    /// are unreachable once their markers are gone), the network store, and
+    /// are unreachable once their markers are gone), the network store,
+    /// `reorg_events` (the history of reorgs, written by reorg handling: a
+    /// rollback is itself recorded there, never undone), and
     /// `pending_proposals` (the proposal cache writes it out of band from
     /// mempool snapshots, with no block context; a committed proposal is
     /// removed after its batch commits and an expired one by the cache's
@@ -632,7 +643,7 @@ const fn cf(
 /// then the domain store in open order), then the network store.
 ///
 /// `RangeByBlock` is only for CFs whose key starts with the block number;
-/// `cells` and `pending_proposals` are `Never`, every other domain CF
+/// `cells`, `pending_proposals` and `reorg_events` are `Never`, every other domain CF
 /// (`dob_decoded` included) `Journal`. The network store is not chain data and
 /// is never rolled back.
 pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
@@ -721,6 +732,9 @@ mod cf_table {
         cf(CF_OBJECT_COLLECTION_ACTIVITY_COUNT,       Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_BIT_CELL_BY_ACCOUNT,                    Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_TX_GROUP_CYCLES,                        Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   RangeByBlock),
+        cf(CF_OBJECT_OUTPOINTS,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_REORG_EVENTS,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -730,6 +744,24 @@ mod cf_table {
 /// The spec of `name`, if it names a column family.
 pub fn cf_spec(name: &str) -> Option<&'static CfSpec> {
     CF_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// A writer an [`OUTSIDE_JOURNAL`] entry can name: the only one allowed to
+/// write that entry's keys outside the journal. An unjournaled write carries
+/// its writer — a [`crate::StoreBatch::outside_journal`] batch, or a direct
+/// write inside [`CkbadgerStore::outside_journal_scope`] on the scope's
+/// thread; any other unjournaled write carries none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideWriter {
+    /// `label_import::import_all` (indexer startup, `ckbadger label-import`).
+    LabelImport,
+    /// The derive scheduler and the rollback reset of derived aggregates.
+    Derive,
+    /// `BatchWriter::record_deep_fork`, which withdraws
+    /// `live_cell_summary:current`.
+    DeepForkRecord,
+    /// `BatchWriter::refresh_latest_dao_statistics`, the DAO tip summary.
+    DaoTipSummary,
 }
 
 /// One range of `Journal`-class keys that is legitimately written outside
@@ -749,6 +781,11 @@ pub struct OutsideJournal {
     /// batches journal it in their block's scope and only the owner writes it
     /// unjournaled.
     pub never_journaled: bool,
+    /// The one writer admitted: every whole-column-family entry (Lane B
+    /// carry-over 4c) and the two also-journaled `(cf, prefix)` entries
+    /// (ruling 5) name it; `None` for a never-journaled `(cf, prefix)` entry,
+    /// which names one narrow key range and admits any unjournaled writer.
+    pub writer: Option<OutsideWriter>,
 }
 
 const fn outside(
@@ -764,6 +801,46 @@ const fn outside(
         owner,
         reason,
         never_journaled,
+        writer: None,
+    }
+}
+
+/// A `(cf, key prefix)` entry with one unjournaled writer: only `writer`
+/// writes its keys outside the journal.
+const fn outside_by(
+    cf: &'static str,
+    key_prefix: &'static [u8],
+    writer: OutsideWriter,
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix,
+        owner,
+        reason,
+        never_journaled,
+        writer: Some(writer),
+    }
+}
+
+/// A whole-column-family entry: only `writer` writes the CF outside the
+/// journal.
+const fn whole_cf(
+    cf: &'static str,
+    writer: OutsideWriter,
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix: b"",
+        owner,
+        reason,
+        never_journaled,
+        writer: Some(writer),
     }
 }
 
@@ -863,21 +940,15 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
     ),
     outside(
         CF_SYNC_META,
-        keys::REORG_EVENT_KEY_PREFIX,
-        "reorg handling (event record, reconciliation links)",
-        "the history of reorgs, not undo state",
-        NEVER,
-    ),
-    outside(
-        CF_SYNC_META,
         keys::sync_meta_keys::REORG_RECONCILE_PENDING,
         "reorg handling",
         "names the reorg event awaiting canonical replay",
         NEVER,
     ),
-    outside(
+    outside_by(
         CF_SYNC_META,
         keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        OutsideWriter::DeepForkRecord,
         "deep-fork record (withdraws it)",
         "a deep fork withdraws the summary until an operator resolves the fork; live batches \
          journal it per block",
@@ -897,79 +968,122 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         "a function of the sync tip, recomputed after every tip change",
         NEVER,
     ),
-    outside(
+    outside_by(
         CF_STATS_DAO,
         &[keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT],
+        OutsideWriter::DaoTipSummary,
         "DAO tip summary (refresh_latest_dao_statistics)",
         "the open day's row is a function of the tip, recomputed after every tip change; a \
          sealed day's row is journaled at its sealer block",
         ALSO_JOURNALED,
     ),
-    outside(CF_DAO_LIVE_AGG, b"", DERIVE, DERIVE_REASON, ALSO_JOURNALED),
-    outside(
+    whole_cf(
+        CF_DAO_LIVE_AGG,
+        OutsideWriter::Derive,
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    whole_cf(
         CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-        b"",
+        OutsideWriter::Derive,
         DERIVE,
         DERIVE_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_BIT_CELL_BY_ACCOUNT,
-        b"",
+        OutsideWriter::Derive,
         DERIVE,
         DERIVE_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS_BY_LABEL,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS_BY_FAMILY,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_FAMILIES,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_FAMILY_BY_NAME,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_INFO,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(CF_TOKENS, b"", LABEL_IMPORT, LABELS_REASON, ALSO_JOURNALED),
+    whole_cf(
+        CF_TOKENS,
+        OutsideWriter::LabelImport,
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
 ];
 
-/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any.
+/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any, whoever the
+/// writer (the block overlay's never-journaled test).
 pub fn outside_journal_entry(cf: &str, key: &[u8]) -> Option<&'static OutsideJournal> {
     OUTSIDE_JOURNAL
         .iter()
         .find(|entry| entry.cf == cf && key.starts_with(entry.key_prefix))
+}
+
+/// The [`OUTSIDE_JOURNAL`] entry admitting an unjournaled write of `(cf, key)`
+/// by `writer`, if any: an entry that names no writer admits any, one that
+/// names a writer admits only that one.
+pub fn outside_journal_entry_for(
+    cf: &str,
+    key: &[u8],
+    writer: Option<OutsideWriter>,
+) -> Option<&'static OutsideJournal> {
+    OUTSIDE_JOURNAL.iter().find(|entry| {
+        entry.cf == cf
+            && key.starts_with(entry.key_prefix)
+            && entry.writer.is_none_or(|named| writer == Some(named))
+    })
+}
+
+/// An open [`CkbadgerStore::outside_journal_scope`]; closing it (drop) ends
+/// the scope.
+pub struct OutsideJournalScope<'a> {
+    store: &'a CkbadgerStore,
+}
+
+impl Drop for OutsideJournalScope<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.store.outside_writer_scope.lock() {
+            *slot = None;
+        }
+    }
 }
 
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
@@ -1175,6 +1289,9 @@ pub struct CkbadgerStore {
     /// Set by the indexer: outside bulk sync, an unjournaled commit may write
     /// a `Journal`-class key only where [`OUTSIDE_JOURNAL`] covers it.
     journal_discipline: AtomicBool,
+    /// The writer of direct (non-batch) unjournaled writes made on one thread
+    /// inside [`Self::outside_journal_scope`].
+    outside_writer_scope: Mutex<Option<(std::thread::ThreadId, OutsideWriter)>>,
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
@@ -1400,6 +1517,7 @@ impl CkbadgerStore {
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             journal_discipline: AtomicBool::new(false),
+            outside_writer_scope: Mutex::new(None),
             is_secondary: false,
             memory_profile,
             runtime_config,
@@ -1500,6 +1618,7 @@ impl CkbadgerStore {
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             journal_discipline: AtomicBool::new(false),
+            outside_writer_scope: Mutex::new(None),
             is_secondary: true,
             memory_profile,
             runtime_config,
@@ -2161,6 +2280,15 @@ impl CkbadgerStore {
     pub fn cf_tx_group_cycles(&self) -> &ColumnFamily {
         self.cf(CF_TX_GROUP_CYCLES)
     }
+    pub fn cf_object_outpoints(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_OUTPOINTS)
+    }
+    pub fn cf_object_outpoint_by_id(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_OUTPOINT_BY_ID)
+    }
+    pub fn cf_reorg_events(&self) -> &ColumnFamily {
+        self.cf(CF_REORG_EVENTS)
+    }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
     }
@@ -2313,7 +2441,11 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
         } else if self.journal_discipline_applies() {
-            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
+            self.check_unjournaled_write(
+                self.cf_name_for_handle(cf)?,
+                key,
+                self.direct_outside_writer()?,
+            )?;
         }
         let _guard = self
             .domain_write_gate
@@ -2327,7 +2459,11 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
         } else if self.journal_discipline_applies() {
-            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
+            self.check_unjournaled_write(
+                self.cf_name_for_handle(cf)?,
+                key,
+                self.direct_outside_writer()?,
+            )?;
         }
         let _guard = self
             .domain_write_gate
@@ -2554,8 +2690,6 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
-            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
             | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(self.cf_stats_chain()),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -2572,17 +2706,10 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_HOURLY
             | keys::STATS_PREFIX_CLUSTER_DAILY
             | keys::STATS_PREFIX_SPORE_DAILY
-            | keys::STATS_PREFIX_SPORE_OUTPOINT
-            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(self.cf_stats_spore()),
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX => Ok(self.cf_stats_spore()),
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
-            | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
@@ -2611,8 +2738,6 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
-            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
             | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(CF_STATS_CHAIN),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -2629,17 +2754,10 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_HOURLY
             | keys::STATS_PREFIX_CLUSTER_DAILY
             | keys::STATS_PREFIX_SPORE_DAILY
-            | keys::STATS_PREFIX_SPORE_OUTPOINT
-            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(CF_STATS_SPORE),
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX => Ok(CF_STATS_SPORE),
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
-            | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(CF_STATS_MNFT),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
@@ -2742,22 +2860,63 @@ impl CkbadgerStore {
         self.journal_discipline.load(Ordering::Relaxed) && !self.is_bulk_sync_mode()
     }
 
+    /// Run this thread's direct (non-batch) writes as `writer` until the
+    /// returned guard drops: inside it, a direct unjournaled write is admitted
+    /// where an [`OUTSIDE_JOURNAL`] entry names `writer`. The scope belongs to
+    /// the thread that opened it (a sync writer such as label import; never
+    /// held across an `.await`), and scopes do not nest.
+    pub fn outside_journal_scope(
+        &self,
+        writer: OutsideWriter,
+    ) -> anyhow::Result<OutsideJournalScope<'_>> {
+        let mut slot = self
+            .outside_writer_scope
+            .lock()
+            .map_err(|_| anyhow::anyhow!("outside-journal scope lock poisoned"))?;
+        if let Some((thread, open)) = *slot {
+            anyhow::bail!(
+                "outside-journal scope {writer:?} requested while {open:?} is open on thread \
+                 {thread:?}: scopes do not nest"
+            );
+        }
+        *slot = Some((std::thread::current().id(), writer));
+        Ok(OutsideJournalScope { store: self })
+    }
+
+    /// The writer of a direct write on this thread: the open
+    /// [`Self::outside_journal_scope`]'s, if this thread opened it.
+    fn direct_outside_writer(&self) -> anyhow::Result<Option<OutsideWriter>> {
+        let slot = self
+            .outside_writer_scope
+            .lock()
+            .map_err(|_| anyhow::anyhow!("outside-journal scope lock poisoned"))?;
+        Ok(slot
+            .filter(|(thread, _)| *thread == std::thread::current().id())
+            .map(|(_, writer)| writer))
+    }
+
     /// Check one unjournaled write (a direct put / delete, or a write of an
-    /// unjournaled `StoreBatch`) against the journal discipline.
-    pub(crate) fn check_unjournaled_write(&self, cf: &str, key: &[u8]) -> anyhow::Result<()> {
+    /// unjournaled `StoreBatch`) by `writer` against the journal discipline.
+    pub(crate) fn check_unjournaled_write(
+        &self,
+        cf: &str,
+        key: &[u8],
+        writer: Option<OutsideWriter>,
+    ) -> anyhow::Result<()> {
         if !self.journal_discipline_applies() {
             return Ok(());
         }
         let journaled =
             cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
-        if !journaled || outside_journal_entry(cf, key).is_some() {
+        if !journaled || outside_journal_entry_for(cf, key, writer).is_some() {
             return Ok(());
         }
         anyhow::bail!(
             "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf} \
-             key=0x{}; a live write goes through a journaled batch in its block's scope, and a \
-             write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner \
-             and reason",
+             key=0x{} writer={writer:?}; a live write goes through a journaled batch in its \
+             block's scope, and a write that belongs outside the journal is listed in \
+             OUTSIDE_JOURNAL with its owner, reason and (for a whole column family) the one \
+             writer it admits",
             crate::bytes_to_hex(key)
         )
     }
@@ -2770,6 +2929,7 @@ impl CkbadgerStore {
         cf: &str,
         start: &[u8],
         end: &[u8],
+        writer: Option<OutsideWriter>,
     ) -> anyhow::Result<()> {
         if !self.journal_discipline_applies() {
             return Ok(());
@@ -2778,6 +2938,7 @@ impl CkbadgerStore {
             cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
         let covered = OUTSIDE_JOURNAL.iter().any(|entry| {
             entry.cf == cf
+                && entry.writer.is_none_or(|named| writer == Some(named))
                 && (entry.key_prefix.is_empty()
                     || (start.starts_with(entry.key_prefix) && end.starts_with(entry.key_prefix)))
         });
@@ -2786,7 +2947,7 @@ impl CkbadgerStore {
         }
         anyhow::bail!(
             "unjournaled range delete on a Journal-class CF outside the OUTSIDE_JOURNAL table: \
-             cf={cf} start=0x{} end=0x{}",
+             cf={cf} start=0x{} end=0x{} writer={writer:?}",
             crate::bytes_to_hex(start),
             crate::bytes_to_hex(end)
         )
@@ -3807,7 +3968,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(DOMAIN_CFS.len(), 74);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5238,8 +5399,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 75);
-        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(CF_SPECS.len(), 78);
+        assert_eq!(DOMAIN_CFS.len(), 74);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5380,6 +5541,152 @@ mod tests {
             .is_err());
     }
 
+    /// Lane B carry-over 4(c): a whole-CF `OUTSIDE_JOURNAL` entry admits only
+    /// the writer it names. `tokens` and `dao_live_agg` are journaled by live
+    /// batches and written outside the journal only by label import and the
+    /// derive scheduler respectively; any other unjournaled write to them —
+    /// an untagged batch, another writer's batch, a direct write outside the
+    /// writer's scope or from another thread — is refused.
+    #[test]
+    fn whole_cf_outside_journal_entries_admit_only_their_writer() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let refused = |result: anyhow::Result<()>, what: &str| {
+            let error = result.expect_err(what).to_string();
+            assert!(error.contains("OUTSIDE_JOURNAL"), "{what}: {error}");
+        };
+
+        // Untagged: refused for both whole-CF entries.
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
+        refused(batch.commit(), "an untagged batch writing tokens");
+        let mut batch = crate::StoreBatch::new(&store);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
+            .unwrap();
+        refused(batch.commit(), "an untagged batch writing dao_live_agg");
+        refused(
+            store.put_cf(store.cf_tokens(), b"t", b"1"),
+            "a direct write to tokens outside the label import scope",
+        );
+
+        // The named writer passes; the other writer does not.
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
+            .unwrap();
+        batch
+            .delete_range_raw_cf_by_name(CF_OBJECT_COLLECTION_ACTIVITY_COUNT, b"", &[0xff])
+            .unwrap();
+        batch.commit().unwrap();
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
+        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
+        refused(batch.commit(), "the derive scheduler writing tokens");
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::LabelImport);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"2")
+            .unwrap();
+        refused(batch.commit(), "label import writing dao_live_agg");
+
+        // Direct writes inside the label import scope, on its thread.
+        {
+            let _scope = store
+                .outside_journal_scope(OutsideWriter::LabelImport)
+                .unwrap();
+            store.put_cf(store.cf_tokens(), b"t", b"1").unwrap();
+            store.put_cf(store.cf_script_info(), b"s", b"1").unwrap();
+            refused(
+                store.put_cf(store.cf_dao_live_agg(), b"d", b"3"),
+                "label import's scope writing dao_live_agg",
+            );
+            std::thread::scope(|threads| {
+                threads.spawn(|| {
+                    refused(
+                        store.put_cf(store.cf_tokens(), b"other", b"1"),
+                        "another thread during the label import scope",
+                    );
+                });
+            });
+            assert!(
+                store.outside_journal_scope(OutsideWriter::Derive).is_err(),
+                "scopes do not nest"
+            );
+        }
+        refused(
+            store.put_cf(store.cf_tokens(), b"t", b"2"),
+            "a direct write after the scope ended",
+        );
+
+        // The (cf, prefix) entries keep admitting any unjournaled writer.
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::SYNC_PROGRESS,
+                b"p",
+            )
+            .unwrap();
+    }
+
+    /// Ruling 5: the two also-journaled `(cf, prefix)` entries admit only
+    /// their one unjournaled writer — `live_cell_summary:current` the
+    /// deep-fork record, `stats_dao` 0x08 the DAO tip summary.
+    #[test]
+    fn also_journaled_prefix_entries_admit_only_their_writer() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let summary = keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT;
+        let open_day = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20261107");
+        let write = |writer: Option<OutsideWriter>, cf: &str, key: &[u8]| {
+            let mut batch = match writer {
+                Some(writer) => crate::StoreBatch::outside_journal(&store, writer),
+                None => crate::StoreBatch::new(&store),
+            };
+            batch.put_raw_cf_by_name(cf, key, b"v").unwrap();
+            batch.commit()
+        };
+        for (writer, cf, key, admitted) in [
+            (None, CF_SYNC_META, summary, false),
+            (
+                Some(OutsideWriter::DaoTipSummary),
+                CF_SYNC_META,
+                summary,
+                false,
+            ),
+            (
+                Some(OutsideWriter::DeepForkRecord),
+                CF_SYNC_META,
+                summary,
+                true,
+            ),
+            (None, CF_STATS_DAO, open_day.as_slice(), false),
+            (
+                Some(OutsideWriter::DeepForkRecord),
+                CF_STATS_DAO,
+                open_day.as_slice(),
+                false,
+            ),
+            (
+                Some(OutsideWriter::DaoTipSummary),
+                CF_STATS_DAO,
+                open_day.as_slice(),
+                true,
+            ),
+        ] {
+            let result = write(writer, cf, key);
+            assert_eq!(
+                result.is_ok(),
+                admitted,
+                "{writer:?} writing {cf}:{}: {result:?}",
+                String::from_utf8_lossy(key)
+            );
+        }
+        // The DAO tip summary's never-journaled rows still admit any writer.
+        let latest = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
+        write(None, CF_STATS_DAO, &latest).unwrap();
+    }
+
     /// A never-journaled key written through a journaled batch goes straight
     /// into the commit, with no journal entry; an also-journaled one is
     /// journaled in its block.
@@ -5425,9 +5732,8 @@ mod tests {
                 | CF_TX_ACTIONS
                 | CF_REORG_UNDO_LOG_BY_BLOCK
                 | CF_TX_GROUP_CYCLES => RollbackClass::RangeByBlock,
-                CF_CELLS | CF_PENDING_PROPOSALS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => {
-                    RollbackClass::Never
-                }
+                CF_CELLS | CF_PENDING_PROPOSALS | CF_REORG_EVENTS | CF_NET_NODES | CF_NET_STATS
+                | CF_NET_CRAWL => RollbackClass::Never,
                 _ => RollbackClass::Journal,
             };
             assert_eq!(spec.rollback_class, expected, "{}", spec.name);
@@ -5441,7 +5747,10 @@ mod tests {
     /// here is an option change, which needs its own paired bulk run. B-4
     /// adds two rows (`hodl_capacity_by_date`, `cell_dist_cohort_by_month`,
     /// the trackers' rows) and B-5c one (`tx_group_cycles`, the lazy cycles
-    /// record moved out of `sync_meta`); every other row is unchanged.
+    /// record moved out of `sync_meta`); C-4b three (`object_outpoints` and
+    /// `object_outpoint_by_id`, the outpoint indexes moved out of
+    /// `stats_spore` / `stats_mnft`, and `reorg_events`, the event history
+    /// moved out of `sync_meta`); every other row is unchanged.
     #[test]
     fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
         let actual = cf_option_snapshot();
@@ -5532,6 +5841,9 @@ mod tests {
     "object_collection_activity_count BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "bit_cell_by_account BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "tx_group_cycles BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_outpoints FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "reorg_events BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
