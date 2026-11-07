@@ -326,7 +326,7 @@ async fn list_identity_collection_activities(
     .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
 
     // Rows keyed by position are canonical by construction.
-    let (results, headers) = super::assets::nft_collection_activity_page(
+    let (results, headers, _) = super::assets::nft_collection_activity_page(
         state.store.as_ref(),
         &collection_id_bytes,
         (limit as usize) + 1,

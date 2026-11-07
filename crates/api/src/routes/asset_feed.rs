@@ -198,6 +198,16 @@ pub(crate) fn canonical_actions(
     blocks.sort_unstable();
     blocks.dedup();
     let headers = state.store.get_block_headers_batch(&blocks)?;
+    canonical_actions_with_headers(state, rows, &headers)
+}
+
+/// [`canonical_actions`] of a page whose block headers the caller has read
+/// (a collection feed's completion): one `activities` read.
+pub(crate) fn canonical_actions_with_headers(
+    state: &AppState,
+    rows: &[AssetTransaction],
+    headers: &HashMap<i64, ckbadger_store::CachedBlockHeader>,
+) -> anyhow::Result<Vec<TxActions>> {
     let resolved = rows
         .iter()
         .map(|row| {

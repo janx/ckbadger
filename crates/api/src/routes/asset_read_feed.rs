@@ -164,7 +164,11 @@ fn collection_feed(
         parse_optional_block_tx_cursor(params.cursor.as_deref(), "asset transaction cursor")?;
     let page_size =
         usize::try_from(limit).map_err(|_| ApiError::internal("feed limit overflow"))?;
-    let mut rows = assets::list_canonical_nft_collection_activities_page(
+    // The page's rows come with what their completion read: the block
+    // headers and each row's `tx_index` entry, so the rows are the page's
+    // transactions as they stand (rows keyed by position are canonical by
+    // construction) without a second lookup by hash.
+    let (mut rows, headers, mut entries) = assets::nft_collection_activity_page(
         &state.store,
         &id,
         page_size + 1,
@@ -174,25 +178,16 @@ fn collection_feed(
     .map_err(context)?;
     let more = rows.len() > page_size;
     rows.truncate(page_size);
-    let page = asset_feed::canonical_scope(
-        &state.store,
-        rows.iter().map(|(_, _, entry)| entry.tx_hash.clone()),
-    )
-    .map_err(context)?;
-    let located: Vec<_> = page
+    entries.truncate(page_size);
+    let page: Vec<asset_feed::AssetTransaction> = rows
         .iter()
-        .map(|row| (row.block_number, row.tx_index))
+        .zip(entries)
+        .map(|((block_number, tx_index, _), entry)| asset_feed::AssetTransaction {
+            block_number: *block_number,
+            tx_index: *tx_index,
+            entry,
+        })
         .collect();
-    let indexed: Vec<_> = rows
-        .iter()
-        .map(|(block, index, _)| (*block, *index))
-        .collect();
-    if located != indexed {
-        return Err(ApiError::internal(format!(
-            "collection=0x{} activity index rows {indexed:?} do not match their canonical locations {located:?}",
-            hex::encode(&id)
-        )));
-    }
     let next = if more {
         page.last().map(asset_feed::feed_cursor)
     } else {
@@ -201,7 +196,8 @@ fn collection_feed(
     // What each row did to THIS collection's items (OB-C13), computed once.
     let members = CollectionMembers::of(collection.source, &id)?;
     // The page's actions, read once for the contexts and the projection.
-    let actions = asset_feed::canonical_actions(state, &page).map_err(context)?;
+    let actions =
+        asset_feed::canonical_actions_with_headers(state, &page, &headers).map_err(context)?;
     let contexts = page
         .iter()
         .zip(&actions)

@@ -1399,7 +1399,7 @@ pub(crate) fn nft_collection_activity_page(
     action_filter: Option<&str>,
 ) -> anyhow::Result<ckbadger_store::CollectionActivityPage> {
     if limit == 0 {
-        return Ok((Vec::new(), HashMap::new()));
+        return Ok((Vec::new(), HashMap::new(), Vec::new()));
     }
     if is_identity_sentinel(collection_id) {
         store.list_identity_collection_activity_page(collection_id, limit, cursor, action_filter)
@@ -4001,7 +4001,7 @@ async fn list_object_collection_activities(
         .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
     // Rows keyed by position are canonical by construction.
-    let (results, headers) = nft_collection_activity_page(
+    let (results, headers, _) = nft_collection_activity_page(
         state.store.as_ref(),
         &collection_id_bytes,
         (limit as usize) + 1,

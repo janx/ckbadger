@@ -10,12 +10,14 @@ use crate::types::{
 pub(crate) type MnftBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
 /// One page of a collection activity feed, `(block_number, tx_index, entry)`
-/// rows newest first, with the block headers its completion read (one per
-/// distinct block): a reader that also serves a header field (the chain time)
-/// takes it from here instead of reading the headers again.
+/// rows newest first, with what its completion read: the block headers (one
+/// per distinct block) and each row's `tx_index` entry (in row order). A
+/// reader that also serves a header field (the chain time) or the whole
+/// transaction takes it from here instead of reading it again.
 pub type CollectionActivityPage = (
     Vec<(i64, i32, ObjectCollectionActivityEntry)>,
     HashMap<i64, crate::types::CachedBlockHeader>,
+    Vec<crate::types::TxIndexEntry>,
 );
 
 use crate::bytes_to_hex;
@@ -539,7 +541,7 @@ impl CkbadgerStore {
         action_filter: Option<&str>,
     ) -> anyhow::Result<CollectionActivityPage> {
         if limit == 0 {
-            return Ok((Vec::new(), HashMap::new()));
+            return Ok((Vec::new(), HashMap::new(), Vec::new()));
         }
         let action_filter = match action_filter {
             Some(s) => Some(match s {
@@ -603,7 +605,7 @@ impl CkbadgerStore {
     /// Stored collection activity rows completed into entries: the tx hash and
     /// timestamp from `tx_index` at each position, the block hash from
     /// `block_headers` — one `multi_get` each for the whole slice. The headers
-    /// read come back with the rows.
+    /// and the entries read come back with the rows.
     fn complete_collection_activities(
         &self,
         row_kind: &str,
@@ -617,7 +619,7 @@ impl CkbadgerStore {
         let headers = self.get_block_headers_batch(&blocks)?;
         let rows = rows
             .into_iter()
-            .zip(entries)
+            .zip(&entries)
             .map(|((block, tx_idx, actions), entry)| {
                 let header = headers.get(&block).ok_or_else(|| {
                     anyhow::anyhow!(
@@ -629,13 +631,13 @@ impl CkbadgerStore {
                     tx_idx,
                     ObjectCollectionActivityEntry::from_stored(
                         actions,
-                        &entry,
+                        entry,
                         header.hash.clone(),
                     ),
                 ))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok((rows, headers))
+        Ok((rows, headers, entries))
     }
 
     /// Count total activities for a collection (prefix scan, no deserialization).
@@ -1509,11 +1511,16 @@ mod tests {
         }
         batch.commit().unwrap();
         store.reset_read_call_counters();
-        let (rows, headers) = store
+        let (rows, headers, entries) = store
             .list_object_collection_activity_page(&cid, 10, None, None)
             .unwrap();
         assert_eq!(store.read_call_counts(), (0, 2), "tx_index + block_headers");
         assert_eq!(rows.len(), 3);
+        assert_eq!(
+            entries.iter().map(|entry| entry.tx_hash).collect::<Vec<_>>(),
+            vec![[0x11; 32], [0x10; 32], [0x12; 32]],
+            "the page's tx_index entries, in row order"
+        );
         let mut blocks: Vec<i64> = headers.keys().copied().collect();
         blocks.sort_unstable();
         assert_eq!(blocks, vec![99, 100]);
