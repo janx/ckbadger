@@ -406,8 +406,8 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
 - activity address-row retention: `activity_addr_row_floor`, the first UTC+8 hour whose
-  `ACTIVITY_*_ADDR_ROW` rows are kept (every earlier hour, and every day before its day, has
-  none; see [`stats_chain` activity address rows](#stats_chain-activity-address-rows)),
+  `ACTIVITY_*_ADDR_ROW` rows are kept (every earlier hour has none, and every day before the day
+  of the hour before it; see [`stats_chain` activity address rows](#stats_chain-activity-address-rows)),
   journaled; bulk finalize writes the handoff hour
 - derived aggregate state: `derive:<aggregate>` (bincode `DeriveMeta`, see
   [Derived Aggregates](#derived-aggregates))
@@ -677,8 +677,10 @@ memory, kept only while a block can still reach the bucket (C-3):
   floor block's, and no rollback goes below the floor, so every bucket before the floor block's
   UTC+8 hour (and day) is final. Each batch deletes the rows of one such bucket, the oldest
   (journaled), and moves the cursor `sync_meta` → `activity_addr_row_floor` one bucket on
-  (journaled too; the next batch seeks only from there): a day goes as its own step, the batch
-  after its last hour with rows. So a UTC+8 midnight journals one day's rows in one block, and a
+  (journaled too; the next batch seeks only from there). The cursor is the first hour whose rows
+  are kept: deleting an hour moves it to the next hour, across a midnight too, and a day goes as
+  its own step, the batch after its last hour with rows (the day of the hour before the cursor is
+  the only earlier day that can still hold rows). So a UTC+8 midnight journals one day's rows in one block, and a
   store that was offline catches up over many batches. A rollback of a pruning block restores the
   rows and the older cursor; the next batch prunes them again. The floor sits
   `ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks, about 2.7 hours) below the committed tip, so

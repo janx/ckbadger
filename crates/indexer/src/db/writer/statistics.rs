@@ -693,11 +693,13 @@ impl BatchWriter {
     /// coverage floor leaves it ([`Self::stage_activity_addr_retention`]).
     ///
     /// `addr_row_floor` is `sync_meta` → `activity_addr_row_floor`: the first
-    /// UTC+8 hour whose address rows are kept (every earlier hour, and every
-    /// day before its day, has none: pruned, or sealed by the bulk build,
-    /// which records the handoff hour). A block landing in such a bucket
-    /// would count every address again, so it is rebuild-required
-    /// (finding 11).
+    /// UTC+8 hour whose address rows are kept (every earlier hour has none:
+    /// pruned, or sealed by the bulk build, which records the handoff hour).
+    /// A block landing in an earlier hour, or in a day before the floor's
+    /// day, would count every address again, so it is rebuild-required
+    /// (finding 11). (A day before the floor's day may still hold its own
+    /// rows until the prune reaches it; its hours have none, so the block is
+    /// refused all the same.)
     pub fn update_activity_bucket_stats(
         &self,
         kind: keys::ActivityBucketKind,
@@ -781,15 +783,18 @@ impl BatchWriter {
     /// of a bucket no block reaches again — are deleted; the bucket stats rows
     /// are kept.
     ///
-    /// `sync_meta` → `activity_addr_row_floor` is the cursor: every hour
-    /// before it, and every day before its day, has no row (bulk finalize
-    /// starts it at the handoff hour). A batch finds the oldest hour with rows
-    /// from the cursor to the floor's hour, and the oldest day with rows
-    /// before that hour's day (one seek each), and deletes one bucket:
+    /// `sync_meta` → `activity_addr_row_floor` is the cursor, the first hour
+    /// whose rows are kept: every hour before it has no row, and every day
+    /// before the day of the hour before it has none either — the day the
+    /// cursor last left may still hold rows, pruned as their own step (bulk
+    /// finalize starts the cursor at the handoff hour). A batch finds the
+    /// oldest hour with rows from the cursor to the floor's hour, and the
+    /// oldest day with rows from the day of the hour before the cursor to
+    /// that hour's day (one seek each), and deletes one bucket:
     /// - such a day goes as its own step, the batch after its last hour with
     ///   rows; the cursor moves to the next day's first hour;
-    /// - else that hour goes; the cursor moves to the next hour, or, for a
-    ///   day's last hour, stays on it until the day itself goes;
+    /// - else that hour goes; the cursor moves to the next hour (across a
+    ///   midnight too: the day it leaves goes in a later batch);
     /// - with neither, the cursor moves to the floor's hour.
     ///
     /// So a UTC+8 midnight journals one day's rows in one block, and a store
@@ -846,28 +851,28 @@ impl BatchWriter {
         let day_of = |hour: &str| hour[..Daily.bucket_len()].to_string();
         let hour = self.oldest_activity_addr_bucket(Hourly, cursor.as_deref(), &floor_hour)?;
         let day_limit = day_of(hour.as_deref().unwrap_or(&floor_hour));
-        let day = self.oldest_activity_addr_bucket(
-            Daily,
-            cursor.as_deref().map(day_of).as_deref(),
-            &day_limit,
-        )?;
+        // The day the cursor last left (the day of the hour before it) may
+        // still hold rows; every earlier day has none.
+        let day_from = cursor
+            .as_deref()
+            .map(|cursor| -> Result<String> {
+                const HOUR_MS: i64 = 3_600_000;
+                let hour_start = bucket_end_from_utc8_key(cursor, true)?
+                    .checked_sub(HOUR_MS + 1)
+                    .ok_or_else(|| anyhow!("activity address row floor {cursor} underflows"))?;
+                Ok(day_of(&Hourly.bucket_label(hour_start)?))
+            })
+            .transpose()?;
+        let day = self.oldest_activity_addr_bucket(Daily, day_from.as_deref(), &day_limit)?;
         let (deleted, next_cursor) = match (day, hour) {
             (Some(day), _) => (
                 self.stage_delete_activity_addr_bucket(batch, Daily, &day)?,
                 Hourly.bucket_label(bucket_end_from_utc8_key(&day, false)?)?,
             ),
-            (None, Some(hour)) => {
-                let next = Hourly.bucket_label(bucket_end_from_utc8_key(&hour, true)?)?;
-                let next_cursor = if day_of(&next) == day_of(&hour) {
-                    next
-                } else {
-                    hour.clone()
-                };
-                (
-                    self.stage_delete_activity_addr_bucket(batch, Hourly, &hour)?,
-                    next_cursor,
-                )
-            }
+            (None, Some(hour)) => (
+                self.stage_delete_activity_addr_bucket(batch, Hourly, &hour)?,
+                Hourly.bucket_label(bucket_end_from_utc8_key(&hour, true)?)?,
+            ),
             (None, None) => (0, floor_hour),
         };
         batch.put_activity_addr_row_floor(&next_cursor);
@@ -4666,11 +4671,13 @@ mod activity_stats_tests {
     }
 
     /// Finding 10: the live prune deletes at most one bucket per batch, the
-    /// oldest behind the floor: three hours go over three batches (a day's
-    /// last hour leaves the cursor on it until its day is pruned), a fourth
-    /// moves the cursor to the floor's hour. The cursor never moves back; a
-    /// rollback restores the rows and the cursor, and the next batches prune
-    /// them again.
+    /// oldest behind the floor: three hours go over three batches, the day
+    /// they belong to in a fourth, and a fifth moves the cursor to the
+    /// floor's hour. The cursor is always the first hour with rows kept: a
+    /// day's last hour moves it into the next day (delta review guard gap),
+    /// so a block of that pruned hour is rebuild-required. The cursor never
+    /// moves back; a rollback restores the rows and the cursor, and the next
+    /// batches prune them again.
     #[test]
     fn activity_addr_rows_are_pruned_one_bucket_per_batch() {
         let dir = tempfile::tempdir().unwrap();
@@ -4705,7 +4712,7 @@ mod activity_stats_tests {
         // pruning batches are blocks 100 to 103.
         let floor = 7;
         put_header(floor, day_start + 25 * HOUR + 30 * 60_000);
-        for block in 100..=103 {
+        for block in 100..=104 {
             put_header(block, day_start + 26 * HOUR + block);
         }
         let hours = ["2026030921", "2026030922", "2026030923", "2026031001"];
@@ -4721,6 +4728,22 @@ mod activity_stats_tests {
                     .unwrap();
             }
         }
+        for address in [addr(1), addr(2)] {
+            store
+                .put_stats_key(
+                    &keys::ActivityBucketKind::Daily
+                        .addr_row_key("20260309", &address)
+                        .unwrap(),
+                    &[],
+                )
+                .unwrap();
+        }
+        let day_left = || {
+            !store
+                .get_activity_bucket_addrs(keys::ActivityBucketKind::Daily, "20260309")
+                .unwrap()
+                .is_empty()
+        };
         let prune_at = |block: i64| -> u64 {
             let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
             let mut batch = StoreBatch::journaled(&store, &overlay, 0);
@@ -4750,19 +4773,41 @@ mod activity_stats_tests {
         assert_eq!(prune_at(101), 2);
         assert_eq!(cursor().as_deref(), Some("2026030923"));
         assert_eq!(left(), ["2026030923", "2026031001"]);
+        // The day's last hour: the cursor moves into the next day, the day's
+        // own rows stay for the next batch.
         assert_eq!(prune_at(102), 2);
-        assert_eq!(cursor().as_deref(), Some("2026030923"));
+        assert_eq!(cursor().as_deref(), Some("2026031000"));
         assert_eq!(left(), ["2026031001"]);
-        assert_eq!(prune_at(103), 0);
+        assert!(day_left());
+        // A block of the pruned hour 23 would count its addresses again.
+        let err = writer
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030923",
+                &DailyActivityStats::default(),
+                &BTreeSet::from([addr(1)]),
+                cursor().as_deref(),
+                &mut StoreBatch::new(&store),
+            )
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        assert_eq!(prune_at(103), 2, "the day the cursor left");
+        assert_eq!(cursor().as_deref(), Some("2026031000"));
+        assert!(!day_left());
+        assert_eq!(prune_at(104), 0);
         assert_eq!(cursor().as_deref(), Some("2026031001"));
 
-        // Roll back the last two batches: hour 23 and the cursor come back.
+        // Roll back the last three batches: hour 23, the day and the cursor
+        // come back.
         store.rollback_to_block(101).unwrap();
         assert_eq!(cursor().as_deref(), Some("2026030923"));
         assert_eq!(left(), ["2026030923", "2026031001"]);
+        assert!(day_left());
         assert_eq!(prune_at(102), 2);
         assert_eq!(left(), ["2026031001"]);
-        assert_eq!(prune_at(103), 0);
+        assert_eq!(prune_at(103), 2);
+        assert!(!day_left());
+        assert_eq!(prune_at(104), 0);
         assert_eq!(cursor().as_deref(), Some("2026031001"));
     }
 
