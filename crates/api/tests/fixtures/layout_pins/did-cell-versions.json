@@ -1,0 +1,71 @@
+{
+  "data": [
+    {
+      "anatomy": {
+        "capacityBytes": 8,
+        "dataBytes": 3,
+        "lockBytes": 53,
+        "typeBytes": 65
+      },
+      "blockNumber": 2,
+      "capacity": "50000000000",
+      "consumedAtBlock": 3,
+      "consumedByTx": "0x66ceaf4f13457d4af6978c2e76f1b2d1d6284f122d56a443bb895098575f1d89",
+      "dataHash": "0xc132a4226b96902551d544a7e1bacc1e8fbf14c4c6f66f81bc8953ce6de36260",
+      "isLive": false,
+      "lock": {
+        "args": "0x0606060606060606060606060606060606060606",
+        "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "hashType": "type"
+      },
+      "lockName": "Default Lock",
+      "occupiedCapacity": "12900000000",
+      "outputIndex": 0,
+      "ownerAddress": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvps2zahxe",
+      "ownerLockHash": "0x5d64d444aacad37ded80fd80dd4a56120279d1b5095a724e1afdbfe93f72b7b8",
+      "timestamp": "1790040000000",
+      "txHash": "0xf3735cb7e5d5a156e72aa677bdf94b66cc75e9b5df016a227e5440d9099fa28b",
+      "txIndex": 2,
+      "type": {
+        "args": "0x1616161616161616161616161616161616161616161616161616161616161616",
+        "codeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
+        "hashType": "type"
+      },
+      "typeName": "did:ckb"
+    },
+    {
+      "anatomy": {
+        "capacityBytes": 8,
+        "dataBytes": 3,
+        "lockBytes": 53,
+        "typeBytes": 65
+      },
+      "blockNumber": 3,
+      "capacity": "49900000000",
+      "consumedAtBlock": null,
+      "consumedByTx": null,
+      "dataHash": "0xc132a4226b96902551d544a7e1bacc1e8fbf14c4c6f66f81bc8953ce6de36260",
+      "isLive": true,
+      "lock": {
+        "args": "0x0707070707070707070707070707070707070707",
+        "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "hashType": "type"
+      },
+      "lockName": "Default Lock",
+      "occupiedCapacity": "12900000000",
+      "outputIndex": 0,
+      "ownerAddress": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqg8qurswpc8qurswpc8qurswpc8qurswpc92gx9u",
+      "ownerLockHash": "0xc1e0e142cfa13a77ab92004fd124cd1f953a6db51855ee3d3b39c13dcca17a64",
+      "timestamp": "1790040600000",
+      "txHash": "0x66ceaf4f13457d4af6978c2e76f1b2d1d6284f122d56a443bb895098575f1d89",
+      "txIndex": 2,
+      "type": {
+        "args": "0x1616161616161616161616161616161616161616161616161616161616161616",
+        "codeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
+        "hashType": "type"
+      },
+      "typeName": "did:ckb"
+    }
+  ],
+  "total": 2
+}

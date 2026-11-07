@@ -12,6 +12,7 @@ mod dao_batch_operations;
 mod dao_daily_snapshot;
 mod dao_deferred;
 mod entity_stats_rollback;
+mod layout_rows;
 mod live_cells;
 mod object_protocol_state;
 mod pipeline_consistency;

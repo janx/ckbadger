@@ -206,8 +206,8 @@ fn compare_dumps(actual: &Dump, expected: &Dump, context: &str) -> Result<(), St
 // Stores and runs
 // ---------------------------------------------------------------------------
 
-struct Stores {
-    domain: Arc<CkbadgerStore>,
+pub(crate) struct Stores {
+    pub(crate) domain: Arc<CkbadgerStore>,
     _append: Arc<CkbadgerStore>,
     indexer: Indexer,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
@@ -245,7 +245,7 @@ fn open_fixture_stores() -> FixtureStores {
 
 /// The stores the property runs on, driven by an indexer (under the journal
 /// discipline, as in production).
-fn open_stores() -> Stores {
+pub(crate) fn open_stores() -> Stores {
     let FixtureStores {
         domain,
         _append: append,
@@ -267,7 +267,7 @@ fn open_stores() -> Stores {
 /// Write `chain[..=upto]` as live batches following `plan` (inclusive block
 /// ranges in order, covering the chain from 0); a batch that crosses `upto` is
 /// truncated there, exactly like a store whose tip stopped at `upto`.
-async fn sync_prefix(
+pub(crate) async fn sync_prefix(
     stores: &Stores,
     chain: &[BlockResponseWithCycles],
     plan: &[RangeInclusive<usize>],
@@ -1260,7 +1260,7 @@ fn funding(index: u32) -> CellInput {
 /// in blocks 1..=16 (10 minutes apart from 23:00 UTC+8, so the UTC+8 day and
 /// two UTC hours turn inside the range), then `plain_blocks` blocks of plain
 /// transfers so a 36-deep rollback can land below every event.
-fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
+pub(crate) fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
     let t = |n: u64| T_EVENING + n * 10 * MINUTE;
     let cluster_id = [0x11u8; 32];
     let spore_id = [0x12u8; 32];
@@ -1605,7 +1605,7 @@ fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
 // Cases
 // ---------------------------------------------------------------------------
 
-fn single_block_plan(len: usize) -> Vec<RangeInclusive<usize>> {
+pub(crate) fn single_block_plan(len: usize) -> Vec<RangeInclusive<usize>> {
     (0..len).map(|n| n..=n).collect()
 }
 

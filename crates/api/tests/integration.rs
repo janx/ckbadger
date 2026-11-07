@@ -20,6 +20,7 @@ mod api_frontend_formats;
 mod api_graph;
 mod api_hash_validation;
 mod api_inventory_summary;
+mod api_layout_pins;
 mod api_live_cell_filters;
 mod api_mempool;
 mod api_network;

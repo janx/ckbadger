@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "blockNumber": 5,
+      "capacityChange": "49800000000",
+      "cycles": null,
+      "cyclesStatus": "pending",
+      "fee": "100000000",
+      "inputsCount": 1,
+      "isCellbase": false,
+      "outputsCount": 1,
+      "scriptLabels": [],
+      "timestamp": "2026-09-22T01:50:00+00:00",
+      "txHash": "0x1e20955f4cd6108d951fb52e9bbd5c3a74f9765f1666fd045722aa3c2ec07a88",
+      "txSize": 233,
+      "txType": "received"
+    }
+  ],
+  "hasMore": false,
+  "limit": 50,
+  "nextCursor": null,
+  "pool": {
+    "count": 0,
+    "enabled": true,
+    "healthy": false,
+    "lastPolledAt": null,
+    "pendingCkbDelta": "0",
+    "truncated": false
+  },
+  "total": 1
+}
