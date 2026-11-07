@@ -94,7 +94,8 @@ impl CkbadgerStore {
 
     /// Resolve live dotbit account outpoints by account IDs.
     ///
-    /// Scans dotbit outpoint index in `stats` and validates liveness via `live_cells`.
+    /// Reads the `.bit` kind of `object_outpoint_by_id` and validates liveness
+    /// via `live_cells`.
     /// Returns account_id -> (tx_hash, output_index) for accounts that currently have
     /// a live outpoint.
     ///
@@ -119,7 +120,7 @@ impl CkbadgerStore {
             for item in iter {
                 let (key, _) = item.map_err(|e| {
                     anyhow::anyhow!(
-                        "failed to iterate stats_object in get_live_dotbit_outpoints_by_account_ids: account_id=0x{}, error={}",
+                        "failed to iterate object_outpoint_by_id in get_live_dotbit_outpoints_by_account_ids: account_id=0x{}, error={}",
                         bytes_to_hex(account_id),
                         e
                     )
@@ -184,7 +185,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_dotbit_account_outpoints_by_account_id: account_id=0x{}, error={}",
+                    "failed to iterate object_outpoint_by_id in list_dotbit_account_outpoints_by_account_id: account_id=0x{}, error={}",
                     bytes_to_hex(account_id),
                     e
                 )

@@ -3138,7 +3138,7 @@ pub(crate) fn materialize_object_state_for_test(
             for item in iter {
                 let (key, value) = item.map_err(|e| {
                     anyhow!(
-                        "failed to iterate stats_object hourly rows in object snapshot helper: collection_id=0x{}, error={}",
+                        "failed to iterate stats_mnft hourly rows in object snapshot helper: collection_id=0x{}, error={}",
                         hex::encode(collection_id),
                         e
                     )

@@ -520,7 +520,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in scan_all_object_24h_transfers: {}",
+                    "failed to iterate stats_mnft in scan_all_object_24h_transfers: {}",
                     e
                 )
             })?;

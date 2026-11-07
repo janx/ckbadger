@@ -295,7 +295,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_object_collection_owner_counts: {}",
+                    "failed to iterate stats_mnft in list_object_collection_owner_counts: {}",
                     e
                 )
             })?;
@@ -395,7 +395,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_object_daily_deltas_in_range: {}",
+                    "failed to iterate stats_mnft in list_object_daily_deltas_in_range: {}",
                     e
                 )
             })?;
