@@ -438,6 +438,10 @@ pub(crate) fn import_all(
     tokens: &[TokenMetadata],
     scripts: &[ScriptMetadata],
 ) -> Result<LabelImportResult> {
+    // Label import writes its CFs directly, outside the block journal: the
+    // journal discipline admits those writes from this scope only (Lane B
+    // carry-over 4c, `OUTSIDE_JOURNAL`'s label-import entries).
+    let _label_import = store.outside_journal_scope(ckbadger_store::OutsideWriter::LabelImport)?;
     let registrations = validate_script_registrations(store, scripts, network)?;
     let mut result = LabelImportResult::default();
     for token in tokens {

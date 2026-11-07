@@ -288,6 +288,16 @@ before a label change restores that block's pre-change rows until the next impor
 never-journaled is staged straight into the commit even by a journaled batch; the others are also
 journaled by live batches in their block's scope.
 
+An entry that covers a whole column family — the three derived aggregates and label import's seven
+CFs, `tokens` and `dao_live_agg` among them, which live batches also journal — names the **one
+writer** it admits (`OutsideWriter`): the derive scheduler writes through
+`StoreBatch::outside_journal(store, OutsideWriter::Derive)`, and `label_import::import_all` opens
+`CkbadgerStore::outside_journal_scope(OutsideWriter::LabelImport)` for its direct writes (a scope
+belongs to the thread that opened it and does not nest). Any other unjournaled write to those CFs —
+an untagged batch, the other writer, a direct write outside the scope or from another thread — is
+refused like an unlisted key. The `(cf, key prefix)` entries name narrow key ranges and admit any
+unjournaled writer.
+
 The indexer turns on the **journal discipline** on its domain store before its first write
 (`CkbadgerStore::enforce_journal_discipline`, `entry.rs`): from then on, outside bulk sync, an
 unjournaled commit that writes a `Journal`-class key no entry covers fails with the CF and key, on

@@ -7,7 +7,7 @@ use ckbadger_common::TokenBalance;
 
 use crate::block_overlay::{JournalStats, SharedBlockOverlay};
 use crate::keys;
-use crate::store::{cf_spec, CkbadgerStore, RollbackClass, StoreWriteIntent};
+use crate::store::{cf_spec, CkbadgerStore, OutsideWriter, RollbackClass, StoreWriteIntent};
 use crate::types::*;
 
 /// How many keys one append-only existence probe reads at a time.
@@ -47,6 +47,10 @@ pub struct StoreBatch<'a> {
     /// refused (`CkbadgerStore::check_unjournaled_write`); `commit` returns
     /// it and writes nothing.
     discipline_error: Option<anyhow::Error>,
+    /// The writer of this unjournaled batch ([`Self::outside_journal`]): the
+    /// journal discipline admits its writes where an `OUTSIDE_JOURNAL` entry
+    /// names it.
+    writer: Option<OutsideWriter>,
 }
 
 /// The journaled side of a [`StoreBatch`]: the shared overlay, which
@@ -99,7 +103,18 @@ impl<'a> StoreBatch<'a> {
             pending_fiber_channel_by_commitment: HashMap::new(),
             journal: None,
             discipline_error: None,
+            writer: None,
         }
+    }
+
+    /// An unjournaled batch of `writer`: its writes to a whole column family
+    /// that `OUTSIDE_JOURNAL` reserves for `writer` (label import's CFs, the
+    /// derived aggregates) pass the journal discipline; any other batch's are
+    /// refused.
+    pub fn outside_journal(store: &'a CkbadgerStore, writer: OutsideWriter) -> Self {
+        let mut batch = Self::new(store);
+        batch.writer = Some(writer);
+        batch
     }
 
     /// A domain batch of a live write: its writes to `Journal`-class CFs go
@@ -593,7 +608,7 @@ impl<'a> StoreBatch<'a> {
         let checked = self
             .store
             .cf_name_for_handle(cf)
-            .and_then(|name| self.store.check_unjournaled_write(name, key));
+            .and_then(|name| self.store.check_unjournaled_write(name, key, self.writer));
         if let Err(error) = checked {
             self.discipline_error = Some(error);
         }
@@ -648,7 +663,7 @@ impl<'a> StoreBatch<'a> {
         }
         if self.journal.is_none() {
             self.store
-                .check_unjournaled_range_delete(cf_name, start, end)?;
+                .check_unjournaled_range_delete(cf_name, start, end, self.writer)?;
         }
         let cf = self.store.cf(cf_name);
         self.batch.delete_range_cf(cf, start, end);

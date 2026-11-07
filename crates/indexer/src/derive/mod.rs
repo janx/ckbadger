@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, DerivedAggregateId, ReadSnapshot};
-use ckbadger_store::{CkbadgerStore, StoreBatch};
+use ckbadger_store::{CkbadgerStore, OutsideWriter, StoreBatch};
 use tracing::warn;
 
 pub(crate) use live::apply_live_batch;
@@ -206,7 +206,7 @@ pub(crate) fn invalidate_registered_for_rollback(
     rollback_to: i64,
 ) -> Result<()> {
     let tip = committed_tip(store)?;
-    let mut batch = StoreBatch::new(store);
+    let mut batch = StoreBatch::outside_journal(store, OutsideWriter::Derive);
     let mut reset = Vec::new();
     // The journal owns an aggregate's rollback only while it is complete at
     // or below the target; every other aggregate's journal entries above the

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use ckbadger_common::BackgroundTaskState;
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, ReadSnapshot, RebuildPhase};
-use ckbadger_store::{CkbadgerStore, StoreBatch};
+use ckbadger_store::{CkbadgerStore, OutsideWriter, StoreBatch};
 use tracing::info;
 
 use super::live::record_failure_before_stop;
@@ -98,7 +98,7 @@ impl<'s> DeriveScheduler<'s> {
     /// only a rollback that skipped [`super::invalidate_for_rollback`] leaves.
     pub fn normalize_on_startup(&mut self) -> Result<()> {
         let tip = committed_tip(self.store)?;
-        let mut batch = StoreBatch::new(self.store);
+        let mut batch = StoreBatch::outside_journal(self.store, OutsideWriter::Derive);
         let mut reset = Vec::new();
         for aggregate in &self.aggregates {
             let id = aggregate.id();
@@ -202,7 +202,7 @@ impl<'s> DeriveScheduler<'s> {
             started_at_ms: Some(started_at_ms),
             finished_at_ms: None,
         };
-        let mut batch = StoreBatch::new(self.store);
+        let mut batch = StoreBatch::outside_journal(self.store, OutsideWriter::Derive);
         batch.clear_derived_cf(id.cf_name)?;
         batch.put_derive_meta(id.name, &meta);
         batch.commit()?;
@@ -271,7 +271,7 @@ impl<'s> DeriveScheduler<'s> {
         // Fold the chunk into the rows (at most `chunk_keys` of them). Live
         // deltas may already sit on them (signed sums commute), so
         // read-modify-write against the primary.
-        let mut batch = StoreBatch::new(self.store);
+        let mut batch = StoreBatch::outside_journal(self.store, OutsideWriter::Derive);
         for (key, delta) in &out {
             let current = self.store.get_derived_value(id.cf_name, key)?;
             let value = sum_with(current, delta)?;
@@ -359,7 +359,7 @@ impl<'s> DeriveScheduler<'s> {
                 .store
                 .get_derive_meta(id.name)?
                 .and_then(|meta| meta.started_at_ms);
-            let mut batch = StoreBatch::new(self.store);
+            let mut batch = StoreBatch::outside_journal(self.store, OutsideWriter::Derive);
             batch.put_derive_meta(
                 id.name,
                 &DeriveMeta {
@@ -386,7 +386,7 @@ impl<'s> DeriveScheduler<'s> {
             .and_then(|meta| meta.started_at_ms);
         let completed_at_tip = committed_tip(self.store)?;
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
-        let mut batch = StoreBatch::new(self.store);
+        let mut batch = StoreBatch::outside_journal(self.store, OutsideWriter::Derive);
         batch.put_derive_meta(
             id.name,
             &DeriveMeta {
@@ -478,7 +478,7 @@ pub(crate) fn rederive_to_completion_with(
 /// stands now (tests and tools that change source rows directly, outside the
 /// live writer). Returns each aggregate's final state.
 pub fn rederive_to_completion(store: &CkbadgerStore) -> Result<Vec<(&'static str, DeriveState)>> {
-    let mut batch = StoreBatch::new(store);
+    let mut batch = StoreBatch::outside_journal(store, OutsideWriter::Derive);
     for aggregate in registry() {
         let id = aggregate.id();
         let previous = store.get_derive_meta(id.name)?;

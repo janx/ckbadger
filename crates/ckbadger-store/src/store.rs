@@ -746,6 +746,19 @@ pub fn cf_spec(name: &str) -> Option<&'static CfSpec> {
     CF_SPECS.iter().find(|spec| spec.name == name)
 }
 
+/// A writer an [`OUTSIDE_JOURNAL`] entry can name: the only one allowed to
+/// write that entry's keys outside the journal. An unjournaled write carries
+/// its writer — a [`crate::StoreBatch::outside_journal`] batch, or a direct
+/// write inside [`CkbadgerStore::outside_journal_scope`] on the scope's
+/// thread; any other unjournaled write carries none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideWriter {
+    /// `label_import::import_all` (indexer startup, `ckbadger label-import`).
+    LabelImport,
+    /// The derive scheduler and the rollback reset of derived aggregates.
+    Derive,
+}
+
 /// One range of `Journal`-class keys that is legitimately written outside
 /// the block journal (an unjournaled commit), with its owner and why a
 /// rollback need not restore it. [`OUTSIDE_JOURNAL`] lists every one.
@@ -763,6 +776,10 @@ pub struct OutsideJournal {
     /// batches journal it in their block's scope and only the owner writes it
     /// unjournaled.
     pub never_journaled: bool,
+    /// The one writer admitted, for an entry that covers a whole column family
+    /// (Lane B carry-over 4c); `None` for a `(cf, key prefix)` entry, which
+    /// names one narrow key range and admits any unjournaled writer.
+    pub writer: Option<OutsideWriter>,
 }
 
 const fn outside(
@@ -778,6 +795,26 @@ const fn outside(
         owner,
         reason,
         never_journaled,
+        writer: None,
+    }
+}
+
+/// A whole-column-family entry: only `writer` writes the CF outside the
+/// journal.
+const fn whole_cf(
+    cf: &'static str,
+    writer: OutsideWriter,
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix: b"",
+        owner,
+        reason,
+        never_journaled,
+        writer: Some(writer),
     }
 }
 
@@ -912,71 +949,113 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
          sealed day's row is journaled at its sealer block",
         ALSO_JOURNALED,
     ),
-    outside(CF_DAO_LIVE_AGG, b"", DERIVE, DERIVE_REASON, ALSO_JOURNALED),
-    outside(
+    whole_cf(
+        CF_DAO_LIVE_AGG,
+        OutsideWriter::Derive,
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    whole_cf(
         CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-        b"",
+        OutsideWriter::Derive,
         DERIVE,
         DERIVE_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_BIT_CELL_BY_ACCOUNT,
-        b"",
+        OutsideWriter::Derive,
         DERIVE,
         DERIVE_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS_BY_LABEL,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS_BY_FAMILY,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_FAMILIES,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_FAMILY_BY_NAME,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_INFO,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(CF_TOKENS, b"", LABEL_IMPORT, LABELS_REASON, ALSO_JOURNALED),
+    whole_cf(
+        CF_TOKENS,
+        OutsideWriter::LabelImport,
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
 ];
 
-/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any.
+/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any, whoever the
+/// writer (the block overlay's never-journaled test).
 pub fn outside_journal_entry(cf: &str, key: &[u8]) -> Option<&'static OutsideJournal> {
     OUTSIDE_JOURNAL
         .iter()
         .find(|entry| entry.cf == cf && key.starts_with(entry.key_prefix))
+}
+
+/// The [`OUTSIDE_JOURNAL`] entry admitting an unjournaled write of `(cf, key)`
+/// by `writer`, if any: an entry that names no writer admits any, one that
+/// names a writer admits only that one.
+pub fn outside_journal_entry_for(
+    cf: &str,
+    key: &[u8],
+    writer: Option<OutsideWriter>,
+) -> Option<&'static OutsideJournal> {
+    OUTSIDE_JOURNAL.iter().find(|entry| {
+        entry.cf == cf
+            && key.starts_with(entry.key_prefix)
+            && entry.writer.is_none_or(|named| writer == Some(named))
+    })
+}
+
+/// An open [`CkbadgerStore::outside_journal_scope`]; closing it (drop) ends
+/// the scope.
+pub struct OutsideJournalScope<'a> {
+    store: &'a CkbadgerStore,
+}
+
+impl Drop for OutsideJournalScope<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.store.outside_writer_scope.lock() {
+            *slot = None;
+        }
+    }
 }
 
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
@@ -1182,6 +1261,9 @@ pub struct CkbadgerStore {
     /// Set by the indexer: outside bulk sync, an unjournaled commit may write
     /// a `Journal`-class key only where [`OUTSIDE_JOURNAL`] covers it.
     journal_discipline: AtomicBool,
+    /// The writer of direct (non-batch) unjournaled writes made on one thread
+    /// inside [`Self::outside_journal_scope`].
+    outside_writer_scope: Mutex<Option<(std::thread::ThreadId, OutsideWriter)>>,
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
@@ -1407,6 +1489,7 @@ impl CkbadgerStore {
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             journal_discipline: AtomicBool::new(false),
+            outside_writer_scope: Mutex::new(None),
             is_secondary: false,
             memory_profile,
             runtime_config,
@@ -1507,6 +1590,7 @@ impl CkbadgerStore {
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             journal_discipline: AtomicBool::new(false),
+            outside_writer_scope: Mutex::new(None),
             is_secondary: true,
             memory_profile,
             runtime_config,
@@ -2329,7 +2413,11 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
         } else if self.journal_discipline_applies() {
-            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
+            self.check_unjournaled_write(
+                self.cf_name_for_handle(cf)?,
+                key,
+                self.direct_outside_writer()?,
+            )?;
         }
         let _guard = self
             .domain_write_gate
@@ -2343,7 +2431,11 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
         } else if self.journal_discipline_applies() {
-            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
+            self.check_unjournaled_write(
+                self.cf_name_for_handle(cf)?,
+                key,
+                self.direct_outside_writer()?,
+            )?;
         }
         let _guard = self
             .domain_write_gate
@@ -2742,22 +2834,63 @@ impl CkbadgerStore {
         self.journal_discipline.load(Ordering::Relaxed) && !self.is_bulk_sync_mode()
     }
 
+    /// Run this thread's direct (non-batch) writes as `writer` until the
+    /// returned guard drops: inside it, a direct unjournaled write is admitted
+    /// where an [`OUTSIDE_JOURNAL`] entry names `writer`. The scope belongs to
+    /// the thread that opened it (a sync writer such as label import; never
+    /// held across an `.await`), and scopes do not nest.
+    pub fn outside_journal_scope(
+        &self,
+        writer: OutsideWriter,
+    ) -> anyhow::Result<OutsideJournalScope<'_>> {
+        let mut slot = self
+            .outside_writer_scope
+            .lock()
+            .map_err(|_| anyhow::anyhow!("outside-journal scope lock poisoned"))?;
+        if let Some((thread, open)) = *slot {
+            anyhow::bail!(
+                "outside-journal scope {writer:?} requested while {open:?} is open on thread \
+                 {thread:?}: scopes do not nest"
+            );
+        }
+        *slot = Some((std::thread::current().id(), writer));
+        Ok(OutsideJournalScope { store: self })
+    }
+
+    /// The writer of a direct write on this thread: the open
+    /// [`Self::outside_journal_scope`]'s, if this thread opened it.
+    fn direct_outside_writer(&self) -> anyhow::Result<Option<OutsideWriter>> {
+        let slot = self
+            .outside_writer_scope
+            .lock()
+            .map_err(|_| anyhow::anyhow!("outside-journal scope lock poisoned"))?;
+        Ok(slot
+            .filter(|(thread, _)| *thread == std::thread::current().id())
+            .map(|(_, writer)| writer))
+    }
+
     /// Check one unjournaled write (a direct put / delete, or a write of an
-    /// unjournaled `StoreBatch`) against the journal discipline.
-    pub(crate) fn check_unjournaled_write(&self, cf: &str, key: &[u8]) -> anyhow::Result<()> {
+    /// unjournaled `StoreBatch`) by `writer` against the journal discipline.
+    pub(crate) fn check_unjournaled_write(
+        &self,
+        cf: &str,
+        key: &[u8],
+        writer: Option<OutsideWriter>,
+    ) -> anyhow::Result<()> {
         if !self.journal_discipline_applies() {
             return Ok(());
         }
         let journaled =
             cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
-        if !journaled || outside_journal_entry(cf, key).is_some() {
+        if !journaled || outside_journal_entry_for(cf, key, writer).is_some() {
             return Ok(());
         }
         anyhow::bail!(
             "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf} \
-             key=0x{}; a live write goes through a journaled batch in its block's scope, and a \
-             write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner \
-             and reason",
+             key=0x{} writer={writer:?}; a live write goes through a journaled batch in its \
+             block's scope, and a write that belongs outside the journal is listed in \
+             OUTSIDE_JOURNAL with its owner, reason and (for a whole column family) the one \
+             writer it admits",
             crate::bytes_to_hex(key)
         )
     }
@@ -2770,6 +2903,7 @@ impl CkbadgerStore {
         cf: &str,
         start: &[u8],
         end: &[u8],
+        writer: Option<OutsideWriter>,
     ) -> anyhow::Result<()> {
         if !self.journal_discipline_applies() {
             return Ok(());
@@ -2778,6 +2912,7 @@ impl CkbadgerStore {
             cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
         let covered = OUTSIDE_JOURNAL.iter().any(|entry| {
             entry.cf == cf
+                && entry.writer.is_none_or(|named| writer == Some(named))
                 && (entry.key_prefix.is_empty()
                     || (start.starts_with(entry.key_prefix) && end.starts_with(entry.key_prefix)))
         });
@@ -2786,7 +2921,7 @@ impl CkbadgerStore {
         }
         anyhow::bail!(
             "unjournaled range delete on a Journal-class CF outside the OUTSIDE_JOURNAL table: \
-             cf={cf} start=0x{} end=0x{}",
+             cf={cf} start=0x{} end=0x{} writer={writer:?}",
             crate::bytes_to_hex(start),
             crate::bytes_to_hex(end)
         )
@@ -5378,6 +5513,93 @@ mod tests {
         assert!(store
             .write_batch_no_wal_bulk(WriteBatch::default())
             .is_err());
+    }
+
+    /// Lane B carry-over 4(c): a whole-CF `OUTSIDE_JOURNAL` entry admits only
+    /// the writer it names. `tokens` and `dao_live_agg` are journaled by live
+    /// batches and written outside the journal only by label import and the
+    /// derive scheduler respectively; any other unjournaled write to them —
+    /// an untagged batch, another writer's batch, a direct write outside the
+    /// writer's scope or from another thread — is refused.
+    #[test]
+    fn whole_cf_outside_journal_entries_admit_only_their_writer() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let refused = |result: anyhow::Result<()>, what: &str| {
+            let error = result.expect_err(what).to_string();
+            assert!(error.contains("OUTSIDE_JOURNAL"), "{what}: {error}");
+        };
+
+        // Untagged: refused for both whole-CF entries.
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
+        refused(batch.commit(), "an untagged batch writing tokens");
+        let mut batch = crate::StoreBatch::new(&store);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
+            .unwrap();
+        refused(batch.commit(), "an untagged batch writing dao_live_agg");
+        refused(
+            store.put_cf(store.cf_tokens(), b"t", b"1"),
+            "a direct write to tokens outside the label import scope",
+        );
+
+        // The named writer passes; the other writer does not.
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
+            .unwrap();
+        batch
+            .delete_range_raw_cf_by_name(CF_OBJECT_COLLECTION_ACTIVITY_COUNT, b"", &[0xff])
+            .unwrap();
+        batch.commit().unwrap();
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
+        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
+        refused(batch.commit(), "the derive scheduler writing tokens");
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::LabelImport);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"2")
+            .unwrap();
+        refused(batch.commit(), "label import writing dao_live_agg");
+
+        // Direct writes inside the label import scope, on its thread.
+        {
+            let _scope = store
+                .outside_journal_scope(OutsideWriter::LabelImport)
+                .unwrap();
+            store.put_cf(store.cf_tokens(), b"t", b"1").unwrap();
+            store.put_cf(store.cf_script_info(), b"s", b"1").unwrap();
+            refused(
+                store.put_cf(store.cf_dao_live_agg(), b"d", b"3"),
+                "label import's scope writing dao_live_agg",
+            );
+            std::thread::scope(|threads| {
+                threads.spawn(|| {
+                    refused(
+                        store.put_cf(store.cf_tokens(), b"other", b"1"),
+                        "another thread during the label import scope",
+                    );
+                });
+            });
+            assert!(
+                store.outside_journal_scope(OutsideWriter::Derive).is_err(),
+                "scopes do not nest"
+            );
+        }
+        refused(
+            store.put_cf(store.cf_tokens(), b"t", b"2"),
+            "a direct write after the scope ended",
+        );
+
+        // The (cf, prefix) entries keep admitting any unjournaled writer.
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::SYNC_PROGRESS,
+                b"p",
+            )
+            .unwrap();
     }
 
     /// A never-journaled key written through a journaled batch goes straight
