@@ -14871,10 +14871,9 @@ mod tests {
                 rocksdb::IteratorMode::Start,
             ) {
                 let (key, value) = row.unwrap();
-                let (collection, block, _, _, _) =
-                    ckbadger_store::keys::decode_object_collection_activity_key(&key);
-                let entry: ckbadger_store::ObjectCollectionActivityEntry =
-                    bincode::deserialize(&value).unwrap();
+                let (collection, block, _) =
+                    ckbadger_store::keys::decode_object_collection_activity_key(&key).unwrap();
+                let actions = ckbadger_store::decode_stored_collection_activity(&value).unwrap();
                 let chain_time = multi
                     .get_block_header(block)
                     .unwrap()
@@ -14884,7 +14883,7 @@ mod tests {
                     .add_row(
                         &collection,
                         ckbadger_store::keys::stats_day_yyyymmdd(chain_time).unwrap(),
-                        &entry.actions,
+                        &actions,
                     )
                     .unwrap();
             }

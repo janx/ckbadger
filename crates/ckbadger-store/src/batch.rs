@@ -1636,15 +1636,13 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ObjectCollectionActivityEntry,
     ) {
-        let key = keys::encode_object_collection_activity_key(
-            collection_id,
-            block_num,
-            tx_idx,
-            &entry.block_hash,
-            &entry.tx_hash,
+        // Keyed by the transaction's position; only the actions are stored.
+        let key = keys::encode_object_collection_activity_key(collection_id, block_num, tx_idx);
+        self.put_cf(
+            self.store.cf_object_collection_activities(),
+            key,
+            entry.encode_stored(),
         );
-        let value = bincode::serialize(entry).expect("serialize ObjectCollectionActivityEntry");
-        self.put_cf(self.store.cf_object_collection_activities(), key, &value);
     }
 
     // ---- Identity collection activities ----
@@ -1675,15 +1673,13 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ObjectCollectionActivityEntry,
     ) {
-        let key = keys::encode_object_collection_activity_key(
-            collection_id,
-            block_num,
-            tx_idx,
-            &entry.block_hash,
-            &entry.tx_hash,
+        // Keyed by the transaction's position; only the actions are stored.
+        let key = keys::encode_object_collection_activity_key(collection_id, block_num, tx_idx);
+        self.put_cf(
+            self.store.cf_identity_collection_activities(),
+            key,
+            entry.encode_stored(),
         );
-        let value = bincode::serialize(entry).expect("serialize identity collection activity");
-        self.put_cf(self.store.cf_identity_collection_activities(), key, &value);
     }
 
     // ---- Statistics ----
@@ -2534,41 +2530,56 @@ mod tests {
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 
+    /// A collection activity row is keyed by its transaction's position and
+    /// stores only the actions; a second write at the position replaces the
+    /// first (a block hash is the header's, never a competing row's).
     #[test]
-    fn test_append_only_object_collection_activity_preserves_competing_block_hash_history() {
+    fn a_collection_activity_row_stores_only_its_actions_at_its_position() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = [0x12u8; 32];
-        let tx_hash = vec![0x44; 32];
-
-        let first = ObjectCollectionActivityEntry {
-            tx_hash: tx_hash.clone(),
-            block_hash: vec![0x31; 32],
+        let entry = |block_hash: u8, action| ObjectCollectionActivityEntry {
+            tx_hash: vec![0x44; 32],
+            block_hash: vec![block_hash; 32],
             timestamp_ms: 1_700_000_000_100,
-            actions: vec![AssetAction::Mint],
-        };
-        let second = ObjectCollectionActivityEntry {
-            tx_hash: tx_hash.clone(),
-            block_hash: vec![0x32; 32],
-            timestamp_ms: 1_700_000_000_200,
-            actions: vec![AssetAction::Transfer],
+            actions: vec![action],
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_activity(&collection_id, 100, 0, &first);
-        batch.put_object_collection_activity(&collection_id, 100, 0, &second);
+        batch.put_object_collection_activity(
+            &collection_id,
+            100,
+            0,
+            &entry(0x31, AssetAction::Mint),
+        );
+        batch.put_object_collection_activity(
+            &collection_id,
+            100,
+            0,
+            &entry(0x32, AssetAction::Transfer),
+        );
+        crate::object_ops::test_support::index_collection_activity(
+            &mut batch,
+            100,
+            0,
+            &entry(0x32, AssetAction::Transfer),
+        );
         batch.commit().unwrap();
 
+        let key = keys::encode_object_collection_activity_key(&collection_id, 100, 0);
+        assert_eq!(
+            store
+                .get_cf(store.cf_object_collection_activities(), &key)
+                .unwrap()
+                .unwrap(),
+            bincode::serialize(&vec![AssetAction::Transfer]).unwrap()
+        );
         let rows = store
             .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
-        assert_eq!(rows.len(), 2);
-        assert!(rows
-            .iter()
-            .any(|(_, _, entry)| entry.block_hash == vec![0x31; 32]));
-        assert!(rows
-            .iter()
-            .any(|(_, _, entry)| entry.block_hash == vec![0x32; 32]));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.block_hash, vec![0x32; 32]);
+        assert_eq!(rows[0].2.actions, vec![AssetAction::Transfer]);
     }
 
     /// P3.4: the append-only replay probe costs ONE `multi_get_cf`, not one

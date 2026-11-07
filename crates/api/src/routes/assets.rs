@@ -1378,55 +1378,10 @@ pub(crate) fn normalize_identity_activity_action_filter(
     }
 }
 
-/// A transaction's canonical `(block, tx index, block hash)`.
-type CanonicalTxLocation = (i64, i32, Vec<u8>);
-
-/// Every collection activity row must name a canonical transaction at the
-/// row's own position: `docs/prompts/REORG_HANDLING.md` has rollback delete a
-/// rolled-back block's collection rows directly, so a row whose transaction is
-/// unknown, or sits elsewhere, or in a block whose canonical hash differs, is
-/// a rollback bug. It is an error naming the row, never a row skipped.
-fn ensure_canonical_collection_activity_rows(
-    store: &CkbadgerStore,
-    collection_id: &[u8],
-    rows: &[(i64, i32, ObjectCollectionActivityEntry)],
-) -> anyhow::Result<()> {
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let tx_hashes: Vec<Vec<u8>> = rows
-        .iter()
-        .map(|(_, _, entry)| entry.tx_hash.clone())
-        .collect();
-    let canonical: HashMap<Vec<u8>, Option<CanonicalTxLocation>> = store
-        .get_canonical_tx_identities_by_hash_batch(&tx_hashes)?
-        .into_iter()
-        .collect();
-    for (block_number, tx_index, entry) in rows {
-        let location = canonical.get(&entry.tx_hash).cloned().flatten();
-        if location.as_ref() != Some(&(*block_number, *tx_index, entry.block_hash.clone())) {
-            anyhow::bail!(
-                "collection activity row is not canonical: collection=0x{} block={} tx_index={} tx=0x{} block_hash=0x{}; canonical location of the tx: {}; rollback must delete a rolled-back block's collection rows (REORG_HANDLING.md) — fix the rollback, then purge and re-sync",
-                hex::encode(collection_id),
-                block_number,
-                tx_index,
-                hex::encode(&entry.tx_hash),
-                hex::encode(&entry.block_hash),
-                match location {
-                    Some((block, index, hash)) => format!(
-                        "block={block} tx_index={index} block_hash=0x{}",
-                        hex::encode(hash)
-                    ),
-                    None => "none".to_string(),
-                }
-            );
-        }
-    }
-    Ok(())
-}
-
 /// One page of a collection's activity rows, newest first, after `cursor`.
-/// Every row is checked canonical ([`ensure_canonical_collection_activity_rows`]).
+/// Every row is canonical by construction: it is keyed by its transaction's
+/// position and completed from `tx_index` and `block_headers` there, and a
+/// position without a transaction is an error in the store reader.
 pub(crate) fn list_canonical_nft_collection_activities_page(
     store: &CkbadgerStore,
     _append_only_store: &CkbadgerStore,
@@ -1438,13 +1393,11 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let rows = if is_identity_sentinel(collection_id) {
-        store.list_identity_collection_activities(collection_id, limit, cursor, action_filter)?
+    if is_identity_sentinel(collection_id) {
+        store.list_identity_collection_activities(collection_id, limit, cursor, action_filter)
     } else {
-        store.list_object_collection_activities(collection_id, limit, cursor, action_filter)?
-    };
-    ensure_canonical_collection_activity_rows(store, collection_id, &rows)?;
-    Ok(rows)
+        store.list_object_collection_activities(collection_id, limit, cursor, action_filter)
+    }
 }
 
 /// Holder buckets of a collection's live items: how many holders own 1, 2,
@@ -4787,8 +4740,8 @@ mod tests {
         domain_batch.commit().unwrap();
 
         // Per REORG_HANDLING.md rollback deletes a rolled-back block's
-        // collection rows, so a row whose transaction is not canonical is a
-        // rollback bug: the feed and the count name it instead of hiding it.
+        // collection rows, so a row at a position with no transaction is a
+        // rollback bug: the feed names it instead of hiding it.
         let error = list_canonical_nft_collection_activities_page(
             &domain,
             &domain,
@@ -4801,10 +4754,9 @@ mod tests {
         .unwrap_err();
         let message = format!("{error:#}");
         assert!(
-            message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
-                && message.contains("block=30")
-                && message.contains(&format!("tx=0x{}", hex::encode(&stale_tx)))
-                && message.contains("not canonical"),
+            message.contains(
+                "object_collection_activities points at block=30, tx_idx=0, which has no tx_index row"
+            ),
             "{message}"
         );
 
@@ -4812,13 +4764,7 @@ mod tests {
         domain
             .delete_cf(
                 domain.cf_object_collection_activities(),
-                &ckbadger_store::keys::encode_object_collection_activity_key(
-                    &collection_id,
-                    30,
-                    0,
-                    &[0x30; 32],
-                    &stale_tx,
-                ),
+                &ckbadger_store::keys::encode_object_collection_activity_key(&collection_id, 30, 0),
             )
             .unwrap();
         let listed = list_canonical_nft_collection_activities_page(
@@ -4837,8 +4783,11 @@ mod tests {
         assert_eq!(listed[1].2.tx_hash, canonical_tx_old);
     }
 
+    /// A row is keyed by its position, so an abandoned branch's row cannot sit
+    /// beside the canonical one: the second write replaces the first, and the
+    /// block hash a row shows is the canonical header's.
     #[test]
-    fn test_collection_activity_helpers_fail_on_a_competing_block_hash_row() {
+    fn test_collection_activity_rows_take_the_block_hash_of_the_canonical_header() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xAC; 32];
@@ -4860,12 +4809,7 @@ mod tests {
             &collection_id,
             20,
             0,
-            &make_collection_activity(
-                &tx_hash,
-                &[0xAA; 32],
-                1_700_000_020_000,
-                AssetAction::Transfer,
-            ),
+            &make_collection_activity(&tx_hash, &[0xAA; 32], 1_700_000_020_000, AssetAction::Mint),
         );
         domain_batch.put_object_collection_activity(
             &collection_id,
@@ -4883,9 +4827,7 @@ mod tests {
         domain_batch.put_block_header(20, &make_header(0xBB));
         domain_batch.commit().unwrap();
 
-        // The 0xAA row names a block hash that is not the canonical header at
-        // block 20: an abandoned branch's row that rollback should have deleted.
-        let error = list_canonical_nft_collection_activities_page(
+        let listed = list_canonical_nft_collection_activities_page(
             &domain,
             &domain,
             &collection_id,
@@ -4893,16 +4835,11 @@ mod tests {
             None,
             None,
         )
-        .map(|_| ())
-        .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
-                && message.contains("block=20")
-                && message.contains(&format!("tx=0x{}", hex::encode(&tx_hash)))
-                && message.contains(&format!("block_hash=0x{}", hex::encode([0xAA; 32]))),
-            "{message}"
-        );
+        .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].2.block_hash, make_header(0xBB).hash);
+        assert_eq!(listed[0].2.actions, vec![AssetAction::Transfer]);
+        assert_eq!(listed[0].2.timestamp_ms, 1_700_000_000_000, "tx_index time");
     }
 
     #[test]

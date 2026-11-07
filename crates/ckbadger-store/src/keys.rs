@@ -2087,38 +2087,22 @@ pub fn decode_collection_activity_daily_key(key: &[u8]) -> anyhow::Result<([u8; 
     Ok((collection_id, day))
 }
 
-/// Object collection activity key:
-/// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B)
-/// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
-pub const OBJECT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 108;
+/// Object / identity collection activity key:
+/// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes.
+/// Descending block and tx index, so a prefix scan yields the newest first; the
+/// transaction is its position (hash and block hash: `tx_index` / `block_headers`).
+pub const OBJECT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 44;
 
 pub fn encode_object_collection_activity_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
-    block_hash: &[u8],
-    tx_hash: &[u8],
 ) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
-    // `collection_id` is padded (mNFT class IDs are 24B, `.bit` IDs 20B); the
-    // two hash segments must fill their windows exactly.
-    assert_key_component_len(
-        "encode_object_collection_activity_key",
-        "block_hash",
-        block_hash.len(),
-        HASH32_LEN,
-    );
-    assert_key_component_len(
-        "encode_object_collection_activity_key",
-        "tx_hash",
-        tx_hash.len(),
-        HASH32_LEN,
-    );
+    // `collection_id` is padded (mNFT class IDs are 24B, `.bit` IDs 20B).
     let mut key = [0u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
     key[..32].copy_from_slice(&pad_id_32(collection_id));
     key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
     key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
-    key[44..76].copy_from_slice(&block_hash[..32]);
-    key[76..108].copy_from_slice(&tx_hash[..32]);
     key
 }
 
@@ -2126,32 +2110,37 @@ pub fn encode_object_collection_activity_prefix(collection_id: &[u8]) -> [u8; 32
     pad_id_32(collection_id)
 }
 
+/// The seek key for the first row of `collection_id` strictly after (older
+/// than) the position `(block_num, tx_idx)`: the row key plus one byte.
 pub fn encode_object_collection_activity_seek_after_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
-) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
-    let mut key = [0xFFu8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
-    key[..32].copy_from_slice(&pad_id_32(collection_id));
-    key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
-    key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
+) -> Vec<u8> {
+    let mut key = encode_object_collection_activity_key(collection_id, block_num, tx_idx).to_vec();
+    key.push(0);
     key
 }
 
-pub fn decode_object_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Vec<u8>, Vec<u8>) {
-    assert!(
+/// `(collection_id, block_num, tx_idx)` of a collection activity key. Any
+/// other width — the 108-byte layout that also held the block and tx hashes
+/// included — is refused: re-sync required.
+pub fn decode_object_collection_activity_key(key: &[u8]) -> anyhow::Result<([u8; 32], i64, i32)> {
+    anyhow::ensure!(
         key.len() == OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
-        "decode_object_collection_activity_key: expected {} bytes, got {}",
-        OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
-        key.len()
+        "collection activity key 0x{} has {} bytes, expected {} (collection, block, tx_idx): \
+         written by an older layout, re-sync required",
+        hex::encode(key),
+        key.len(),
+        OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
     );
     let mut collection_id = [0u8; 32];
     collection_id.copy_from_slice(&key[..32]);
-    let block_num = decode_desc_block_num(&key[32..40]);
-    let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    let block_hash = key[44..76].to_vec();
-    let tx_hash = key[76..108].to_vec();
-    (collection_id, block_num, tx_idx, block_hash, tx_hash)
+    Ok((
+        collection_id,
+        decode_desc_block_num(&key[32..40]),
+        decode_desc_tx_idx(&key[40..44]),
+    ))
 }
 
 /// A transaction's canonical slot, `block_number (8B BE) ‖ tx_idx (4B BE)`:
@@ -3411,70 +3400,70 @@ mod tests {
             (1_000_000, 42),
             (i64::MAX, i32::MAX),
         ] {
-            let block_hash = [idx as u8; 32];
-            let tx_hash = [block as u8; 32];
-            let key = encode_object_collection_activity_key(
-                &collection_id,
-                block,
-                idx,
-                &block_hash,
-                &tx_hash,
-            );
+            let key = encode_object_collection_activity_key(&collection_id, block, idx);
             assert_eq!(key.len(), OBJECT_COLLECTION_ACTIVITY_KEY_SIZE);
-            let (decoded_cid, decoded_block, decoded_idx, decoded_block_hash, decoded_tx_hash) =
-                decode_object_collection_activity_key(&key);
-            assert_eq!(decoded_cid, collection_id);
-            assert_eq!(decoded_block, block);
-            assert_eq!(decoded_idx, idx);
-            assert_eq!(decoded_block_hash, block_hash.to_vec());
-            assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+            assert_eq!(OBJECT_COLLECTION_ACTIVITY_KEY_SIZE, 44);
+            assert_eq!(
+                decode_object_collection_activity_key(&key).unwrap(),
+                (collection_id, block, idx)
+            );
         }
+    }
+
+    #[test]
+    fn decode_object_collection_activity_key_refuses_the_108_byte_layout() {
+        let mut old = encode_object_collection_activity_key(&[0xAA; 32], 100, 5).to_vec();
+        old.extend_from_slice(&[0x66; 32]);
+        old.extend_from_slice(&[0x77; 32]);
+        let err = decode_object_collection_activity_key(&old)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("has 108 bytes, expected 44") && err.contains("re-sync required"),
+            "{err}"
+        );
     }
 
     #[test]
     fn test_object_collection_activity_key_descending_sort() {
         let cid = [0xBBu8; 32];
-        let block_hash = [0x66u8; 32];
-        let tx_hash = [0x77u8; 32];
-        let k1 = encode_object_collection_activity_key(&cid, 300, 5, &block_hash, &tx_hash);
-        let k2 = encode_object_collection_activity_key(&cid, 200, 5, &block_hash, &tx_hash);
-        let k3 = encode_object_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
+        let k1 = encode_object_collection_activity_key(&cid, 300, 5);
+        let k2 = encode_object_collection_activity_key(&cid, 200, 5);
+        let k3 = encode_object_collection_activity_key(&cid, 100, 5);
         // Higher block_num => smaller key (descending)
         assert!(k1 < k2);
         assert!(k2 < k3);
 
         // Same block, higher tx_idx => smaller key (descending)
-        let k4 = encode_object_collection_activity_key(&cid, 100, 10, &block_hash, &tx_hash);
-        let k5 = encode_object_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
+        let k4 = encode_object_collection_activity_key(&cid, 100, 10);
+        let k5 = encode_object_collection_activity_key(&cid, 100, 5);
         assert!(k4 < k5);
+        // The seek-after key lands strictly between a row and the next older one.
+        let seek = encode_object_collection_activity_seek_after_key(&cid, 100, 10);
+        assert!(seek.as_slice() > k4.as_slice() && seek.as_slice() < k5.as_slice());
     }
 
     #[test]
     fn test_object_collection_activity_prefix_matching() {
         let cid = [0xCCu8; 32];
         let prefix = encode_object_collection_activity_prefix(&cid);
-        let key = encode_object_collection_activity_key(&cid, 500, 3, &[0x77; 32], &[0x88; 32]);
+        let key = encode_object_collection_activity_key(&cid, 500, 3);
         assert!(key.starts_with(&prefix));
 
         let other_cid = [0xDDu8; 32];
-        let other_key =
-            encode_object_collection_activity_key(&other_cid, 500, 3, &[0x78; 32], &[0x99; 32]);
+        let other_key = encode_object_collection_activity_key(&other_cid, 500, 3);
         assert!(!other_key.starts_with(&prefix));
     }
 
     #[test]
     fn test_object_collection_activity_padded_short_id() {
         let short_id = [0xEEu8; 20];
-        let key =
-            encode_object_collection_activity_key(&short_id, 100, 0, &[0xAB; 32], &[0xAA; 32]);
-        let (decoded_cid, decoded_block, _, decoded_block_hash, decoded_tx_hash) =
-            decode_object_collection_activity_key(&key);
+        let key = encode_object_collection_activity_key(&short_id, 100, 0);
+        let (decoded_cid, decoded_block, _) = decode_object_collection_activity_key(&key).unwrap();
         // First 20 bytes match, rest is zero-padded
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
         assert_eq!(decoded_block, 100);
-        assert_eq!(decoded_block_hash, vec![0xAB; 32]);
-        assert_eq!(decoded_tx_hash, vec![0xAA; 32]);
     }
 
     #[test]
@@ -3501,28 +3490,6 @@ mod tests {
             err.contains("has 76 bytes, expected 44") && err.contains("re-sync required"),
             "{err}"
         );
-    }
-
-    #[test]
-    fn test_encode_object_collection_activity_key_includes_block_hash_and_tx_hash() {
-        let collection_id = [0x33u8; 32];
-        let block_hash = [0xABu8; 32];
-        let tx_hash = [0xCCu8; 32];
-        let key =
-            encode_object_collection_activity_key(&collection_id, 300, 9, &block_hash, &tx_hash);
-        assert_eq!(key.len(), OBJECT_COLLECTION_ACTIVITY_KEY_SIZE);
-        let (
-            decoded_collection_id,
-            decoded_block,
-            decoded_idx,
-            decoded_block_hash,
-            decoded_tx_hash,
-        ) = decode_object_collection_activity_key(&key);
-        assert_eq!(decoded_collection_id, collection_id);
-        assert_eq!(decoded_block, 300);
-        assert_eq!(decoded_idx, 9);
-        assert_eq!(decoded_block_hash, block_hash.to_vec());
-        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
     }
 
     // -- ranked balance key codecs -----------------------------------------
@@ -4073,22 +4040,6 @@ mod tests {
                 },
             },
             FixedWidthCase {
-                encoder: "encode_object_collection_activity_key",
-                component: "block_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_object_collection_activity_key(&H, 1, 0, h, &H);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_object_collection_activity_key",
-                component: "tx_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_object_collection_activity_key(&H, 1, 0, &H, h);
-                },
-            },
-            FixedWidthCase {
                 encoder: "encode_fiber_channel_id",
                 component: "funding_tx_hash",
                 expected: 32,
@@ -4300,8 +4251,7 @@ mod tests {
             32 + dotbit_account_id.len()
         );
         assert_eq!(
-            encode_object_collection_activity_key(&mnft_class_id, 1, 0, &[0xE1; 32], &[0xE2; 32])
-                .len(),
+            encode_object_collection_activity_key(&mnft_class_id, 1, 0).len(),
             OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
         );
         assert_eq!(
@@ -4310,7 +4260,7 @@ mod tests {
         );
         assert_eq!(
             encode_object_collection_activity_seek_after_key(&mnft_class_id, 1, 0).len(),
-            OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
+            OBJECT_COLLECTION_ACTIVITY_KEY_SIZE + 1
         );
 
         // `.bit` account IDs are 20 bytes by protocol, not a truncated hash.
@@ -4396,14 +4346,6 @@ mod tests {
     fn test_token_holder_balance_key_rejects_oversized_type_hash() {
         let _ =
             encode_token_holder_balance_key(&[0x9B; 33], &TokenBalance::from(1u128), &[0xAB; 32]);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "encode_object_collection_activity_key: block_hash must be exactly 32 bytes, got 33"
-    )]
-    fn test_object_collection_activity_key_rejects_oversized_block_hash() {
-        let _ = encode_object_collection_activity_key(&[0xAA; 32], 1, 0, &[0x9B; 33], &[0xAB; 32]);
     }
 
     #[test]

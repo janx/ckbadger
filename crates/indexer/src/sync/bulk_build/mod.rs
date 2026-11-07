@@ -5056,10 +5056,12 @@ fn build_history_rows_for_block(
                 &DOTCELL_SENTINEL_COLLECTION,
                 tx_actions.block_number,
                 tx_actions.tx_index,
-                &tx_actions.block_hash,
-                &tx_actions.tx_hash,
             );
-            rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+            rows.push_raw(
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
+                &activity_key,
+                &entry.encode_stored(),
+            )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
                 &DOTCELL_SENTINEL_COLLECTION,
@@ -5240,10 +5242,12 @@ fn build_history_rows_for_block(
                     &DOTBIT_SENTINEL_COLLECTION,
                     tx.block_number,
                     tx.tx_index,
-                    &tx.block_hash,
-                    &tx.tx_hash,
                 );
-                rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+                rows.push_raw(
+                    CF_IDENTITY_COLLECTION_ACTIVITIES,
+                    &activity_key,
+                    &entry.encode_stored(),
+                )?;
                 fold_collection_activity_row(
                     &mut collection_activity_daily,
                     &DOTBIT_SENTINEL_COLLECTION,
@@ -5277,13 +5281,11 @@ fn build_history_rows_for_block(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             );
-            rows.push_serialized(
+            rows.push_raw(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &resolved_entry.entry,
+                &resolved_entry.entry.encode_stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -5307,13 +5309,11 @@ fn build_history_rows_for_block(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             );
-            rows.push_serialized(
+            rows.push_raw(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &resolved_entry.entry,
+                &resolved_entry.entry.encode_stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -5548,11 +5548,9 @@ fn build_object_collection_activity_rows(
                     &DOTBIT_SENTINEL_COLLECTION,
                     tx.block_number,
                     tx.tx_index,
-                    &tx.block_hash,
-                    &tx.tx_hash,
                 )
                 .to_vec(),
-                bincode::serialize(&entry)?,
+                entry.encode_stored(),
             ));
             let delta = identity_activity_count_deltas
                 .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
@@ -5583,11 +5581,9 @@ fn build_object_collection_activity_rows(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             )
             .to_vec(),
-            bincode::serialize(&resolved_entry.entry)?,
+            resolved_entry.entry.encode_stored(),
         ));
     }
 
@@ -5607,11 +5603,9 @@ fn build_object_collection_activity_rows(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             )
             .to_vec(),
-            bincode::serialize(&resolved_entry.entry)?,
+            resolved_entry.entry.encode_stored(),
         ));
     }
 
@@ -6793,8 +6787,8 @@ mod tests {
     use crate::sync::TEST_CELLBASE_WITNESS;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
-        AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
-        TokenTransferRecord, TxActions, BIT_CELL_SENTINEL_COLLECTION,
+        AssetAction, FiberChannelState, TokenInfo, TokenTransferRecord, TxActions,
+        BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ADDR_TXS, CF_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
@@ -8200,65 +8194,86 @@ mod tests {
             .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
-        let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
-            domain_store
-                .iterator_cf(
-                    domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
-                    IteratorMode::Start,
+        let object_rows: std::collections::HashMap<Vec<u8>, Vec<AssetAction>> = domain_store
+            .iterator_cf(
+                domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
+                IteratorMode::Start,
+            )
+            .map(|item| {
+                let (key, value) = item.expect("iterator item");
+                (
+                    key.to_vec(),
+                    ckbadger_store::decode_stored_collection_activity(&value)
+                        .expect("deserialize object collection activity"),
                 )
-                .map(|item| {
-                    let (key, value) = item.expect("iterator item");
-                    (
-                        key.to_vec(),
-                        bincode::deserialize(&value)
-                            .expect("deserialize object collection activity"),
-                    )
-                })
-                .collect();
-        let identity_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
-            domain_store
-                .iterator_cf(
-                    domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
-                    IteratorMode::Start,
+            })
+            .collect();
+        let identity_rows: std::collections::HashMap<Vec<u8>, Vec<AssetAction>> = domain_store
+            .iterator_cf(
+                domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
+                IteratorMode::Start,
+            )
+            .map(|item| {
+                let (key, value) = item.expect("iterator item");
+                (
+                    key.to_vec(),
+                    ckbadger_store::decode_stored_collection_activity(&value)
+                        .expect("deserialize identity collection activity"),
                 )
-                .map(|item| {
-                    let (key, value) = item.expect("iterator item");
-                    (
-                        key.to_vec(),
-                        bincode::deserialize(&value)
-                            .expect("deserialize identity collection activity"),
+            })
+            .collect();
+        // The feeds complete each row from the position's tx_index entry and
+        // block header, which the same history rows wrote.
+        let completed: Vec<(i64, i32, Vec<u8>, Vec<u8>)> = domain_store
+            .list_object_collection_activities(&cluster_id, 10, None, None)
+            .expect("cluster feed")
+            .into_iter()
+            .chain(
+                domain_store
+                    .list_identity_collection_activities(
+                        &BIT_CELL_SENTINEL_COLLECTION,
+                        10,
+                        None,
+                        None,
                     )
-                })
-                .collect();
+                    .expect(".bit Cell feed"),
+            )
+            .map(|(block, idx, entry)| (block, idx, entry.tx_hash, entry.block_hash))
+            .collect();
+        assert_eq!(
+            completed,
+            vec![
+                (
+                    14_001_001,
+                    1,
+                    transfer_tx_hash.clone(),
+                    transfer_block_hash.clone()
+                ),
+                (
+                    14_001_000,
+                    0,
+                    create_tx_hash.clone(),
+                    create_block_hash.clone()
+                ),
+                (14_001_001, 1, transfer_tx_hash, transfer_block_hash),
+                (14_001_000, 0, create_tx_hash, create_block_hash),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&root);
 
-        let cluster_mint_key = keys::encode_object_collection_activity_key(
-            &cluster_id,
-            14_001_000,
-            0,
-            &create_block_hash,
-            &create_tx_hash,
-        );
-        let cluster_transfer_key = keys::encode_object_collection_activity_key(
-            &cluster_id,
-            14_001_001,
-            1,
-            &transfer_block_hash,
-            &transfer_tx_hash,
-        );
+        let cluster_mint_key =
+            keys::encode_object_collection_activity_key(&cluster_id, 14_001_000, 0);
+        let cluster_transfer_key =
+            keys::encode_object_collection_activity_key(&cluster_id, 14_001_001, 1);
         let bit_cell_mint_key = keys::encode_object_collection_activity_key(
             &BIT_CELL_SENTINEL_COLLECTION,
             14_001_000,
             0,
-            &create_block_hash,
-            &create_tx_hash,
         );
         let bit_cell_burn_key = keys::encode_object_collection_activity_key(
             &BIT_CELL_SENTINEL_COLLECTION,
             14_001_001,
             1,
-            &transfer_block_hash,
-            &transfer_tx_hash,
         );
 
         assert_eq!(object_rows.len(), 2);
@@ -8267,34 +8282,26 @@ mod tests {
         let cluster_mint = object_rows
             .get(cluster_mint_key.as_slice())
             .expect("cluster mint activity");
-        assert_eq!(cluster_mint.tx_hash, create_tx_hash);
-        assert_eq!(cluster_mint.block_hash, create_block_hash);
-        assert_eq!(cluster_mint.actions.len(), 1);
-        assert!(matches!(cluster_mint.actions[0], AssetAction::Mint));
+        assert_eq!(cluster_mint.len(), 1);
+        assert!(matches!(cluster_mint[0], AssetAction::Mint));
 
         let cluster_transfer = object_rows
             .get(cluster_transfer_key.as_slice())
             .expect("cluster transfer activity");
-        assert_eq!(cluster_transfer.tx_hash, transfer_tx_hash);
-        assert_eq!(cluster_transfer.block_hash, transfer_block_hash);
-        assert_eq!(cluster_transfer.actions.len(), 1);
-        assert!(matches!(cluster_transfer.actions[0], AssetAction::Transfer));
+        assert_eq!(cluster_transfer.len(), 1);
+        assert!(matches!(cluster_transfer[0], AssetAction::Transfer));
 
         let bit_cell_mint = identity_rows
             .get(bit_cell_mint_key.as_slice())
             .expect(".bit Cell mint activity");
-        assert_eq!(bit_cell_mint.tx_hash, create_tx_hash);
-        assert_eq!(bit_cell_mint.block_hash, create_block_hash);
-        assert_eq!(bit_cell_mint.actions.len(), 1);
-        assert!(matches!(bit_cell_mint.actions[0], AssetAction::Mint));
+        assert_eq!(bit_cell_mint.len(), 1);
+        assert!(matches!(bit_cell_mint[0], AssetAction::Mint));
 
         let bit_cell_burn = identity_rows
             .get(bit_cell_burn_key.as_slice())
             .expect(".bit Cell burn activity");
-        assert_eq!(bit_cell_burn.tx_hash, transfer_tx_hash);
-        assert_eq!(bit_cell_burn.block_hash, transfer_block_hash);
-        assert_eq!(bit_cell_burn.actions.len(), 1);
-        assert!(matches!(bit_cell_burn.actions[0], AssetAction::Burn));
+        assert_eq!(bit_cell_burn.len(), 1);
+        assert!(matches!(bit_cell_burn[0], AssetAction::Burn));
     }
 
     #[test]
@@ -8438,39 +8445,24 @@ mod tests {
         )
         .expect("dotbit collection activity rows");
 
-        let identity_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
+        let identity_rows: HashMap<Vec<u8>, Vec<AssetAction>> = rows
             .iter()
             .filter(|row| row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES)
             .map(|row| {
                 (
                     row.key.clone(),
-                    bincode::deserialize(&row.value)
+                    ckbadger_store::decode_stored_collection_activity(&row.value)
                         .expect("deserialize identity collection activity"),
                 )
             })
             .collect();
 
-        let mint_key = keys::encode_object_collection_activity_key(
-            &DOTBIT_SENTINEL_COLLECTION,
-            300,
-            0,
-            &[0xa0; 32],
-            &[0x31; 32],
-        );
-        let transfer_key = keys::encode_object_collection_activity_key(
-            &DOTBIT_SENTINEL_COLLECTION,
-            301,
-            0,
-            &[0xa1; 32],
-            &[0x32; 32],
-        );
-        let recycle_key = keys::encode_object_collection_activity_key(
-            &DOTBIT_SENTINEL_COLLECTION,
-            302,
-            0,
-            &[0xa2; 32],
-            &[0x33; 32],
-        );
+        let mint_key =
+            keys::encode_object_collection_activity_key(&DOTBIT_SENTINEL_COLLECTION, 300, 0);
+        let transfer_key =
+            keys::encode_object_collection_activity_key(&DOTBIT_SENTINEL_COLLECTION, 301, 0);
+        let recycle_key =
+            keys::encode_object_collection_activity_key(&DOTBIT_SENTINEL_COLLECTION, 302, 0);
 
         assert_eq!(identity_rows.len(), 3);
         assert_eq!(
@@ -8479,20 +8471,20 @@ mod tests {
         );
 
         let mint = identity_rows.get(mint_key.as_slice()).expect("dotbit mint");
-        assert_eq!(mint.actions.len(), 1);
-        assert!(matches!(mint.actions[0], AssetAction::Mint));
+        assert_eq!(mint.len(), 1);
+        assert!(matches!(mint[0], AssetAction::Mint));
 
         let transfer = identity_rows
             .get(transfer_key.as_slice())
             .expect("dotbit transfer");
-        assert_eq!(transfer.actions.len(), 1);
-        assert!(matches!(transfer.actions[0], AssetAction::Transfer));
+        assert_eq!(transfer.len(), 1);
+        assert!(matches!(transfer[0], AssetAction::Transfer));
 
         let recycle = identity_rows
             .get(recycle_key.as_slice())
             .expect("dotbit recycle");
-        assert_eq!(recycle.actions.len(), 1);
-        assert!(matches!(recycle.actions[0], AssetAction::Recycle));
+        assert_eq!(recycle.len(), 1);
+        assert!(matches!(recycle[0], AssetAction::Recycle));
     }
 
     /// Regression: mNFT token collection activities must be recorded during
@@ -8655,13 +8647,13 @@ mod tests {
         .expect("mnft collection activity rows");
 
         // Should produce object rows, not identity rows
-        let object_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
+        let object_rows: HashMap<Vec<u8>, Vec<AssetAction>> = rows
             .iter()
             .filter(|row| row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES)
             .map(|row| {
                 (
                     row.key.clone(),
-                    bincode::deserialize(&row.value)
+                    ckbadger_store::decode_stored_collection_activity(&row.value)
                         .expect("deserialize object collection activity"),
                 )
             })
@@ -8677,42 +8669,24 @@ mod tests {
         assert_eq!(identity_count, 0);
 
         // Verify mint
-        let mint_key = keys::encode_object_collection_activity_key(
-            &class_id,
-            400,
-            0,
-            &[0xb0; 32],
-            &[0x41; 32],
-        );
+        let mint_key = keys::encode_object_collection_activity_key(&class_id, 400, 0);
         let mint = object_rows.get(mint_key.as_slice()).expect("mnft mint");
-        assert_eq!(mint.actions.len(), 1);
-        assert!(matches!(mint.actions[0], AssetAction::Mint));
+        assert_eq!(mint.len(), 1);
+        assert!(matches!(mint[0], AssetAction::Mint));
 
         // Verify transfer
-        let transfer_key = keys::encode_object_collection_activity_key(
-            &class_id,
-            401,
-            0,
-            &[0xb1; 32],
-            &[0x42; 32],
-        );
+        let transfer_key = keys::encode_object_collection_activity_key(&class_id, 401, 0);
         let transfer = object_rows
             .get(transfer_key.as_slice())
             .expect("mnft transfer");
-        assert_eq!(transfer.actions.len(), 1);
-        assert!(matches!(transfer.actions[0], AssetAction::Transfer));
+        assert_eq!(transfer.len(), 1);
+        assert!(matches!(transfer[0], AssetAction::Transfer));
 
         // Verify burn
-        let burn_key = keys::encode_object_collection_activity_key(
-            &class_id,
-            402,
-            0,
-            &[0xb2; 32],
-            &[0x43; 32],
-        );
+        let burn_key = keys::encode_object_collection_activity_key(&class_id, 402, 0);
         let burn = object_rows.get(burn_key.as_slice()).expect("mnft burn");
-        assert_eq!(burn.actions.len(), 1);
-        assert!(matches!(burn.actions[0], AssetAction::Burn));
+        assert_eq!(burn.len(), 1);
+        assert!(matches!(burn[0], AssetAction::Burn));
 
         // Verify object activity count deltas (regression: was missing before fix)
         assert_eq!(

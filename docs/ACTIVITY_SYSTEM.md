@@ -459,8 +459,8 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 | `CF_ADDR_TXS`                       | 44 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
 | `CF_ADDR_TXS_BY_PREFIX`             | 32 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
 | `CF_ADDR_PREFIX_STATS`              | 20 bytes  | `AddrPrefixStats` (bincode)     | Per-prefix count of named participations without a cell          |
-| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds                                      |
-| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
+| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 44 bytes  | `Vec<AssetAction>` (bincode)    | Spore/mNFT collection feeds                                      |
+| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 44 bytes  | `Vec<AssetAction>` (bincode)    | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
 | `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                                         |
 
 **Note**: `CF_TX_ACTIONS` uses the RocksDB string `"activities"` (same physical column family name as the old `CF_ACTIVITIES`). The Rust constant was renamed for clarity.
@@ -538,8 +538,11 @@ participations `addr_balance.txs_count` cannot see, and therefore exactly what
 ### Key Encoding — Collection Activities
 
 ```
-collection_id(32B padded) + block_num_desc(8B) + tx_idx_desc(4B) + block_hash(32B) + tx_hash(32B) = 108 bytes
+collection_id(32B padded) + block_num_desc(8B) + tx_idx_desc(4B) = 44 bytes
 ```
+
+The value is the row's actions only; readers complete a page into `ObjectCollectionActivityEntry`
+(tx hash and timestamp from `tx_index`, block hash from `block_headers`, one `multi_get` each).
 
 ### Value Encoding
 

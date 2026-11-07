@@ -13,6 +13,17 @@ fn capture_producer(name: &str, value: &serde_json::Value) {
 }
 
 fn seed_tx(batch: &mut StoreBatch<'_>, hash: &[u8], block: i64, index: i32) {
+    seed_tx_at_time(batch, hash, block, index, 1_700_000_000_000 + block);
+}
+
+/// [`seed_tx`] with the transaction's (block) time.
+fn seed_tx_at_time(
+    batch: &mut StoreBatch<'_>,
+    hash: &[u8],
+    block: i64,
+    index: i32,
+    timestamp: i64,
+) {
     batch.put_tx_hash_map(hash, block, index);
     batch.put_tx_index(
         block,
@@ -20,7 +31,7 @@ fn seed_tx(batch: &mut StoreBatch<'_>, hash: &[u8], block: i64, index: i32) {
         &TxIndexEntry {
             tx_hash: hash.try_into().unwrap(),
             is_cellbase: false,
-            timestamp: 1_700_000_000_000 + block,
+            timestamp,
             inputs_count: 1,
             outputs_count: 1,
             fee: 0,
@@ -2082,8 +2093,8 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
     batch.commit().unwrap();
     let app = create_router(test_config(store.clone())).await;
     // Rollback deletes a rolled-back block's collection rows
-    // (REORG_HANDLING.md): a row naming a transaction that is not canonical is
-    // a rollback bug the feed names, never a row it skips.
+    // (REORG_HANDLING.md): a row at a position with no transaction is a
+    // rollback bug the feed names, never a row it skips.
     for path in [
         "/assets/identities/did:ckb/activity-feed?limit=10",
         "/assets/identities/did:ckb/transactions?limit=10",
@@ -2092,22 +2103,16 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
         let message = json["message"].as_str().unwrap();
         assert!(
-            message.contains("not canonical")
-                && message.contains("block=101")
-                && message.contains(&format!("tx=0x{}", hex::encode([0xfe; 32]))),
+            message.contains(
+                "identity_collection_activities points at block=101, tx_idx=0, which has no tx_index row"
+            ),
             "{path}: {json}"
         );
     }
     store
         .delete_cf(
             store.cf_identity_collection_activities(),
-            &ckbadger_store::keys::encode_object_collection_activity_key(
-                collection,
-                101,
-                0,
-                &[0xff; 32],
-                &[0xfe; 32],
-            ),
+            &ckbadger_store::keys::encode_object_collection_activity_key(collection, 101, 0),
         )
         .unwrap();
     let (status, activities) =
@@ -2275,8 +2280,10 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
         (1, 1, [0x12; 32], AssetAction::Transfer),
         (4, 1, [0x13; 32], AssetAction::Transfer),
     ] {
-        seed_tx(&mut batch, &hash, block, index);
         let header = store.get_block_header(block).unwrap().unwrap();
+        // The transaction's time is its block's raw header time, as the
+        // indexer records it (the row reads its timestamp from tx_index).
+        seed_tx_at_time(&mut batch, &hash, block, index, header.timestamp);
         batch.put_object_collection_activity(
             &cluster,
             block,

@@ -5551,8 +5551,9 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     batch.commit().unwrap();
     // Rollback deletes a rolled-back block's collection rows
     // (REORG_HANDLING.md), so the reverted row (3) and the competing-branch
-    // row (4) are rollback bugs: every surface that counts or lists the
-    // collection's rows names the first one instead of skipping it.
+    // row (4) — rows at positions with no transaction — are rollback bugs:
+    // every surface that lists the collection's rows names the first one
+    // instead of skipping it.
     let id_hex = format!("0x{}", hex::encode(id));
     let app = create_router(test_config(store.clone())).await;
     // The count no longer walks the rows (J5: it is the derived row count), so
@@ -5565,25 +5566,17 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
         let message = json["message"].as_str().unwrap();
         assert!(
-            message.contains("collection activity row is not canonical")
-                && message.contains(&format!("collection={id_hex}"))
-                && message.contains("block=4")
-                && message.contains(&format!("tx=0x{}", hex::encode([0x22; 32])))
-                && message.contains("canonical location of the tx: block=2"),
+            message.contains(
+                "object_collection_activities points at block=4, tx_idx=0, which has no tx_index row"
+            ),
             "{path}: {json}"
         );
     }
-    for (block, tx, block_hash) in [(3, [0x23; 32], [0xbc; 32]), (4, [0x22; 32], [0xbd; 32])] {
+    for block in [3, 4] {
         store
             .delete_cf(
                 store.cf_object_collection_activities(),
-                &ckbadger_store::keys::encode_object_collection_activity_key(
-                    &id,
-                    block,
-                    0,
-                    &block_hash,
-                    &tx,
-                ),
+                &ckbadger_store::keys::encode_object_collection_activity_key(&id, block, 0),
             )
             .unwrap();
     }

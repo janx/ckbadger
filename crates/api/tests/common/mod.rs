@@ -1399,9 +1399,9 @@ pub fn sync_collection_activity_daily(store: &CkbadgerStore, collection_id: &[u8
     ] {
         for item in store.prefix_iterator_cf(cf, &prefix) {
             let (key, value) = item.unwrap();
-            let (_, block, _, _, _) =
-                ckbadger_store::keys::decode_object_collection_activity_key(&key);
-            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value).unwrap();
+            let (_, block, _) =
+                ckbadger_store::keys::decode_object_collection_activity_key(&key).unwrap();
+            let actions = ckbadger_store::decode_stored_collection_activity(&value).unwrap();
             let header = store
                 .get_block_header(block)
                 .unwrap()
@@ -1410,7 +1410,7 @@ pub fn sync_collection_activity_daily(store: &CkbadgerStore, collection_id: &[u8
                 .add_row(
                     collection_id,
                     ckbadger_store::keys::stats_day_yyyymmdd(header.chain_time_ms).unwrap(),
-                    &entry.actions,
+                    &actions,
                 )
                 .unwrap();
         }

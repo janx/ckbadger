@@ -3177,13 +3177,52 @@ impl DailyActivityStats {
 // Group I-b: Object Collection Activities (pre-computed)
 // ============================================
 
+/// One row of a collection's activity feed (`object_collection_activities` /
+/// `identity_collection_activities`) as readers see it. Only `actions` is
+/// stored (`encode_stored`): the key is the collection and the transaction's
+/// position, so the tx hash and timestamp are `tx_index` there and the block
+/// hash is `block_headers` at the block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectCollectionActivityEntry {
     pub tx_hash: Vec<u8>,
-    #[serde(default)]
     pub block_hash: Vec<u8>,
     pub timestamp_ms: i64,
     pub actions: Vec<AssetAction>,
+}
+
+impl ObjectCollectionActivityEntry {
+    /// The stored value of this row: its actions (bincode `Vec<AssetAction>`).
+    pub fn encode_stored(&self) -> Vec<u8> {
+        bincode::serialize(&self.actions).expect("serialize collection activity actions")
+    }
+
+    /// A stored row completed from its position's `tx_index` entry and its
+    /// block's hash.
+    pub fn from_stored(actions: Vec<AssetAction>, tx: &TxIndexEntry, block_hash: Vec<u8>) -> Self {
+        Self {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash,
+            timestamp_ms: tx.timestamp,
+            actions,
+        }
+    }
+}
+
+/// Decode a collection activity value: exactly one `Vec<AssetAction>`
+/// (strict bincode). The earlier layout (tx hash, block hash, timestamp,
+/// actions) does not decode or leaves bytes over: re-sync required.
+pub fn decode_stored_collection_activity(value: &[u8]) -> anyhow::Result<Vec<AssetAction>> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<Vec<AssetAction>>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "collection activity value of {} bytes is not a list of actions ({e}): written by \
+                 an older layout, re-sync required",
+                value.len()
+            )
+        })
 }
 
 /// One collection's mint / transfer / burn transactions on one UTC+8 stats
@@ -3720,6 +3759,42 @@ mod tests {
         let info = sample_live_cell_info();
         let bytes = info.encode().unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
+    }
+
+    // ---- collection activity value ----
+
+    #[test]
+    fn collection_activity_stores_only_its_actions_and_refuses_the_old_value() {
+        let entry = ObjectCollectionActivityEntry {
+            tx_hash: vec![0xAA; 32],
+            block_hash: vec![0xBB; 32],
+            timestamp_ms: 1_700_000_000_000,
+            actions: vec![AssetAction::Mint, AssetAction::Transfer],
+        };
+        let stored = entry.encode_stored();
+        assert_eq!(stored, bincode::serialize(&entry.actions).unwrap());
+        let actions = decode_stored_collection_activity(&stored).unwrap();
+        let tx = TxIndexEntry {
+            tx_hash: [0xAA; 32],
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let completed = ObjectCollectionActivityEntry::from_stored(actions, &tx, vec![0xBB; 32]);
+        assert_eq!(
+            bincode::serialize(&completed).unwrap(),
+            bincode::serialize(&entry).unwrap()
+        );
+        let old = bincode::serialize(&entry).unwrap();
+        let err = decode_stored_collection_activity(&old)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("re-sync required"), "{err}");
     }
 
     // ---- activities value: StoredTxActions ----
