@@ -4486,9 +4486,9 @@ async fn transaction_list_pages_read_their_actions_once_per_page() {
     let app = create_router(test_config(store.clone())).await;
     for (path, header_reads, index_multi_gets) in [
         ("/transactions?limit=5", 0, 0),
-        // The bucket page completes its rows (one tx_index and one header
-        // batch for its six blocks) and the list reads the page's entries.
-        ("/transactions?activity_type=token&limit=5", 6, 2),
+        // The bucket page completes its rows with one tx_index read, whose
+        // entries the list serves, and one header batch for its six blocks.
+        ("/transactions?activity_type=token&limit=5", 6, 1),
     ] {
         store.reset_read_call_counters();
         let (status, json) = get_json(&app, path).await;

@@ -470,22 +470,19 @@ async fn list_transactions(
                             .collect(),
                     );
                 }
-                let page = super::activities::list_canonical_global_actions_page(
-                    &store,
-                    limit as usize + 1,
-                    cursor,
-                    Some(&filter),
-                )?;
-                // The rows come completed (block hash included); their
-                // `tx_index` entries are one read for the page.
-                let positions: Vec<(i64, i32)> = page
-                    .iter()
-                    .map(|actions| (actions.block_number, actions.tx_index))
-                    .collect();
-                let entries = store.tx_index_entries_at("activities", &positions)?;
-                Ok(page
+                let bucket =
+                    ckbadger_store::GlobalBucket::from_filter(&filter).ok_or_else(|| {
+                        anyhow::anyhow!("transaction filter '{filter}' names no activity bucket")
+                    })?;
+                // The rows come completed (block hash included) with the
+                // `tx_index` entries their completion read.
+                Ok(store
+                    .list_tx_actions_page_by_bucket_with_entries(
+                        bucket,
+                        cursor,
+                        limit as usize + 1,
+                    )?
                     .into_iter()
-                    .zip(entries)
                     .map(|(actions, entry)| {
                         (
                             (

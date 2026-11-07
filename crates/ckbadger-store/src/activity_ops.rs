@@ -122,7 +122,7 @@ impl CkbadgerStore {
     fn tx_actions_from_stored(
         &self,
         rows: Vec<(i64, i32, StoredTxActions)>,
-        entries: Vec<TxIndexEntry>,
+        entries: &[TxIndexEntry],
     ) -> anyhow::Result<TxActionsPage> {
         anyhow::ensure!(
             rows.len() == entries.len(),
@@ -147,7 +147,7 @@ impl CkbadgerStore {
                     stored,
                     block,
                     tx_idx,
-                    &entry,
+                    entry,
                     header.hash.clone(),
                 ))
             })
@@ -163,7 +163,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<TxActionsPage> {
         let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
         let entries = self.tx_index_entries_at("activities", &positions)?;
-        self.tx_actions_from_stored(rows, entries)
+        self.tx_actions_from_stored(rows, &entries)
     }
 
     /// The stored `activities` rows at `positions`, in order, read with one
@@ -378,8 +378,27 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         limit: usize,
     ) -> anyhow::Result<Vec<TxActions>> {
+        Ok(self
+            .list_tx_actions_page_by_bucket_with_entries(bucket, cursor, limit)?
+            .into_iter()
+            .map(|(actions, _)| actions)
+            .collect())
+    }
+
+    /// [`Self::list_tx_actions_page_by_bucket`] with each row's `tx_index`
+    /// entry — the completion's own read — for a reader that serves the
+    /// entries too (one `tx_index` read for the page, not two).
+    pub fn list_tx_actions_page_by_bucket_with_entries(
+        &self,
+        bucket: GlobalBucket,
+        cursor: Option<(i64, i32)>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(TxActions, TxIndexEntry)>> {
         let rows = self.list_stored_tx_actions_page_by_bucket(bucket, cursor, limit)?;
-        Ok(self.complete_tx_actions(rows)?.0)
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
+        let entries = self.tx_index_entries_at("activities", &positions)?;
+        let (actions, _) = self.tx_actions_from_stored(rows, &entries)?;
+        Ok(actions.into_iter().zip(entries).collect())
     }
 
     /// The stored `activities` rows of one page of a global bucket, newest
@@ -512,7 +531,7 @@ impl CkbadgerStore {
                     ),
                 }
             }
-            for actions in self.tx_actions_from_stored(kept_rows, kept_entries)?.0 {
+            for actions in self.tx_actions_from_stored(kept_rows, &kept_entries)?.0 {
                 if Self::matches_activity_filter(&actions, lock_hash, filter)? {
                     results.push(actions);
                     if results.len() >= limit {
