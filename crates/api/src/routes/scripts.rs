@@ -1551,13 +1551,73 @@ pub(crate) fn first_code_cell_deployment(
     }))
 }
 
-fn script_version_deployments(
+/// A version's code cells (sorted), each consumed one's marker and the hash of
+/// the transaction that consumed it.
+struct VersionCells {
+    code_cells: Vec<VersionCodeCell>,
+    consumed: Vec<Option<ckbadger_store::ConsumedCellInfo>>,
+    consumers: Vec<Option<[u8; 32]>>,
+}
+
+/// The code cells of each version in `version_hashes`, in order: per version
+/// its cells and their consumed markers, then the consumers of every
+/// version's consumed cells with one `consumer_tx_hashes` read for the
+/// response.
+fn versions_code_cells(
     state: &AppState,
-    version_hash: &[u8],
-    _info: &ckbadger_store::types::ScriptVersionInfo,
+    version_hashes: &[&[u8]],
+) -> Result<Vec<VersionCells>, ApiRouteError> {
+    let mut versions = Vec::with_capacity(version_hashes.len());
+    for version_hash in version_hashes {
+        let mut code_cells =
+            list_version_code_cells(&state.store, &state.append_only_store, version_hash)
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "code cells of version 0x{}: {e:#}",
+                        hex::encode(version_hash)
+                    ))
+                })?;
+        sort_code_cells(&mut code_cells);
+        let consumed = consumed_code_cells(state, &code_cells)?;
+        versions.push((code_cells, consumed));
+    }
+    let positions: Vec<(i64, i32)> = versions
+        .iter()
+        .flat_map(|(_, consumed)| consumed.iter().flatten())
+        .map(|consumed| consumed.consumer_position())
+        .collect();
+    let mut consumers = state
+        .store
+        .consumer_tx_hashes(&positions)
+        .map_err(|e| ApiError::internal(format!("consumers of script code cells: {e:#}")))?
+        .into_iter();
+    versions
+        .into_iter()
+        .map(|(code_cells, consumed)| {
+            let consumers = consumed
+                .iter()
+                .map(|consumed| match consumed {
+                    Some(_) => consumers.next().map(Some).ok_or_else(|| {
+                        ApiError::internal("code cell consumer resolution came up short")
+                    }),
+                    None => Ok(None),
+                })
+                .collect::<Result<Vec<_>, ApiRouteError>>()?;
+            Ok(VersionCells {
+                code_cells,
+                consumed,
+                consumers,
+            })
+        })
+        .collect()
+}
+
+/// The consumed marker of every consumed code cell (`None` for a live one).
+fn consumed_code_cells(
+    state: &AppState,
     code_cells: &[VersionCodeCell],
-) -> Result<Vec<ScriptVersionDeploymentResponse>, ApiRouteError> {
-    let consumed: Vec<Option<ckbadger_store::ConsumedCellInfo>> = code_cells
+) -> Result<Vec<Option<ckbadger_store::ConsumedCellInfo>>, ApiRouteError> {
+    code_cells
         .iter()
         .map(|(tx_hash, output_index, _, is_live)| {
             if *is_live {
@@ -1582,28 +1642,20 @@ fn script_version_deployments(
                 })
                 .map(Some)
         })
-        .collect::<Result<_, ApiRouteError>>()?;
-    // The consumers of every consumed code cell, resolved together.
-    let mut consumers = state
-        .store
-        .consumer_tx_hashes(
-            &consumed
-                .iter()
-                .flatten()
-                .map(|c| c.consumer_position())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "code cells of version 0x{}: {e:#}",
-                hex::encode(version_hash)
-            ))
-        })?
-        .into_iter();
-    code_cells
+        .collect()
+}
+
+fn script_version_deployments(
+    state: &AppState,
+    version_hash: &[u8],
+    cells: &VersionCells,
+) -> Result<Vec<ScriptVersionDeploymentResponse>, ApiRouteError> {
+    cells
+        .code_cells
         .iter()
-        .zip(consumed)
-        .map(|((tx_hash, output_index, cell, is_live), consumed)| {
+        .zip(&cells.consumed)
+        .zip(&cells.consumers)
+        .map(|(((tx_hash, output_index, cell, is_live), consumed), consumer)| {
             let type_script_hash = cell.type_script_hash();
             let hash_type = if type_script_hash.is_some() {
                 "type".to_string()
@@ -1612,12 +1664,6 @@ fn script_version_deployments(
             };
             let type_reference_hash =
                 type_script_hash.map(|hash| format!("0x{}", hex::encode(hash)));
-            let consumer = match consumed {
-                Some(_) => Some(consumers.next().ok_or_else(|| {
-                    ApiError::internal("code cell consumer resolution came up short")
-                })?),
-                None => None,
-            };
 
             let mut custody = classify_code_cell_lock(&cell.cell)?;
             mark_never_signed_if_proven(state, &cell.cell, &mut custody)?;
@@ -2043,20 +2089,20 @@ fn resolved_version_name(
     Ok(family.name)
 }
 
+/// `cells` is the version's [`versions_code_cells`] entry (read for the whole
+/// response).
 fn script_version_to_detail_response(
     state: &AppState,
     version_hash: &[u8],
     info: &ckbadger_store::types::ScriptVersionInfo,
     observed_references: Vec<ScriptObservedReferenceResponse>,
+    cells: VersionCells,
 ) -> Result<ScriptVersionDetailResponse, ApiRouteError> {
     let (cells_count, live_cells_count, _, owned_capacity_sum, _, owned_knowledge_sum) =
         checked_version_totals(version_hash, info, "script family detail")?;
-    let mut code_cells =
-        list_version_code_cells(&state.store, &state.append_only_store, version_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-    sort_code_cells(&mut code_cells);
+    let code_cells = &cells.code_cells;
 
-    let deployed_at = first_code_cell_deployment(state, version_hash, &code_cells)
+    let deployed_at = first_code_cell_deployment(state, version_hash, code_cells)
         .map_err(|error| ApiError::internal(error.to_string()))?
         .map(|deployment| deployment.timestamp_ms);
     let code_cells_live_count = code_cells
@@ -2064,7 +2110,7 @@ fn script_version_to_detail_response(
         .filter(|(_, _, _, is_live)| *is_live)
         .count() as i64;
     let code_cells_total = code_cells.len() as i64;
-    let deployments = script_version_deployments(state, version_hash, info, &code_cells)?;
+    let deployments = script_version_deployments(state, version_hash, &cells)?;
     let first_position = deployments
         .iter()
         .map(|deployment| {
@@ -2333,11 +2379,19 @@ fn script_history_for_versions(
     family_versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
     references: &mut HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>>,
 ) -> Result<Vec<ScriptHistoryMarkerResponse>, ApiRouteError> {
+    let cells = versions_code_cells(
+        state,
+        &family_versions
+            .iter()
+            .map(|(hash, _)| hash.as_slice())
+            .collect::<Vec<_>>(),
+    )?;
     let versions = family_versions
         .iter()
-        .map(|(hash, info)| {
+        .zip(cells)
+        .map(|((hash, info), cells)| {
             let refs = references.remove(hash).unwrap_or_default();
-            script_version_to_detail_response(state, hash, info, refs)
+            script_version_to_detail_response(state, hash, info, refs, cells)
         })
         .collect::<Result<Vec<_>, _>>()?;
     script_history(state, family_versions, &versions)
@@ -2997,11 +3051,19 @@ async fn get_script(
     let (mut observed_references, all_references, members, observed_type_ids) =
         observed_references_by_version(&state, &family_id, &family_versions)?;
     let code_classes = class_totals_for_members(&state, &members, &observed_type_ids)?;
+    let cells = versions_code_cells(
+        &state,
+        &family_versions
+            .iter()
+            .map(|(hash, _)| hash.as_slice())
+            .collect::<Vec<_>>(),
+    )?;
     let mut versions = family_versions
         .iter()
-        .map(|(version_hash, version_info)| {
+        .zip(cells)
+        .map(|((version_hash, version_info), cells)| {
             let refs = observed_references.remove(version_hash).unwrap_or_default();
-            script_version_to_detail_response(&state, version_hash, version_info, refs)
+            script_version_to_detail_response(&state, version_hash, version_info, refs, cells)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
