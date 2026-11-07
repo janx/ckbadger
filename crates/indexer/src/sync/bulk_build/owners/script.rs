@@ -252,9 +252,12 @@ impl ScriptOwner {
 
                 // Preserve label fields from existing store data (written by
                 // label import); a row that cannot be read fails the finalize
-                // (the error names the code hash). Finalize stage, once per
+                // (the error names the code hash), and a corrupt one is
+                // rebuild-required (finding 12). Finalize stage, once per
                 // script: no per-row bulk work.
-                if let Some(existing) = domain_store.get_script_info(code_hash)? {
+                if let Some(existing) =
+                    crate::db::writer::read_script_info_row(domain_store, code_hash)?
+                {
                     if info.name.is_none() {
                         info.name = existing.name;
                     }
@@ -1605,6 +1608,10 @@ mod tests {
         let text = format!("{err:#}");
         assert!(text.contains(&hex::encode(&code_hash)), "{text}");
         assert!(text.contains("script info"), "{text}");
+        assert!(
+            crate::lifecycle::is_rebuild_required(&err),
+            "a corrupt script_info row is rebuild-required (finding 12): {text}"
+        );
     }
 
     #[test]

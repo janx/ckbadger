@@ -992,13 +992,7 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(code_hashes.len());
         for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
             let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
-                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize script info: code_hash=0x{}, error={}",
-                        hex::encode(code_hash),
-                        e
-                    )
-                })?),
+                Ok(Some(value)) => Some(super::decode_script_info_row(code_hash, &value)?),
                 Ok(None) => None,
                 Err(e) => {
                     bail!(
@@ -1090,8 +1084,9 @@ impl BatchWriter {
                             ..Default::default()
                         });
                     // The label fields as stored now; a row that cannot be
-                    // read fails the batch (the error names the code hash).
-                    if let Some(fresh) = self.store.get_script_info(code_hash)? {
+                    // read fails the batch (the error names the code hash),
+                    // and a corrupt one is rebuild-required (finding 12).
+                    if let Some(fresh) = super::read_script_info_row(&self.store, code_hash)? {
                         info = overlay_script_metadata(info, &fresh);
                     }
                     entry.insert(info)
@@ -2114,6 +2109,10 @@ mod tests {
         let text = format!("{err:#}");
         assert!(text.contains(&hex::encode(&code_hash)), "{text}");
         assert!(text.contains("script info"), "{text}");
+        assert!(
+            crate::lifecycle::is_rebuild_required(&err),
+            "a corrupt script_info row is rebuild-required (finding 12): {text}"
+        );
     }
 
     #[test]
@@ -4334,6 +4333,13 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize script info"));
+        // Finding 12: the batch prefetch types a corrupt row as
+        // rebuild-required, naming the code hash.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        assert!(
+            err.to_string().contains(&hex::encode(&code_hash)),
+            "{err:#}"
+        );
     }
 
     #[test]
