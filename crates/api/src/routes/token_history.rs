@@ -48,7 +48,7 @@ fn decode_transfer_row(
         hex::encode(hash),
         hex::encode(key)
     );
-    let (block, sequence) = keys::decode_token_transfer_key(key);
+    let (block, sequence) = keys::decode_token_transfer_key(key)?;
     let row: TokenTransferRecord = bincode::deserialize(value)
         .with_context(|| format!("token transfer decode key=0x{}", hex::encode(key)))?;
     ensure!(
@@ -114,7 +114,7 @@ fn visit_transfers_in(
         if !key.starts_with(hash) {
             break;
         }
-        if key.len() == 44 && keys::decode_token_transfer_key(&key).0 < range.from {
+        if key.len() == 44 && keys::decode_token_transfer_key(&key)?.0 < range.from {
             break;
         }
         let (block, sequence, row) = decode_transfer_row(hash, &key, &value)?;

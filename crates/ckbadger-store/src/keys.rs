@@ -1822,13 +1822,20 @@ pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) 
     key
 }
 
-/// Decode block_num and tx_idx from a token transfer key.
-pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
-    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
-    let tx_idx_desc = i32::from_be_bytes(key[40..44].try_into().unwrap());
-    let tx_idx = i32::MAX - tx_idx_desc;
-    (block_num, tx_idx)
+/// Decode block_num and tx_idx from a token transfer key. A key of another
+/// width, or with a newest-first component that encodes no position, is a
+/// corrupt key: re-sync required.
+pub fn decode_token_transfer_key(key: &[u8]) -> anyhow::Result<(i64, i32)> {
+    anyhow::ensure!(
+        key.len() == TOKEN_TRANSFER_KEY_SIZE,
+        "token_transfers key 0x{} has {} bytes, expected {TOKEN_TRANSFER_KEY_SIZE}: re-sync required",
+        hex::encode(key),
+        key.len()
+    );
+    Ok((
+        decode_desc_block_num(&key[32..40])?,
+        decode_desc_tx_idx(&key[40..44])?,
+    ))
 }
 
 /// Cluster owner key: prefix(1B) + cluster_id(32B) + lock_hash(32B) = 65 bytes
@@ -1989,17 +1996,16 @@ pub fn encode_dao_by_block_key(
     key
 }
 
-pub fn decode_dao_by_block_key(key: &[u8]) -> (i64, Vec<u8>, i16) {
-    assert!(
+pub fn decode_dao_by_block_key(key: &[u8]) -> anyhow::Result<(i64, Vec<u8>, i16)> {
+    anyhow::ensure!(
         key.len() == DAO_BY_BLOCK_KEY_SIZE,
-        "decode_dao_by_block_key: expected {} bytes, got {}",
-        DAO_BY_BLOCK_KEY_SIZE,
+        "dao_by_block key 0x{} has {} bytes, expected {DAO_BY_BLOCK_KEY_SIZE}: re-sync required",
+        hex::encode(key),
         key.len()
     );
-    let block_desc = i64::from_be_bytes(key[..8].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
+    let block_num = decode_desc_block_num(&key[..8])?;
     let (tx_hash, output_index) = decode_outpoint(&key[8..42]);
-    (block_num, tx_hash, output_index)
+    Ok((block_num, tx_hash, output_index))
 }
 
 pub fn encode_dao_by_lock_block_key(
@@ -2025,18 +2031,19 @@ pub fn encode_dao_by_lock_block_key(
     key
 }
 
-pub fn decode_dao_by_lock_block_key(key: &[u8]) -> (Vec<u8>, i64, Vec<u8>, i16) {
-    assert!(
+#[allow(clippy::type_complexity)]
+pub fn decode_dao_by_lock_block_key(key: &[u8]) -> anyhow::Result<(Vec<u8>, i64, Vec<u8>, i16)> {
+    anyhow::ensure!(
         key.len() == DAO_BY_LOCK_BLOCK_KEY_SIZE,
-        "decode_dao_by_lock_block_key: expected {} bytes, got {}",
-        DAO_BY_LOCK_BLOCK_KEY_SIZE,
+        "dao_by_lock_block key 0x{} has {} bytes, expected {DAO_BY_LOCK_BLOCK_KEY_SIZE}: re-sync \
+         required",
+        hex::encode(key),
         key.len()
     );
     let lock_hash = key[..32].to_vec();
-    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
+    let block_num = decode_desc_block_num(&key[32..40])?;
     let (tx_hash, output_index) = decode_outpoint(&key[40..74]);
-    (lock_hash, block_num, tx_hash, output_index)
+    Ok((lock_hash, block_num, tx_hash, output_index))
 }
 
 pub fn encode_dao_by_lock_prefix(lock_hash: &[u8]) -> [u8; 32] {
@@ -2068,18 +2075,18 @@ pub fn encode_dao_by_status_block_key(
     key
 }
 
-pub fn decode_dao_by_status_block_key(key: &[u8]) -> (i16, i64, Vec<u8>, i16) {
-    assert!(
+pub fn decode_dao_by_status_block_key(key: &[u8]) -> anyhow::Result<(i16, i64, Vec<u8>, i16)> {
+    anyhow::ensure!(
         key.len() == DAO_BY_STATUS_BLOCK_KEY_SIZE,
-        "decode_dao_by_status_block_key: expected {} bytes, got {}",
-        DAO_BY_STATUS_BLOCK_KEY_SIZE,
+        "dao_by_status_block key 0x{} has {} bytes, expected {DAO_BY_STATUS_BLOCK_KEY_SIZE}: \
+         re-sync required",
+        hex::encode(key),
         key.len()
     );
     let status = i16::from_be_bytes(key[..2].try_into().unwrap());
-    let block_desc = i64::from_be_bytes(key[2..10].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
+    let block_num = decode_desc_block_num(&key[2..10])?;
     let (tx_hash, output_index) = decode_outpoint(&key[10..44]);
-    (status, block_num, tx_hash, output_index)
+    Ok((status, block_num, tx_hash, output_index))
 }
 
 pub fn encode_dao_by_status_prefix(status: i16) -> [u8; 2] {
@@ -2660,7 +2667,7 @@ mod tests {
         let outpoint = encode_outpoint(&[0xAA; 32], 3);
         let key = encode_dao_by_block_key(123, &outpoint);
         assert_eq!(key.len(), DAO_BY_BLOCK_KEY_SIZE);
-        let (block, tx_hash, output_index) = decode_dao_by_block_key(&key);
+        let (block, tx_hash, output_index) = decode_dao_by_block_key(&key).unwrap();
         assert_eq!(block, 123);
         assert_eq!(tx_hash, vec![0xAA; 32]);
         assert_eq!(output_index, 3);
@@ -2671,7 +2678,7 @@ mod tests {
         let outpoint = encode_outpoint(&[0xBB; 32], 5);
         let key = encode_dao_by_lock_block_key(&[0x11; 32], 999, &outpoint);
         assert_eq!(key.len(), DAO_BY_LOCK_BLOCK_KEY_SIZE);
-        let (lock_hash, block, tx_hash, output_index) = decode_dao_by_lock_block_key(&key);
+        let (lock_hash, block, tx_hash, output_index) = decode_dao_by_lock_block_key(&key).unwrap();
         assert_eq!(lock_hash, vec![0x11; 32]);
         assert_eq!(block, 999);
         assert_eq!(tx_hash, vec![0xBB; 32]);
@@ -2683,7 +2690,7 @@ mod tests {
         let outpoint = encode_outpoint(&[0xCC; 32], 1);
         let key = encode_dao_by_status_block_key(2, 456, &outpoint);
         assert_eq!(key.len(), DAO_BY_STATUS_BLOCK_KEY_SIZE);
-        let (status, block, tx_hash, output_index) = decode_dao_by_status_block_key(&key);
+        let (status, block, tx_hash, output_index) = decode_dao_by_status_block_key(&key).unwrap();
         assert_eq!(status, 2);
         assert_eq!(block, 456);
         assert_eq!(tx_hash, vec![0xCC; 32]);
@@ -3579,7 +3586,20 @@ mod tests {
             encode_tx_actions_by_bucket_key(crate::global_bucket::GlobalBucket::Token, 5, 1)
                 .to_vec();
         bucket[1] = 0x80;
+        let mut transfer = encode_token_transfer_key(&[0xAA; 32], 5, 1);
+        transfer[40] = 0x80;
+        let outpoint = encode_outpoint(&[0xBB; 32], 0);
+        let mut dao_block = encode_dao_by_block_key(5, &outpoint);
+        dao_block[0] = 0x80;
+        let mut dao_lock = encode_dao_by_lock_block_key(&[0xAA; 32], 5, &outpoint);
+        dao_lock[32] = 0x80;
+        let mut dao_status = encode_dao_by_status_block_key(1, 5, &outpoint);
+        dao_status[2] = 0x80;
         let errors = [
+            decode_token_transfer_key(&transfer).unwrap_err(),
+            decode_dao_by_block_key(&dao_block).unwrap_err(),
+            decode_dao_by_lock_block_key(&dao_lock).unwrap_err(),
+            decode_dao_by_status_block_key(&dao_status).unwrap_err(),
             decode_stored_tx_actions_key(&activities).unwrap_err(),
             decode_addr_tx_key(&addr_tx).unwrap_err(),
             decode_addr_tx_by_prefix_key(&by_prefix).unwrap_err(),
