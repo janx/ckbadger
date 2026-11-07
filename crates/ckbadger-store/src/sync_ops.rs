@@ -46,9 +46,11 @@ impl CkbadgerStore {
         }
     }
 
-    /// The UTC+8 activity hour the activity address rows were last pruned to
-    /// (`sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR`); `None` before the first
-    /// prune. A value that is not 10 ASCII digits is an error.
+    /// The cursor of the activity address row prune
+    /// (`sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR`): the first UTC+8 hour whose
+    /// `ACTIVITY_*_ADDR_ROW` rows are kept (bulk finalize writes the handoff
+    /// hour); `None` before the first prune of a never-bulk store. A value
+    /// that is not 10 ASCII digits is an error.
     pub fn get_activity_addr_row_floor(&self) -> anyhow::Result<Option<String>> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR)? {
             Some(value) => {

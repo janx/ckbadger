@@ -1111,15 +1111,16 @@ transaction with three token changes is counted once in `token_count`.
   bucket + lock hash), kept only while a block can still reach the bucket. Live sync writes the row
   of each address new to a bucket in its block's scope, raising the bucket's
   `unique_address_count` by one; live batches delete the rows of the buckets behind the rollback
-  coverage floor, oldest first (journaled), and record the hour pruned to
-  (`activity_addr_row_floor`). Bulk build keeps a bucket's set in memory until the bucket seals and
+  coverage floor, one bucket a batch, oldest first (journaled), and move the cursor
+  `activity_addr_row_floor`, the first hour whose rows are kept. Bulk build keeps a bucket's set in
+  memory until the bucket seals and
   writes rows only for the buckets still open at the handoff. The retired `0x23` / `0x24` blobs
   are not written (`docs/STORE_SCHEMA.md` → `stats_chain` activity address rows)
 
 Live-sync stats are accumulated per block and merged into the block's day and hour buckets, on top
 of the rows the previous block left, with `BatchWriter::update_activity_bucket_stats`, because a
 day or hour can span multiple blocks and batches. Fresh-store bulk build instead seals completed
-buckets at its median-time-past watermark and writes each sealed aggregate once.
+buckets at its running-maximum chain-time watermark and writes each sealed aggregate once.
 
 ### API Endpoints
 
