@@ -90,7 +90,7 @@ pub use store::{
     known_domain_secondary_store_paths, secondary_store_path, BufferTier, CfCompaction,
     CfCompression, CfSpec, CfStore, CfWritePolicy, CkbadgerStore, FlushStats, MemoryProfile,
     OutsideJournalScope, OutsideWriter, RollbackClass, SecondaryStoreOwner, StoreRuntimeConfig,
-    ALL_CFS, CF_SPECS,
+    ALL_CFS, BATCH_LOOP_ONLY_CFS, CF_SPECS, FINALIZE_WRITTEN_CFS,
 };
 pub use store::{
     APPEND_CFS, CF_ADDR_BALANCE, CF_ADDR_FIBER_CHANNELS, CF_ADDR_PREFIX_STATS,

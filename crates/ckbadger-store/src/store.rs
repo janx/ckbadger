@@ -1102,6 +1102,10 @@ enum CfSelect {
     Tier(BufferTier),
     BulkHot,
     Compaction(CfCompaction),
+    /// Domain CFs bulk finalize phases 2-11 may write.
+    FinalizeWritten,
+    /// Domain CFs only the bulk batch loop writes.
+    BatchLoopOnly,
 }
 
 impl CfSpec {
@@ -1112,7 +1116,21 @@ impl CfSpec {
             CfSelect::Tier(tier) => self.buffer_tier as u8 == tier as u8,
             CfSelect::BulkHot => self.bulk_hot_memtable,
             CfSelect::Compaction(compaction) => self.compaction as u8 == compaction as u8,
+            CfSelect::FinalizeWritten => {
+                matches!(self.store, CfStore::Domain) && self.finalize_writes()
+            }
+            CfSelect::BatchLoopOnly => {
+                matches!(self.store, CfStore::Domain) && !self.finalize_writes()
+            }
         }
+    }
+
+    /// The write policies the bounded bulk finalize materializer accepts.
+    const fn finalize_writes(&self) -> bool {
+        matches!(
+            self.write_policy,
+            CfWritePolicy::SealedAggregate | CfWritePolicy::FinalSnapshot
+        )
     }
 }
 
@@ -1157,6 +1175,10 @@ const HIGH_CF_NAMES: [&str; cf_count(CfSelect::Tier(BufferTier::High))] =
 const BULK_HOT_CF_NAMES: [&str; cf_count(CfSelect::BulkHot)] = cf_names(CfSelect::BulkHot);
 const UNIVERSAL_CF_NAMES: [&str; cf_count(CfSelect::Compaction(CfCompaction::Universal))] =
     cf_names(CfSelect::Compaction(CfCompaction::Universal));
+const FINALIZE_WRITTEN_CF_NAMES: [&str; cf_count(CfSelect::FinalizeWritten)] =
+    cf_names(CfSelect::FinalizeWritten);
+const BATCH_LOOP_ONLY_CF_NAMES: [&str; cf_count(CfSelect::BatchLoopOnly)] =
+    cf_names(CfSelect::BatchLoopOnly);
 
 pub fn is_append_only_cf_name(cf_name: &str) -> bool {
     APPEND_CFS.contains(&cf_name)
@@ -1187,6 +1209,19 @@ pub const ALL_CFS: &[&str] = &ALL_CF_NAMES;
 
 /// Column families of the domain mutable store.
 pub const DOMAIN_CFS: &[&str] = &DOMAIN_CF_NAMES;
+
+/// Domain CFs bulk finalize phases 2-11 may write, in [`DOMAIN_CFS`] order:
+/// the `SealedAggregate` and `FinalSnapshot` write policies, the only two the
+/// bounded finalize materializer accepts. Finalize phase 12 flushes exactly
+/// these.
+pub const FINALIZE_WRITTEN_CFS: &[&str] = &FINALIZE_WRITTEN_CF_NAMES;
+
+/// Every other domain CF ([`DOMAIN_CFS`] minus [`FINALIZE_WRITTEN_CFS`]):
+/// Class A history and bulk-disabled CFs, which only the bulk batch loop
+/// writes. They hold their final bulk state once the flush channel has
+/// committed its last batch, so finalize flushes them from then on, beside
+/// phases 2-11.
+pub const BATCH_LOOP_ONLY_CFS: &[&str] = &BATCH_LOOP_ONLY_CF_NAMES;
 
 /// Column families of the append-only store (immutable, hash-keyed cell payloads).
 pub const APPEND_CFS: &[&str] = &APPEND_CF_NAMES;
@@ -5588,6 +5623,67 @@ mod tests {
             assert_eq!(cf_spec(spec.name), Some(spec));
         }
         assert_eq!(cf_spec("no_such_cf"), None);
+    }
+
+    /// Bulk finalize's two flush sets split the domain store (D-3).
+    /// `FINALIZE_WRITTEN_CFS` is every domain CF finalize phases 2-11 may
+    /// write: the two write policies the bounded finalize materializer
+    /// accepts. `BATCH_LOOP_ONLY_CFS` is every other domain CF; only the
+    /// batch loop writes those, so finalize flushes them as soon as the
+    /// flush channel has committed its last batch.
+    #[test]
+    fn batch_loop_only_cfs_are_the_domain_cfs_outside_finalize_written_cfs() {
+        let finalize_policies: Vec<&str> = DOMAIN_CFS
+            .iter()
+            .copied()
+            .filter(|name| {
+                matches!(
+                    cf_write_policy(name),
+                    CfWritePolicy::SealedAggregate | CfWritePolicy::FinalSnapshot
+                )
+            })
+            .collect();
+        assert_eq!(FINALIZE_WRITTEN_CFS, finalize_policies.as_slice());
+
+        let domain_minus_finalize: Vec<&str> = DOMAIN_CFS
+            .iter()
+            .copied()
+            .filter(|name| !FINALIZE_WRITTEN_CFS.contains(name))
+            .collect();
+        assert_eq!(BATCH_LOOP_ONLY_CFS, domain_minus_finalize.as_slice());
+        assert_eq!(
+            FINALIZE_WRITTEN_CFS.len() + BATCH_LOOP_ONLY_CFS.len(),
+            DOMAIN_CFS.len()
+        );
+        assert_eq!(
+            (FINALIZE_WRITTEN_CFS.len(), BATCH_LOOP_ONLY_CFS.len()),
+            (52, 22)
+        );
+        for name in BATCH_LOOP_ONLY_CFS {
+            assert!(
+                matches!(
+                    cf_write_policy(name),
+                    CfWritePolicy::AppendOnly | CfWritePolicy::BulkDisabled
+                ),
+                "{name}"
+            );
+        }
+        for name in APPEND_CFS.iter().chain(NETWORK_CFS) {
+            assert!(!FINALIZE_WRITTEN_CFS.contains(name), "{name}");
+            assert!(!BATCH_LOOP_ONLY_CFS.contains(name), "{name}");
+        }
+        // Lane 0 §7.1 classed this history feed with the finalize-written
+        // CFs; its policy (Class A) keeps it out of finalize.
+        assert!(BATCH_LOOP_ONLY_CFS.contains(&CF_OBJECT_COLLECTION_ACTIVITIES));
+        // Phase 11's tracker rows and cursors, written outside the
+        // materializer, and the progress records in `sync_meta`.
+        for name in [
+            CF_HODL_CAPACITY_BY_DATE,
+            CF_CELL_DIST_COHORT_BY_MONTH,
+            CF_SYNC_META,
+        ] {
+            assert!(FINALIZE_WRITTEN_CFS.contains(&name), "{name}");
+        }
     }
 
     /// C-5: `docs/STORE_SCHEMA.md`'s "Column Families" table is the reference
