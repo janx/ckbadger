@@ -8,7 +8,7 @@
 mod convert;
 
 use anyhow::{anyhow, Result};
-use ckb_types::core::BlockView;
+use ckb_types::core::{BlockView, HeaderView, TransactionView, UncleBlockVecView};
 use ckb_types::packed;
 use ckb_types::prelude::*;
 use rocksdb::{ColumnFamilyDescriptor, DBCompressionType, Options, DB};
@@ -207,9 +207,7 @@ impl CkbChainReader {
     /// Returns `parent_hash`, `nonce`, `transactions_root`, and `version` without
     /// reading the full block body.
     pub fn get_block_header_info(&self, hash: &[u8; 32]) -> Option<BlockHeaderInfo> {
-        let packed_hv = self.get_block_header_packed(hash)?;
-        // packed::HeaderView -> packed::Header -> core::HeaderView
-        let view = packed_hv.data().into_view();
+        let view = self.get_block_header(hash)?;
         Some(BlockHeaderInfo {
             parent_hash: view.parent_hash().unpack(),
             nonce: view.nonce(),
@@ -255,10 +253,13 @@ impl CkbChainReader {
     }
 
     /// Get a full block by hash, returned as ckb_types::core::BlockView.
+    ///
+    /// Every hash in the view (block, uncles, transactions, witnesses) is the
+    /// one the node stored with the object; none is computed again.
     pub fn get_block(&self, hash: &[u8; 32]) -> Option<BlockView> {
-        let header = self.get_block_header_packed(hash)?;
-        let uncles = self.get_block_uncles_packed(hash)?;
-        let transactions = self.get_block_body_packed(hash);
+        let header = self.get_block_header(hash)?;
+        let uncles = self.get_block_uncles(hash)?;
+        let transactions = self.get_block_transactions(hash);
         let proposals = self.get_block_proposals_packed(hash)?;
         // Extensions are stored separately by the node. Omitting one changes
         // the serialized block and underreports its byte size.
@@ -268,46 +269,16 @@ impl CkbChainReader {
             None => None,
         };
 
-        // Build transaction views preserving the hashes from the stored TransactionView
-        let tx_views: Vec<ckb_types::core::TransactionView> = transactions
-            .into_iter()
-            .map(|tv| {
-                let hash = tv.hash();
-                let witness_hash = tv.witness_hash();
-                tv.data()
-                    .into_view()
-                    .fake_hash(hash)
-                    .fake_witness_hash(witness_hash)
-            })
-            .collect();
-
-        let block = packed::Block::new_builder()
-            .header(header.data())
-            .uncles(uncles.data())
-            .transactions(
-                packed::TransactionVec::new_builder()
-                    .set(tx_views.iter().map(|tv| tv.data()).collect::<Vec<_>>())
-                    .build(),
-            )
-            .proposals(proposals)
-            .build();
-
-        let tx_hashes: Vec<packed::Byte32> = tx_views.iter().map(|tv| tv.hash()).collect();
-
-        // Use into_view and fake_hash since into_view_with_hashes may not be available
-        let mut view = block
-            .into_view()
-            .as_advanced_builder()
-            .extension(extension)
-            .build();
-        view = view.fake_hash(packed::Byte32::new(*hash));
-
-        // The block's into_view() computes tx hashes from data, but we already have the correct
-        // hashes from the stored TransactionView. Since into_view() should compute the same
-        // hashes, we verify and trust the computed result.
-        let _ = tx_hashes; // hashes already embedded via fake_hash on tx_views
-
-        Some(view)
+        Some(match extension {
+            Some(extension) => BlockView::new_unchecked_with_extension(
+                header,
+                uncles,
+                transactions,
+                proposals,
+                extension,
+            ),
+            None => BlockView::new_unchecked(header, uncles, transactions, proposals),
+        })
     }
 
     /// Get a transaction by hash. Returns the transaction view.
@@ -346,18 +317,11 @@ impl CkbChainReader {
         body_key.extend_from_slice(&tx_index.to_be_bytes());
         let raw_tx = self.db.get_cf(&cf_body, &body_key).ok()??;
 
-        let packed_tv = packed::TransactionViewReader::from_slice(&raw_tx).ok()?;
-        let entity = packed_tv.to_entity();
-        let hash = entity.hash();
-        let witness_hash = entity.witness_hash();
-        Some((
-            entity
-                .data()
-                .into_view()
-                .fake_hash(hash)
-                .fake_witness_hash(witness_hash),
-            block_number,
-        ))
+        // The stored view carries the transaction's hash and witness hash.
+        let tx = packed::TransactionViewReader::from_slice(&raw_tx)
+            .ok()?
+            .unpack();
+        Some((tx, block_number))
     }
 
     pub fn get_transaction(&self, tx_hash: &[u8; 32]) -> Option<ckb_types::core::TransactionView> {
@@ -542,9 +506,11 @@ impl CkbChainReader {
 
         let mut blocks = Vec::with_capacity(n);
         for i in 0..n {
+            // Header, uncle and transaction views carry the hashes the node
+            // stored with them; the view is assembled without hashing.
             let header = match &mg[i] {
                 Ok(Some(raw)) => match packed::HeaderViewReader::from_slice(raw) {
-                    Ok(r) => r.to_entity(),
+                    Ok(r) => r.unpack(),
                     Err(_) => {
                         blocks.push(None);
                         continue;
@@ -557,7 +523,7 @@ impl CkbChainReader {
             };
             let uncles = match &mg[n + i] {
                 Ok(Some(raw)) => match packed::UncleBlockVecViewReader::from_slice(raw) {
-                    Ok(r) => r.to_entity(),
+                    Ok(r) => r.unpack(),
                     Err(_) => {
                         blocks.push(None);
                         continue;
@@ -583,33 +549,16 @@ impl CkbChainReader {
             };
 
             // Body: prefix iteration per block (cannot be batched)
-            let transactions = self.get_block_body_packed(&hashes[i]);
+            let transactions = self.get_block_transactions(&hashes[i]);
 
-            let tx_views: Vec<ckb_types::core::TransactionView> = transactions
-                .into_iter()
-                .map(|tv| {
-                    let hash = tv.hash();
-                    let witness_hash = tv.witness_hash();
-                    tv.data()
-                        .into_view()
-                        .fake_hash(hash)
-                        .fake_witness_hash(witness_hash)
-                })
-                .collect();
-
-            let block = packed::Block::new_builder()
-                .header(header.data())
-                .uncles(uncles.data())
-                .transactions(
-                    packed::TransactionVec::new_builder()
-                        .set(tx_views.iter().map(|tv| tv.data()).collect::<Vec<_>>())
-                        .build(),
-                )
-                .proposals(proposals)
-                .build();
-
-            let view = block.into_view().fake_hash(packed::Byte32::new(hashes[i]));
-            blocks.push(Some(view));
+            // No extension: nothing on the bulk path reads it, and the batch
+            // view has never carried one (`get_block` does).
+            blocks.push(Some(BlockView::new_unchecked(
+                header,
+                uncles,
+                transactions,
+                proposals,
+            )));
         }
 
         blocks
@@ -670,23 +619,26 @@ impl CkbChainReader {
 
     // -- Internal helpers --
 
-    fn get_block_header_packed(&self, hash: &[u8; 32]) -> Option<packed::HeaderView> {
+    /// The stored header view: the header and the hash the node stored with it.
+    fn get_block_header(&self, hash: &[u8; 32]) -> Option<HeaderView> {
         let cf = self.db.cf_handle(COLUMN_BLOCK_HEADER)?;
         let raw = self.db.get_cf(&cf, hash).ok()??;
         let reader = packed::HeaderViewReader::from_slice(&raw).ok()?;
-        Some(reader.to_entity())
+        Some(reader.unpack())
     }
 
-    fn get_block_uncles_packed(&self, hash: &[u8; 32]) -> Option<packed::UncleBlockVecView> {
+    /// The stored uncle views: the uncles and the hashes the node stored.
+    fn get_block_uncles(&self, hash: &[u8; 32]) -> Option<UncleBlockVecView> {
         let cf = self.db.cf_handle(COLUMN_BLOCK_UNCLE)?;
         let raw = self.db.get_cf(&cf, hash).ok()??;
         let reader = packed::UncleBlockVecViewReader::from_slice(&raw).ok()?;
-        Some(reader.to_entity())
+        Some(reader.unpack())
     }
 
-    /// Read all transactions for a block from COLUMN_BLOCK_BODY.
+    /// Read all transactions for a block from COLUMN_BLOCK_BODY, each with the
+    /// hash and witness hash the node stored with it.
     /// Keys are `block_hash (32 bytes) + tx_index (4 bytes BE)`, iterated by prefix.
-    fn get_block_body_packed(&self, hash: &[u8; 32]) -> Vec<packed::TransactionView> {
+    fn get_block_transactions(&self, hash: &[u8; 32]) -> Vec<TransactionView> {
         let cf = match self.db.cf_handle(COLUMN_BLOCK_BODY) {
             Some(cf) => cf,
             None => return vec![],
@@ -703,7 +655,7 @@ impl CkbChainReader {
                         break;
                     }
                     if let Ok(reader) = packed::TransactionViewReader::from_slice(&value) {
-                        txs.push(reader.to_entity());
+                        txs.push(reader.unpack());
                     }
                 }
                 Err(e) => {
@@ -985,5 +937,543 @@ mod tests {
         assert_eq!(exts.len(), 2);
         assert!(exts.iter().all(|e| e.is_none()));
         assert!(secondary_path.exists());
+    }
+
+    /// A block shaped like a mainnet one: several transactions whose witnesses
+    /// differ from their raw parts (so witness hash != hash), two uncles,
+    /// proposals, and optionally an extension. All hashes and roots valid.
+    fn fixture_block(number: u64, with_extension: bool) -> BlockView {
+        use ckb_types::core::{
+            BlockBuilder, Capacity, EpochNumberWithFraction, TransactionBuilder,
+        };
+
+        let script = |byte: u8| {
+            packed::Script::new_builder()
+                .code_hash(packed::Byte32::new([byte; 32]))
+                .hash_type(ckb_types::core::ScriptHashType::Type.into())
+                .args(ckb_types::bytes::Bytes::from(vec![byte; 20]).pack())
+                .build()
+        };
+        let output = |byte: u8, shannons: u64| {
+            packed::CellOutput::new_builder()
+                .capacity(Capacity::shannons(shannons).pack())
+                .lock(script(byte))
+                .build()
+        };
+        let cellbase = TransactionBuilder::default()
+            .input(packed::CellInput::new_cellbase_input(number))
+            .output(output(0x11, 100_000_000_000))
+            .output_data(ckb_types::bytes::Bytes::new().pack())
+            .witness(ckb_types::bytes::Bytes::from(vec![0x77; 40]).pack())
+            .build();
+        let spend = |byte: u8| {
+            TransactionBuilder::default()
+                .input(packed::CellInput::new(
+                    packed::OutPoint::new(packed::Byte32::new([byte; 32]), number as u32),
+                    0,
+                ))
+                .output(output(byte, 20_000_000_000))
+                .output(output(byte.wrapping_add(1), 30_000_000_000))
+                .output_data(ckb_types::bytes::Bytes::from(vec![byte; 16]).pack())
+                .output_data(ckb_types::bytes::Bytes::new().pack())
+                .witness(ckb_types::bytes::Bytes::from(vec![byte; 65]).pack())
+                .build()
+        };
+        let uncle = |nonce: u128| {
+            BlockBuilder::default()
+                .number((number - 1).pack())
+                .epoch(EpochNumberWithFraction::new(10, 4, 1800).pack())
+                .compact_target(0x1a08_a97e_u32.pack())
+                .timestamp(1_700_000_000_000u64.pack())
+                .nonce(nonce.pack())
+                .proposal(packed::ProposalShortId::new([nonce as u8; 10]))
+                .build()
+                .as_uncle()
+        };
+        let builder = BlockBuilder::default()
+            .number(number.pack())
+            .epoch(EpochNumberWithFraction::new(10, 5, 1800).pack())
+            .compact_target(0x1a08_a97e_u32.pack())
+            .timestamp(1_700_000_010_000u64.pack())
+            .parent_hash(packed::Byte32::new([0x0f; 32]))
+            .dao(packed::Byte32::new([0x0d; 32]))
+            .nonce(0x0123_4567_89ab_cdef_u128.pack())
+            .transaction(cellbase)
+            .transaction(spend(0x21))
+            .transaction(spend(0x31))
+            .uncle(uncle(1))
+            .uncle(uncle(2))
+            .proposal(packed::ProposalShortId::new([0xa1; 10]))
+            .proposal(packed::ProposalShortId::new([0xa2; 10]));
+        let builder = if with_extension {
+            builder.extension(Some(ckb_types::bytes::Bytes::from(vec![0x42; 32]).pack()))
+        } else {
+            builder
+        };
+        builder.build()
+    }
+
+    /// The hashes a fixture is stored under. `Real` stores each object's own
+    /// hash; `Sentinel` stores made-up ones, so a reader that recomputes a
+    /// hash instead of reading it returns a value that differs from the store.
+    #[derive(Clone, Copy, PartialEq)]
+    enum StoredHashes {
+        Real,
+        Sentinel,
+    }
+
+    fn sentinel(seed: u8, block_number: u64, index: usize) -> packed::Byte32 {
+        let mut bytes = [seed; 32];
+        bytes[30] = block_number as u8;
+        bytes[31] = index as u8;
+        packed::Byte32::new(bytes)
+    }
+
+    /// Write one block into a primary node store exactly as the node lays it
+    /// out (header view, uncle views, tx views keyed `block_hash ++ be32(i)`,
+    /// proposals, extension, number index, tx info). Returns the block key.
+    fn store_block(primary: &DB, block: &BlockView, hashes: StoredHashes) -> [u8; 32] {
+        let header_hash = match hashes {
+            StoredHashes::Real => block.hash(),
+            StoredHashes::Sentinel => sentinel(0xb0, block.number(), 0),
+        };
+        let key: [u8; 32] = header_hash.unpack();
+        let header_view = packed::HeaderView::new_builder()
+            .data(block.data().header())
+            .hash(header_hash)
+            .build();
+        let uncle_hashes = match hashes {
+            StoredHashes::Real => block.uncle_hashes(),
+            StoredHashes::Sentinel => (0..block.uncle_hashes().len())
+                .map(|index| sentinel(0xc0, block.number(), index))
+                .collect::<Vec<_>>()
+                .pack(),
+        };
+        let uncles_view = packed::UncleBlockVecView::new_builder()
+            .data(block.data().uncles())
+            .hashes(uncle_hashes)
+            .build();
+        let put = |cf: &str, key: &[u8], value: &[u8]| {
+            primary
+                .put_cf(&primary.cf_handle(cf).unwrap(), key, value)
+                .unwrap();
+        };
+        put(COLUMN_INDEX, &block.number().to_le_bytes(), &key);
+        put(COLUMN_BLOCK_HEADER, &key, header_view.as_slice());
+        put(COLUMN_BLOCK_UNCLE, &key, uncles_view.as_slice());
+        put(
+            COLUMN_BLOCK_PROPOSAL_IDS,
+            &key,
+            block.data().proposals().as_slice(),
+        );
+        if let Some(extension) = block.extension() {
+            put(COLUMN_BLOCK_EXTENSION, &key, extension.as_slice());
+        }
+        for (index, tx) in block.transactions().into_iter().enumerate() {
+            let (tx_hash, witness_hash) = match hashes {
+                StoredHashes::Real => (tx.hash(), tx.witness_hash()),
+                StoredHashes::Sentinel => (
+                    sentinel(0xd0, block.number(), index),
+                    sentinel(0xe0, block.number(), index),
+                ),
+            };
+            let tx_view = packed::TransactionView::new_builder()
+                .data(tx.data())
+                .hash(tx_hash.clone())
+                .witness_hash(witness_hash)
+                .build();
+            let mut body_key = key.to_vec();
+            body_key.extend_from_slice(&(index as u32).to_be_bytes());
+            put(COLUMN_BLOCK_BODY, &body_key, tx_view.as_slice());
+            let info = packed::TransactionInfo::new_builder()
+                .block_number(block.number().pack())
+                .block_epoch(block.epoch().full_value().pack())
+                .key(
+                    packed::TransactionKey::new_builder()
+                        .block_hash(header_view.hash())
+                        .index((index as u32).pack())
+                        .build(),
+                )
+                .build();
+            put(COLUMN_TRANSACTION_INFO, tx_hash.as_slice(), info.as_slice());
+        }
+        for cf in ALL_COLUMN_FAMILIES {
+            primary.flush_cf(&primary.cf_handle(cf).unwrap()).unwrap();
+        }
+        key
+    }
+
+    fn open_primary(dir: &Path) -> DB {
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        options.create_missing_column_families(true);
+        let descriptors = ALL_COLUMN_FAMILIES
+            .iter()
+            .map(|name| ColumnFamilyDescriptor::new(*name, Options::default()));
+        DB::open_cf_descriptors(&options, dir, descriptors).unwrap()
+    }
+
+    /// Everything a `BlockView` carries. Its `PartialEq` compares only the
+    /// block hash.
+    #[derive(Debug, PartialEq)]
+    struct BlockFields {
+        data: Vec<u8>,
+        hash: packed::Byte32,
+        uncle_hashes: Vec<u8>,
+        tx_hashes: Vec<packed::Byte32>,
+        tx_witness_hashes: Vec<packed::Byte32>,
+    }
+
+    fn block_fields(view: &BlockView) -> BlockFields {
+        BlockFields {
+            data: view.data().as_slice().to_vec(),
+            hash: view.hash(),
+            uncle_hashes: view.uncle_hashes().as_slice().to_vec(),
+            tx_hashes: view.tx_hashes().to_vec(),
+            tx_witness_hashes: view.tx_witness_hashes().to_vec(),
+        }
+    }
+
+    /// D-2 red test: every read returns the hashes the node stored (here made
+    /// up), which proves it did not hash the transactions, uncles or header
+    /// again. The node writes those hashes when it stores the block.
+    #[test]
+    fn block_and_transaction_reads_return_the_stored_hashes() {
+        let primary_dir = tempdir().unwrap();
+        let primary = open_primary(primary_dir.path());
+        let with_extension = fixture_block(1_234, true);
+        let without_extension = fixture_block(1_235, false);
+        let keys = [
+            store_block(&primary, &with_extension, StoredHashes::Sentinel),
+            store_block(&primary, &without_extension, StoredHashes::Sentinel),
+        ];
+        let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+
+        let batch = reader.get_blocks_batch(&keys);
+        for ((key, block), view) in keys
+            .iter()
+            .zip([&with_extension, &without_extension])
+            .zip(&batch)
+        {
+            let view = view.as_ref().expect("stored block must be read");
+            let single = reader.get_block(key).expect("stored block must be read");
+            for view in [view, &single] {
+                assert_eq!(view.hash().as_slice(), key.as_slice());
+                assert_eq!(view.header().hash().as_slice(), key.as_slice());
+                let number = block.number();
+                assert_eq!(
+                    view.uncle_hashes().as_slice(),
+                    vec![sentinel(0xc0, number, 0), sentinel(0xc0, number, 1)]
+                        .pack()
+                        .as_slice()
+                );
+                assert_eq!(
+                    view.tx_hashes(),
+                    (0..3)
+                        .map(|index| sentinel(0xd0, number, index))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    view.tx_witness_hashes(),
+                    (0..3)
+                        .map(|index| sentinel(0xe0, number, index))
+                        .collect::<Vec<_>>()
+                );
+                // The block's own bytes are still the node's bytes.
+                assert_eq!(
+                    view.data().header().as_slice(),
+                    block.data().header().as_slice()
+                );
+                assert_eq!(
+                    view.data().transactions().as_slice(),
+                    block.data().transactions().as_slice()
+                );
+            }
+        }
+
+        let (tx, number) = reader
+            .get_transaction_with_block_number(&sentinel(0xd0, 1_234, 1).unpack())
+            .expect("stored transaction must be read");
+        assert_eq!(number, 1_234);
+        assert_eq!(tx.hash(), sentinel(0xd0, 1_234, 1));
+        assert_eq!(tx.witness_hash(), sentinel(0xe0, 1_234, 1));
+        assert_eq!(
+            tx.data().as_slice(),
+            with_extension.transactions()[1].data().as_slice()
+        );
+    }
+
+    /// The constructions `get_blocks_batch`, `get_block`,
+    /// `get_transaction_with_block_number` and `get_block_header_info` used
+    /// before D-2 (they recomputed every hash the node had stored), kept as
+    /// the oracle for the hash-preserving ones.
+    mod rehashing_oracle {
+        use super::*;
+
+        // The pre-D-2 private readers, verbatim apart from `unwrap`.
+        fn get_block_header_packed(reader: &CkbChainReader, hash: &[u8; 32]) -> packed::HeaderView {
+            let cf = reader.db.cf_handle(COLUMN_BLOCK_HEADER).unwrap();
+            let raw = reader.db.get_cf(&cf, hash).unwrap().unwrap();
+            packed::HeaderViewReader::from_slice(&raw)
+                .unwrap()
+                .to_entity()
+        }
+
+        fn get_block_uncles_packed(
+            reader: &CkbChainReader,
+            hash: &[u8; 32],
+        ) -> packed::UncleBlockVecView {
+            let cf = reader.db.cf_handle(COLUMN_BLOCK_UNCLE).unwrap();
+            let raw = reader.db.get_cf(&cf, hash).unwrap().unwrap();
+            packed::UncleBlockVecViewReader::from_slice(&raw)
+                .unwrap()
+                .to_entity()
+        }
+
+        fn get_block_body_packed(
+            reader: &CkbChainReader,
+            hash: &[u8; 32],
+        ) -> Vec<packed::TransactionView> {
+            let cf = reader.db.cf_handle(COLUMN_BLOCK_BODY).unwrap();
+            let mut txs = Vec::new();
+            for item in reader.db.prefix_iterator_cf(&cf, hash) {
+                let (key, value) = item.unwrap();
+                if !key.starts_with(hash) {
+                    break;
+                }
+                txs.push(
+                    packed::TransactionViewReader::from_slice(&value)
+                        .unwrap()
+                        .to_entity(),
+                );
+            }
+            txs
+        }
+
+        pub(super) fn batch_block(reader: &CkbChainReader, hash: &[u8; 32]) -> BlockView {
+            let header = get_block_header_packed(reader, hash);
+            let uncles = get_block_uncles_packed(reader, hash);
+            let proposals = reader.get_block_proposals_packed(hash).unwrap();
+            let transactions = get_block_body_packed(reader, hash);
+            let tx_views: Vec<ckb_types::core::TransactionView> = transactions
+                .into_iter()
+                .map(|tv| {
+                    let hash = tv.hash();
+                    let witness_hash = tv.witness_hash();
+                    tv.data()
+                        .into_view()
+                        .fake_hash(hash)
+                        .fake_witness_hash(witness_hash)
+                })
+                .collect();
+            let block = packed::Block::new_builder()
+                .header(header.data())
+                .uncles(uncles.data())
+                .transactions(
+                    packed::TransactionVec::new_builder()
+                        .set(tx_views.iter().map(|tv| tv.data()).collect::<Vec<_>>())
+                        .build(),
+                )
+                .proposals(proposals)
+                .build();
+            block.into_view().fake_hash(packed::Byte32::new(*hash))
+        }
+
+        pub(super) fn single_block(reader: &CkbChainReader, hash: &[u8; 32]) -> BlockView {
+            let header = get_block_header_packed(reader, hash);
+            let uncles = get_block_uncles_packed(reader, hash);
+            let transactions = get_block_body_packed(reader, hash);
+            let proposals = reader.get_block_proposals_packed(hash).unwrap();
+            let extension_cf = reader.db.cf_handle(COLUMN_BLOCK_EXTENSION).unwrap();
+            let extension = reader
+                .db
+                .get_cf(&extension_cf, hash)
+                .unwrap()
+                .map(|bytes| packed::Bytes::from_slice(&bytes).unwrap());
+            let tx_views: Vec<ckb_types::core::TransactionView> = transactions
+                .into_iter()
+                .map(|tv| {
+                    let hash = tv.hash();
+                    let witness_hash = tv.witness_hash();
+                    tv.data()
+                        .into_view()
+                        .fake_hash(hash)
+                        .fake_witness_hash(witness_hash)
+                })
+                .collect();
+            let block = packed::Block::new_builder()
+                .header(header.data())
+                .uncles(uncles.data())
+                .transactions(
+                    packed::TransactionVec::new_builder()
+                        .set(tx_views.iter().map(|tv| tv.data()).collect::<Vec<_>>())
+                        .build(),
+                )
+                .proposals(proposals)
+                .build();
+            block
+                .into_view()
+                .as_advanced_builder()
+                .extension(extension)
+                .build()
+                .fake_hash(packed::Byte32::new(*hash))
+        }
+
+        pub(super) fn transaction(
+            reader: &CkbChainReader,
+            tx_hash: &[u8; 32],
+        ) -> ckb_types::core::TransactionView {
+            let cf_info = reader.db.cf_handle(COLUMN_TRANSACTION_INFO).unwrap();
+            let raw_info = reader.db.get_cf(&cf_info, tx_hash).unwrap().unwrap();
+            let tx_info = packed::TransactionInfoReader::from_slice(&raw_info).unwrap();
+            let cf_body = reader.db.cf_handle(COLUMN_BLOCK_BODY).unwrap();
+            let raw_tx = reader
+                .db
+                .get_cf(&cf_body, tx_info.key().as_slice())
+                .unwrap()
+                .unwrap();
+            let entity = packed::TransactionViewReader::from_slice(&raw_tx)
+                .unwrap()
+                .to_entity();
+            let hash = entity.hash();
+            let witness_hash = entity.witness_hash();
+            entity
+                .data()
+                .into_view()
+                .fake_hash(hash)
+                .fake_witness_hash(witness_hash)
+        }
+
+        pub(super) fn header_info(reader: &CkbChainReader, hash: &[u8; 32]) -> BlockHeaderInfo {
+            let view = get_block_header_packed(reader, hash).data().into_view();
+            BlockHeaderInfo {
+                parent_hash: view.parent_hash().unpack(),
+                nonce: view.nonce(),
+                transactions_root: view.transactions_root().unpack(),
+                version: view.version(),
+            }
+        }
+    }
+
+    /// D-2 oracle: on a store holding the real hashes, the hash-preserving
+    /// reads produce what the rehashing ones did, field for field, and both
+    /// equal the block as built. One difference is by construction: the batch
+    /// read carries no extension (it never did; nothing on the bulk path reads
+    /// it), and the old batch construction rebuilt the header's `extra_hash`
+    /// from the uncles alone, which for a block with an extension is not the
+    /// stored value. The new batch read keeps the stored header.
+    #[test]
+    fn hash_preserving_reads_match_the_rehashing_construction() {
+        let primary_dir = tempdir().unwrap();
+        let primary = open_primary(primary_dir.path());
+        let with_extension = fixture_block(1_234, true);
+        let without_extension = fixture_block(1_235, false);
+        let blocks = [&with_extension, &without_extension];
+        let keys = blocks.map(|block| store_block(&primary, block, StoredHashes::Real));
+        let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+
+        let batch = reader.get_blocks_batch(&keys);
+        for ((key, block), view) in keys.iter().zip(blocks).zip(&batch) {
+            let view = view.as_ref().expect("stored block must be read");
+            let oracle = rehashing_oracle::batch_block(&reader, key);
+            assert_eq!(view.hash().as_slice(), key.as_slice());
+            assert_eq!(view.hash(), block.hash());
+            assert_eq!(
+                view.uncle_hashes().as_slice(),
+                block.uncle_hashes().as_slice()
+            );
+            assert_eq!(view.tx_hashes(), block.tx_hashes());
+            assert_eq!(view.tx_witness_hashes(), block.tx_witness_hashes());
+            assert_eq!(
+                view.data().proposals().as_slice(),
+                block.data().proposals().as_slice()
+            );
+            assert_eq!(
+                view.data().uncles().as_slice(),
+                block.data().uncles().as_slice()
+            );
+            assert_eq!(
+                view.data().header().as_slice(),
+                block.data().header().as_slice()
+            );
+            assert_eq!(view.extension(), None);
+            assert_eq!(oracle.extension(), None);
+            assert_eq!(view.data().total_size(), oracle.data().total_size());
+            if block.extension().is_none() {
+                assert_eq!(block_fields(view), block_fields(&oracle));
+            } else {
+                let view_fields = block_fields(view);
+                let oracle_fields = block_fields(&oracle);
+                assert_eq!(
+                    BlockFields {
+                        data: Vec::new(),
+                        ..view_fields
+                    },
+                    BlockFields {
+                        data: Vec::new(),
+                        ..oracle_fields
+                    }
+                );
+                assert_ne!(
+                    view.data().as_slice(),
+                    oracle.data().as_slice(),
+                    "the old batch header rewrote extra_hash"
+                );
+                assert_eq!(
+                    oracle.extra_hash(),
+                    block.calc_uncles_hash(),
+                    "the old batch header's extra_hash is the uncles hash alone"
+                );
+                assert_eq!(view.extra_hash(), block.extra_hash());
+                // Apart from extra_hash the old header was the stored one.
+                assert_eq!(
+                    oracle
+                        .header()
+                        .as_advanced_builder()
+                        .extra_hash(block.extra_hash())
+                        .build()
+                        .data()
+                        .as_slice(),
+                    block.data().header().as_slice()
+                );
+            }
+
+            let single = reader.get_block(key).expect("stored block must be read");
+            let single_oracle = rehashing_oracle::single_block(&reader, key);
+            assert_eq!(block_fields(&single), block_fields(&single_oracle));
+            assert_eq!(block_fields(&single), block_fields(block));
+            assert_eq!(single.extension(), block.extension());
+
+            let info = reader.get_block_header_info(key).unwrap();
+            let info_oracle = rehashing_oracle::header_info(&reader, key);
+            assert_eq!(
+                (
+                    info.parent_hash,
+                    info.nonce,
+                    info.transactions_root,
+                    info.version
+                ),
+                (
+                    info_oracle.parent_hash,
+                    info_oracle.nonce,
+                    info_oracle.transactions_root,
+                    info_oracle.version
+                )
+            );
+            assert_eq!(info.parent_hash, [0x0f; 32]);
+            assert_eq!(info.nonce, 0x0123_4567_89ab_cdef);
+
+            for tx in block.transactions() {
+                let tx_hash: [u8; 32] = tx.hash().unpack();
+                let (read, number) = reader.get_transaction_with_block_number(&tx_hash).unwrap();
+                let oracle = rehashing_oracle::transaction(&reader, &tx_hash);
+                assert_eq!(number, block.number());
+                assert_eq!(read.hash(), oracle.hash());
+                assert_eq!(read.witness_hash(), oracle.witness_hash());
+                assert_eq!(read.data().as_slice(), oracle.data().as_slice());
+                assert_eq!(read.hash(), tx.hash());
+                assert_eq!(read.witness_hash(), tx.witness_hash());
+            }
+        }
     }
 }
