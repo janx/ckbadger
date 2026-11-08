@@ -273,69 +273,43 @@ fn cell_protocol_script(info: &ckbadger_store::LiveCellInfo) -> CellProtocolScri
     }
 }
 
+/// The most members a cell may hold and still be shown as a dep group on the
+/// cell page. A display rule, not consensus: a cell page asks of arbitrary
+/// data (no `dep_type` exists for a cell on its own) whether it looks like a
+/// dep group, and a structurally valid `OutPointVec` with thousands of members
+/// is far more likely some other payload than a deployment's dep group.
+const DEP_GROUP_DISPLAY_MAX_MEMBERS: usize = 256;
+
+/// Whether a cell's data reads as a dep group on the cell page: its structure
+/// decodes by the consensus dep group rule
+/// ([`crate::utils::script_resolution::dep_group_members`]) and it has at most
+/// [`DEP_GROUP_DISPLAY_MAX_MEMBERS`] members. `data` is the cell's whole data
+/// (both callers check it against `data_size` first).
 pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
-    let full_size = data_size as usize;
-
-    // OutPointVec format: 4 bytes count + N * 36 bytes OutPoints
-    if full_size < 40 || (full_size - 4) % 36 != 0 {
-        return DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        };
-    }
-
-    if data.len() < 4 {
-        return DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        };
-    }
-
-    let count = match data[0..4].try_into().ok().map(u32::from_le_bytes) {
-        Some(c) => c as usize,
-        None => {
-            return DepGroupParseResult {
-                is_dep_group: false,
-                items: None,
-            }
-        }
+    let not_a_dep_group = DepGroupParseResult {
+        is_dep_group: false,
+        items: None,
     };
-
-    let expected_size = 4 + count * 36;
-    if count == 0 || count > 256 || expected_size != full_size {
-        return DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        };
+    if usize::try_from(data_size).ok() != Some(data.len()) {
+        return not_a_dep_group;
     }
-
-    // At this point we know it's a valid dep group format
-    let mut items = Vec::with_capacity(count);
-    for i in 0..count {
-        let offset = 4 + i * 36;
-        if offset + 36 > data.len() {
-            break;
-        }
-        let tx_hash = format!("0x{}", hex::encode(&data[offset..offset + 32]));
-        if let Some(index) = data[offset + 32..offset + 36]
-            .try_into()
-            .ok()
-            .map(u32::from_le_bytes)
-        {
-            items.push(DepGroupItem {
-                tx_hash,
-                output_index: index,
-            });
-        }
+    let Ok(members) = crate::utils::script_resolution::dep_group_members(data) else {
+        return not_a_dep_group;
+    };
+    if members.len() > DEP_GROUP_DISPLAY_MAX_MEMBERS {
+        return not_a_dep_group;
     }
-
+    use ckb_types::prelude::Unpack;
+    let items = members
+        .into_iter()
+        .map(|out_point| DepGroupItem {
+            tx_hash: format!("0x{}", hex::encode(out_point.tx_hash().as_slice())),
+            output_index: out_point.index().unpack(),
+        })
+        .collect();
     DepGroupParseResult {
         is_dep_group: true,
-        items: if items.len() == count {
-            Some(items)
-        } else {
-            None // Data truncated, can't return complete list
-        },
+        items: Some(items),
     }
 }
 
@@ -1230,12 +1204,11 @@ fn maybe_parse_dotcell_decode(
 }
 
 fn maybe_parse_dep_group_decode(data: &[u8], data_size: i32) -> Option<CellDeterministicDecode> {
-    let parsed = parse_dep_group(data, data_size);
-    if !parsed.is_dep_group || data.len() < 4 {
-        return None;
-    }
+    let items = parse_dep_group(data, data_size).items?;
 
-    let count = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    // The byte map of the decoded `OutPointVec`: a 4-byte count, then 36
+    // bytes per member (32-byte tx hash, 4-byte index).
+    let count = items.len();
     let mut segments = Vec::new();
     segments.push(CellDataSegment {
         label: "count".to_string(),
@@ -1245,36 +1218,29 @@ fn maybe_parse_dep_group_decode(data: &[u8], data_size: i32) -> Option<CellDeter
         human_value: count.to_string(),
     });
 
-    for idx in 0..count {
+    for (idx, item) in items.iter().enumerate() {
         let base = 4 + idx * 36;
-        if base + 36 > data.len() {
-            break;
-        }
-
         segments.push(CellDataSegment {
             label: format!("outpoint[{}].tx_hash", idx),
             start: base as i32,
             end: (base + 32) as i32,
             meaning: "Referenced transaction hash".to_string(),
-            human_value: format!("0x{}", hex::encode(&data[base..base + 32])),
+            human_value: item.tx_hash.clone(),
         });
-
-        let output_index = u32::from_le_bytes(data[base + 32..base + 36].try_into().ok()?);
         segments.push(CellDataSegment {
             label: format!("outpoint[{}].output_index", idx),
             start: (base + 32) as i32,
             end: (base + 36) as i32,
             meaning: "Referenced output index (u32 LE)".to_string(),
-            human_value: output_index.to_string(),
+            human_value: item.output_index.to_string(),
         });
     }
 
-    let parsed_count = (segments.len().saturating_sub(1)) / 2;
     Some(CellDeterministicDecode {
         kind: "dep_group_out_point_vec".to_string(),
         summary: format!(
             "Dep group OutPointVec with {} item(s); decoded {} item(s) from available bytes",
-            count, parsed_count
+            count, count
         ),
         segments,
     })
@@ -5045,6 +5011,28 @@ mod tests {
         let data = vec![0u8; 10];
         let result = parse_dep_group(&data, 10);
         assert!(!result.is_dep_group);
+    }
+
+    /// The cell page's dep group display rule: a structurally valid dep group
+    /// is shown as one up to `DEP_GROUP_DISPLAY_MAX_MEMBERS` members.
+    #[test]
+    fn dep_group_display_rule_caps_the_member_count() {
+        let group = |members: usize| {
+            let mut data = (members as u32).to_le_bytes().to_vec();
+            for member in 0..members {
+                data.extend_from_slice(&[(member % 251) as u8; 32]);
+                data.extend_from_slice(&(member as u32).to_le_bytes());
+            }
+            data
+        };
+        let at_cap = group(DEP_GROUP_DISPLAY_MAX_MEMBERS);
+        let parsed = parse_dep_group(&at_cap, at_cap.len() as i32);
+        assert!(parsed.is_dep_group);
+        assert_eq!(parsed.items.unwrap().len(), DEP_GROUP_DISPLAY_MAX_MEMBERS);
+        let over_cap = group(DEP_GROUP_DISPLAY_MAX_MEMBERS + 1);
+        let parsed = parse_dep_group(&over_cap, over_cap.len() as i32);
+        assert!(!parsed.is_dep_group);
+        assert!(parsed.items.is_none());
     }
 
     #[test]
