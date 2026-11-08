@@ -1723,6 +1723,184 @@ mod tests {
         );
     }
 
+    /// D-1b pin: the withdraw-to output of a phase-2 completion, through the
+    /// full deposit → request → completion lifecycle, for every branch of the
+    /// inference: the one non-DAO output carrying the deposit's lock; none when
+    /// two do; the only non-DAO output when none does; none when several
+    /// non-DAO outputs and none carries it; DAO outputs are never candidates
+    /// and the index is the output's own index; none without outputs.
+    #[test]
+    fn withdraw_completion_infers_the_withdraw_to_output_from_non_dao_outputs() {
+        let interner = IdentityInterner::default();
+        let lock_a = interner.intern_bytes(vec![0xaa; 32]);
+        let lock_b = interner.intern_bytes(vec![0xbb; 32]);
+        let lock_c = interner.intern_bytes(vec![0xcc; 32]);
+        let dao_code_hash_id =
+            interner.intern_bytes(hex::decode(&DAO_CODE_HASH[2..]).expect("dao code hash"));
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let output = |tx_hash: [u8; 32],
+                      index: u32,
+                      block: i64,
+                      lock: InternId,
+                      dao_state: Option<DaoCellState>| CellFacts {
+            outpoint: OutPointKey::new(tx_hash, index),
+            created_at_block: block,
+            created_by_block_dao_ar: 10_000,
+            capacity: 200_00000000,
+            lock_script_hash_id: lock,
+            lock_code_hash_id: lock,
+            lock_hash_type: 1,
+            lock_args_id: lock,
+            type_script_hash_id: dao_state.map(|_| dao_code_hash_id),
+            type_code_hash_id: dao_state.map(|_| dao_code_hash_id),
+            type_hash_type: dao_state.map(|_| 1),
+            type_args_id: dao_state.map(|_| dao_code_hash_id),
+            occupied_capacity: 102_00000000,
+            data_size: if dao_state.is_some() { 8 } else { 0 },
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: if dao_state.is_some() {
+                CellSemanticTag::Dao
+            } else {
+                CellSemanticTag::Plain
+            },
+            dao_state,
+            protocol_facts: None,
+        };
+        let input = |cell: &CellFacts| ResolvedInputFacts {
+            outpoint: cell.outpoint,
+            created_at_block: cell.created_at_block,
+            created_by_block_dao_ar: cell.created_by_block_dao_ar,
+            capacity: cell.capacity,
+            occupied_capacity: cell.occupied_capacity,
+            data_size: cell.data_size,
+            data_hash: None,
+            udt_amount: None,
+            lock_script_hash_id: cell.lock_script_hash_id,
+            lock_code_hash_id: cell.lock_code_hash_id,
+            lock_hash_type: cell.lock_hash_type,
+            lock_args_id: cell.lock_args_id,
+            type_script_hash_id: cell.type_script_hash_id,
+            type_code_hash_id: cell.type_code_hash_id,
+            type_hash_type: cell.type_hash_type,
+            type_args_id: cell.type_args_id,
+            semantic_tag: cell.semantic_tag,
+            dao_state: cell.dao_state,
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+        let tx = |tx_hash: [u8; 32],
+                  block: i64,
+                  ar: u64,
+                  inputs: Vec<ResolvedInputFacts>,
+                  cells: Vec<CellFacts>| ResolvedTxFacts {
+            tx_hash,
+            block_number: block,
+            block_hash: [block as u8; 32],
+            timestamp_ms: 1_700_000_000_000 + block,
+            chain_time_ms: 1_700_000_000_000 + block,
+            block_dao_ar: ar,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: inputs,
+            cells: cells.into(),
+        };
+
+        let completion_outputs = |plan: &[(InternId, Option<DaoCellState>)]| {
+            plan.iter()
+                .enumerate()
+                .map(|(index, (lock, state))| output([0x33; 32], index as u32, 102, *lock, *state))
+                .collect::<Vec<_>>()
+        };
+        /// Completion outputs in order: (lock, DAO state if a DAO cell).
+        type Plan = Vec<(InternId, Option<DaoCellState>)>;
+        let cases: Vec<(&str, Plan, Option<i16>)> = vec![
+            (
+                "one non-DAO output carries the deposit lock",
+                vec![(lock_b, None), (lock_a, None), (lock_c, None)],
+                Some(1),
+            ),
+            (
+                "two non-DAO outputs carry the deposit lock",
+                vec![(lock_a, None), (lock_a, None)],
+                None,
+            ),
+            (
+                "one non-DAO output, another lock",
+                vec![(lock_b, None)],
+                Some(0),
+            ),
+            (
+                "several non-DAO outputs, none with the deposit lock",
+                vec![(lock_b, None), (lock_c, None)],
+                None,
+            ),
+            (
+                "a DAO output is not a candidate; the index is the output's",
+                vec![(lock_a, Some(DaoCellState::Deposit)), (lock_b, None)],
+                Some(1),
+            ),
+            ("no outputs", Vec::new(), None),
+        ];
+
+        for (label, plan, expected) in cases {
+            let mut owner = DaoOwner::default();
+            let deposit = output([0x31; 32], 0, 100, lock_a, Some(DaoCellState::Deposit));
+            owner
+                .apply_tx(
+                    &tx([0x31; 32], 100, 10_000, Vec::new(), vec![deposit.clone()]),
+                    &ctx,
+                )
+                .expect("apply deposit");
+            let request = output(
+                [0x32; 32],
+                0,
+                101,
+                lock_a,
+                Some(DaoCellState::WithdrawRequest {
+                    deposit_block_number: 100,
+                }),
+            );
+            owner
+                .apply_tx(
+                    &tx(
+                        [0x32; 32],
+                        101,
+                        12_000,
+                        vec![input(&deposit)],
+                        vec![request.clone()],
+                    ),
+                    &ctx,
+                )
+                .expect("apply request");
+            owner
+                .apply_tx(
+                    &tx(
+                        [0x33; 32],
+                        102,
+                        13_000,
+                        vec![input(&request)],
+                        completion_outputs(&plan),
+                    ),
+                    &ctx,
+                )
+                .unwrap_or_else(|error| panic!("{label}: apply completion: {error:#}"));
+
+            let entry = owner
+                .deposits
+                .get(&OutPointKey::new([0x31; 32], 0))
+                .expect("dao entry");
+            assert_eq!(entry.status, 2, "{label}");
+            assert_eq!(entry.withdraw_tx, Some(vec![0x33; 32]), "{label}");
+            assert_eq!(entry.withdraw_request_output_index, Some(0), "{label}");
+            assert_eq!(entry.withdraw_to_output_index, expected, "{label}");
+            assert!(entry.compensation.is_some(), "{label}");
+        }
+    }
+
     #[test]
     fn dao_owner_reduces_deposit_request_completion_lifecycle() {
         let interner = IdentityInterner::default();
