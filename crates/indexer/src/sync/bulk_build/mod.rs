@@ -254,6 +254,11 @@ impl BulkBuildEngine {
         let mut cumulative_sealed_rows: usize = 0;
         let mut _flush_send_count: usize = 0;
         let mut last_bottleneck: Option<String> = None;
+        // The owners' breakdown from the most recent walk, which finalize
+        // reuses: the last batch always walks (`owner_memory_walk_due`) and
+        // nothing changes the owners after it. Before the first batch the
+        // owners are empty, so this walk costs nothing.
+        let mut owner_memory_at_last_walk = runtime.memory_breakdown_bytes();
 
         let interrupted_stage = 'bulk_loop: loop {
             if indexer.is_shutdown_requested() {
@@ -690,8 +695,8 @@ impl BulkBuildEngine {
             }
 
             // Memory summary on every batch that walked the owner maps.
-            if let Some(owner_memory) = owner_memory.as_ref() {
-                let total_mb = checked_memory_map_total(owner_memory)? / (1024 * 1024);
+            if let Some(owner_memory) = owner_memory {
+                let total_mb = checked_memory_map_total(&owner_memory)? / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
                 let interner_slots = runtime.interner.slot_len();
@@ -707,6 +712,7 @@ impl BulkBuildEngine {
                     batch_count,
                     "Bulk build memory snapshot"
                 );
+                owner_memory_at_last_walk = owner_memory;
             }
         };
 
@@ -747,9 +753,10 @@ impl BulkBuildEngine {
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
-        // A fresh owner walk at the end of the batch loop (OWNER_MEMORY_WALK_EVERY_BATCHES).
+        // The last batch's owner walk (OWNER_MEMORY_WALK_EVERY_BATCHES): the
+        // owners have not changed since, so finalize walks them no second time.
         let before_finalize_memory = retained_memory_breakdown(
-            &runtime.memory_breakdown_bytes(),
+            &owner_memory_at_last_walk,
             buffer.retained_block_bytes()?,
             flush_channel.reserved_bytes()?,
             None,
@@ -1177,18 +1184,24 @@ fn start_bulk_build_session_marker(
     Ok(marker)
 }
 
-/// The test seams' finalize flush: what production runs on the domain
-/// batch-loop side thread ([`flush_batch_loop_only_cfs`]) and then phase 12's
-/// flushes ([`finalize_memtable_flush`]), inline and in that order. Every
-/// bulk write is durable afterwards.
-fn flush_bulk_build_materialized_state(
+/// The test seams' finalize in production's flush order, inline: the
+/// batch-loop-only CFs are flushed once the last batch has been written
+/// (production: on a side thread from the end of the drain), then
+/// `phases_2_to_11` run, then phase 12's flushes and check
+/// ([`finalize_memtable_flush`]). A phases 2-11 write to a batch-loop-only CF
+/// therefore fails a seam as it fails production. Every bulk write is durable
+/// afterwards.
+fn finalize_stores_inline<T>(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
-) -> Result<()> {
+    phases_2_to_11: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     flush_batch_loop_only_cfs(domain_store)?;
+    let finalized = phases_2_to_11()?;
     flush_finalize_written_cfs(domain_store)?;
     flush_append_only_barrier(append_store)?;
-    ensure_batch_loop_only_cfs_flushed(domain_store)
+    ensure_batch_loop_only_cfs_flushed(domain_store)?;
+    Ok(finalized)
 }
 
 /// The domain CFs only the batch loop writes ([`BATCH_LOOP_ONLY_CFS`]), in
@@ -3802,9 +3815,10 @@ fn checked_retained_memory_total(
 /// Batches between exact walks of the bulk reducers' owner maps for the memory
 /// breakdown (`BulkBuildRuntimeState::memory_breakdown_bytes`). The walk also
 /// runs on the first batch, on the last batch (the one that reaches the
-/// prefetch's handoff block), before finalize, and inside a memory-guard
-/// failure message. A batch's perf sample carries the owner fields only when
-/// that batch walked; otherwise they are absent, never carried forward.
+/// prefetch's handoff block; finalize reuses that walk, since nothing changes
+/// the owners after it), and inside a memory-guard failure message. A batch's
+/// perf sample carries the owner fields only when that batch walked;
+/// otherwise they are absent, never carried forward.
 ///
 /// Why not every batch: the walk visits every entry of the script, token, DAO,
 /// fiber, object and activity-stats maps, with a `bincode::serialized_size`
@@ -4337,8 +4351,10 @@ fn run_bulk_stage_on_stores(
         processed_blocks = block_idx + 1;
     }
 
-    let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-    flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
+    let live_cell_summary =
+        finalize_stores_inline(domain_store.as_ref(), append_store.as_ref(), || {
+            runtime.finalize(domain_store.as_ref(), &mut materializer)
+        })?;
     let sync_status =
         sync_totals.finalize_success(domain_store.as_ref(), false, live_cell_summary.as_ref())?;
     crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
@@ -4526,8 +4542,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             }
             sync_totals.record_batch(&batch_stats)?;
         }
-        let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
+        let live_cell_summary =
+            finalize_stores_inline(domain_store.as_ref(), append_store.as_ref(), || {
+                runtime.finalize(domain_store.as_ref(), &mut materializer)
+            })?;
         let sync_status = sync_totals.finalize_success(
             domain_store.as_ref(),
             true,
@@ -7927,7 +7945,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_bulk_build_materialized_state_flushes_domain_and_append_memtables() {
+    fn finalize_stores_inline_flushes_domain_and_append_memtables() {
         let block = bulk_build_addr_tx_fixture();
         let interner = interner::IdentityInterner::default();
         let (arena, _) =
@@ -7986,7 +8004,7 @@ mod tests {
             "expected pending no-WAL memtable bytes before flush helper"
         );
 
-        flush_bulk_build_materialized_state(&domain_store, &append_store)
+        finalize_stores_inline(&domain_store, &append_store, || Ok(()))
             .expect("flush bulk build state");
 
         let domain_stats_after = domain_store.memory_stats();
@@ -8007,8 +8025,8 @@ mod tests {
                     .sst_files_size
                     .expect("append-only SST observation")
         );
-        // The seam runs the batch-loop flush and phase 12's flush inline: no
-        // domain CF of either set keeps a byte in memory.
+        // The seam runs the batch-loop flush and phase 12's flushes inline:
+        // no domain CF of either set keeps a byte in memory.
         for &cf in ckbadger_store::DOMAIN_CFS {
             let state = domain_store.cf_flush_state(cf).expect("flush state");
             assert_eq!(
@@ -8280,11 +8298,7 @@ mod tests {
             move || {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 loop {
-                    if observed_store
-                        .cf_flush_state(CF_TX_HASH_MAP)?
-                        .live_sst_bytes
-                        > 0
-                    {
+                    if observed_store.cf_live_sst_bytes(CF_TX_HASH_MAP)? > 0 {
                         return Ok(materialize::MaterializationReport::default());
                     }
                     if Instant::now() >= deadline {
@@ -8366,14 +8380,19 @@ mod tests {
                 (0, 0),
                 "{cf}"
             );
-            assert!(state.live_sst_bytes > 0, "{cf}: {state:?}");
+            let sst_bytes = domain_store.cf_live_sst_bytes(cf).expect("SST bytes");
+            assert!(sst_bytes > 0, "{cf}");
         }
         for &cf in ckbadger_store::BATCH_LOOP_ONLY_CFS {
-            let state = domain_store.cf_flush_state(cf).expect("flush state");
+            let active_entries = domain_store
+                .cf_flush_state(cf)
+                .expect("flush state")
+                .active_entries;
+            let sst_bytes = domain_store.cf_live_sst_bytes(cf).expect("SST bytes");
             assert_eq!(
-                (state.active_entries, state.live_sst_bytes),
+                (active_entries, sst_bytes),
                 (1, 0),
-                "phase 12 flushed batch-loop-only CF {cf}: {state:?}"
+                "phase 12 flushed batch-loop-only CF {cf}"
             );
         }
 
@@ -8500,6 +8519,32 @@ mod tests {
             &tracing::Span::none(),
         )
         .await
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(CF_TX_HASH_MAP), "{message}");
+        assert!(message.contains("after the drain"), "{message}");
+
+        drop(domain_store);
+        drop(append_store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Review finding 4: the seams flush the batch-loop-only CFs before
+    /// phases 2-11, as production does at the drain end, so a phases 2-11
+    /// write to one of them outside the bounded sink fails the seam (and every
+    /// end-to-end bulk test through it) naming the CF, instead of being
+    /// flushed by a late batch-loop flush.
+    #[test]
+    fn seam_finalize_fails_when_phases_2_to_11_write_a_batch_loop_only_cf() {
+        let (domain_store, append_store, root) =
+            open_finalize_stores("bulk-finalize-seam-late-batch-loop-write");
+        write_a_row_into_every_domain_cf(&domain_store, b"batch-loop");
+
+        let error = finalize_stores_inline(&domain_store, &append_store, || {
+            let mut stray = rocksdb::WriteBatch::default();
+            stray.put_cf(domain_store.cf(CF_TX_HASH_MAP), b"phases-2-11", b"row");
+            domain_store.write_batch_no_wal_bulk(stray)
+        })
         .unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains(CF_TX_HASH_MAP), "{message}");

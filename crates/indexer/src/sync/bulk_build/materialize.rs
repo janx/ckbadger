@@ -5,8 +5,8 @@ use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
 use ckbadger_store::types::{encode_live_cell_marker, CachedBlockHeader, LiveCellInfo};
 use ckbadger_store::{
-    cf_write_policy, is_append_only_cf_name, CfWritePolicy, CkbadgerStore, StoreBatch,
-    CF_BLOCK_HEADERS, CF_CELLS, CF_LIVE_CELLS, FINALIZE_WRITTEN_CFS,
+    cf_spec, cf_write_policy, is_append_only_cf_name, CfStore, CfWritePolicy, CkbadgerStore,
+    StoreBatch, CF_BLOCK_HEADERS, CF_CELLS, CF_LIVE_CELLS,
 };
 
 #[doc(hidden)]
@@ -370,7 +370,9 @@ impl<'a> BoundedRowSink<'a> {
 
     fn push_borrowed(&mut self, row: &MaterializedRow) -> Result<()> {
         self.ensure_not_cancelled()?;
-        if is_append_only_cf_name(row.cf_name) {
+        // One `CF_SPECS` lookup per row decides all three refusals.
+        let spec = cf_spec(row.cf_name);
+        if spec.is_some_and(|spec| spec.store == CfStore::AppendOnly) {
             if matches!(self.counter_kind, CounterKind::FinalSnapshot) {
                 return Err(anyhow!(
                     "final snapshot cannot target append-only cf: {}",
@@ -382,21 +384,21 @@ impl<'a> BoundedRowSink<'a> {
                 row.cf_name
             ));
         }
-        // Finalize phase 12 flushes exactly these CFs; every other domain CF
-        // was flushed when the drain ended and must not be written again.
-        if !FINALIZE_WRITTEN_CFS.contains(&row.cf_name) {
+        // Finalize phase 12 flushes exactly `FINALIZE_WRITTEN_CFS` (the CFs
+        // `CfSpec::is_finalize_written` admits); every other domain CF was
+        // flushed when the drain ended and must not be written again.
+        let Some(spec) = spec.filter(|spec| spec.is_finalize_written()) else {
             return Err(anyhow!(
                 "bounded finalize materialization cannot target a cf outside FINALIZE_WRITTEN_CFS: {}",
                 row.cf_name
             ));
-        }
-        let actual_policy = cf_write_policy(row.cf_name);
-        if actual_policy != self.expected_policy {
+        };
+        if spec.write_policy != self.expected_policy {
             return Err(anyhow!(
                 "materializer write-policy mismatch: cf={} expected={:?} actual={:?}",
                 row.cf_name,
                 self.expected_policy,
-                actual_policy
+                spec.write_policy
             ));
         }
 
@@ -1217,6 +1219,7 @@ impl FlushChannelHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::FINALIZE_WRITTEN_CFS;
 
     #[test]
     fn flush_reserved_bytes_are_derived_from_semaphore_permits() {
@@ -1355,6 +1358,55 @@ mod tests {
                 );
             }
         }
+
+        drop(domain_store);
+        drop(append_store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Review finding 5: the sink decides each row with one `cf_spec`
+    /// lookup. Through the bounded closure path it admits a finalize-written
+    /// CF of its own policy and refuses a batch-loop-only CF, an unknown name
+    /// (an error, not a panic), `cells`, and a finalize-written CF of the other
+    /// policy, each with its own message.
+    #[test]
+    fn bounded_sink_push_decides_each_row_from_its_cf_spec() {
+        let root = super::super::unique_temp_test_dir("bounded-sink-cf-spec");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let row =
+            |cf_name: &'static str| MaterializedRow::new(cf_name, b"k".to_vec(), b"v".to_vec());
+
+        materializer
+            .materialize_final_snapshot_bounded(|sink| sink.push(row(CF_LIVE_CELLS)))
+            .expect("live_cells is a finalize-written final-snapshot CF");
+        for (cf_name, expected) in [
+            (
+                ckbadger_store::CF_TX_HASH_MAP,
+                "outside FINALIZE_WRITTEN_CFS",
+            ),
+            ("no_such_cf", "outside FINALIZE_WRITTEN_CFS"),
+            (CF_CELLS, "final snapshot cannot target append-only cf"),
+            (ckbadger_store::CF_STATS_CHAIN, "write-policy mismatch"),
+        ] {
+            let error = materializer
+                .materialize_final_snapshot_bounded(|sink| sink.push(row(cf_name)))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{cf_name}: {error}");
+        }
+        assert_eq!(
+            domain_store
+                .get_cf(domain_store.cf(CF_LIVE_CELLS), b"k")
+                .unwrap()
+                .as_deref(),
+            Some(b"v".as_slice())
+        );
 
         drop(domain_store);
         drop(append_store);
