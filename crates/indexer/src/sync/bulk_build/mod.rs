@@ -1177,18 +1177,24 @@ fn start_bulk_build_session_marker(
     Ok(marker)
 }
 
-/// The test seams' finalize flush: what production runs on the domain
-/// batch-loop side thread ([`flush_batch_loop_only_cfs`]) and then phase 12's
-/// flushes ([`finalize_memtable_flush`]), inline and in that order. Every
-/// bulk write is durable afterwards.
-fn flush_bulk_build_materialized_state(
+/// The test seams' finalize in production's flush order, inline: the
+/// batch-loop-only CFs are flushed once the last batch has been written
+/// (production: on a side thread from the end of the drain), then
+/// `phases_2_to_11` run, then phase 12's flushes and check
+/// ([`finalize_memtable_flush`]). A phases 2-11 write to a batch-loop-only CF
+/// therefore fails a seam as it fails production. Every bulk write is durable
+/// afterwards.
+fn finalize_stores_inline<T>(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
-) -> Result<()> {
+    phases_2_to_11: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     flush_batch_loop_only_cfs(domain_store)?;
+    let finalized = phases_2_to_11()?;
     flush_finalize_written_cfs(domain_store)?;
     flush_append_only_barrier(append_store)?;
-    ensure_batch_loop_only_cfs_flushed(domain_store)
+    ensure_batch_loop_only_cfs_flushed(domain_store)?;
+    Ok(finalized)
 }
 
 /// The domain CFs only the batch loop writes ([`BATCH_LOOP_ONLY_CFS`]), in
@@ -4337,8 +4343,10 @@ fn run_bulk_stage_on_stores(
         processed_blocks = block_idx + 1;
     }
 
-    let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-    flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
+    let live_cell_summary =
+        finalize_stores_inline(domain_store.as_ref(), append_store.as_ref(), || {
+            runtime.finalize(domain_store.as_ref(), &mut materializer)
+        })?;
     let sync_status =
         sync_totals.finalize_success(domain_store.as_ref(), false, live_cell_summary.as_ref())?;
     crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
@@ -4526,8 +4534,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             }
             sync_totals.record_batch(&batch_stats)?;
         }
-        let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
+        let live_cell_summary =
+            finalize_stores_inline(domain_store.as_ref(), append_store.as_ref(), || {
+                runtime.finalize(domain_store.as_ref(), &mut materializer)
+            })?;
         let sync_status = sync_totals.finalize_success(
             domain_store.as_ref(),
             true,
@@ -7927,7 +7937,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_bulk_build_materialized_state_flushes_domain_and_append_memtables() {
+    fn finalize_stores_inline_flushes_domain_and_append_memtables() {
         let block = bulk_build_addr_tx_fixture();
         let interner = interner::IdentityInterner::default();
         let (arena, _) =
@@ -7986,7 +7996,7 @@ mod tests {
             "expected pending no-WAL memtable bytes before flush helper"
         );
 
-        flush_bulk_build_materialized_state(&domain_store, &append_store)
+        finalize_stores_inline(&domain_store, &append_store, || Ok(()))
             .expect("flush bulk build state");
 
         let domain_stats_after = domain_store.memory_stats();
@@ -8007,8 +8017,8 @@ mod tests {
                     .sst_files_size
                     .expect("append-only SST observation")
         );
-        // The seam runs the batch-loop flush and phase 12's flush inline: no
-        // domain CF of either set keeps a byte in memory.
+        // The seam runs the batch-loop flush and phase 12's flushes inline:
+        // no domain CF of either set keeps a byte in memory.
         for &cf in ckbadger_store::DOMAIN_CFS {
             let state = domain_store.cf_flush_state(cf).expect("flush state");
             assert_eq!(
@@ -8501,6 +8511,32 @@ mod tests {
             &tracing::Span::none(),
         )
         .await
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(CF_TX_HASH_MAP), "{message}");
+        assert!(message.contains("after the drain"), "{message}");
+
+        drop(domain_store);
+        drop(append_store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Review finding 4: the seams flush the batch-loop-only CFs before
+    /// phases 2-11, as production does at the drain end, so a phases 2-11
+    /// write to one of them outside the bounded sink fails the seam (and every
+    /// end-to-end bulk test through it) naming the CF, instead of being
+    /// flushed by a late batch-loop flush.
+    #[test]
+    fn seam_finalize_fails_when_phases_2_to_11_write_a_batch_loop_only_cf() {
+        let (domain_store, append_store, root) =
+            open_finalize_stores("bulk-finalize-seam-late-batch-loop-write");
+        write_a_row_into_every_domain_cf(&domain_store, b"batch-loop");
+
+        let error = finalize_stores_inline(&domain_store, &append_store, || {
+            let mut stray = rocksdb::WriteBatch::default();
+            stray.put_cf(domain_store.cf(CF_TX_HASH_MAP), b"phases-2-11", b"row");
+            domain_store.write_batch_no_wal_bulk(stray)
+        })
         .unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains(CF_TX_HASH_MAP), "{message}");
