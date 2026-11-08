@@ -723,7 +723,7 @@ fn read_block_evidence(
             miners
                 .cellbase_miner(node, &hash)
                 .map_err(|e| error(format!("{e:#}")))?
-                .ok_or_else(|| error("missing or malformed cellbase witness".into()))?,
+                .ok_or_else(|| error("cellbase is not in the node DB".into()))?,
         )
     };
     let txs = store

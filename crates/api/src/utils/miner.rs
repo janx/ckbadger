@@ -31,14 +31,15 @@ pub struct CellbaseMiner {
 }
 
 impl MinerNaming<'_> {
-    /// The miner of block `block_hash`; `None` only when the node has no
-    /// cellbase witness for it.
+    /// The miner of block `block_hash`; `None` only when the node does not
+    /// store the block. A cellbase that cannot be read, or whose witness is
+    /// missing or not a `CellbaseWitness`, is an error.
     pub fn cellbase_miner(
         &self,
         reader: &CkbChainReader,
         block_hash: &[u8; 32],
     ) -> anyhow::Result<Option<CellbaseMiner>> {
-        let Some((lock, message)) = reader.get_cellbase_witness(block_hash) else {
+        let Some((lock, message)) = reader.get_cellbase_witness(block_hash)? else {
             return Ok(None);
         };
         let context = || format!("block 0x{}: miner witness", hex::encode(block_hash));

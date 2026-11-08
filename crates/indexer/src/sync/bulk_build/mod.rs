@@ -213,8 +213,8 @@ impl BulkBuildEngine {
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
         let initial_chain_tip = ckb_store
-            .tip_number()
-            .ok_or_else(|| anyhow!("failed to get chain tip from CKB RocksDB for prefetch init"))?;
+            .tip_number()?
+            .ok_or_else(|| anyhow!("CKB RocksDB has no chain tip for prefetch init"))?;
         let initial_handoff = initial_chain_tip.saturating_sub(indexer.config.bulk_sync_threshold);
         let prefetch_start = if indexer.progress.current() == 0 {
             0
@@ -260,9 +260,9 @@ impl BulkBuildEngine {
                 break 'bulk_loop Some("before_batch");
             }
             ckb_store.refresh()?;
-            let chain_tip = ckb_store.tip_number().ok_or_else(|| {
-                anyhow!("failed to get chain tip from CKB RocksDB during bulk build")
-            })?;
+            let chain_tip = ckb_store
+                .tip_number()?
+                .ok_or_else(|| anyhow!("CKB RocksDB has no chain tip during bulk build"))?;
             indexer.progress.update_target(chain_tip);
 
             let current_block = indexer.progress.current();

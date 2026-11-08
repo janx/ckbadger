@@ -4073,6 +4073,23 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
     };
     let store = test_store();
     let parent = [0x33; 32];
+    // The block's first transaction stands in for its cellbase, so it carries
+    // the CellbaseWitness every node-stored cellbase has (RFC-0022); a witness
+    // does not change the transaction hash.
+    let miner_witness = packed::CellbaseWitness::new_builder()
+        .lock(
+            packed::Script::new_builder()
+                .code_hash(packed::Byte32::new(
+                    hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                ))
+                .hash_type(ckb_types::core::ScriptHashType::Type.into())
+                .args(ckb_types::bytes::Bytes::from(vec![0xcc; 20]).pack())
+                .build(),
+        )
+        .build();
     let tx = TransactionBuilder::default()
         .output(
             packed::CellOutput::new_builder()
@@ -4080,6 +4097,7 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
                 .build(),
         )
         .output_data(Vec::<u8>::new().pack())
+        .witness(miner_witness.as_bytes().pack())
         .build();
     let tx_hash = tx.hash();
     let block = BlockBuilder::default()

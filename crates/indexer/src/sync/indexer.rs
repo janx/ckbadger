@@ -446,7 +446,7 @@ impl Indexer {
             ckb_store
                 .as_ref()
                 .expect("ckb_store must exist after startup validation")
-                .tip_number(),
+                .tip_number()?,
             "CKB RocksDB during indexer startup",
         )?;
 

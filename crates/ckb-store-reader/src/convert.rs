@@ -94,17 +94,18 @@ pub struct RpcScript {
 
 /// Convert a `ckb_types::core::BlockView` into the RPC-compatible `RpcBlockResponseWithCycles`.
 ///
-/// The `store` is used to read BlockExt for cycles data.
+/// The `store` is used to read BlockExt for cycles data; a failed or
+/// undecodable ext row is an error.
 pub fn block_view_to_rpc(
     block: &core::BlockView,
     store: &CkbChainReader,
-) -> RpcBlockResponseWithCycles {
+) -> anyhow::Result<RpcBlockResponseWithCycles> {
     let hash_bytes: [u8; 32] = block.hash().unpack();
 
     // Get cycles from BlockExt
     let cycles = store
-        .get_block_ext(&hash_bytes)
-        .and_then(|(_, cycles_vec)| {
+        .get_block_ext_cycles(&hash_bytes)?
+        .and_then(|cycles_vec| {
             if cycles_vec.is_empty() {
                 None
             } else {
@@ -149,7 +150,7 @@ pub fn block_view_to_rpc(
         .map(|p| format!("0x{}", hex::encode(p.as_slice())))
         .collect();
 
-    RpcBlockResponseWithCycles {
+    Ok(RpcBlockResponseWithCycles {
         block: RpcBlockView {
             header,
             uncles,
@@ -157,7 +158,7 @@ pub fn block_view_to_rpc(
             proposals,
         },
         cycles,
-    }
+    })
 }
 
 fn convert_header(header: &core::HeaderView) -> RpcHeaderView {

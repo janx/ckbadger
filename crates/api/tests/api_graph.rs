@@ -544,3 +544,54 @@ async fn tx_graph_fails_when_the_node_lacks_an_indexed_transaction() {
         "{message}"
     );
 }
+
+/// Fix round, finding 11: a window block whose node number-index row cannot
+/// be read fails the proposals graph. Before, the reader answered "no such
+/// block", the scan skipped block 443, and the proposal it commits showed as
+/// never committed.
+#[tokio::test]
+async fn proposal_graph_fails_on_an_unreadable_window_block_index_row() {
+    let txs = committed_transactions();
+    let tx_a = &txs[1];
+    let specs = vec![
+        FixtureBlock {
+            number: 440,
+            proposals: vec![tx_a.proposal_short_id()],
+            uncles: vec![],
+            transactions: vec![],
+        },
+        FixtureBlock {
+            number: 443,
+            proposals: vec![],
+            uncles: vec![],
+            transactions: vec![tx_a.clone()],
+        },
+    ];
+    let (store, chain) = seed_proposal_fixture(&specs);
+    {
+        let mut options = Options::default();
+        options.create_missing_column_families(true);
+        let descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+            .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+            .collect();
+        let db = DB::open_cf_descriptors(&options, &chain.path, descriptors).unwrap();
+        let index = db.cf_handle("0").unwrap();
+        db.put_cf(&index, 443u64.to_le_bytes(), [1, 2, 3]).unwrap();
+        db.flush_cf(&index).unwrap();
+    }
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+
+    let (status, json) = get_json(&app, "/graph/proposals/440").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("CKB block hash index row for number 443 has 3 bytes"),
+        "{message}"
+    );
+}

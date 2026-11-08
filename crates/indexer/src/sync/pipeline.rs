@@ -1730,12 +1730,22 @@ impl Indexer {
                     continue;
                 }
 
+                // `Ok(None)`: the node has no tip yet, wait for it. A failed
+                // read or a corrupt tip row is not transient: stop the fetcher.
                 let chain_tip = match ckb_store.tip_number() {
-                    Some(tip) => tip,
-                    None => {
-                        error!("Failed to get chain tip from CKB RocksDB");
+                    Ok(Some(tip)) => tip,
+                    Ok(None) => {
+                        error!("CKB RocksDB has no chain tip yet");
                         sleep(Duration::from_secs(5)).await;
                         continue;
+                    }
+                    Err(e) => {
+                        error!("Failed to read chain tip from CKB RocksDB: {:#}", e);
+                        record_worker_exit_reason(
+                            &fetcher_exit_reason_for_fetcher,
+                            format!("CKB RocksDB chain tip read failed: {e:#}"),
+                        );
+                        break;
                     }
                 };
                 progress.update_target(chain_tip);
@@ -3244,12 +3254,14 @@ impl Indexer {
         Self::scoped_parallel_fetch(&block_numbers, default_threads, |&num| {
             let hash = store
                 .get_block_hash(num)
+                .with_context(|| format!("Block {} hash read from CKB RocksDB failed", num))?
                 .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
             let block = store
                 .get_block(&hash)
                 .with_context(|| format!("Block {} read from CKB RocksDB failed", num))?
                 .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
-            let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
+            let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store)
+                .with_context(|| format!("Block {} cycles read from CKB RocksDB failed", num))?;
             Ok(rpc_block.into())
         })
     }
@@ -3279,7 +3291,13 @@ impl Indexer {
                 .map(|chunk| {
                     s.spawn(move || -> Result<Vec<crate::sync::bulk_build::binary_facts::RawCkbBlock>> {
                         // Batch 1: multi_get all block hashes
-                        let hash_opts = store.get_block_hashes_batch(chunk);
+                        let hash_opts = store.get_block_hashes_batch(chunk).with_context(|| {
+                            format!(
+                                "CKB RocksDB batch read of block hashes {}..={} failed",
+                                chunk[0],
+                                chunk[chunk.len() - 1]
+                            )
+                        })?;
                         let mut hashes = Vec::with_capacity(chunk.len());
                         for (i, h) in hash_opts.into_iter().enumerate() {
                             hashes.push(h.ok_or_else(|| {
@@ -3301,7 +3319,13 @@ impl Indexer {
                         })?;
 
                         // Batch 3: multi_get all block extensions (N keys)
-                        let ext_opts = store.get_block_exts_batch(&hashes);
+                        let ext_opts = store.get_block_ext_cycles_batch(&hashes).with_context(|| {
+                            format!(
+                                "CKB RocksDB batch read of block cycles {}..={} failed",
+                                chunk[0],
+                                chunk[chunk.len() - 1]
+                            )
+                        })?;
 
                         // Assemble RawCkbBlock results
                         let mut results = Vec::with_capacity(chunk.len());
@@ -3314,15 +3338,9 @@ impl Indexer {
                                     chunk[i]
                                 )
                             })?;
-                            let cycles = ext_opt
-                                .and_then(|(_, cycles_vec)| {
-                                    if cycles_vec.is_empty() {
-                                        None
-                                    } else {
-                                        Some(cycles_vec)
-                                    }
-                                })
-                                .unwrap_or_default();
+                            // No ext row, or one without cycles: the node has not
+                            // recorded them, and the block's cycles stay pending.
+                            let cycles = ext_opt.unwrap_or_default();
                             results.push(
                                 crate::sync::bulk_build::binary_facts::RawCkbBlock {
                                     block,

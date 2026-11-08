@@ -357,6 +357,8 @@ async fn detail_proves_uncle_inclusion_competing_gap_and_later_tx_commit() {
     let store = test_store();
     let fork_hash = [0x33; 32];
     let epoch = EpochNumberWithFraction::new(1, 0, 1800);
+    // Every cellbase a node stores carries a CellbaseWitness (RFC-0022); the
+    // reader reads the miner from it.
     let cellbase = TransactionBuilder::default()
         .output(
             packed::CellOutput::new_builder()
@@ -364,6 +366,7 @@ async fn detail_proves_uncle_inclusion_competing_gap_and_later_tx_commit() {
                 .build(),
         )
         .output_data(Vec::<u8>::new().pack())
+        .witness(cellbase_paying([0xcc; 20]).witnesses().get(0).unwrap())
         .build();
     let tx = TransactionBuilder::default()
         .output(
@@ -690,6 +693,8 @@ async fn detail_reports_epoch_closed_without_uncle_or_tx_commit() {
     let fork_hash = [0x33; 32];
     let epoch1 = EpochNumberWithFraction::new(1, 0, 1800);
     let epoch2 = EpochNumberWithFraction::new(2, 0, 1800);
+    // Every cellbase a node stores carries a CellbaseWitness (RFC-0022); the
+    // reader reads the miner from it.
     let cellbase = TransactionBuilder::default()
         .output(
             packed::CellOutput::new_builder()
@@ -697,6 +702,7 @@ async fn detail_reports_epoch_closed_without_uncle_or_tx_commit() {
                 .build(),
         )
         .output_data(Vec::<u8>::new().pack())
+        .witness(cellbase_paying([0xcc; 20]).witnesses().get(0).unwrap())
         .build();
     let tx = TransactionBuilder::default()
         .output(
