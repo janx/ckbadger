@@ -5033,8 +5033,9 @@ async fn dep_group_lookup_fixture_with_live_row(
             .collect();
         let db = DB::open_cf_descriptors(&options, &chain.path, descriptors).unwrap();
         let cf = db.cf_handle("12").unwrap();
-        let mut key = deployment_tx_hash.to_vec();
-        key.extend_from_slice(&dep_index.to_le_bytes());
+        // The node's own key for a live cell's data row.
+        let key =
+            packed::OutPoint::new(packed::Byte32::new(deployment_tx_hash), dep_index).to_cell_key();
         db.put_cf(&cf, key, row).unwrap();
         db.flush_cf(&cf).unwrap();
     }

@@ -394,16 +394,16 @@ impl CkbChainReader {
 
     /// Get cell data for a specific output.
     ///
-    /// A live cell's data is in `COLUMN_CELL_DATA` (the node writes a
-    /// `CellDataEntry`, or an empty value for empty data); a consumed cell has
-    /// no row there and is read from its transaction in `COLUMN_BLOCK_BODY`.
-    /// `Ok(None)`: no such transaction or output. `Err`: a read failed or a row
-    /// does not decode.
+    /// Two sources, one per cell state. A live cell's data is in
+    /// `COLUMN_CELL_DATA` under the node's own key, `OutPoint::to_cell_key`
+    /// (`tx_hash ++ index` big-endian), as a `CellDataEntry` or an empty value
+    /// for empty data. The node deletes that row when the cell is consumed, so
+    /// a consumed cell's data is read from its transaction in
+    /// `COLUMN_BLOCK_BODY`. `Ok(None)`: no such transaction or output. `Err`: a
+    /// read failed or a row does not decode.
     pub fn get_cell_data(&self, tx_hash: &[u8; 32], index: u32) -> Result<Option<Vec<u8>>> {
         let cf = self.column(COLUMN_CELL_DATA)?;
-        let mut key = Vec::with_capacity(36);
-        key.extend_from_slice(tx_hash);
-        key.extend_from_slice(&index.to_le_bytes());
+        let key = packed::OutPoint::new(packed::Byte32::new(*tx_hash), index).to_cell_key();
         let live = self.db.get_cf(cf, &key).map_err(|e| {
             anyhow!(
                 "CKB cell data read failed: outpoint=0x{}:{index}: {e}",
@@ -1579,10 +1579,9 @@ mod tests {
         key
     }
 
+    /// The node's own `COLUMN_CELL_DATA` key (`OutPoint::to_cell_key`).
     fn cell_key(tx_hash: &[u8; 32], index: u32) -> Vec<u8> {
-        let mut key = tx_hash.to_vec();
-        key.extend_from_slice(&index.to_le_bytes());
-        key
+        packed::OutPoint::new(packed::Byte32::new(*tx_hash), index).to_cell_key()
     }
 
     /// D-2b: a body row that does not decode fails the block read with the
@@ -1751,6 +1750,58 @@ mod tests {
             message.contains("undecodable CKB cell data row")
                 && message.contains(&format!("0x{}:1", hex::encode(other))),
             "{message}"
+        );
+    }
+
+    /// Fix round, finding 2: the node keys a live cell's `COLUMN_CELL_DATA`
+    /// row with `OutPoint::to_cell_key` (index big-endian), so a row at index 1
+    /// or above must be read from there; before, the reader built the key
+    /// little-endian, missed every such row and answered from the block body.
+    #[test]
+    fn a_live_cell_data_row_at_index_one_is_read_under_the_nodes_key() {
+        let primary_dir = tempdir().unwrap();
+        let primary = open_primary(primary_dir.path());
+        let block = fixture_block(1_234, true);
+        store_block(&primary, &block, StoredHashes::Real);
+        let spend: [u8; 32] = block.transactions()[1].hash().unpack();
+        let other: [u8; 32] = block.transactions()[2].hash().unpack();
+        let node_key = |tx: [u8; 32], index: u32| {
+            packed::OutPoint::new(packed::Byte32::new(tx), index).to_cell_key()
+        };
+        // Output 1 of both spends holds empty data in the body; the live rows
+        // say otherwise, so only a read of the live row returns them.
+        let entry = packed::CellDataEntry::new_builder()
+            .output_data(ckb_types::bytes::Bytes::from(vec![0x77; 8]).pack())
+            .output_data_hash(packed::Byte32::new([0x99; 32]))
+            .build();
+        put_row(
+            &primary,
+            COLUMN_CELL_DATA,
+            &node_key(spend, 1),
+            entry.as_slice(),
+        );
+        put_row(&primary, COLUMN_CELL_DATA, &node_key(other, 1), &[5, 5, 5]);
+        let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            reader.get_cell_data(&spend, 1).unwrap(),
+            Some(vec![0x77; 8])
+        );
+        let message = format!(
+            "{:#}",
+            reader
+                .get_cell_data(&other, 1)
+                .expect_err("corrupt live row at index 1")
+        );
+        assert!(
+            message.contains("undecodable CKB cell data row")
+                && message.contains(&format!("0x{}:1", hex::encode(other))),
+            "{message}"
+        );
+        // No live row: the body answers (a consumed cell).
+        assert_eq!(
+            reader.get_cell_data(&other, 0).unwrap(),
+            Some(vec![0x31; 16])
         );
     }
 }
