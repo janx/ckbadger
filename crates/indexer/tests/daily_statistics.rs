@@ -4,10 +4,7 @@ use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_domain_temp().unwrap())
 }
 
 /// Put daily stats for a single date and verify retrieval.

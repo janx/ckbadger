@@ -99,8 +99,9 @@ pub struct DataHashRowResponse {
 /// `cell_by_data_hash` rows under one data hash, each with the cell it names
 /// (live or consumed) and that cell's stored data size. Raw and bounded, from
 /// the request's one read pin; a dangling or malformed row is a 500 naming it.
-/// The verifier asks for the hash of empty data, which must have no row: a row
-/// exists iff its cell has data (`keys::cell_has_data_hash_row`).
+/// The verifier asks for the hash of empty data, which must have no row, and
+/// for the data hash of each genesis output: a row exists iff its cell is a
+/// code cell (`keys::is_code_cell`).
 async fn export_data_hash_rows(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DataHashRowsQuery>,

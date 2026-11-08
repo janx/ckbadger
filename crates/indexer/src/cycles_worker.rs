@@ -432,7 +432,6 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let header = CachedBlockHeader {
             hash: vec![0x69; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1,
             epoch_number: 0,
             epoch_index: 0,
@@ -519,7 +518,6 @@ mod tests {
         let hash = [0x44; 32];
         let header = CachedBlockHeader {
             hash: vec![0x42; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1,
             epoch_number: 0,
             epoch_index: 0,
@@ -565,7 +563,6 @@ mod tests {
             123,
             &CachedBlockHeader {
                 hash: vec![0x77; 32],
-                parent_hash: vec![0; 32],
                 timestamp: 1,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -788,7 +785,6 @@ mod tests {
             123,
             &CachedBlockHeader {
                 hash: vec![0x77; 32],
-                parent_hash: vec![0; 32],
                 timestamp: 1,
                 epoch_number: 1,
                 epoch_index: 0,

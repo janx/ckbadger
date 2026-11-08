@@ -11,7 +11,6 @@ async fn block_transaction_list_requires_node_proposal_evidence() {
         7,
         &CachedBlockHeader {
             hash: vec![0xB7; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -113,7 +112,6 @@ async fn committed_detail_uses_transaction_output_data_without_cell_data_cf() {
         7,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -204,7 +202,6 @@ async fn committed_detail_rejects_missing_indexed_input_cell() {
         7,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -344,7 +341,6 @@ async fn block_transaction_list_rejects_invalid_stored_timestamp() {
         7,
         &CachedBlockHeader {
             hash: vec![0xB7; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1208,7 +1204,6 @@ fn seed_lifecycle_fixture(
     let mut batch = StoreBatch::new(store.as_ref());
     let header = |hash: Vec<u8>, number: i64| CachedBlockHeader {
         hash,
-        parent_hash: vec![0u8; 32],
         timestamp: 1_700_000_000_000 + number,
         epoch_number: 1,
         epoch_index: 0,
@@ -1795,7 +1790,6 @@ async fn dotcell_transaction_app(index_identities: bool) -> (axum::Router, Strin
         block_number,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -1860,6 +1854,8 @@ async fn dotcell_transaction_app(index_identities: bool) -> (axum::Router, Strin
             &input_cell,
             block_number - 1,
             block_number,
+            // Consumed by this transaction, seeded at tx index 0 above.
+            0,
         );
     }
     for output in 0..4 {
@@ -2057,7 +2053,6 @@ fn seed_tx_awaiting_cycles(store: &Arc<CkbadgerStore>, tx_hash: &[u8; 32], cycle
         321,
         &CachedBlockHeader {
             hash: vec![0x44; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123_456,
             epoch_number: 1,
             epoch_index: 0,
@@ -2261,7 +2256,6 @@ async fn redesign_committed_detail_requires_node_transaction_bytes() {
         10,
         &CachedBlockHeader {
             hash: vec![0x41; 32],
-            parent_hash: vec![0x42; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2811,7 +2805,6 @@ async fn genesis_detail_marks_type_groups_as_unexecuted() {
         0,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2964,7 +2957,6 @@ async fn r3_cycles_dispatch_rejects_inconsistent_deep_fork_status() {
 fn detail_fixture_header(hash: [u8; 32], timestamp: i64) -> CachedBlockHeader {
     CachedBlockHeader {
         hash: hash.to_vec(),
-        parent_hash: vec![0; 32],
         timestamp,
         epoch_number: 1,
         epoch_index: 0,
@@ -4060,7 +4052,6 @@ fn seed_code_cell_family(store: &Arc<CkbadgerStore>) -> [Vec<u8>; 3] {
             block,
             &CachedBlockHeader {
                 hash: vec![0xb0 + block as u8; 32],
-                parent_hash: vec![0; 32],
                 timestamp: 1_700_000_000_000 + block * 10_000,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -4462,4 +4453,66 @@ async fn transaction_detail_reads_an_xudt_amount_by_the_indexer_rule() {
     let display = &json["outputs"][0]["display"];
     assert_eq!(display["amount"], "100000000000", "{display}");
     assert_eq!(display["noAmountReason"], serde_json::Value::Null);
+}
+
+/// Review P1-1 / 27: a transaction list page reads its `activities` rows with
+/// one multi_get, completed from the entries and block hashes the page
+/// already holds — no `tx_index`, `activities` or `block_headers` read per
+/// row (the latest page reads no header at all; the class filter one batch
+/// of the page's blocks).
+#[tokio::test]
+async fn transaction_list_pages_read_their_actions_once_per_page() {
+    use ckbadger_store::types::TAG_TOKEN;
+    let store = test_store();
+    let cell = LiveCellInfo {
+        capacity: 10_000_000_000,
+        lock_code_hash: [0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0; 20],
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    };
+    for block in 20..30i64 {
+        let tx = [block as u8; 32];
+        seed_committed_activity(&store, &[0x11; 32], &tx, block, 1, 100, TAG_TOKEN);
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cell(&tx, 0, &cell, block);
+        batch.commit().unwrap();
+    }
+    let app = create_router(test_config(store.clone())).await;
+    for (path, header_reads, index_multi_gets) in [
+        ("/transactions?limit=5", 0, 0),
+        // The bucket page completes its rows with one tx_index read, whose
+        // entries the list serves, and one header batch for its six blocks.
+        ("/transactions?activity_type=token&limit=5", 6, 1),
+    ] {
+        store.reset_read_call_counters();
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        assert_eq!(json["data"].as_array().unwrap().len(), 5, "{path}");
+        assert_eq!(
+            store.point_reads(ckbadger_store::CF_TX_INDEX),
+            0,
+            "{path}: no tx_index row read by key"
+        );
+        assert_eq!(
+            store.multi_gets(ckbadger_store::CF_TX_ACTIONS),
+            1,
+            "{path}: one activities read for the page"
+        );
+        assert_eq!(
+            store.multi_gets(ckbadger_store::CF_TX_INDEX),
+            index_multi_gets,
+            "{path}: tx_index reads for the page"
+        );
+        assert_eq!(
+            store.point_reads(ckbadger_store::CF_BLOCK_HEADERS),
+            header_reads,
+            "{path}: header keys read"
+        );
+    }
 }

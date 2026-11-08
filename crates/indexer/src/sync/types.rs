@@ -133,12 +133,14 @@ pub struct AddressBalanceDelta {
     pub used_delta: i128,
     /// Block number of the first transaction touching this address in the batch.
     pub first_seen_block: i64,
-    /// Tx hash of the first transaction touching this address in the batch.
-    pub first_seen_tx: Vec<u8>,
+    /// Index (in `first_seen_block`) of the first transaction touching this
+    /// address in the batch.
+    pub first_seen_tx_idx: i32,
     /// Block number of the last transaction touching this address in the batch.
     pub last_activity_block: i64,
-    /// Tx hash of the last transaction touching this address in the batch.
-    pub last_activity_tx: Vec<u8>,
+    /// Index (in `last_activity_block`) of the last transaction touching this
+    /// address in the batch.
+    pub last_activity_tx_idx: i32,
 }
 
 /// One transaction's per-lock effects, as the parser stage accumulates them
@@ -159,7 +161,7 @@ pub(crate) struct TxAddressEffects<'a> {
 pub(crate) fn fold_tx_address_deltas(
     changes: &mut HashMap<Vec<u8>, AddressBalanceDelta>,
     block_number: i64,
-    tx_hash: &[u8],
+    tx_idx: i32,
     is_cellbase: bool,
     effects: TxAddressEffects<'_>,
 ) {
@@ -187,9 +189,9 @@ pub(crate) fn fold_tx_address_deltas(
                 cellbase_tx_delta: 0,
                 used_delta: 0,
                 first_seen_block: block_number,
-                first_seen_tx: tx_hash.to_vec(),
+                first_seen_tx_idx: tx_idx,
                 last_activity_block: block_number,
-                last_activity_tx: tx_hash.to_vec(),
+                last_activity_tx_idx: tx_idx,
             });
         entry.balance_delta += balance_change;
         entry.live_delta += cells_created - cells_consumed;
@@ -197,7 +199,7 @@ pub(crate) fn fold_tx_address_deltas(
         entry.tx_delta += 1;
         entry.cellbase_tx_delta += cellbase_increment;
         entry.last_activity_block = block_number;
-        entry.last_activity_tx = tx_hash.to_vec();
+        entry.last_activity_tx_idx = tx_idx;
         entry.used_delta += occupied_change;
     }
 }

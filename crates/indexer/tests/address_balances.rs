@@ -18,10 +18,7 @@ use std::sync::Arc;
 const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_domain_temp().unwrap())
 }
 
 fn fixture_lock_script(args_hex: &str) -> Script {
@@ -121,9 +118,9 @@ fn make_balance(
     total_cells: i64,
     txs: i64,
     first_block: i64,
-    first_tx_byte: u8,
+    first_tx_idx: i32,
     last_block: i64,
-    last_tx_byte: u8,
+    last_tx_idx: i32,
 ) -> AddressBalance {
     AddressBalance {
         balance,
@@ -133,9 +130,9 @@ fn make_balance(
         txs_count: txs,
         cellbase_txs_count: 0,
         first_seen_block: first_block,
-        first_seen_tx: vec![first_tx_byte; 32],
+        first_seen_tx_idx: first_tx_idx,
         last_activity_block: last_block,
-        last_activity_tx: vec![last_tx_byte; 32],
+        last_activity_tx_idx: last_tx_idx,
     }
 }
 
@@ -159,7 +156,7 @@ fn test_receive_cells_balance_increases() {
     assert_eq!(retrieved.total_cells_count, 1);
     assert_eq!(retrieved.txs_count, 1);
     assert_eq!(retrieved.first_seen_block, 1000);
-    assert_eq!(retrieved.first_seen_tx, vec![0x01u8; 32]);
+    assert_eq!(retrieved.first_seen_tx_idx, 0x01);
     assert_eq!(retrieved.last_activity_block, 1000);
 }
 
@@ -186,7 +183,7 @@ fn test_send_cells_balance_decreases() {
     assert_eq!(retrieved.total_cells_count, 2);
     assert_eq!(retrieved.txs_count, 2);
     assert_eq!(retrieved.last_activity_block, 2000);
-    assert_eq!(retrieved.last_activity_tx, vec![0x02u8; 32]);
+    assert_eq!(retrieved.last_activity_tx_idx, 0x02);
 }
 
 #[test]
@@ -241,9 +238,9 @@ fn test_used_capacity_stored_and_retrieved() {
         txs_count: 1,
         cellbase_txs_count: 0,
         first_seen_block: 1000,
-        first_seen_tx: vec![0x01; 32],
+        first_seen_tx_idx: 0,
         last_activity_block: 1000,
-        last_activity_tx: vec![0x01; 32],
+        last_activity_tx_idx: 0,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -284,7 +281,7 @@ fn bulk_build_address_owner_materializes_final_balances_without_db_reads() {
 
     let balance_a = balances
         .values()
-        .find(|balance| balance.first_seen_tx == vec![0xaa; 32])
+        .find(|balance| balance.first_seen_tx_idx == 0)
         .expect("address A balance");
     assert_eq!(balance_a.balance, 100_00000000);
     assert_eq!(balance_a.used_capacity, 61_00000000);
@@ -292,13 +289,13 @@ fn bulk_build_address_owner_materializes_final_balances_without_db_reads() {
     assert_eq!(balance_a.total_cells_count, 2);
     assert_eq!(balance_a.txs_count, 2);
     assert_eq!(balance_a.first_seen_block, 14_000_500);
-    assert_eq!(balance_a.first_seen_tx, vec![0xaa; 32]);
+    assert_eq!(balance_a.first_seen_tx_idx, 0, "the create tx");
     assert_eq!(balance_a.last_activity_block, 14_000_500);
-    assert_eq!(balance_a.last_activity_tx, vec![0xbb; 32]);
+    assert_eq!(balance_a.last_activity_tx_idx, 1, "the split tx");
 
     let balance_b = balances
         .values()
-        .find(|balance| balance.first_seen_tx == vec![0xbb; 32])
+        .find(|balance| balance.first_seen_tx_idx == 1)
         .expect("address B balance");
     assert_eq!(balance_b.balance, 100_00000000);
     assert_eq!(balance_b.used_capacity, 61_00000000);
@@ -306,7 +303,7 @@ fn bulk_build_address_owner_materializes_final_balances_without_db_reads() {
     assert_eq!(balance_b.total_cells_count, 1);
     assert_eq!(balance_b.txs_count, 1);
     assert_eq!(balance_b.first_seen_block, 14_000_500);
-    assert_eq!(balance_b.first_seen_tx, vec![0xbb; 32]);
+    assert_eq!(balance_b.first_seen_tx_idx, 1);
     assert_eq!(balance_b.last_activity_block, 14_000_500);
-    assert_eq!(balance_b.last_activity_tx, vec![0xbb; 32]);
+    assert_eq!(balance_b.last_activity_tx_idx, 1);
 }

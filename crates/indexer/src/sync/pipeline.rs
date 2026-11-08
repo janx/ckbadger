@@ -767,21 +767,9 @@ fn parse_single_block(
         });
     }
 
-    let parent_hash: [u8; 32] = parsed_block
-        .parent_hash
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            anyhow!(
-                "parent_hash length mismatch: block={} len={}",
-                parsed_block.number,
-                parsed_block.parent_hash.len()
-            )
-        })?;
     let block_facts = BlockFacts {
         number: parsed_block.number,
         hash: block_hash,
-        parent_hash,
         timestamp_ms,
         chain_time_ms: timestamp_ms,
         epoch_number: parsed_block.epoch_number,
@@ -1614,7 +1602,7 @@ pub(crate) fn precompute_live_batch(
         fold_tx_address_deltas(
             address_balance_changes.block_mut(tx_data.block_number)?,
             tx_data.block_number,
-            &tx_data.hash,
+            tx_data.tx_index,
             tx_data.is_cellbase,
             TxAddressEffects {
                 balance: &tx_balance_changes,

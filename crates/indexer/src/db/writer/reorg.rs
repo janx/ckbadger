@@ -29,10 +29,13 @@ fn next_reorg_event_key() -> Result<String> {
 }
 
 /// The first block a switch drops — height `fork_point + 1` of the branch the
-/// store holds — after proving that branch: the first orphan's parent is
-/// `fork_hash`, every later header's parent is the header below it, and the
-/// header at `old_tip` is `old_tip_hash`. Read before the rollback deletes
-/// these headers; it is the event's D7 address (`ReorgEvent::first_orphan_hash`).
+/// store holds — after proving that branch from the store's own rows: the
+/// stored header at the fork point is `fork_hash` (so it is the first orphan's
+/// parent: a header row stores no parent hash, the parent of block n is the
+/// row of block n-1), the old branch has a header at every height up to
+/// `old_tip`, and the header at `old_tip` is `old_tip_hash`. Read with one
+/// `multi_get` before the rollback deletes these headers; it is the event's
+/// D7 address (`ReorgEvent::first_orphan_hash`).
 fn first_orphan_of_stored_branch(
     store: &CkbadgerStore,
     fork_point: i64,
@@ -44,36 +47,37 @@ fn first_orphan_of_stored_branch(
         old_tip > fork_point,
         "first orphan: old tip {old_tip} is not above fork point {fork_point}"
     );
-    let mut parent = fork_hash.to_vec();
-    let mut first: Option<Vec<u8>> = None;
-    for height in fork_point + 1..=old_tip {
-        let header = store.get_block_header(height)?.ok_or_else(|| {
-            anyhow!(
-                "first orphan: the stored old branch has no header at {height} (fork point {fork_point}, old tip {old_tip})"
-            )
-        })?;
-        ensure!(
-            header.parent_hash == parent,
-            "first orphan: stored header {height} 0x{} has parent 0x{}, not 0x{} (fork point {fork_point}, old tip {old_tip})",
-            hex::encode(&header.hash),
-            hex::encode(&header.parent_hash),
-            hex::encode(&parent),
-        );
-        if first.is_none() {
-            first = Some(header.hash.clone());
-        }
-        parent = header.hash;
-    }
+    let heights: Vec<i64> = (fork_point..=old_tip).collect();
+    let headers = store.get_block_headers_batch(&heights)?;
+    let hash_at = |height: i64| -> Result<&[u8]> {
+        headers
+            .get(&height)
+            .map(|header| header.hash.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "first orphan: the stored chain has no header at {height} (fork point {fork_point}, old tip {old_tip})"
+                )
+            })
+    };
+    let stored_fork = hash_at(fork_point)?;
     ensure!(
-        parent.as_slice() == old_tip_hash,
+        stored_fork == fork_hash,
+        "first orphan: the stored header at fork point {fork_point} (the first orphan's parent) is 0x{}, not 0x{} (old tip {old_tip})",
+        hex::encode(stored_fork),
+        hex::encode(fork_hash),
+    );
+    for height in fork_point + 1..old_tip {
+        hash_at(height)?;
+    }
+    let stored_tip = hash_at(old_tip)?;
+    ensure!(
+        stored_tip == old_tip_hash,
         "first orphan: the stored old branch ends at 0x{}, not the recorded old tip 0x{} (fork point {fork_point}, old tip {old_tip})",
-        hex::encode(&parent),
+        hex::encode(stored_tip),
         hex::encode(old_tip_hash),
     );
-    let first = first.ok_or_else(|| {
-        anyhow!("first orphan: empty old branch (fork point {fork_point}, old tip {old_tip})")
-    })?;
-    first.as_slice().try_into().map_err(|_| {
+    let first = hash_at(fork_point + 1)?;
+    first.try_into().map_err(|_| {
         anyhow!(
             "first orphan: stored header {} hash has {} bytes (fork point {fork_point}, old tip {old_tip})",
             fork_point + 1,
@@ -98,7 +102,7 @@ impl BatchWriter {
         let key = std::str::from_utf8(&event_key)?;
         let bytes = self
             .store
-            .get_cf(self.store.cf_sync_meta(), &event_key)?
+            .get_cf(self.store.cf_reorg_events(), &event_key)?
             .ok_or_else(|| anyhow!("pending reorg event is missing before rollback: key={key}"))?;
         let mut event: ReorgEvent = bincode::deserialize(&bytes)
             .with_context(|| format!("invalid pending reorg event before rollback: key={key}"))?;
@@ -111,7 +115,7 @@ impl BatchWriter {
         }
         event.reconcile_interrupted = true;
         let mut batch = StoreBatch::new(&self.store);
-        batch.put_sync_meta(&event_key, &bincode::serialize(&event)?);
+        batch.put_reorg_event(&event_key, &bincode::serialize(&event)?);
         batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
         batch.commit()?;
         Ok(())
@@ -158,7 +162,7 @@ impl BatchWriter {
         let event_key_str = std::str::from_utf8(&event_key)?;
         let bytes = self
             .store
-            .get_cf(self.store.cf_sync_meta(), &event_key)?
+            .get_cf(self.store.cf_reorg_events(), &event_key)?
             .ok_or_else(|| anyhow!("pending reorg event is missing: key={event_key_str}"))?;
         let mut current: ReorgEvent = bincode::deserialize(&bytes)?;
         if current.kind != ReorgEventKind::Automatic {
@@ -234,12 +238,12 @@ impl BatchWriter {
             if !current.reverses_events.contains(&prior.key) {
                 current.reverses_events.push(prior.key.clone());
             }
-            batch.put_sync_meta(prior.key.as_bytes(), &bincode::serialize(&prior.event)?);
+            batch.put_reorg_event(prior.key.as_bytes(), &bincode::serialize(&prior.event)?);
         }
         current.reverses_events.sort();
         let next_bytes = bincode::serialize(&current)?;
         if next_bytes != bytes {
-            batch.put_sync_meta(&event_key, &next_bytes);
+            batch.put_reorg_event(&event_key, &next_bytes);
         }
         if complete {
             batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
@@ -296,8 +300,13 @@ impl BatchWriter {
             depth: depth_i32,
             fork_point,
         });
-        let mut batch = StoreBatch::new(self.store.as_ref());
-        batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        // The deep-fork record is the one unjournaled writer of
+        // `live_cell_summary:current` (its withdrawal below).
+        let mut batch = StoreBatch::outside_journal(
+            self.store.as_ref(),
+            ckbadger_store::OutsideWriter::DeepForkRecord,
+        );
+        batch.put_reorg_event(event_key.as_bytes(), &event_bytes);
         batch.put_sync_runtime(&status.runtime())?;
         // The local node has already reported that this tip is no longer
         // canonical. Keep the API unavailable until an operator resolves the
@@ -407,7 +416,7 @@ impl BatchWriter {
         status.deep_fork_detected = false;
         status.deep_fork_info = None;
         let mut batch = StoreBatch::new(self.store.as_ref());
-        batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_reorg_event(event_key.as_bytes(), &event_bytes);
         batch.put_sync_meta(
             sync_meta_keys::REORG_RECONCILE_PENDING,
             event_key.as_bytes(),
@@ -492,7 +501,7 @@ mod tests {
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -502,7 +511,6 @@ mod tests {
                 height,
                 &CachedBlockHeader {
                     hash,
-                    parent_hash: vec![9; 32],
                     timestamp: 0,
                     epoch_number: 1,
                     epoch_index: 0,
@@ -589,7 +597,7 @@ mod tests {
             assert_eq!(first.fork_point, 8);
             assert_eq!(second.fork_point, if deeper { 7 } else { 8 });
             let mut batch = StoreBatch::new(&store);
-            batch.put_sync_meta(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
+            batch.put_reorg_event(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
             batch.put_sync_meta(
                 keys::sync_meta_keys::REORG_RECONCILE_PENDING,
                 first_key.as_bytes(),
@@ -603,7 +611,7 @@ mod tests {
                 writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
                 let middle_key = keys::encode_reorg_event_key(1500, &[3; 16]).unwrap();
                 let mut batch = StoreBatch::new(&store);
-                batch.put_sync_meta(
+                batch.put_reorg_event(
                     middle_key.as_bytes(),
                     &bincode::serialize(&observation(&b, &c, 1)).unwrap(),
                 );
@@ -615,18 +623,16 @@ mod tests {
             }
             writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
             let mut batch = StoreBatch::new(&store);
-            batch.put_sync_meta(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
+            batch.put_reorg_event(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
             batch.put_sync_meta(
                 keys::sync_meta_keys::REORG_RECONCILE_PENDING,
                 second_key.as_bytes(),
             );
-            let mut parent = vec![6; 32];
             for (index, hash) in canonical_a.iter().enumerate() {
                 batch.put_block_header(
                     7 + index as i64,
                     &CachedBlockHeader {
                         hash: vec![*hash; 32],
-                        parent_hash: parent,
                         timestamp: 0,
                         epoch_number: 1,
                         epoch_index: 0,
@@ -641,7 +647,6 @@ mod tests {
                         chain_time_ms: 0,
                     },
                 );
-                parent = vec![*hash; 32];
             }
             batch.commit().unwrap();
             store.update_sync_tip(12, &[0xd2; 32], 0).unwrap();
@@ -715,7 +720,6 @@ mod tests {
         };
         let header = |hash| CachedBlockHeader {
             hash,
-            parent_hash: vec![8; 32],
             timestamp: 0,
             epoch_number: 1,
             epoch_index: 0,
@@ -730,7 +734,7 @@ mod tests {
             chain_time_ms: 0,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -787,7 +791,6 @@ mod tests {
         };
         let header = |hash| CachedBlockHeader {
             hash,
-            parent_hash: vec![9; 32],
             timestamp: 0,
             epoch_number: 1,
             epoch_index: 0,
@@ -802,8 +805,8 @@ mod tests {
             chain_time_ms: 0,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
-        batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -887,7 +890,7 @@ mod tests {
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(
             keys::sync_meta_keys::REORG_RECONCILE_PENDING,
             key.as_bytes(),
@@ -896,7 +899,6 @@ mod tests {
             9,
             &ckbadger_store::types::CachedBlockHeader {
                 hash: vec![9; 32],
-                parent_hash: vec![8; 32],
                 timestamp: 0,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -982,7 +984,7 @@ mod tests {
             (&unrelated_key, &unrelated),
             (&deep_key, &deep),
         ] {
-            batch.put_sync_meta(key.as_bytes(), &bincode::serialize(event).unwrap());
+            batch.put_reorg_event(key.as_bytes(), &bincode::serialize(event).unwrap());
         }
         batch.put_sync_meta(b"reorg_reconcile_pending", reversal_key.as_bytes());
         for (height, hash) in [(9, vec![9; 32]), (10, vec![0xaa; 32]), (12, vec![0xcc; 32])] {
@@ -990,7 +992,6 @@ mod tests {
                 height,
                 &CachedBlockHeader {
                     hash,
-                    parent_hash: vec![9; 32],
                     timestamp: 0,
                     epoch_number: 1,
                     epoch_index: 0,
@@ -1074,7 +1075,7 @@ mod tests {
 
     fn reorg_event_count(store: &CkbadgerStore) -> usize {
         store
-            .iterator_cf(store.cf_sync_meta(), rocksdb::IteratorMode::Start)
+            .iterator_cf(store.cf_reorg_events(), rocksdb::IteratorMode::Start)
             .flatten()
             .filter(|(key, _)| key.starts_with(keys::REORG_EVENT_KEY_PREFIX))
             .count()
@@ -1179,6 +1180,53 @@ mod tests {
         assert_eq!(info.chain_tip, 130);
         assert_eq!(info.depth, 20);
         assert_eq!(store.get_live_cell_summary().unwrap(), None);
+    }
+
+    /// Review 27: the branch proof needs a header at every height of the old
+    /// branch; a missing intermediate one is an error naming the height.
+    #[test]
+    fn first_orphan_refuses_a_stored_branch_with_a_missing_header() {
+        use ckbadger_store::types::CachedBlockHeader;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        // Fork point 8, old tip 11; height 10 has no header.
+        for height in [8i64, 9, 11] {
+            batch.put_block_header(
+                height,
+                &CachedBlockHeader {
+                    hash: vec![height as u8; 32],
+                    timestamp: 0,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 100,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms: 0,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        let err = super::first_orphan_of_stored_branch(&store, 8, &[8; 32], 11, &[11; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("the stored chain has no header at 10 (fork point 8, old tip 11)"),
+            "{err}"
+        );
+        // With the header, the first orphan is height 9.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(10, &store.get_block_header(9).unwrap().unwrap());
+        batch.commit().unwrap();
+        assert_eq!(
+            super::first_orphan_of_stored_branch(&store, 8, &[8; 32], 11, &[11; 32]).unwrap(),
+            [9; 32]
+        );
     }
 
     #[tokio::test]

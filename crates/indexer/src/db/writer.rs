@@ -31,6 +31,40 @@ pub(crate) enum ContractRequirement {
     OptionalOnFreshStore,
 }
 
+/// A derived count the chain cannot take below zero went below zero: the
+/// stored aggregate no longer matches the chain, so the sync stops
+/// rebuild-required (the F1 policy; B-6, F2 and their siblings, finding 13).
+pub(crate) fn aggregate_underflow(diagnosis: String) -> anyhow::Error {
+    anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(diagnosis))
+}
+
+/// Decode a stored `script_info` row. An undecodable row is corruption the
+/// chain cannot repair, so it is rebuild-required (finding 12, the F1
+/// policy) from the live batch writer and from the bulk finalize alike; a
+/// failed read stays a plain error (the store failed, not the row).
+pub(crate) fn decode_script_info_row(
+    code_hash: &[u8],
+    value: &[u8],
+) -> Result<ckbadger_store::types::ScriptInfo> {
+    CkbadgerStore::decode_script_info(code_hash, value).map_err(|e| {
+        anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(format!(
+            "corrupt script_info row: {e:#}"
+        )))
+    })
+}
+
+/// The stored `script_info` row of `code_hash`, decoded by
+/// [`decode_script_info_row`].
+pub(crate) fn read_script_info_row(
+    store: &CkbadgerStore,
+    code_hash: &[u8],
+) -> Result<Option<ckbadger_store::types::ScriptInfo>> {
+    store
+        .get_cf(store.cf_script_info(), code_hash)?
+        .map(|value| decode_script_info_row(code_hash, &value))
+        .transpose()
+}
+
 impl BatchWriter {
     /// Refuse any rollback that reaches below the journal coverage floor.
     ///
@@ -184,7 +218,6 @@ pub use reorg::ReorgResult;
 pub use spore::IdentityTransition;
 pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;
-pub use statistics::FrozenActivityAddrSets;
 
 /// Test support: the block journal a live batch committed (store refactor
 /// lane B).
@@ -203,7 +236,6 @@ pub(crate) mod journal_test_support {
             hash[..8].copy_from_slice(&block.to_be_bytes());
             let header = ckbadger_store::CachedBlockHeader {
                 hash,
-                parent_hash: vec![0; 32],
                 timestamp: 1_700_000_000_000 + block * 1_000,
                 epoch_number: 0,
                 epoch_index: 0,

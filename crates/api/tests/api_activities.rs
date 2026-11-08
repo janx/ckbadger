@@ -28,7 +28,6 @@ async fn test_address_activities_reads_from_store() {
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -45,13 +44,7 @@ async fn test_address_activities_reads_from_store() {
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     core_batch.put_tx_actions(&actions);
-    core_batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    core_batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     core_batch.commit().unwrap();
     sync_address_tx_counters(&core_store, &lock_hash);
     core_store
@@ -115,7 +108,6 @@ async fn address_activities_response(
         88,
         &CachedBlockHeader {
             hash: actions.block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123,
             epoch_number: 0,
             epoch_index: 0,
@@ -131,13 +123,7 @@ async fn address_activities_response(
         },
     );
     batch.put_tx_actions(actions);
-    batch.put_addr_tx(
-        lock_hash,
-        88,
-        1,
-        &actions.tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    batch.put_addr_tx(lock_hash, 88, 1, &AddrTxValue::new(0, false, true, 0));
     batch.commit().unwrap();
     sync_address_tx_counters(&core_store, lock_hash);
     core_store
@@ -264,7 +250,7 @@ async fn dotbit_protocol_actions_project_with_their_registry_name() {
 
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_tx_actions(&actions);
+    put_tx_actions_indexed(&mut batch, &actions);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, global) = fetch_json(app, "/api/v1/activities?filter=identity&limit=10").await;
@@ -470,7 +456,6 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         &lock_hash,
         88,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, false, true, TAG_TYPE_CALL),
     );
     core_batch.put_tx_hash_map(&tx_hash, 88, 0);
@@ -493,7 +478,6 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         88,
         &CachedBlockHeader {
             hash: block_hash,
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_888_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -609,7 +593,6 @@ async fn test_latest_activities_return_type_calls() {
         99,
         &CachedBlockHeader {
             hash: block_hash,
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_999,
             epoch_number: 0,
             epoch_index: 0,
@@ -681,7 +664,6 @@ async fn test_global_activities_basic() {
         200,
         &CachedBlockHeader {
             hash: block_hash,
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -759,7 +741,6 @@ async fn test_address_transactions_reads_from_derived_store() {
         10,
         &CachedBlockHeader {
             hash: vec![0xba; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -797,13 +778,7 @@ async fn test_address_transactions_reads_from_derived_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
     let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
-    derived_batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    derived_batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     derived_batch.commit().unwrap();
 
     let request = Request::builder()
@@ -866,7 +841,6 @@ fn seed_activity_with_txs_count(
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -883,13 +857,7 @@ fn seed_activity_with_txs_count(
     );
     let actions = make_test_tx_actions(lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     batch.put_tx_actions(&actions);
-    batch.put_addr_tx(
-        lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    batch.put_addr_tx(lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     batch.commit().unwrap();
 
     store
@@ -903,9 +871,9 @@ fn seed_activity_with_txs_count(
                 txs_count,
                 cellbase_txs_count,
                 first_seen_block: 10,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 10,
-                last_activity_tx: tx_hash.clone(),
+                last_activity_tx_idx: 0,
             },
         )
         .unwrap();
@@ -975,7 +943,6 @@ async fn test_address_activities_total_contradicting_page_one_is_an_error() {
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -992,13 +959,7 @@ async fn test_address_activities_total_contradicting_page_one_is_an_error() {
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     batch.put_tx_actions(&actions);
-    batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(0, false, true, 0));
     batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -1075,13 +1036,7 @@ async fn test_address_activities_total_is_reached_by_paging_to_exhaustion() {
                 semantic_tags: 0,
             },
         );
-        batch.put_addr_tx(
-            &lock_hash,
-            block,
-            0,
-            &tx_hash,
-            &AddrTxValue::new(100, false, true, 0),
-        );
+        batch.put_addr_tx(&lock_hash, block, 0, &AddrTxValue::new(100, false, true, 0));
     }
     batch.put_addr_balance(
         &lock_hash,
@@ -1443,7 +1398,6 @@ fn seed_named_tx(
         block_number,
         &CachedBlockHeader {
             hash: actions.block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1523,7 +1477,6 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         &prefix,
         10,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, false, false, TAG_IDENTITY),
     );
     // `other` holds a cell in this transaction, so the chain view knows its
@@ -1621,13 +1574,7 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
     };
     seed_named_tx(&core_store, 10, &tx_hash, &actions);
     let mut batch = StoreBatch::new(core_store.as_ref());
-    batch.put_addr_tx(
-        &lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(-100, true, false, 0),
-    );
+    batch.put_addr_tx(&lock_hash, 10, 0, &AddrTxValue::new(-100, true, false, 0));
     batch.commit().unwrap();
     sync_address_tx_counters(&core_store, &lock_hash);
 
@@ -1882,13 +1829,7 @@ async fn address_transactions_missing_block_header_is_a_500_naming_the_block() {
             semantic_tags: 0,
         },
     );
-    batch.put_addr_tx(
-        &lock_hash,
-        4242,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(-100, true, false, 0),
-    );
+    batch.put_addr_tx(&lock_hash, 4242, 0, &AddrTxValue::new(-100, true, false, 0));
     batch.commit().unwrap();
     let mut config = test_config(store);
     config.pool_mirror_enabled = false;
@@ -2076,13 +2017,7 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
     };
     seed_named_tx(store, 10, &tx_hash, &actions);
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_addr_tx(
-        lock_hash,
-        10,
-        0,
-        &tx_hash,
-        &AddrTxValue::new(-100, true, false, 0),
-    );
+    batch.put_addr_tx(lock_hash, 10, 0, &AddrTxValue::new(-100, true, false, 0));
     batch.commit().unwrap();
     sync_address_tx_counters(store, lock_hash);
 }
@@ -2262,7 +2197,6 @@ async fn identity_item_deltas_name_their_standard() {
         &lock_hash,
         10,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, true, true, TAG_IDENTITY),
     );
     batch.commit().unwrap();
@@ -2456,7 +2390,6 @@ async fn object_item_deltas_name_collection_class_and_composition() {
         &lock_hash,
         10,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, true, true, TAG_OBJECT),
     );
     batch.commit().unwrap();
@@ -2542,7 +2475,6 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         &lock_hash,
         12,
         0,
-        &tx_hash,
         &AddrTxValue::new(0, true, true, TAG_OBJECT),
     );
     // The transaction list sums each listed tx's output payloads.
@@ -2892,7 +2824,6 @@ async fn block_and_direct_cellbase_activity_derive_the_exact_paid_outputs() {
         100,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -3016,7 +2947,6 @@ fn seed_sparse_object_chain(
             block,
             &CachedBlockHeader {
                 hash: block_hash.clone(),
-                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_000_000 + block,
                 epoch_number: 0,
                 epoch_index: 0,
@@ -3137,13 +3067,10 @@ async fn global_bucket_filter_never_reads_other_buckets_tx_actions() {
         if expected.contains(&block) {
             continue;
         }
-        let mut tx_hash = [0u8; 32];
-        tx_hash[..8].copy_from_slice(&block.to_be_bytes());
-        tx_hash[31] = 0x0b;
         store
             .put_cf(
                 store.cf_tx_actions(),
-                &ckbadger_store::keys::encode_tx_actions_key(block, 1, &tx_hash),
+                &ckbadger_store::keys::encode_tx_actions_key(block, 1),
                 b"not a TxActions payload",
             )
             .unwrap();
@@ -3269,4 +3196,26 @@ async fn address_script_filter_is_type_calls_or_lock_calls() {
         .map(|row| row["blockNumber"].as_i64().unwrap())
         .collect();
     assert_eq!(blocks, vec![54, 51, 50], "{json}");
+}
+
+/// Review P1-1 / 27: one block's activities read the block header once and
+/// the page's `activities` rows with one multi_get, whatever the number of
+/// rows; no `tx_index` row is read by key.
+#[tokio::test]
+async fn block_activities_read_the_header_once_and_the_rows_with_one_multi_get() {
+    let store = test_store();
+    for index in 1..=12i32 {
+        let mut tx = [0x5a; 32];
+        tx[..4].copy_from_slice(&index.to_be_bytes());
+        seed_committed_activity(&store, &[0x11; 32], &tx, 30, index, 100, 0);
+    }
+    let app = create_router(test_config(store.clone())).await;
+    store.reset_read_call_counters();
+    let (status, json) = get_json(&app, "/activities?blockNumber=30&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 10);
+    assert_eq!(store.point_reads(ckbadger_store::CF_BLOCK_HEADERS), 1);
+    assert_eq!(store.point_reads(ckbadger_store::CF_TX_INDEX), 0);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_TX_ACTIONS), 1);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_TX_INDEX), 0);
 }

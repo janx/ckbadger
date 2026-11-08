@@ -2332,7 +2332,6 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         older_block,
         &CachedBlockHeader {
             hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: older_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -2351,7 +2350,6 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         newer_earliest_block,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: newer_earliest_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -2370,7 +2368,6 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         newer_block,
         &CachedBlockHeader {
             hash: vec![0x04; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: newer_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -3126,7 +3123,8 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     batch.delete_cell(&[0x72; 32], 0);
     batch.delete_cell_by_type(&reference, 30, &[0x72; 32], 0);
     let consuming_tx = vec![0x74; 32];
-    batch.put_consumed_cell_meta(&[0x72; 32], 0, 30, 40, Some(&consuming_tx));
+    // Consumed by `consuming_tx`, indexed at (40, 0) below.
+    batch.put_consumed_cell_meta(&[0x72; 32], 0, 30, 40, 0);
     put_canonical_script_tx(&mut batch, &consuming_tx, 40, 0, 1);
     let reactivated_tx = vec![0x75; 32];
     batch.put_cell(
@@ -3519,7 +3517,6 @@ async fn test_script_capacity_chart_aggregates_deployments() {
         300,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_705_536_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3633,7 +3630,6 @@ async fn test_script_capacity_history_chart_aggregates_family_member_references(
         300,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_705_536_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3719,7 +3715,6 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0x04; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_705_363_200_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3782,7 +3777,6 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
         200,
         &CachedBlockHeader {
             hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
             // Raw tip time regressed, while its canonical chain day advanced.
             timestamp: 1_705_449_600_000,
             epoch_number: 0,
@@ -4462,12 +4456,13 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
             // row together.
             batch.delete_cell(&previous_tx, 0);
             batch.delete_cell_by_type(&reference, 10 + previous as i64, &previous_tx, 0);
+            // Consumed by `consuming_tx`, indexed at (11 + previous, 0) below.
             batch.put_consumed_cell_meta(
                 &previous_tx,
                 0,
                 10 + previous as i64,
                 11 + previous as i64,
-                Some(&consuming_tx),
+                0,
             );
             put_canonical_script_tx(&mut batch, &consuming_tx, 11 + previous as i64, 0, 1);
         }
@@ -4781,7 +4776,9 @@ async fn chronology_error_body_with_index(
         },
     );
     batch.put_script_reference_to_version(0, &version, &version);
-    batch.put_consumed_cell_with_consumer(
+    // Consumed at `consumption_location` (indexed below when given); without
+    // one the consumed marker points at a position with no transaction.
+    batch.put_consumed_cell(
         &tx,
         0,
         &LiveCellInfo {
@@ -4798,7 +4795,7 @@ async fn chronology_error_body_with_index(
         },
         10,
         consumed_at_block,
-        Some(&consumer),
+        consumption_location.map_or(0, |(_, index)| index),
     );
     batch.put_cell_by_data_hash(&version, 10, &tx, 0);
     if let Some((block, index)) = creation_location {
@@ -4862,13 +4859,14 @@ async fn test_script_history_requires_canonical_creation_and_consumption_locatio
         (
             Some((10, 0)),
             None,
-            "code cell consumption transaction",
+            // The consumed marker names its consumer by position; with no
+            // transaction there, the position does not resolve.
+            "consumed_cells points at block=11, tx_idx=0, which has no tx_index row",
         ),
     ] {
         let (status, body) = chronology_error_body(creation, consumption, 11).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         assert!(body.contains(expected), "{body}");
-        assert!(body.contains("lacks canonical"), "{body}");
     }
 }
 
@@ -4881,14 +4879,17 @@ async fn test_script_history_rejects_consumer_not_after_creator() {
 
 #[tokio::test]
 async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound() {
-    let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, false, 1).await;
+    // The consumer is indexed, so the creation side is what fails.
+    let (status, body) =
+        chronology_error_body_with_index(Some((10, 0)), Some((11, 0)), 11, false, 1).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(
         body.contains("tx_hash_map points to missing tx_index"),
         "{body}"
     );
 
-    let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, true, 0).await;
+    let (status, body) =
+        chronology_error_body_with_index(Some((10, 0)), Some((11, 0)), 11, true, 0).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(
         body.contains("outside canonical transaction output count 0"),

@@ -520,7 +520,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in scan_all_object_24h_transfers: {}",
+                    "failed to iterate stats_mnft in scan_all_object_24h_transfers: {}",
                     e
                 )
             })?;
@@ -591,7 +591,7 @@ impl CkbadgerStore {
                 if cursor.is_some() && key.as_ref() == start_key.as_slice() {
                     continue;
                 }
-                let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
+                let (block_num, tx_idx) = keys::decode_token_transfer_key(&key)?;
                 let record: TokenTransferRecord = bincode::deserialize(&value)?;
                 results.push((block_num, tx_idx, record));
                 if results.len() >= limit {
@@ -664,7 +664,7 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
+            let (block_num, tx_idx) = keys::decode_token_transfer_key(&key)?;
             let record: TokenTransferRecord = bincode::deserialize(&value)?;
 
             if let Some(ref prev_tx_hash) = current_tx_hash {

@@ -332,13 +332,25 @@ pub fn encode_desc_block_num(block_num: i64) -> [u8; 8] {
     (i64::MAX - block_num).to_be_bytes()
 }
 
-fn decode_desc_block_num(bytes: &[u8]) -> i64 {
-    assert!(
-        bytes.len() == 8,
-        "decode_desc_block_num: expected 8 bytes, got {}",
-        bytes.len()
-    );
-    i64::MAX - i64::from_be_bytes(bytes.try_into().unwrap())
+/// The block number of a newest-first key component (`i64::MAX - block`,
+/// BE). [`encode_desc_block_num`] writes only `block >= 0`, so a component
+/// with the top bit set encodes no block: a corrupt key, re-sync required.
+fn decode_desc_block_num(bytes: &[u8]) -> anyhow::Result<i64> {
+    let raw: [u8; 8] = bytes.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "newest-first block component has {} bytes, expected 8",
+            bytes.len()
+        )
+    })?;
+    i64::MAX
+        .checked_sub(i64::from_be_bytes(raw))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "newest-first block component 0x{} encodes no block: a corrupt key, re-sync \
+                 required",
+                hex::encode(bytes)
+            )
+        })
 }
 
 fn encode_desc_tx_idx(tx_idx: i32) -> [u8; 4] {
@@ -350,13 +362,25 @@ fn encode_desc_tx_idx(tx_idx: i32) -> [u8; 4] {
     (i32::MAX - tx_idx).to_be_bytes()
 }
 
-fn decode_desc_tx_idx(bytes: &[u8]) -> i32 {
-    assert!(
-        bytes.len() == 4,
-        "decode_desc_tx_idx: expected 4 bytes, got {}",
-        bytes.len()
-    );
-    i32::MAX - i32::from_be_bytes(bytes.try_into().unwrap())
+/// The transaction index of a newest-first key component (`i32::MAX -
+/// tx_idx`, BE); like [`decode_desc_block_num`], a component with the top bit
+/// set is a corrupt key, re-sync required.
+fn decode_desc_tx_idx(bytes: &[u8]) -> anyhow::Result<i32> {
+    let raw: [u8; 4] = bytes.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "newest-first tx_idx component has {} bytes, expected 4",
+            bytes.len()
+        )
+    })?;
+    i32::MAX
+        .checked_sub(i32::from_be_bytes(raw))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "newest-first tx_idx component 0x{} encodes no transaction index: a corrupt key, \
+                 re-sync required",
+                hex::encode(bytes)
+            )
+        })
 }
 
 fn encode_desc_token_balance(value: &TokenBalance) -> [u8; TokenBalance::ENCODED_LEN] {
@@ -382,28 +406,45 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
         .expect("fixed-width complemented token balance must decode")
 }
 
-/// Encode a cell-by-lock/type index key:
-/// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+/// The first four bytes of every RISC-V binary CKB-VM runs (ELF magic).
+pub const ELF_MAGIC: [u8; 4] = *b"\x7fELF";
+
+/// Whether `(code_hash, hash_type)` is the consensus Type ID script: the
+/// all-zero code hash ending in `TYPE_ID`, referenced by type (hash_type 1).
+pub fn is_type_id_script(code_hash: &[u8], hash_type: i16) -> bool {
+    hash_type == 1
+        && code_hash.len() == HASH32_LEN
+        && code_hash[..25] == [0; 25]
+        && &code_hash[25..] == b"TYPE_ID"
+}
+
+/// Whether a cell's data is code: it starts with [`ELF_MAGIC`] (so it is not
+/// empty). CKB-VM loads only ELF binaries, `ckb_dlopen` libraries are ELF
+/// shared objects, and the DOB decoder's VM loads only ELF.
 ///
-/// # Invariant
-///
-/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
-/// fixed, so a longer hash is truncated into the block-number bytes of another
-/// script's row and the scan answers for a different cell owner.
-/// Whether a cell has a `cell_by_data_hash` row: exactly when it carries data.
-///
-/// The one rule for every writer and reader of that index — the live cell
-/// writer, the bulk build, rollback and verify. An empty-data cell has no row
-/// (its data hash, the hash of empty data, would otherwise index every plain
-/// cell of the chain under one key).
-pub fn cell_has_data_hash_row(data_size: i32) -> bool {
-    data_size > 0
+/// The one "is code" rule: the `cell_by_data_hash` writers (live cell writer,
+/// bulk build) and verify F8, the Type ID lineage on both sync paths, the cell
+/// page's ELF reading and the code-version reads of the API all ask it. A
+/// Type ID cell whose data is not ELF is state (a config cell, a retired
+/// deployment), not code, and no reader looks it up by data hash. An
+/// empty-data cell is never code: its data hash would index every plain cell
+/// of the chain under one key.
+pub fn is_code_cell(data: &[u8]) -> bool {
+    data.starts_with(&ELF_MAGIC)
 }
 
 /// Width of a `cell_by_lock` / `cell_by_type` / `cell_by_data_hash` key:
 /// `hash(32) + block(8 BE) + outpoint(34)`.
 pub const CELL_INDEX_KEY_SIZE: usize = 74;
 
+/// Encode a cell-by-lock/type/data-hash index key:
+/// hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+///
+/// # Invariant
+///
+/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
+/// fixed, so a longer hash is truncated into the block-number bytes of another
+/// script's row and the scan answers for a different cell owner.
 pub fn encode_cell_index_key(
     script_hash: &[u8],
     block_num: i64,
@@ -508,30 +549,27 @@ pub fn cell_code_index_hash_type_byte(hash_type: i16) -> anyhow::Result<u8> {
     })
 }
 
-/// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
-pub const ADDR_TX_KEY_SIZE: usize = 76;
+/// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE).
+/// The transaction is its position; its hash is `tx_index` there.
+pub const ADDR_TX_KEY_SIZE: usize = 44;
 
-pub fn encode_addr_tx_key(
-    lock_hash: &[u8],
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> Vec<u8> {
+pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     assert_key_component_len(
         "encode_addr_tx_key",
         "lock_hash",
         lock_hash.len(),
         HASH32_LEN,
     );
-    assert_key_component_len("encode_addr_tx_key", "tx_hash", tx_hash.len(), HASH32_LEN);
     let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
     key.extend_from_slice(&lock_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&tx_hash[..32]);
     key
 }
 
+/// The seek key for the first `addr_txs` row of `lock_hash` strictly after
+/// (older than) the position `(block_num, tx_idx)`: the row key plus one
+/// byte, so a forward seek passes the row itself.
 pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     assert_key_component_len(
         "encode_addr_tx_seek_after_key",
@@ -539,11 +577,8 @@ pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i
         lock_hash.len(),
         HASH32_LEN,
     );
-    let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
-    key.extend_from_slice(&lock_hash[..32]);
-    key.extend_from_slice(&encode_desc_block_num(block_num));
-    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&[0xFF; 32]);
+    let mut key = encode_addr_tx_key(lock_hash, block_num, tx_idx);
+    key.push(0);
     key
 }
 
@@ -565,54 +600,51 @@ pub fn encode_addr_tx_block_seek_key(lock_hash: &[u8], block_num: i64) -> Vec<u8
     key
 }
 
-pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
-    assert!(
+/// `(lock_hash, block_num, tx_idx)` of an `addr_txs` key. A key of any other
+/// width — the 76-byte layout that also held the tx hash included — is
+/// refused: re-sync required.
+pub fn decode_addr_tx_key(key: &[u8]) -> anyhow::Result<([u8; 32], i64, i32)> {
+    anyhow::ensure!(
         key.len() == ADDR_TX_KEY_SIZE,
-        "decode_addr_tx_key: expected {} bytes, got {}",
-        ADDR_TX_KEY_SIZE,
-        key.len()
+        "addr_txs key 0x{} has {} bytes, expected {} (lock_hash, block, tx_idx): written by an \
+         older layout, re-sync required",
+        hex::encode(key),
+        key.len(),
+        ADDR_TX_KEY_SIZE
     );
-    let lock_hash = key[..32].to_vec();
-    let block_num = decode_desc_block_num(&key[32..40]);
-    let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    let tx_hash = key[44..76].to_vec();
-    (lock_hash, block_num, tx_idx, tx_hash)
+    let mut lock_hash = [0u8; 32];
+    lock_hash.copy_from_slice(&key[..32]);
+    Ok((
+        lock_hash,
+        decode_desc_block_num(&key[32..40])?,
+        decode_desc_tx_idx(&key[40..44])?,
+    ))
 }
 
 /// Address-tx key for a party a protocol named by the first 20 bytes of its lock
-/// hash: prefix20 + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 64.
+/// hash: prefix20 + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 32.
 ///
 /// A separate CF (and therefore a separate fixed width) keeps `ADDR_TX_KEY_SIZE`
 /// and every length assert on the full-hash index intact.
-pub const ADDR_TX_BY_PREFIX_KEY_SIZE: usize = 64;
+pub const ADDR_TX_BY_PREFIX_KEY_SIZE: usize = 32;
 const LOCK_PREFIX_LEN: usize = 20;
 
-pub fn encode_addr_tx_by_prefix_key(
-    prefix: &[u8],
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> Vec<u8> {
+pub fn encode_addr_tx_by_prefix_key(prefix: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     assert_key_component_len(
         "encode_addr_tx_by_prefix_key",
         "prefix",
         prefix.len(),
         LOCK_PREFIX_LEN,
     );
-    assert_key_component_len(
-        "encode_addr_tx_by_prefix_key",
-        "tx_hash",
-        tx_hash.len(),
-        HASH32_LEN,
-    );
     let mut key = Vec::with_capacity(ADDR_TX_BY_PREFIX_KEY_SIZE);
     key.extend_from_slice(prefix);
     // Reuse the full-hash encoder's descending position suffix verbatim, so the
     // two indexes can never drift in ordering.
-    key.extend_from_slice(&encode_addr_tx_key(&[0u8; 32], block_num, tx_idx, tx_hash)[32..]);
+    key.extend_from_slice(&encode_addr_tx_key(&[0u8; 32], block_num, tx_idx)[32..]);
     key
 }
 
+/// [`encode_addr_tx_seek_after_key`] for `addr_txs_by_prefix`.
 pub fn encode_addr_tx_by_prefix_seek_after_key(
     prefix: &[u8],
     block_num: i64,
@@ -624,25 +656,29 @@ pub fn encode_addr_tx_by_prefix_seek_after_key(
         prefix.len(),
         LOCK_PREFIX_LEN,
     );
-    let mut key = Vec::with_capacity(ADDR_TX_BY_PREFIX_KEY_SIZE);
-    key.extend_from_slice(prefix);
-    key.extend_from_slice(&encode_addr_tx_seek_after_key(&[0u8; 32], block_num, tx_idx)[32..]);
+    let mut key = encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx);
+    key.push(0);
     key
 }
 
-pub fn decode_addr_tx_by_prefix_key(key: &[u8]) -> ([u8; 20], i64, i32, Vec<u8>) {
-    assert!(
+/// `(prefix, block_num, tx_idx)` of an `addr_txs_by_prefix` key; any other
+/// width (the 64-byte layout with the tx hash included) is refused.
+pub fn decode_addr_tx_by_prefix_key(key: &[u8]) -> anyhow::Result<([u8; 20], i64, i32)> {
+    anyhow::ensure!(
         key.len() == ADDR_TX_BY_PREFIX_KEY_SIZE,
-        "decode_addr_tx_by_prefix_key: expected {} bytes, got {}",
-        ADDR_TX_BY_PREFIX_KEY_SIZE,
-        key.len()
+        "addr_txs_by_prefix key 0x{} has {} bytes, expected {} (prefix, block, tx_idx): written \
+         by an older layout, re-sync required",
+        hex::encode(key),
+        key.len(),
+        ADDR_TX_BY_PREFIX_KEY_SIZE
     );
     let mut prefix = [0u8; LOCK_PREFIX_LEN];
     prefix.copy_from_slice(&key[..LOCK_PREFIX_LEN]);
-    let mut padded = vec![0u8; 32];
-    padded.extend_from_slice(&key[LOCK_PREFIX_LEN..]);
-    let (_, block_num, tx_idx, tx_hash) = decode_addr_tx_key(&padded);
-    (prefix, block_num, tx_idx, tx_hash)
+    Ok((
+        prefix,
+        decode_desc_block_num(&key[20..28])?,
+        decode_desc_tx_idx(&key[28..32])?,
+    ))
 }
 
 /// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
@@ -789,7 +825,7 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 /// - **`HOURLY` (`%Y%m%d%H`)** uses the **UTC** clock: the live writer
 ///   formats the UTC-truncated canonical block hour from
 ///   `ckbadger_common::stats_bucket::stats_hour(chain_time_ms)`.
-/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_SET` (`%Y%m%d%H`)** use the
+/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_ROW` (`%Y%m%d%H`)** use the
 ///   **UTC+8** display of that same canonical hour, keeping the
 ///   hourly activity series aligned with its UTC+8 daily parent.
 ///
@@ -819,14 +855,14 @@ pub mod stats_prefix {
     pub const TOKEN_DAILY: u8 = 0x10;
     pub const CLUSTER_DAILY: u8 = 0x11;
     pub const SPORE_DAILY: u8 = 0x12;
-    pub const SPORE_OUTPOINT: u8 = 0x13;
+    // 0x13 / 0x1A (spore item outpoint and its by-id reverse index), 0x17 /
+    // 0x18 (mNFT class / token outpoint) and 0x19 / 0x1F (`.bit` account
+    // outpoint and its by-account reverse index) moved to the
+    // `object_outpoints` / `object_outpoint_by_id` CFs (C-4b; see
+    // `object_outpoint_kind`) and are not reused.
     pub const SPORE_TYPE_INDEX: u8 = 0x14;
     pub const OBJECT_DAILY: u8 = 0x15;
     pub const OBJECT_TYPE_INDEX: u8 = 0x16;
-    pub const MNFT_CLASS_OUTPOINT: u8 = 0x17;
-    pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
-    pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
-    pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
     pub const OBJECT_COLLECTION_OWNER: u8 = 0x1C;
     /// Activity daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
@@ -834,29 +870,29 @@ pub mod stats_prefix {
     /// Activity hourly stats. Suffix: `%Y%m%d%H` on the **UTC+8** clock
     /// (unlike chain-level `HOURLY`, which is UTC).
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
-    pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
     pub const CELL_DISTRIBUTION: u8 = 0x21;
     pub const ADDR_COHORT: u8 = 0x22;
-    /// Persistent address set for daily unique address dedup across batches.
-    /// Value: sorted, concatenated [u8; 32] lock hashes.
-    pub const ACTIVITY_DAILY_ADDR_SET: u8 = 0x23;
-    /// Persistent address set for hourly unique address dedup across batches.
-    pub const ACTIVITY_HOURLY_ADDR_SET: u8 = 0x24;
-    /// An output carrying the `.bit` AccountCell type script that the indexer
-    /// did not materialize as an account because its data names none (the DAS
-    /// root AccountCell with its all-zero account id, or data too short to
-    /// name one). Suffix: outpoint. Value: empty.
-    pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
-    /// One address of a daily activity bucket that live sync saw first in
-    /// that bucket: neither in the bucket's bulk-written `ACTIVITY_DAILY_ADDR_SET`
-    /// blob nor in an earlier row. Suffix: `%Y%m%d` (UTC+8) + 32B lock hash.
-    /// Value: empty. One row per address keeps a live block's journal to one
-    /// small entry per new address instead of a rewritten bucket-wide blob.
+    // 0x23 / 0x24 (the retired `ACTIVITY_*_ADDR_SET` blobs: one bucket's
+    // addresses in one value, written by bulk build for every bucket) are
+    // not reused. A bucket's addresses are its `ACTIVITY_*_ADDR_ROW` rows
+    // (C-3).
+    // 0x25 (the unindexed `.bit` AccountCell marker) moved to
+    // `object_outpoints` as `object_outpoint_kind::DOTBIT_UNINDEXED` and is
+    // not reused.
+    /// One unique `Lock` address of a daily activity bucket: the dedup
+    /// memory behind `DailyActivityStats::unique_address_count`. Suffix:
+    /// `%Y%m%d` (UTC+8) + 32B lock hash. Value: empty. Kept only while a
+    /// block can still reach the bucket (C-3): live sync writes one row per
+    /// address the bucket has not seen, in the block's scope, and deletes a
+    /// bucket's rows once the rollback coverage floor's chain time has left
+    /// the bucket; bulk build writes the rows only for the buckets still open
+    /// at the handoff tip. One row per address keeps a live block's journal
+    /// to one small entry per new address.
     pub const ACTIVITY_DAILY_ADDR_ROW: u8 = 0x26;
-    /// One address of an hourly activity bucket that live sync saw first in
-    /// that bucket (see `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the
-    /// **UTC+8** clock + 32B lock hash. Value: empty.
+    /// One unique `Lock` address of an hourly activity bucket (see
+    /// `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the **UTC+8** clock +
+    /// 32B lock hash. Value: empty.
     pub const ACTIVITY_HOURLY_ADDR_ROW: u8 = 0x27;
 }
 
@@ -879,34 +915,22 @@ pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
 pub const STATS_PREFIX_TOKEN_DAILY: u8 = stats_prefix::TOKEN_DAILY;
 pub const STATS_PREFIX_CLUSTER_DAILY: u8 = stats_prefix::CLUSTER_DAILY;
 pub const STATS_PREFIX_SPORE_DAILY: u8 = stats_prefix::SPORE_DAILY;
-pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
 pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
 pub const STATS_PREFIX_OBJECT_DAILY: u8 = stats_prefix::OBJECT_DAILY;
 pub const STATS_PREFIX_OBJECT_TYPE_INDEX: u8 = stats_prefix::OBJECT_TYPE_INDEX;
-pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOINT;
-pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
-pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
-pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
 pub const STATS_PREFIX_OBJECT_COLLECTION_OWNER: u8 = stats_prefix::OBJECT_COLLECTION_OWNER;
 pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
-pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
-    stats_prefix::DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
 pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
 pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
 pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
-pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
-pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
-pub const STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT: u8 = stats_prefix::DOTBIT_UNINDEXED_OUTPOINT;
 pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_ROW;
 pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_ROW;
 
-/// The two activity bucket families and their three row kinds: the bucket's
-/// `DailyActivityStats`, the bulk-written address-set blob, and the live
-/// per-address rows. A bucket's unique addresses are the blob's addresses
-/// plus the rows' addresses; live sync never rewrites the blob and writes a
-/// row only for an address in neither.
+/// The two activity bucket families and their two row kinds: the bucket's
+/// `DailyActivityStats` (kept forever) and its per-address rows (kept while a
+/// block can still reach the bucket; see `stats_prefix::ACTIVITY_DAILY_ADDR_ROW`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityBucketKind {
     /// UTC+8 calendar day, `%Y%m%d`.
@@ -921,14 +945,6 @@ impl ActivityBucketKind {
         match self {
             Self::Daily => stats_prefix::ACTIVITY_DAILY,
             Self::Hourly => stats_prefix::ACTIVITY_HOURLY,
-        }
-    }
-
-    /// Prefix of the bucket's bulk-written address-set blob.
-    pub const fn addr_set_prefix(self) -> u8 {
-        match self {
-            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
         }
     }
 
@@ -966,10 +982,14 @@ impl ActivityBucketKind {
         Ok(encode_stats_key(self.stats_prefix(), bucket.as_bytes()))
     }
 
-    /// Key of the bucket's bulk-written address-set blob.
-    pub fn addr_set_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
-        self.check_bucket(bucket)?;
-        Ok(encode_stats_key(self.addr_set_prefix(), bucket.as_bytes()))
+    /// The bucket of this kind a chain time falls in: its UTC+8 day
+    /// (`%Y%m%d`) or UTC+8 hour (`%Y%m%d%H`), the labels the live writer and
+    /// bulk build key the bucket by. Labels of one kind sort chronologically.
+    pub fn bucket_label(self, chain_time_ms: i64) -> anyhow::Result<String> {
+        match self {
+            Self::Daily => ckbadger_common::stats_bucket::stats_date_key(chain_time_ms),
+            Self::Hourly => ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time_ms),
+        }
     }
 
     /// Key of one live per-address row: prefix ‖ bucket ‖ lock hash.
@@ -1161,7 +1181,31 @@ pub fn decode_spore_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     (spore_id, date)
 }
 
-/// Spore outpoint lookup key: prefix(1B) + outpoint(34B)
+/// The kind of object a row of `object_outpoints` / `object_outpoint_by_id`
+/// indexes: the first byte of every key of both CFs (C-4b). Every reader asks
+/// for one kind, so each kind's rows are one contiguous key range (the mNFT
+/// token scans and the per-transaction class seek read only their kind).
+pub mod object_outpoint_kind {
+    /// Spore, did:ckb and `.bit Cell` items, which share one id space: the
+    /// item id at its natural width (32 bytes; did:ckb also 20). By-id rows
+    /// carry the item's `AssetAction` byte for an identity, nothing for a
+    /// spore.
+    pub const SPORE_ITEM: u8 = 0x01;
+    /// mNFT classes (outpoint rows only).
+    pub const MNFT_CLASS: u8 = 0x02;
+    /// mNFT tokens (outpoint rows only).
+    pub const MNFT_TOKEN: u8 = 0x03;
+    /// `.bit` accounts (20-byte account id); by-id rows carry the
+    /// `AssetAction` byte.
+    pub const DOTBIT_ACCOUNT: u8 = 0x04;
+    /// An output carrying the `.bit` AccountCell type script that names no
+    /// account (the DAS root AccountCell with its all-zero account id, or data
+    /// too short to name one); value empty, outpoint rows only. A consumed
+    /// AccountCell has exactly one of a `DOTBIT_ACCOUNT` row and this one.
+    pub const DOTBIT_UNINDEXED: u8 = 0x05;
+}
+
+/// Spore item outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const SPORE_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_spore_outpoint_key(
@@ -1169,7 +1213,7 @@ pub fn encode_spore_outpoint_key(
     output_index: i16,
 ) -> [u8; SPORE_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; SPORE_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_SPORE_OUTPOINT;
+    key[0] = object_outpoint_kind::SPORE_ITEM;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
@@ -1178,8 +1222,8 @@ pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
-/// Spore/identity outpoint reverse index key:
-/// `prefix(1B) + id(1..=32B, verbatim) + outpoint(34B)`
+/// Spore/identity outpoint reverse index key (`object_outpoint_by_id`):
+/// `kind(1B) + id(1..=32B, verbatim) + outpoint(34B)`
 ///
 /// The id component is VARIABLE width. Spore and `.bit Cell` ids are always 32
 /// bytes, but did:ckb item ids are the type-script args verbatim and occur on
@@ -1225,7 +1269,7 @@ pub fn encode_spore_outpoint_by_id_key(
 ) -> Vec<u8> {
     assert_by_id_len("encode_spore_outpoint_by_id_key", spore_id.len());
     let mut key = Vec::with_capacity(spore_outpoint_by_id_key_len(spore_id.len()));
-    key.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    key.push(object_outpoint_kind::SPORE_ITEM);
     key.extend_from_slice(spore_id);
     key.extend_from_slice(&encode_outpoint(tx_hash, output_index));
     key
@@ -1234,7 +1278,7 @@ pub fn encode_spore_outpoint_by_id_key(
 pub fn encode_spore_outpoint_by_id_prefix(spore_id: &[u8]) -> Vec<u8> {
     assert_by_id_len("encode_spore_outpoint_by_id_prefix", spore_id.len());
     let mut prefix = Vec::with_capacity(1 + spore_id.len());
-    prefix.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    prefix.push(object_outpoint_kind::SPORE_ITEM);
     prefix.extend_from_slice(spore_id);
     prefix
 }
@@ -1249,7 +1293,7 @@ pub fn decode_spore_outpoint_by_id_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[key.len() - OUTPOINT_KEY_SIZE..])
 }
 
-/// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
+/// mNFT class outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const MNFT_CLASS_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_mnft_class_outpoint_key(
@@ -1257,13 +1301,13 @@ pub fn encode_mnft_class_outpoint_key(
     output_index: i16,
 ) -> [u8; MNFT_CLASS_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; MNFT_CLASS_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    key[0] = object_outpoint_kind::MNFT_CLASS;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
 /// The prefix of every mNFT class outpoint key one transaction created:
-/// prefix(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
+/// kind(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
 /// lists exactly that transaction's class outputs.
 pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
     assert_key_component_len(
@@ -1273,12 +1317,12 @@ pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
         HASH32_LEN,
     );
     let mut prefix = [0u8; 33];
-    prefix[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    prefix[0] = object_outpoint_kind::MNFT_CLASS;
     prefix[1..].copy_from_slice(tx_hash);
     prefix
 }
 
-/// mNFT token outpoint lookup key: prefix(1B) + outpoint(34B)
+/// mNFT token outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const MNFT_TOKEN_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_mnft_token_outpoint_key(
@@ -1286,12 +1330,12 @@ pub fn encode_mnft_token_outpoint_key(
     output_index: i16,
 ) -> [u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_MNFT_TOKEN_OUTPOINT;
+    key[0] = object_outpoint_kind::MNFT_TOKEN;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
-/// .bit account outpoint lookup key: prefix(1B) + outpoint(34B)
+/// .bit account outpoint key (`object_outpoints`): kind(1B) + outpoint(34B)
 pub const DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_dotbit_account_outpoint_key(
@@ -1299,7 +1343,7 @@ pub fn encode_dotbit_account_outpoint_key(
     output_index: i16,
 ) -> [u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT;
+    key[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
@@ -1308,9 +1352,9 @@ pub fn decode_dotbit_account_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
-/// Unindexed `.bit` AccountCell outpoint marker key: prefix(1B) + outpoint(34B).
-/// The positive record that lets a later consumption of the cell tell "never an
-/// account" apart from a lost `DOTBIT_ACCOUNT_OUTPOINT` row.
+/// Unindexed `.bit` AccountCell outpoint marker key (`object_outpoints`):
+/// kind(1B) + outpoint(34B). The positive record that lets a later consumption
+/// of the cell tell "never an account" apart from a lost account outpoint row.
 pub const DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE: usize = 35;
 
 pub fn encode_dotbit_unindexed_outpoint_key(
@@ -1318,15 +1362,16 @@ pub fn encode_dotbit_unindexed_outpoint_key(
     output_index: i16,
 ) -> [u8; DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT;
+    key[0] = object_outpoint_kind::DOTBIT_UNINDEXED;
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
-/// .bit outpoint reverse index key: prefix(1B) + account_id(20B) + outpoint(34B)
+/// .bit outpoint reverse index key (`object_outpoint_by_id`):
+/// kind(1B) + account_id(20B) + outpoint(34B)
 pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE: usize = 55;
 
-/// Prefix for scanning all outpoints of a given .bit account: prefix(1B) + account_id(20B)
+/// Prefix for scanning all outpoints of a given .bit account: kind(1B) + account_id(20B)
 pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE: usize = 21;
 
 pub fn encode_dotbit_outpoint_by_account_id_key(
@@ -1341,7 +1386,7 @@ pub fn encode_dotbit_outpoint_by_account_id_key(
         DOTBIT_ACCOUNT_ID_LEN,
     );
     let mut key = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE];
-    key[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    key[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     key[1..21].copy_from_slice(&account_id[..20]);
     key[21..55].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
@@ -1357,7 +1402,7 @@ pub fn encode_dotbit_outpoint_by_account_id_prefix(
         DOTBIT_ACCOUNT_ID_LEN,
     );
     let mut prefix = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE];
-    prefix[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    prefix[0] = object_outpoint_kind::DOTBIT_ACCOUNT;
     prefix[1..21].copy_from_slice(&account_id[..20]);
     prefix
 }
@@ -1777,13 +1822,20 @@ pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) 
     key
 }
 
-/// Decode block_num and tx_idx from a token transfer key.
-pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
-    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
-    let tx_idx_desc = i32::from_be_bytes(key[40..44].try_into().unwrap());
-    let tx_idx = i32::MAX - tx_idx_desc;
-    (block_num, tx_idx)
+/// Decode block_num and tx_idx from a token transfer key. A key of another
+/// width, or with a newest-first component that encodes no position, is a
+/// corrupt key: re-sync required.
+pub fn decode_token_transfer_key(key: &[u8]) -> anyhow::Result<(i64, i32)> {
+    anyhow::ensure!(
+        key.len() == TOKEN_TRANSFER_KEY_SIZE,
+        "token_transfers key 0x{} has {} bytes, expected {TOKEN_TRANSFER_KEY_SIZE}: re-sync required",
+        hex::encode(key),
+        key.len()
+    );
+    Ok((
+        decode_desc_block_num(&key[32..40])?,
+        decode_desc_tx_idx(&key[40..44])?,
+    ))
 }
 
 /// Cluster owner key: prefix(1B) + cluster_id(32B) + lock_hash(32B) = 65 bytes
@@ -1847,56 +1899,41 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
     key
 }
 
-/// TxActions key: block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
-pub const TX_ACTIONS_KEY_SIZE: usize = 44;
+/// `activities` (`CF_TX_ACTIONS`) key: the transaction's position,
+/// block_num_desc(8B BE) + tx_idx_desc(4B BE). Its hash is `tx_index` there.
+pub const TX_ACTIONS_KEY_SIZE: usize = 12;
 
-pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8> {
-    assert_key_component_len(
-        "encode_tx_actions_key",
-        "tx_hash",
-        tx_hash.len(),
-        HASH32_LEN,
-    );
-    let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
-    key.extend_from_slice(&encode_desc_block_num(block_num));
-    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&tx_hash[..32]);
+pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32) -> [u8; TX_ACTIONS_KEY_SIZE] {
+    let mut key = [0u8; TX_ACTIONS_KEY_SIZE];
+    key[..8].copy_from_slice(&encode_desc_block_num(block_num));
+    key[8..].copy_from_slice(&encode_desc_tx_idx(tx_idx));
     key
 }
 
+/// The seek key for the first `activities` row strictly after (older than)
+/// the position `(block_num, tx_idx)`: the row key plus one byte.
 pub fn encode_tx_actions_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8> {
-    let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
-    key.extend_from_slice(&encode_desc_block_num(block_num));
-    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&[0xFF; 32]);
+    let mut key = encode_tx_actions_key(block_num, tx_idx).to_vec();
+    key.push(0);
     key
 }
 
-/// [`decode_tx_actions_key`] for a key read back from the store: only
-/// 44-byte keys are ever written to `activities`, so any other width is
-/// corruption, reported with the key instead of skipped.
-pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32, Vec<u8>)> {
+/// `(block_num, tx_idx)` of an `activities` key read back from the store.
+/// Only 12-byte keys are written; any other width — the 44-byte layout that
+/// also held the tx hash included — is refused: re-sync required.
+pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32)> {
     anyhow::ensure!(
         key.len() == TX_ACTIONS_KEY_SIZE,
-        "activities key 0x{} has {} bytes, expected {}",
+        "activities key 0x{} has {} bytes, expected {} (block, tx_idx): written by an older \
+         layout, re-sync required",
         hex::encode(key),
         key.len(),
         TX_ACTIONS_KEY_SIZE
     );
-    Ok(decode_tx_actions_key(key))
-}
-
-pub fn decode_tx_actions_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
-    assert!(
-        key.len() == TX_ACTIONS_KEY_SIZE,
-        "decode_tx_actions_key: expected {} bytes, got {}",
-        TX_ACTIONS_KEY_SIZE,
-        key.len()
-    );
-    let block_num = decode_desc_block_num(&key[0..8]);
-    let tx_idx = decode_desc_tx_idx(&key[8..12]);
-    let tx_hash = key[12..44].to_vec();
-    (block_num, tx_idx, tx_hash)
+    Ok((
+        decode_desc_block_num(&key[0..8])?,
+        decode_desc_tx_idx(&key[8..12])?,
+    ))
 }
 
 /// Global activity bucket index key:
@@ -1931,18 +1968,9 @@ pub fn decode_tx_actions_by_bucket_key(
     let bucket = crate::global_bucket::GlobalBucket::from_byte(key[0])?;
     Ok((
         bucket,
-        decode_desc_block_num(&key[1..9]),
-        decode_desc_tx_idx(&key[9..13]),
+        decode_desc_block_num(&key[1..9])?,
+        decode_desc_tx_idx(&key[9..13])?,
     ))
-}
-
-/// The 12-byte `block_num_desc + tx_idx_desc` prefix every `CF_TX_ACTIONS` key
-/// of one transaction position starts with.
-pub fn encode_tx_actions_position_prefix(block_num: i64, tx_idx: i32) -> [u8; 12] {
-    let mut prefix = [0u8; 12];
-    prefix[..8].copy_from_slice(&encode_desc_block_num(block_num));
-    prefix[8..].copy_from_slice(&encode_desc_tx_idx(tx_idx));
-    prefix
 }
 
 /// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
@@ -1968,17 +1996,16 @@ pub fn encode_dao_by_block_key(
     key
 }
 
-pub fn decode_dao_by_block_key(key: &[u8]) -> (i64, Vec<u8>, i16) {
-    assert!(
+pub fn decode_dao_by_block_key(key: &[u8]) -> anyhow::Result<(i64, Vec<u8>, i16)> {
+    anyhow::ensure!(
         key.len() == DAO_BY_BLOCK_KEY_SIZE,
-        "decode_dao_by_block_key: expected {} bytes, got {}",
-        DAO_BY_BLOCK_KEY_SIZE,
+        "dao_by_block key 0x{} has {} bytes, expected {DAO_BY_BLOCK_KEY_SIZE}: re-sync required",
+        hex::encode(key),
         key.len()
     );
-    let block_desc = i64::from_be_bytes(key[..8].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
+    let block_num = decode_desc_block_num(&key[..8])?;
     let (tx_hash, output_index) = decode_outpoint(&key[8..42]);
-    (block_num, tx_hash, output_index)
+    Ok((block_num, tx_hash, output_index))
 }
 
 pub fn encode_dao_by_lock_block_key(
@@ -2004,18 +2031,19 @@ pub fn encode_dao_by_lock_block_key(
     key
 }
 
-pub fn decode_dao_by_lock_block_key(key: &[u8]) -> (Vec<u8>, i64, Vec<u8>, i16) {
-    assert!(
+#[allow(clippy::type_complexity)]
+pub fn decode_dao_by_lock_block_key(key: &[u8]) -> anyhow::Result<(Vec<u8>, i64, Vec<u8>, i16)> {
+    anyhow::ensure!(
         key.len() == DAO_BY_LOCK_BLOCK_KEY_SIZE,
-        "decode_dao_by_lock_block_key: expected {} bytes, got {}",
-        DAO_BY_LOCK_BLOCK_KEY_SIZE,
+        "dao_by_lock_block key 0x{} has {} bytes, expected {DAO_BY_LOCK_BLOCK_KEY_SIZE}: re-sync \
+         required",
+        hex::encode(key),
         key.len()
     );
     let lock_hash = key[..32].to_vec();
-    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
+    let block_num = decode_desc_block_num(&key[32..40])?;
     let (tx_hash, output_index) = decode_outpoint(&key[40..74]);
-    (lock_hash, block_num, tx_hash, output_index)
+    Ok((lock_hash, block_num, tx_hash, output_index))
 }
 
 pub fn encode_dao_by_lock_prefix(lock_hash: &[u8]) -> [u8; 32] {
@@ -2047,18 +2075,18 @@ pub fn encode_dao_by_status_block_key(
     key
 }
 
-pub fn decode_dao_by_status_block_key(key: &[u8]) -> (i16, i64, Vec<u8>, i16) {
-    assert!(
+pub fn decode_dao_by_status_block_key(key: &[u8]) -> anyhow::Result<(i16, i64, Vec<u8>, i16)> {
+    anyhow::ensure!(
         key.len() == DAO_BY_STATUS_BLOCK_KEY_SIZE,
-        "decode_dao_by_status_block_key: expected {} bytes, got {}",
-        DAO_BY_STATUS_BLOCK_KEY_SIZE,
+        "dao_by_status_block key 0x{} has {} bytes, expected {DAO_BY_STATUS_BLOCK_KEY_SIZE}: \
+         re-sync required",
+        hex::encode(key),
         key.len()
     );
     let status = i16::from_be_bytes(key[..2].try_into().unwrap());
-    let block_desc = i64::from_be_bytes(key[2..10].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
+    let block_num = decode_desc_block_num(&key[2..10])?;
     let (tx_hash, output_index) = decode_outpoint(&key[10..44]);
-    (status, block_num, tx_hash, output_index)
+    Ok((status, block_num, tx_hash, output_index))
 }
 
 pub fn encode_dao_by_status_prefix(status: i16) -> [u8; 2] {
@@ -2116,38 +2144,22 @@ pub fn decode_collection_activity_daily_key(key: &[u8]) -> anyhow::Result<([u8; 
     Ok((collection_id, day))
 }
 
-/// Object collection activity key:
-/// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B)
-/// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
-pub const OBJECT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 108;
+/// Object / identity collection activity key:
+/// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes.
+/// Descending block and tx index, so a prefix scan yields the newest first; the
+/// transaction is its position (hash and block hash: `tx_index` / `block_headers`).
+pub const OBJECT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 44;
 
 pub fn encode_object_collection_activity_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
-    block_hash: &[u8],
-    tx_hash: &[u8],
 ) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
-    // `collection_id` is padded (mNFT class IDs are 24B, `.bit` IDs 20B); the
-    // two hash segments must fill their windows exactly.
-    assert_key_component_len(
-        "encode_object_collection_activity_key",
-        "block_hash",
-        block_hash.len(),
-        HASH32_LEN,
-    );
-    assert_key_component_len(
-        "encode_object_collection_activity_key",
-        "tx_hash",
-        tx_hash.len(),
-        HASH32_LEN,
-    );
+    // `collection_id` is padded (mNFT class IDs are 24B, `.bit` IDs 20B).
     let mut key = [0u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
     key[..32].copy_from_slice(&pad_id_32(collection_id));
     key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
     key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
-    key[44..76].copy_from_slice(&block_hash[..32]);
-    key[76..108].copy_from_slice(&tx_hash[..32]);
     key
 }
 
@@ -2155,32 +2167,37 @@ pub fn encode_object_collection_activity_prefix(collection_id: &[u8]) -> [u8; 32
     pad_id_32(collection_id)
 }
 
+/// The seek key for the first row of `collection_id` strictly after (older
+/// than) the position `(block_num, tx_idx)`: the row key plus one byte.
 pub fn encode_object_collection_activity_seek_after_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
-) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
-    let mut key = [0xFFu8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
-    key[..32].copy_from_slice(&pad_id_32(collection_id));
-    key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
-    key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
+) -> Vec<u8> {
+    let mut key = encode_object_collection_activity_key(collection_id, block_num, tx_idx).to_vec();
+    key.push(0);
     key
 }
 
-pub fn decode_object_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Vec<u8>, Vec<u8>) {
-    assert!(
+/// `(collection_id, block_num, tx_idx)` of a collection activity key. Any
+/// other width — the 108-byte layout that also held the block and tx hashes
+/// included — is refused: re-sync required.
+pub fn decode_object_collection_activity_key(key: &[u8]) -> anyhow::Result<([u8; 32], i64, i32)> {
+    anyhow::ensure!(
         key.len() == OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
-        "decode_object_collection_activity_key: expected {} bytes, got {}",
-        OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
-        key.len()
+        "collection activity key 0x{} has {} bytes, expected {} (collection, block, tx_idx): \
+         written by an older layout, re-sync required",
+        hex::encode(key),
+        key.len(),
+        OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
     );
     let mut collection_id = [0u8; 32];
     collection_id.copy_from_slice(&key[..32]);
-    let block_num = decode_desc_block_num(&key[32..40]);
-    let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    let block_hash = key[44..76].to_vec();
-    let tx_hash = key[76..108].to_vec();
-    (collection_id, block_num, tx_idx, block_hash, tx_hash)
+    Ok((
+        collection_id,
+        decode_desc_block_num(&key[32..40])?,
+        decode_desc_tx_idx(&key[40..44])?,
+    ))
 }
 
 /// A transaction's canonical slot, `block_number (8B BE) ‖ tx_idx (4B BE)`:
@@ -2190,8 +2207,11 @@ pub fn encode_tx_slot_key(block_number: i64, tx_idx: i32) -> Vec<u8> {
 }
 
 /// Sync meta keys
+/// The fixed keys of `sync_meta` (C-4b: nothing else is stored there; the
+/// reorg-event history is `reorg_events`). The `derive:` and
+/// `hourly_retention_state:` keys are closed families: one key per derived
+/// aggregate / per hourly retention family.
 pub mod sync_meta_keys {
-    pub const TIP_BLOCK: &[u8] = b"tip_block";
     /// `SyncChainStatus`: tip and totals, journaled per block.
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     /// `SyncRuntimeStatus`: run telemetry, bulk completion and deep-fork
@@ -2200,7 +2220,6 @@ pub mod sync_meta_keys {
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
-    pub const DEEP_FORK: &[u8] = b"deep_fork";
     /// The HODL wave tracker's scalars (bincode `HodlTrackerCursor`): holder
     /// count, open snapshot day, last processed block. Its per-day capacity
     /// is `CF_HODL_CAPACITY_BY_DATE`.
@@ -2239,6 +2258,14 @@ pub mod sync_meta_keys {
     /// One derived aggregate's derivation state (bincode `DeriveMeta`). The
     /// aggregate name is appended: `derive:dao_live_agg`.
     pub const DERIVE_META_PREFIX: &[u8] = b"derive:";
+    /// The UTC+8 activity hour (`%Y%m%d%H`, 10 ASCII digits) of the rollback
+    /// coverage floor block the activity address rows were last pruned to:
+    /// no `ACTIVITY_HOURLY_ADDR_ROW` row of an earlier hour, and no
+    /// `ACTIVITY_DAILY_ADDR_ROW` row of an earlier day (the hour's first 8
+    /// digits), remains (C-3). Written by the live batch that prunes, in its
+    /// block's scope (journaled), so a rollback of that block restores the
+    /// rows and this bound together.
+    pub const ACTIVITY_ADDR_ROW_FLOOR: &[u8] = b"activity_addr_row_floor";
 }
 
 /// `sync_meta` key of one derived aggregate's `DeriveMeta`.
@@ -2446,6 +2473,41 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 mod tests {
     use super::*;
 
+    /// C-2 (narrowed in the fix round, findings 7 + 9): code is ELF data and
+    /// nothing else — a Type ID cell whose data is not ELF is state.
+    #[test]
+    fn is_code_cell_is_elf_data_only() {
+        let elf = b"\x7fELF\x02\x01\x01rest";
+        assert!(is_code_cell(elf), "an ELF binary is code");
+        assert!(is_code_cell(&ELF_MAGIC), "the magic alone starts a binary");
+        assert!(
+            !is_code_cell(b"{\"json\":1}"),
+            "state data is not code, under any type script"
+        );
+        assert!(
+            !is_code_cell(&[0x7f, b'E', b'L']),
+            "a truncated magic is not code"
+        );
+        assert!(
+            !is_code_cell(&100u128.to_le_bytes()),
+            "a UDT amount is not code"
+        );
+        assert!(!is_code_cell(&[]), "an empty cell is never code");
+    }
+
+    #[test]
+    fn is_type_id_script_requires_the_exact_code_hash_and_hash_type_type() {
+        let mut type_id = [0u8; 32];
+        type_id[25..].copy_from_slice(b"TYPE_ID");
+        assert!(is_type_id_script(&type_id, 1));
+        assert!(!is_type_id_script(&type_id, 0));
+        assert!(!is_type_id_script(&type_id, 2));
+        assert!(!is_type_id_script(&type_id[1..], 1));
+        let mut other = type_id;
+        other[0] = 1;
+        assert!(!is_type_id_script(&other, 1));
+    }
+
     #[test]
     fn test_reorg_event_key_roundtrip_and_shape() {
         let key = encode_reorg_event_key(1_700_000_123_456, &[0xAB; 16]).unwrap();
@@ -2605,7 +2667,7 @@ mod tests {
         let outpoint = encode_outpoint(&[0xAA; 32], 3);
         let key = encode_dao_by_block_key(123, &outpoint);
         assert_eq!(key.len(), DAO_BY_BLOCK_KEY_SIZE);
-        let (block, tx_hash, output_index) = decode_dao_by_block_key(&key);
+        let (block, tx_hash, output_index) = decode_dao_by_block_key(&key).unwrap();
         assert_eq!(block, 123);
         assert_eq!(tx_hash, vec![0xAA; 32]);
         assert_eq!(output_index, 3);
@@ -2616,7 +2678,7 @@ mod tests {
         let outpoint = encode_outpoint(&[0xBB; 32], 5);
         let key = encode_dao_by_lock_block_key(&[0x11; 32], 999, &outpoint);
         assert_eq!(key.len(), DAO_BY_LOCK_BLOCK_KEY_SIZE);
-        let (lock_hash, block, tx_hash, output_index) = decode_dao_by_lock_block_key(&key);
+        let (lock_hash, block, tx_hash, output_index) = decode_dao_by_lock_block_key(&key).unwrap();
         assert_eq!(lock_hash, vec![0x11; 32]);
         assert_eq!(block, 999);
         assert_eq!(tx_hash, vec![0xBB; 32]);
@@ -2628,7 +2690,7 @@ mod tests {
         let outpoint = encode_outpoint(&[0xCC; 32], 1);
         let key = encode_dao_by_status_block_key(2, 456, &outpoint);
         assert_eq!(key.len(), DAO_BY_STATUS_BLOCK_KEY_SIZE);
-        let (status, block, tx_hash, output_index) = decode_dao_by_status_block_key(&key);
+        let (status, block, tx_hash, output_index) = decode_dao_by_status_block_key(&key).unwrap();
         assert_eq!(status, 2);
         assert_eq!(block, 456);
         assert_eq!(tx_hash, vec![0xCC; 32]);
@@ -2874,7 +2936,7 @@ mod tests {
         let tx_hash = [0xABu8; 32];
         let key = encode_spore_outpoint_key(&tx_hash, 7);
         assert_eq!(key.len(), SPORE_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 7);
@@ -2887,7 +2949,7 @@ mod tests {
         let key = encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, 3);
         assert_eq!(key.len(), spore_outpoint_by_id_key_len(spore_id.len()));
         assert_eq!(key.len(), 67);
-        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+        assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
         assert_eq!(&key[1..33], &spore_id);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_by_id_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
@@ -2911,7 +2973,7 @@ mod tests {
             let key = encode_spore_outpoint_by_id_key(&id, &tx_hash, 5);
             assert_eq!(key.len(), 1 + id_len + OUTPOINT_KEY_SIZE);
             assert_eq!(key.len(), spore_outpoint_by_id_key_len(id_len));
-            assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+            assert_eq!(key[0], object_outpoint_kind::SPORE_ITEM);
             assert_eq!(&key[1..1 + id_len], id.as_slice());
 
             let prefix = encode_spore_outpoint_by_id_prefix(&id);
@@ -2972,7 +3034,7 @@ mod tests {
         let tx_hash = [0xACu8; 32];
         let key = encode_mnft_class_outpoint_key(&tx_hash, 8);
         assert_eq!(key.len(), MNFT_CLASS_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_MNFT_CLASS_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::MNFT_CLASS);
         let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 8);
@@ -2983,7 +3045,7 @@ mod tests {
         let tx_hash = [0xADu8; 32];
         let key = encode_mnft_token_outpoint_key(&tx_hash, 9);
         assert_eq!(key.len(), MNFT_TOKEN_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_MNFT_TOKEN_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::MNFT_TOKEN);
         let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 9);
@@ -2994,7 +3056,7 @@ mod tests {
         let tx_hash = [0xAEu8; 32];
         let key = encode_dotbit_account_outpoint_key(&tx_hash, 10);
         assert_eq!(key.len(), DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_ACCOUNT);
         let (decoded_tx_hash, decoded_output_index) = decode_dotbit_account_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 10);
@@ -3005,11 +3067,12 @@ mod tests {
         let tx_hash = [0xA7u8; 32];
         let key = encode_dotbit_unindexed_outpoint_key(&tx_hash, 3);
         assert_eq!(key.len(), DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_UNINDEXED);
         assert_eq!(&key[1..35], encode_outpoint(&tx_hash, 3).as_slice());
         assert_ne!(
-            key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT,
-            "the marker never shares the account outpoint family"
+            key[0],
+            encode_dotbit_account_outpoint_key(&tx_hash, 3)[0],
+            "the marker never shares the indexed account kind"
         );
     }
 
@@ -3019,7 +3082,7 @@ mod tests {
         let tx_hash = [0xBBu8; 32];
         let key = encode_dotbit_outpoint_by_account_id_key(&account_id, &tx_hash, 5);
         assert_eq!(key.len(), DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID);
+        assert_eq!(key[0], object_outpoint_kind::DOTBIT_ACCOUNT);
         assert_eq!(&key[1..21], &account_id);
         let (decoded_tx_hash, decoded_output_index) =
             decode_dotbit_outpoint_by_account_id_key(&key);
@@ -3113,22 +3176,33 @@ mod tests {
     // ---- Activity key ----
 
     #[test]
-    fn test_tx_actions_key_roundtrip() {
-        let key = encode_tx_actions_key(123, 7, &[0x44; 32]);
+    fn tx_actions_key_is_the_12_byte_position_and_round_trips() {
+        let key = encode_tx_actions_key(123, 7);
         assert_eq!(key.len(), TX_ACTIONS_KEY_SIZE);
+        assert_eq!(TX_ACTIONS_KEY_SIZE, 12);
+        assert_eq!(decode_stored_tx_actions_key(&key).unwrap(), (123, 7));
+        let seek = encode_tx_actions_seek_after_key(123, 7);
+        assert!(seek.as_slice() > key.as_slice());
+        assert!(seek.as_slice() < encode_tx_actions_key(123, 6).as_slice());
+    }
 
-        let (block_num, tx_idx, tx_hash) = decode_tx_actions_key(&key);
-        assert_eq!(block_num, 123);
-        assert_eq!(tx_idx, 7);
-        assert_eq!(tx_hash, vec![0x44; 32]);
+    #[test]
+    fn decode_stored_tx_actions_key_refuses_the_44_byte_layout() {
+        let mut old = encode_tx_actions_key(123, 7).to_vec();
+        old.extend_from_slice(&[0x44; 32]);
+        let err = decode_stored_tx_actions_key(&old).unwrap_err().to_string();
+        assert!(
+            err.contains("has 44 bytes, expected 12") && err.contains("re-sync required"),
+            "{err}"
+        );
     }
 
     #[test]
     fn test_tx_actions_key_descending_sort_order() {
-        let k1 = encode_tx_actions_key(300, 0, &[0x11; 32]);
-        let k2 = encode_tx_actions_key(200, 0, &[0x22; 32]);
-        let k3 = encode_tx_actions_key(100, 5, &[0x33; 32]);
-        let k4 = encode_tx_actions_key(100, 1, &[0x44; 32]);
+        let k1 = encode_tx_actions_key(300, 0);
+        let k2 = encode_tx_actions_key(200, 0);
+        let k3 = encode_tx_actions_key(100, 5);
+        let k4 = encode_tx_actions_key(100, 1);
 
         assert!(k1 < k2);
         assert!(k2 < k3);
@@ -3149,13 +3223,9 @@ mod tests {
                 (bucket, 20_617_704, 13)
             );
         }
-        // The position part is exactly the CF_TX_ACTIONS position prefix.
+        // The position part is exactly the CF_TX_ACTIONS key.
         let key = encode_tx_actions_by_bucket_key(GlobalBucket::Dao, 7, 2);
-        assert_eq!(key[1..], encode_tx_actions_position_prefix(7, 2));
-        assert_eq!(
-            encode_tx_actions_key(7, 2, &[0x55; 32])[..12],
-            encode_tx_actions_position_prefix(7, 2)
-        );
+        assert_eq!(key[1..], encode_tx_actions_key(7, 2));
     }
 
     #[test]
@@ -3433,106 +3503,157 @@ mod tests {
             (1_000_000, 42),
             (i64::MAX, i32::MAX),
         ] {
-            let block_hash = [idx as u8; 32];
-            let tx_hash = [block as u8; 32];
-            let key = encode_object_collection_activity_key(
-                &collection_id,
-                block,
-                idx,
-                &block_hash,
-                &tx_hash,
-            );
+            let key = encode_object_collection_activity_key(&collection_id, block, idx);
             assert_eq!(key.len(), OBJECT_COLLECTION_ACTIVITY_KEY_SIZE);
-            let (decoded_cid, decoded_block, decoded_idx, decoded_block_hash, decoded_tx_hash) =
-                decode_object_collection_activity_key(&key);
-            assert_eq!(decoded_cid, collection_id);
-            assert_eq!(decoded_block, block);
-            assert_eq!(decoded_idx, idx);
-            assert_eq!(decoded_block_hash, block_hash.to_vec());
-            assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+            assert_eq!(OBJECT_COLLECTION_ACTIVITY_KEY_SIZE, 44);
+            assert_eq!(
+                decode_object_collection_activity_key(&key).unwrap(),
+                (collection_id, block, idx)
+            );
         }
+    }
+
+    #[test]
+    fn decode_object_collection_activity_key_refuses_the_108_byte_layout() {
+        let mut old = encode_object_collection_activity_key(&[0xAA; 32], 100, 5).to_vec();
+        old.extend_from_slice(&[0x66; 32]);
+        old.extend_from_slice(&[0x77; 32]);
+        let err = decode_object_collection_activity_key(&old)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("has 108 bytes, expected 44") && err.contains("re-sync required"),
+            "{err}"
+        );
     }
 
     #[test]
     fn test_object_collection_activity_key_descending_sort() {
         let cid = [0xBBu8; 32];
-        let block_hash = [0x66u8; 32];
-        let tx_hash = [0x77u8; 32];
-        let k1 = encode_object_collection_activity_key(&cid, 300, 5, &block_hash, &tx_hash);
-        let k2 = encode_object_collection_activity_key(&cid, 200, 5, &block_hash, &tx_hash);
-        let k3 = encode_object_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
+        let k1 = encode_object_collection_activity_key(&cid, 300, 5);
+        let k2 = encode_object_collection_activity_key(&cid, 200, 5);
+        let k3 = encode_object_collection_activity_key(&cid, 100, 5);
         // Higher block_num => smaller key (descending)
         assert!(k1 < k2);
         assert!(k2 < k3);
 
         // Same block, higher tx_idx => smaller key (descending)
-        let k4 = encode_object_collection_activity_key(&cid, 100, 10, &block_hash, &tx_hash);
-        let k5 = encode_object_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
+        let k4 = encode_object_collection_activity_key(&cid, 100, 10);
+        let k5 = encode_object_collection_activity_key(&cid, 100, 5);
         assert!(k4 < k5);
+        // The seek-after key lands strictly between a row and the next older one.
+        let seek = encode_object_collection_activity_seek_after_key(&cid, 100, 10);
+        assert!(seek.as_slice() > k4.as_slice() && seek.as_slice() < k5.as_slice());
     }
 
     #[test]
     fn test_object_collection_activity_prefix_matching() {
         let cid = [0xCCu8; 32];
         let prefix = encode_object_collection_activity_prefix(&cid);
-        let key = encode_object_collection_activity_key(&cid, 500, 3, &[0x77; 32], &[0x88; 32]);
+        let key = encode_object_collection_activity_key(&cid, 500, 3);
         assert!(key.starts_with(&prefix));
 
         let other_cid = [0xDDu8; 32];
-        let other_key =
-            encode_object_collection_activity_key(&other_cid, 500, 3, &[0x78; 32], &[0x99; 32]);
+        let other_key = encode_object_collection_activity_key(&other_cid, 500, 3);
         assert!(!other_key.starts_with(&prefix));
     }
 
     #[test]
     fn test_object_collection_activity_padded_short_id() {
         let short_id = [0xEEu8; 20];
-        let key =
-            encode_object_collection_activity_key(&short_id, 100, 0, &[0xAB; 32], &[0xAA; 32]);
-        let (decoded_cid, decoded_block, _, decoded_block_hash, decoded_tx_hash) =
-            decode_object_collection_activity_key(&key);
+        let key = encode_object_collection_activity_key(&short_id, 100, 0);
+        let (decoded_cid, decoded_block, _) = decode_object_collection_activity_key(&key).unwrap();
         // First 20 bytes match, rest is zero-padded
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
         assert_eq!(decoded_block, 100);
-        assert_eq!(decoded_block_hash, vec![0xAB; 32]);
-        assert_eq!(decoded_tx_hash, vec![0xAA; 32]);
+    }
+
+    /// Review 20: a newest-first component with the top bit set encodes no
+    /// position (the encoders write only non-negative ones); every decoder
+    /// of such a key fails "re-sync required" instead of overflowing.
+    #[test]
+    fn newest_first_keys_with_the_top_bit_set_are_refused() {
+        let mut activities = encode_tx_actions_key(5, 1);
+        activities[0] = 0x80;
+        let mut addr_tx = encode_addr_tx_key(&[0xAA; 32], 5, 1);
+        addr_tx[32] = 0x80;
+        let mut by_prefix = encode_addr_tx_by_prefix_key(&[0xAA; 20], 5, 1);
+        by_prefix[28] = 0x80;
+        let mut collection = encode_object_collection_activity_key(&[0xCC; 32], 5, 1).to_vec();
+        collection[40] = 0x80;
+        let mut bucket =
+            encode_tx_actions_by_bucket_key(crate::global_bucket::GlobalBucket::Token, 5, 1)
+                .to_vec();
+        bucket[1] = 0x80;
+        let mut transfer = encode_token_transfer_key(&[0xAA; 32], 5, 1);
+        transfer[40] = 0x80;
+        let outpoint = encode_outpoint(&[0xBB; 32], 0);
+        let mut dao_block = encode_dao_by_block_key(5, &outpoint);
+        dao_block[0] = 0x80;
+        let mut dao_lock = encode_dao_by_lock_block_key(&[0xAA; 32], 5, &outpoint);
+        dao_lock[32] = 0x80;
+        let mut dao_status = encode_dao_by_status_block_key(1, 5, &outpoint);
+        dao_status[2] = 0x80;
+        let errors = [
+            decode_token_transfer_key(&transfer).unwrap_err(),
+            decode_dao_by_block_key(&dao_block).unwrap_err(),
+            decode_dao_by_lock_block_key(&dao_lock).unwrap_err(),
+            decode_dao_by_status_block_key(&dao_status).unwrap_err(),
+            decode_stored_tx_actions_key(&activities).unwrap_err(),
+            decode_addr_tx_key(&addr_tx).unwrap_err(),
+            decode_addr_tx_by_prefix_key(&by_prefix).unwrap_err(),
+            decode_object_collection_activity_key(&collection).unwrap_err(),
+            decode_tx_actions_by_bucket_key(&bucket).unwrap_err(),
+        ];
+        for (i, error) in errors.iter().enumerate() {
+            let error = error.to_string();
+            assert!(
+                error.contains("a corrupt key, re-sync required"),
+                "decoder {i}: {error}"
+            );
+        }
+        assert!(decode_desc_tx_idx(&[0x80, 0, 0, 0])
+            .unwrap_err()
+            .to_string()
+            .contains("encodes no transaction index"));
+        assert!(decode_desc_block_num(&[0x80, 0, 0, 0, 0, 0, 0, 0])
+            .unwrap_err()
+            .to_string()
+            .contains("encodes no block"));
+        // The extremes of a valid component still decode.
+        assert_eq!(decode_desc_block_num(&i64::MAX.to_be_bytes()).unwrap(), 0);
+        assert_eq!(
+            decode_desc_block_num(&0i64.to_be_bytes()).unwrap(),
+            i64::MAX
+        );
+        assert_eq!(decode_desc_tx_idx(&0i32.to_be_bytes()).unwrap(), i32::MAX);
     }
 
     #[test]
-    fn test_encode_addr_tx_key_includes_tx_hash() {
+    fn addr_tx_key_is_the_44_byte_position_and_round_trips() {
         let lock_hash = [0x11u8; 32];
-        let tx_hash = [0xAAu8; 32];
-        let key = encode_addr_tx_key(&lock_hash, 100, 3, &tx_hash);
-        assert_eq!(key.len(), 76);
-        let (decoded_lock_hash, decoded_block, decoded_idx, decoded_tx_hash) =
-            decode_addr_tx_key(&key);
-        assert_eq!(decoded_lock_hash, lock_hash.to_vec());
-        assert_eq!(decoded_block, 100);
-        assert_eq!(decoded_idx, 3);
-        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        let key = encode_addr_tx_key(&lock_hash, 100, 3);
+        assert_eq!(key.len(), ADDR_TX_KEY_SIZE);
+        assert_eq!(ADDR_TX_KEY_SIZE, 44);
+        assert_eq!(&key[..32], &lock_hash);
+        assert_eq!(decode_addr_tx_key(&key).unwrap(), (lock_hash, 100, 3));
+        // Newer positions first; the seek-after key lands strictly after its row.
+        assert!(encode_addr_tx_key(&lock_hash, 100, 4) < key);
+        assert!(encode_addr_tx_key(&lock_hash, 101, 0) < key);
+        let seek = encode_addr_tx_seek_after_key(&lock_hash, 100, 3);
+        assert!(seek > key && seek < encode_addr_tx_key(&lock_hash, 100, 2));
     }
 
     #[test]
-    fn test_encode_object_collection_activity_key_includes_block_hash_and_tx_hash() {
-        let collection_id = [0x33u8; 32];
-        let block_hash = [0xABu8; 32];
-        let tx_hash = [0xCCu8; 32];
-        let key =
-            encode_object_collection_activity_key(&collection_id, 300, 9, &block_hash, &tx_hash);
-        assert_eq!(key.len(), OBJECT_COLLECTION_ACTIVITY_KEY_SIZE);
-        let (
-            decoded_collection_id,
-            decoded_block,
-            decoded_idx,
-            decoded_block_hash,
-            decoded_tx_hash,
-        ) = decode_object_collection_activity_key(&key);
-        assert_eq!(decoded_collection_id, collection_id);
-        assert_eq!(decoded_block, 300);
-        assert_eq!(decoded_idx, 9);
-        assert_eq!(decoded_block_hash, block_hash.to_vec());
-        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+    fn decode_addr_tx_key_refuses_the_76_byte_layout() {
+        let mut old = encode_addr_tx_key(&[0x11; 32], 100, 3);
+        old.extend_from_slice(&[0xAA; 32]);
+        let err = decode_addr_tx_key(&old).unwrap_err().to_string();
+        assert!(
+            err.contains("has 76 bytes, expected 44") && err.contains("re-sync required"),
+            "{err}"
+        );
     }
 
     // -- ranked balance key codecs -----------------------------------------
@@ -3819,15 +3940,7 @@ mod tests {
                 component: "lock_hash",
                 expected: 32,
                 call: |h| {
-                    let _ = encode_addr_tx_key(h, 1, 0, &H);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_addr_tx_key",
-                component: "tx_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_addr_tx_key(&H, 1, 0, h);
+                    let _ = encode_addr_tx_key(h, 1, 0);
                 },
             },
             FixedWidthCase {
@@ -4091,30 +4204,6 @@ mod tests {
                 },
             },
             FixedWidthCase {
-                encoder: "encode_tx_actions_key",
-                component: "tx_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_tx_actions_key(1, 0, h);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_object_collection_activity_key",
-                component: "block_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_object_collection_activity_key(&H, 1, 0, h, &H);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_object_collection_activity_key",
-                component: "tx_hash",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_object_collection_activity_key(&H, 1, 0, &H, h);
-                },
-            },
-            FixedWidthCase {
                 encoder: "encode_fiber_channel_id",
                 component: "funding_tx_hash",
                 expected: 32,
@@ -4326,8 +4415,7 @@ mod tests {
             32 + dotbit_account_id.len()
         );
         assert_eq!(
-            encode_object_collection_activity_key(&mnft_class_id, 1, 0, &[0xE1; 32], &[0xE2; 32])
-                .len(),
+            encode_object_collection_activity_key(&mnft_class_id, 1, 0).len(),
             OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
         );
         assert_eq!(
@@ -4336,7 +4424,7 @@ mod tests {
         );
         assert_eq!(
             encode_object_collection_activity_seek_after_key(&mnft_class_id, 1, 0).len(),
-            OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
+            OBJECT_COLLECTION_ACTIVITY_KEY_SIZE + 1
         );
 
         // `.bit` account IDs are 20 bytes by protocol, not a truncated hash.
@@ -4401,25 +4489,18 @@ mod tests {
     fn test_addr_tx_block_seek_key_orders_between_blocks() {
         let lock = [0xAA; 32];
         let seek = encode_addr_tx_block_seek_key(&lock, 5);
-        // Every row of block 5, whatever its tx index or hash, sorts at or after the seek key.
-        assert!(encode_addr_tx_key(&lock, 5, 0, &[0x00; 32]) >= seek);
-        assert!(encode_addr_tx_key(&lock, 5, i32::MAX, &[0x00; 32]) >= seek);
-        assert!(encode_addr_tx_key(&lock, 5, 0, &[0xFF; 32]) >= seek);
+        // Every row of block 5, whatever its tx index, sorts at or after the seek key.
+        assert!(encode_addr_tx_key(&lock, 5, 0) >= seek);
+        assert!(encode_addr_tx_key(&lock, 5, i32::MAX) >= seek);
         // Lower blocks follow it; higher blocks precede it.
-        assert!(encode_addr_tx_key(&lock, 4, i32::MAX, &[0x00; 32]) > seek);
-        assert!(encode_addr_tx_key(&lock, 6, 0, &[0xFF; 32]) < seek);
+        assert!(encode_addr_tx_key(&lock, 4, i32::MAX) > seek);
+        assert!(encode_addr_tx_key(&lock, 6, 0) < seek);
     }
 
     #[test]
     #[should_panic(expected = "encode_addr_tx_key: lock_hash must be exactly 32 bytes, got 33")]
     fn test_addr_tx_key_rejects_oversized_lock_hash() {
-        let _ = encode_addr_tx_key(&[0x9B; 33], 1, 0, &[0xAB; 32]);
-    }
-
-    #[test]
-    #[should_panic(expected = "encode_addr_tx_key: tx_hash must be exactly 32 bytes, got 33")]
-    fn test_addr_tx_key_rejects_oversized_tx_hash() {
-        let _ = encode_addr_tx_key(&[0x9B; 32], 1, 0, &[0xAB; 33]);
+        let _ = encode_addr_tx_key(&[0x9B; 33], 1, 0);
     }
 
     #[test]
@@ -4429,14 +4510,6 @@ mod tests {
     fn test_token_holder_balance_key_rejects_oversized_type_hash() {
         let _ =
             encode_token_holder_balance_key(&[0x9B; 33], &TokenBalance::from(1u128), &[0xAB; 32]);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "encode_object_collection_activity_key: block_hash must be exactly 32 bytes, got 33"
-    )]
-    fn test_object_collection_activity_key_rejects_oversized_block_hash() {
-        let _ = encode_object_collection_activity_key(&[0xAA; 32], 1, 0, &[0x9B; 33], &[0xAB; 32]);
     }
 
     #[test]
@@ -4453,23 +4526,33 @@ mod addr_tx_by_prefix_key_tests {
     use super::*;
 
     #[test]
-    fn addr_tx_by_prefix_key_roundtrip_is_64_bytes_and_descending() {
+    fn addr_tx_by_prefix_key_roundtrip_is_32_bytes_and_descending() {
         let prefix = [0x5Au8; 20];
-        let tx_hash = [0x77u8; 32];
-        let k1 = encode_addr_tx_by_prefix_key(&prefix, 100, 3, &tx_hash);
-        let k2 = encode_addr_tx_by_prefix_key(&prefix, 101, 0, &tx_hash);
+        let k1 = encode_addr_tx_by_prefix_key(&prefix, 100, 3);
+        let k2 = encode_addr_tx_by_prefix_key(&prefix, 101, 0);
         assert_eq!(k1.len(), ADDR_TX_BY_PREFIX_KEY_SIZE);
+        assert_eq!(ADDR_TX_BY_PREFIX_KEY_SIZE, 32);
         assert!(k2 < k1, "更高的块必须排在前面（desc 编码）");
-        let (p, b, t, h) = decode_addr_tx_by_prefix_key(&k1);
-        assert_eq!((p, b, t, h.as_slice()), (prefix, 100, 3, &tx_hash[..]));
+        assert_eq!(decode_addr_tx_by_prefix_key(&k1).unwrap(), (prefix, 100, 3));
         let seek = encode_addr_tx_by_prefix_seek_after_key(&prefix, 100, 3);
         assert!(seek > k1 && seek.starts_with(&prefix));
     }
 
     #[test]
+    fn decode_addr_tx_by_prefix_key_refuses_the_64_byte_layout() {
+        let mut old = encode_addr_tx_by_prefix_key(&[0x5A; 20], 100, 3);
+        old.extend_from_slice(&[0x77; 32]);
+        let err = decode_addr_tx_by_prefix_key(&old).unwrap_err().to_string();
+        assert!(
+            err.contains("has 64 bytes, expected 32") && err.contains("re-sync required"),
+            "{err}"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "prefix must be exactly 20 bytes")]
     fn addr_tx_by_prefix_key_rejects_wrong_prefix_width() {
-        encode_addr_tx_by_prefix_key(&[0u8; 32], 1, 0, &[0u8; 32]);
+        encode_addr_tx_by_prefix_key(&[0u8; 32], 1, 0);
     }
 }
 

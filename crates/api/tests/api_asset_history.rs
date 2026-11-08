@@ -13,6 +13,17 @@ fn capture_producer(name: &str, value: &serde_json::Value) {
 }
 
 fn seed_tx(batch: &mut StoreBatch<'_>, hash: &[u8], block: i64, index: i32) {
+    seed_tx_at_time(batch, hash, block, index, 1_700_000_000_000 + block);
+}
+
+/// [`seed_tx`] with the transaction's (block) time.
+fn seed_tx_at_time(
+    batch: &mut StoreBatch<'_>,
+    hash: &[u8],
+    block: i64,
+    index: i32,
+    timestamp: i64,
+) {
     batch.put_tx_hash_map(hash, block, index);
     batch.put_tx_index(
         block,
@@ -20,7 +31,7 @@ fn seed_tx(batch: &mut StoreBatch<'_>, hash: &[u8], block: i64, index: i32) {
         &TxIndexEntry {
             tx_hash: hash.try_into().unwrap(),
             is_cellbase: false,
-            timestamp: 1_700_000_000_000 + block,
+            timestamp,
             inputs_count: 1,
             outputs_count: 1,
             fee: 0,
@@ -74,14 +85,8 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
     );
     batch.put_spore_outpoint(&mint, 0, &id);
     batch.put_spore_outpoint(&transfer, 0, &id);
-    batch.put_consumed_cell_with_consumer(
-        &mint,
-        0,
-        &cell(&id, 307_00000000, 1),
-        100,
-        100,
-        Some(&transfer),
-    );
+    // Consumed by `transfer`, indexed at (100, 2) below.
+    batch.put_consumed_cell(&mint, 0, &cell(&id, 307_00000000, 1), 100, 100, 2);
     let mut current = cell(&id, 320_00000000, 2);
     match corrupt {
         Some("lock") => current.lock_args[0] ^= 1,
@@ -128,6 +133,40 @@ async fn cell_versions_exact_same_block_order_capacity_and_current_owner() {
         json["data"][1]["anatomy"],
         serde_json::json!({"capacityBytes":8,"lockBytes":53,"typeBytes":53,"dataBytes":0})
     );
+}
+
+/// Lane B carry-over 4(b): a cell's data hash is the one a script references
+/// (CKB's `calc_data_hash`): 32 zero bytes for empty data, as the cell page
+/// serves it — not the blake2b of zero bytes the payload stores for every
+/// empty cell. The fixture's payloads carry the indexer's stored value.
+#[tokio::test]
+async fn cell_versions_serve_the_zero_data_hash_of_an_empty_cell() {
+    let (store, id) = history_fixture();
+    let stored_empty_hash: [u8; 32] = ckb_hash::blake2b_256([]);
+    assert_ne!(stored_empty_hash, [0; 32]);
+    let (mint, transfer) = (vec![0x51; 32], vec![0x52; 32]);
+    let mut batch = StoreBatch::new(&store);
+    let mut consumed = cell(&id, 307_00000000, 1);
+    consumed.data_hash = Some(stored_empty_hash);
+    let mut current = cell(&id, 320_00000000, 2);
+    current.data_hash = Some(stored_empty_hash);
+    // Consumed by `transfer`, which `history_fixture` indexes at (100, 2).
+    batch.put_consumed_cell(&mint, 0, &consumed, 100, 100, 2);
+    batch.put_cell(&transfer, 0, &current, 100);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/cell-versions",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let zero = format!("0x{}", "00".repeat(32));
+    assert_eq!(json["data"][0]["dataHash"], zero.as_str(), "{json}");
+    assert_eq!(json["data"][1]["dataHash"], zero.as_str(), "{json}");
 }
 
 #[tokio::test]
@@ -708,7 +747,7 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -1022,9 +1061,8 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
         batch.put_tx_actions(&tx_actions);
         batch.put_spore_outpoint(hash, 0, &id);
         match txs.get(position + 1) {
-            Some((consumer, _)) => {
-                batch.put_consumed_cell_with_consumer(hash, 0, &version, 100, 100, Some(consumer))
-            }
+            // The next transaction, indexed at (100, index + 1).
+            Some(_) => batch.put_consumed_cell(hash, 0, &version, 100, 100, index + 1),
             None => batch.put_cell(hash, 0, &version, 100),
         }
     }
@@ -1159,7 +1197,7 @@ async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() 
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -1271,7 +1309,7 @@ async fn protocol_fixture(
             batch.put_dotbit_account_outpoint(&hash, 0, &id);
             batch
                 .put_raw_cf_by_name(
-                    ckbadger_store::CF_STATS_MNFT,
+                    ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                     &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(&id, &hash, 0),
                     &[AssetAction::Mint.compact()],
                 )
@@ -1414,21 +1452,15 @@ fn seed_item_versions(
         if let Some(action) = version.item_action {
             batch
                 .put_raw_cf_by_name(
-                    ckbadger_store::CF_STATS_SPORE,
+                    ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                     &ckbadger_store::keys::encode_spore_outpoint_by_id_key(id, hash, 0),
                     &[action.compact()],
                 )
                 .unwrap();
         }
         match hashes.get(k + 1) {
-            Some(consumer) => batch.put_consumed_cell_with_consumer(
-                hash,
-                0,
-                &payloads[k],
-                block,
-                block + 1,
-                Some(consumer),
-            ),
+            // The next version's transaction, indexed at (block + 1, 0).
+            Some(_) => batch.put_consumed_cell(hash, 0, &payloads[k], block, block + 1, 0),
             None => batch.put_cell(hash, 0, &payloads[k], block),
         }
     }
@@ -1456,7 +1488,8 @@ fn dotcell_email_records(email: &str) -> Vec<u8> {
 /// named by the version each edit consumed (the authority over records),
 /// with how many of the newest edits in a row that party made. Here manager
 /// 0x62… made one edit, handed the name to 0x63… (`edit_manager`, not a
-/// record edit), and 0x63… made the last two.
+/// record edit), and 0x63… made the last two. The four transitions'
+/// classifications are one `activities` read (delta review D2).
 #[tokio::test]
 async fn dotcell_protocol_names_who_made_the_last_record_edits() {
     use ckbadger_indexer::parser::DotCellParser;
@@ -1519,6 +1552,7 @@ async fn dotcell_protocol_names_who_made_the_last_record_edits() {
         },
     );
     batch.commit().unwrap();
+    let counters = store.clone();
     let app = create_router(test_config_with_ckb_db_path(
         store.clone(),
         store,
@@ -1526,9 +1560,15 @@ async fn dotcell_protocol_names_who_made_the_last_record_edits() {
         Some(chain.cleanup),
     ))
     .await;
+    counters.reset_read_call_counters();
     let (status, json) =
         get_json(&app, "/assets/identities/dotcell/items/alice.cell/protocol").await;
     assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        counters.multi_gets(ckbadger_store::CF_TX_ACTIONS),
+        1,
+        "one activities read for every transition"
+    );
     let edits = &json["recordEdits"];
     assert_eq!(edits["count"], 3, "{edits}");
     assert_eq!(
@@ -1665,7 +1705,7 @@ async fn did_feed_row_with_unchanged_data_has_an_unchanged_handle() {
         ));
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
                 &[action.compact()],
             )
@@ -2064,7 +2104,7 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
         // outpoint (what the item and collection feeds read).
         batch
             .put_raw_cf_by_name(
-                ckbadger_store::CF_STATS_SPORE,
+                ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
                 &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&[0x44; 20], &hash, 0),
                 &[action.compact()],
             )
@@ -2095,8 +2135,8 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
     batch.commit().unwrap();
     let app = create_router(test_config(store.clone())).await;
     // Rollback deletes a rolled-back block's collection rows
-    // (REORG_HANDLING.md): a row naming a transaction that is not canonical is
-    // a rollback bug the feed names, never a row it skips.
+    // (REORG_HANDLING.md): a row at a position with no transaction is a
+    // rollback bug the feed names, never a row it skips.
     for path in [
         "/assets/identities/did:ckb/activity-feed?limit=10",
         "/assets/identities/did:ckb/transactions?limit=10",
@@ -2105,22 +2145,16 @@ async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_paginati
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
         let message = json["message"].as_str().unwrap();
         assert!(
-            message.contains("not canonical")
-                && message.contains("block=101")
-                && message.contains(&format!("tx=0x{}", hex::encode([0xfe; 32]))),
+            message.contains(
+                "identity_collection_activities points at block=101, tx_idx=0, which has no tx_index row"
+            ),
             "{path}: {json}"
         );
     }
     store
         .delete_cf(
             store.cf_identity_collection_activities(),
-            &ckbadger_store::keys::encode_object_collection_activity_key(
-                collection,
-                101,
-                0,
-                &[0xff; 32],
-                &[0xfe; 32],
-            ),
+            &ckbadger_store::keys::encode_object_collection_activity_key(collection, 101, 0),
         )
         .unwrap();
     let (status, activities) =
@@ -2288,8 +2322,10 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
         (1, 1, [0x12; 32], AssetAction::Transfer),
         (4, 1, [0x13; 32], AssetAction::Transfer),
     ] {
-        seed_tx(&mut batch, &hash, block, index);
         let header = store.get_block_header(block).unwrap().unwrap();
+        // The transaction's time is its block's raw header time, as the
+        // indexer records it (the row reads its timestamp from tx_index).
+        seed_tx_at_time(&mut batch, &hash, block, index, header.timestamp);
         batch.put_object_collection_activity(
             &cluster,
             block,
@@ -2340,14 +2376,8 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
 async fn history_consumer_must_follow_creation_even_in_same_block() {
     let (store, id) = history_fixture();
     let mut batch = StoreBatch::new(&store);
-    batch.put_consumed_cell_with_consumer(
-        &[0x51; 32],
-        0,
-        &cell(&id, 307_00000000, 1),
-        100,
-        100,
-        Some(&[0x51; 32]),
-    );
+    // "Consumed" by the transaction that created it (indexed at (100, 1)).
+    batch.put_consumed_cell(&[0x51; 32], 0, &cell(&id, 307_00000000, 1), 100, 100, 1);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(

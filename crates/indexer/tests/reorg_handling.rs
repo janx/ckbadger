@@ -35,20 +35,33 @@ fn rollback_fixture(
 }
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_domain_temp().unwrap())
 }
 
 fn setup_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
-    let domain_dir = tempfile::tempdir().unwrap();
-    let append_dir = tempfile::tempdir().unwrap();
-    let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-    let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-    std::mem::forget(domain_dir);
-    std::mem::forget(append_dir);
+    let domain = Arc::new(CkbadgerStore::open_domain_temp().unwrap());
+    let append = Arc::new(CkbadgerStore::open_append_only_temp().unwrap());
     (domain, append)
+}
+
+/// `tx_hash` indexed at its position `(block, tx_idx)`: what an `addr_txs` /
+/// `activities` row at that position resolves to.
+fn index_tx(batch: &mut StoreBatch, block: i64, tx_idx: i32, tx_hash: &[u8]) {
+    batch.put_tx_index(
+        block,
+        tx_idx,
+        &ckbadger_store::types::TxIndexEntry {
+            tx_hash: tx_hash.try_into().expect("32-byte tx hash"),
+            is_cellbase: false,
+            timestamp: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
 }
 
 fn make_header(block_num: i64) -> CachedBlockHeader {
@@ -56,7 +69,6 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     CachedBlockHeader {
         hash,
-        parent_hash: vec![0u8; 32],
         timestamp: 1_000_000 + block_num * 1000,
         epoch_number: block_num / 1800,
         epoch_index: (block_num % 1800) as i32,
@@ -231,9 +243,9 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_args: &[u8], block_count: i6
                 txs_count: cells,
                 cellbase_txs_count: 0,
                 first_seen_block: 1,
-                first_seen_tx: vec![0u8; 32],
+                first_seen_tx_idx: 0,
                 last_activity_block: block,
-                last_activity_tx: vec![0u8; 32],
+                last_activity_tx_idx: 0,
             };
             batch.put_addr_balance(lock_hash, &addr_bal);
 
@@ -505,8 +517,15 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
     let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
     let lock_hash = vec![0xAA; 32];
 
-    // Insert activities at blocks 100, 200, 300, 400, 500 into domain store
-    let mut domain_batch = StoreBatch::new(&domain);
+    // Seed a contiguous header chain 1..=500. Rollback derives each orphaned
+    // block's inter-block gap from its immediate predecessor's header, so a
+    // sparse header range is a chain the store can never hold (the indexer
+    // fails startup on any internal header gap) and rollback now says so.
+    journaled_headers(&domain, 1..=500);
+    seed_epoch_rows(&domain, 1..=500i64);
+
+    // Activities at blocks 100, 200, 300, 400, 500, each written in its
+    // block's journaled scope as the live writer writes them.
     for i in 1..=5i64 {
         let block = i * 100;
         let tx_hash = vec![i as u8; 32];
@@ -529,22 +548,13 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
                 roles: 0,
             }],
         };
-        domain_batch.put_tx_actions(&tx_actions);
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            block,
-            0,
-            &tx_hash,
-            &AddrTxValue::new(0, false, true, 0),
-        );
+        commit_journaled_block(&domain, block, |batch| {
+            batch.put_tx_actions(&tx_actions);
+            batch.put_addr_tx(&lock_hash, block, 0, &AddrTxValue::new(0, false, true, 0));
+            index_tx(batch, block, 0, &tx_hash);
+        })
+        .unwrap();
     }
-    // Seed a contiguous header chain 1..=500. Rollback derives each orphaned
-    // block's inter-block gap from its immediate predecessor's header, so a
-    // sparse header range is a chain the store can never hold (the indexer
-    // fails startup on any internal header gap) and rollback now says so.
-    domain_batch.commit().unwrap();
-    journaled_headers(&domain, 1..=500);
-    seed_epoch_rows(&domain, 1..=500i64);
 
     // Verify all 5 exist
     let before = domain.list_activities(&lock_hash, 100, None, None).unwrap();
@@ -673,9 +683,9 @@ fn test_rollback_updates_derived_cfs_inline() {
                     txs_count: block,
                     cellbase_txs_count: 0,
                     first_seen_block: 1,
-                    first_seen_tx: vec![0u8; 32],
+                    first_seen_tx_idx: 0,
                     last_activity_block: block,
-                    last_activity_tx: vec![0u8; 32],
+                    last_activity_tx_idx: 0,
                 },
             );
             // script_info for lock_code_hash [0xAA;32]
@@ -1156,8 +1166,8 @@ fn test_rollback_deletes_multi_participant_activities() {
     seed_epoch_rows(&domain, 1..=5i64);
 
     // Create activities: block 2 has single-participant, blocks 3 and 4 have
-    // multi-participant activities (both lock_a and lock_b).
-    let mut batch = StoreBatch::new(&domain);
+    // multi-participant activities (both lock_a and lock_b), each block's rows
+    // in its journaled scope as the live writer writes them.
 
     // Block 2, tx 0: single participant (lock_a only) — should survive rollback to 2
     let mut tx_hash_2 = vec![0u8; 32];
@@ -1181,14 +1191,12 @@ fn test_rollback_deletes_multi_participant_activities() {
             roles: 0,
         }],
     };
-    batch.put_tx_actions(&actions_2);
-    batch.put_addr_tx(
-        &lock_a,
-        2,
-        0,
-        &tx_hash_2,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    commit_journaled_block(&domain, 2, |batch| {
+        batch.put_tx_actions(&actions_2);
+        batch.put_addr_tx(&lock_a, 2, 0, &AddrTxValue::new(0, false, true, 0));
+        index_tx(batch, 2, 0, &tx_hash_2);
+    })
+    .unwrap();
 
     // Block 3, tx 0: two participants — should be deleted on rollback to 2
     let mut tx_hash_3 = vec![0u8; 32];
@@ -1222,21 +1230,13 @@ fn test_rollback_deletes_multi_participant_activities() {
             },
         ],
     };
-    batch.put_tx_actions(&actions_3);
-    batch.put_addr_tx(
-        &lock_a,
-        3,
-        0,
-        &tx_hash_3,
-        &AddrTxValue::new(0, false, true, 0),
-    );
-    batch.put_addr_tx(
-        &lock_b,
-        3,
-        0,
-        &tx_hash_3,
-        &AddrTxValue::new(0, false, true, 0),
-    );
+    commit_journaled_block(&domain, 3, |batch| {
+        batch.put_tx_actions(&actions_3);
+        batch.put_addr_tx(&lock_a, 3, 0, &AddrTxValue::new(0, false, true, 0));
+        batch.put_addr_tx(&lock_b, 3, 0, &AddrTxValue::new(0, false, true, 0));
+        index_tx(batch, 3, 0, &tx_hash_3);
+    })
+    .unwrap();
 
     // Block 4, tx 1: another multi-participant — should also be deleted
     let mut tx_hash_4 = vec![0u8; 32];
@@ -1270,23 +1270,13 @@ fn test_rollback_deletes_multi_participant_activities() {
             },
         ],
     };
-    batch.put_tx_actions(&actions_4);
-    batch.put_addr_tx(
-        &lock_a,
-        4,
-        1,
-        &tx_hash_4,
-        &AddrTxValue::new(0, false, true, 0),
-    );
-    batch.put_addr_tx(
-        &lock_b,
-        4,
-        1,
-        &tx_hash_4,
-        &AddrTxValue::new(0, false, true, 0),
-    );
-
-    batch.commit().unwrap();
+    commit_journaled_block(&domain, 4, |batch| {
+        batch.put_tx_actions(&actions_4);
+        batch.put_addr_tx(&lock_a, 4, 1, &AddrTxValue::new(0, false, true, 0));
+        batch.put_addr_tx(&lock_b, 4, 1, &AddrTxValue::new(0, false, true, 0));
+        index_tx(batch, 4, 1, &tx_hash_4);
+    })
+    .unwrap();
 
     // Sanity: global activity list has 3 entries
     let all = domain.list_tx_actions_recent(10, None).unwrap();
@@ -1469,18 +1459,12 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     for (block, tx_hash) in [(2i64, &tx_hash_2), (3, &tx_hash_3)] {
         commit_journaled_block(&domain, block, |batch| {
             batch.put_tx_actions(&prefix_participant_actions(block, 1, tx_hash, &lock_a));
-            batch.put_addr_tx(
-                &lock_a,
-                block,
-                1,
-                tx_hash,
-                &AddrTxValue::new(0, true, false, 0),
-            );
+            index_tx(batch, block, 1, tx_hash);
+            batch.put_addr_tx(&lock_a, block, 1, &AddrTxValue::new(0, true, false, 0));
             batch.put_addr_tx_by_prefix(
                 &ROLLED_BACK_PREFIX,
                 block,
                 1,
-                tx_hash,
                 &AddrTxValue::new(0, false, false, 0),
             );
             batch.put_addr_balance(

@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, DerivedAggregateId, ReadSnapshot};
-use ckbadger_store::{CkbadgerStore, StoreBatch};
+use ckbadger_store::{CkbadgerStore, OutsideWriter, StoreBatch};
 use tracing::warn;
 
 pub(crate) use live::apply_live_batch;
@@ -206,7 +206,7 @@ pub(crate) fn invalidate_registered_for_rollback(
     rollback_to: i64,
 ) -> Result<()> {
     let tip = committed_tip(store)?;
-    let mut batch = StoreBatch::new(store);
+    let mut batch = StoreBatch::outside_journal(store, OutsideWriter::Derive);
     let mut reset = Vec::new();
     // The journal owns an aggregate's rollback only while it is complete at
     // or below the target; every other aggregate's journal entries above the
@@ -357,8 +357,8 @@ pub(crate) mod test_support {
                 if key.len() != 8 {
                     continue;
                 }
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
                 let number = ckbadger_store::keys::decode_block_num(&key);
+                let header = ckbadger_store::decode_block_header(number, &value)?;
                 add_delta(out, self.key_of(number, header.epoch_number), &[1])?;
                 if budget.tick(out.len()) {
                     return Ok(Some(key.to_vec()));
@@ -397,7 +397,6 @@ pub(crate) mod test_support {
     pub(crate) fn header(number: i64, epoch: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![(number % 251) as u8; 32],
-            parent_hash: vec![0; 32],
             timestamp: number * 1_000,
             epoch_number: epoch,
             epoch_index: 0,

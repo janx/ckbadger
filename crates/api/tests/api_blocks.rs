@@ -44,13 +44,21 @@ fn attach_block_evidence_with_message(
             );
         }
         let mut batch = StoreBatch::new(&config.store);
-        if number > 0 && config.store.get_block_header(number - 1).unwrap().is_none() {
+        // The node block names the store's block below it as its parent (the
+        // store keeps no parent hash); index one when the fixture has none.
+        let parent_hash = if number == 0 {
+            vec![0u8; 32]
+        } else if let Some(parent) = config.store.get_block_header(number - 1).unwrap() {
+            parent.hash
+        } else {
             let mut parent = header.clone();
-            parent.hash = header.parent_hash.clone();
+            parent.hash = vec![0x11; 32];
+            parent.hash[..8].copy_from_slice(&(number - 1).to_be_bytes());
             parent.timestamp -= 10_000;
             parent.chain_time_ms = parent.timestamp;
             batch.put_block_header(number - 1, &parent);
-        }
+            parent.hash
+        };
         // Every block below an indexed block is indexed: the block whose
         // reward this one's cellbase pays (mainnet window, `number - 11`) too.
         let target = number - 11;
@@ -98,6 +106,7 @@ fn attach_block_evidence_with_message(
             })
             .collect();
         let block = core::BlockBuilder::default()
+            .parent_hash(packed::Byte32::from_slice(&parent_hash).unwrap())
             .set_proposals(proposals)
             .set_uncles(uncles)
             .number((number as u64).pack())
@@ -157,7 +166,6 @@ async fn block_fee_stats_preserve_rates_above_ieee_safe_integer() {
         7,
         &CachedBlockHeader {
             hash: vec![0x77; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -206,7 +214,6 @@ async fn block_fee_stats_without_fee_sample_are_null() {
         8,
         &CachedBlockHeader {
             hash: vec![0x88; 32],
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -270,7 +277,6 @@ async fn test_get_block_includes_hardfork_activation() {
         8_775_638,
         &CachedBlockHeader {
             hash: vec![0x11; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 5414,
             epoch_index: 7,
@@ -344,7 +350,6 @@ async fn test_blocks_list_includes_hardfork_activation() {
         8_775_639,
         &CachedBlockHeader {
             hash: vec![0x22; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 5414,
             epoch_index: 8,
@@ -363,7 +368,6 @@ async fn test_blocks_list_includes_hardfork_activation() {
         8_775_638,
         &CachedBlockHeader {
             hash: vec![0x11; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 5414,
             epoch_index: 7,
@@ -540,7 +544,6 @@ async fn test_block_proposals_resolve_commitments_via_shared_window() {
         440,
         &CachedBlockHeader {
             hash: proposer_hash.to_vec(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -646,7 +649,6 @@ fn seed_proposer_header(store: &Arc<CkbadgerStore>, number: i64, hash: &[u8]) {
         number,
         &CachedBlockHeader {
             hash: hash.to_vec(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -1161,7 +1163,6 @@ async fn uncle_fixture_with_rival_parent(
     let store = test_store();
     let header = |hash: &[u8], uncles_count: i32| CachedBlockHeader {
         hash: hash.to_vec(),
-        parent_hash: rival_parent.to_vec(),
         timestamp: 1_700_000_000_000,
         epoch_number: 1,
         epoch_index: 0,
@@ -1177,6 +1178,8 @@ async fn uncle_fixture_with_rival_parent(
     };
     let mut batch = StoreBatch::new(store.as_ref());
     if seed_canonical_height {
+        // The canonical 439's parent is the store's block 438.
+        batch.put_block_header(438, &header(&rival_parent, 0));
         batch.put_block_header(439, &header(&canonical_439, 0));
     }
     batch.put_block_header(440, &header(&including_hash, 1));
@@ -1418,11 +1421,12 @@ async fn block_miner_message_text_drops_the_versionbits_prefix() {
 }
 
 /// A `<work_dir>/metadata` directory holding only `pools.toml` (R-12): the
-/// override label import's metadata directory takes, here for the API.
-fn pools_metadata_dir(pools_toml: &str) -> std::path::PathBuf {
+/// override label import's metadata directory takes, here for the API. The
+/// caller keeps it until the router is built (removed when it drops).
+fn pools_metadata_dir(pools_toml: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("pools.toml"), pools_toml).unwrap();
-    dir.keep()
+    dir
 }
 
 /// The lock every `attach_block_evidence*` cellbase names, as its script hash.
@@ -1441,7 +1445,8 @@ async fn block_500_with(message: &[u8], pools_toml: Option<&str>) -> serde_json:
     mount_block_economic_state_not_finalized(&server).await;
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
-    config.metadata_path = pools_toml.map(pools_metadata_dir);
+    let metadata = pools_toml.map(pools_metadata_dir);
+    config.metadata_path = metadata.as_ref().map(|dir| dir.path().to_path_buf());
     let app = create_router(attach_block_evidence_with_message(config, &[500], message)).await;
     let (status, detail) = get_json(&app, "/blocks/500").await;
     assert_eq!(status, StatusCode::OK, "{detail}");
@@ -1503,11 +1508,12 @@ async fn block_miner_pool_conflict_between_lock_and_message_is_an_error() {
     mount_block_economic_state_not_finalized(&server).await;
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
-    config.metadata_path = Some(pools_metadata_dir(&format!(
+    let metadata = pools_metadata_dir(&format!(
         "[[pools]]\nname = \"Lock Pool\"\n[pools.mainnet]\nlock_hashes = [\"{}\"]\n\
          [[pools]]\nname = \"Message Pool\"\n[pools.mainnet]\nmessage_prefixes = [\"0x636b62\"]\n",
         fixture_miner_lock_hash()
-    )));
+    ));
+    config.metadata_path = Some(metadata.path().to_path_buf());
     let app = create_router(attach_block_evidence(config, &[500])).await;
     let (status, body) = get_json(&app, "/blocks/500").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
@@ -1523,9 +1529,10 @@ async fn block_miner_pool_conflict_between_lock_and_message_is_an_error() {
 #[tokio::test]
 async fn router_build_fails_on_a_malformed_pools_override() {
     let mut config = test_config(test_store());
-    config.metadata_path = Some(pools_metadata_dir(
+    let metadata = pools_metadata_dir(
         "[[pools]]\nname = \"Short\"\n[pools.mainnet]\nlock_hashes = [\"0xaa\"]\n",
-    ));
+    );
+    config.metadata_path = Some(metadata.path().to_path_buf());
     let error = match ckbadger_api::try_create_router(config).await {
         Ok(_) => panic!("a malformed pools.toml must fail the router build"),
         Err(error) => format!("{error:#}"),
@@ -1630,7 +1637,6 @@ async fn proposal_fee_fixture(top: u64) -> (axum::Router, [ckb_types::core::Tran
             number,
             &CachedBlockHeader {
                 hash: block.hash().raw_data().to_vec(),
-                parent_hash: block.parent_hash().raw_data().to_vec(),
                 timestamp: 1_700_000_000_000 + number * 10_000,
                 epoch_number: 1,
                 epoch_index: 0,

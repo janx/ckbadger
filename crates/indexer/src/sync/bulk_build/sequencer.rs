@@ -404,7 +404,6 @@ mod tests {
             blocks: vec![BlockFacts {
                 number: 14_000_321,
                 hash: [0x10; 32],
-                parent_hash: [0u8; 32],
                 timestamp_ms: 1_704_067_200_000,
                 chain_time_ms: 1_704_067_200_000,
                 epoch_number: 42,
@@ -532,7 +531,6 @@ mod tests {
     fn sequencer_keeps_the_last_block_end_summary() {
         let mut sequencer = BulkSequencer::default();
         let base_block = 14_000_321i64;
-        let mut previous_hash = [0u8; 32];
 
         for offset in 0..40u8 {
             let mut arena = build_sample_facts_arena();
@@ -542,7 +540,6 @@ mod tests {
             let spend_hash = [0x80 + offset; 32];
             arena.blocks[0].number = block_number;
             arena.blocks[0].hash = block_hash;
-            arena.blocks[0].parent_hash = previous_hash;
             for tx in &mut arena.txs {
                 tx.block_number = block_number;
                 tx.block_hash = block_hash;
@@ -557,7 +554,6 @@ mod tests {
             }
 
             sequencer.resolve(&arena).unwrap();
-            previous_hash = block_hash;
         }
 
         let last = sequencer.last_live_cell_summary().unwrap();

@@ -186,6 +186,20 @@ impl FixtureChain {
         (self.blocks.len() - 1) as u64
     }
 
+    /// The chain with block `number` rebuilt to name `0xEE…` as its parent:
+    /// the store indexes it at its height like any other block, so the node
+    /// block at `number` does not link to the store's block below it (C5).
+    /// The store keeps no parent hash to corrupt.
+    fn with_broken_parent(mut self, number: u64) -> Self {
+        let block = &self.blocks[number as usize];
+        let rebuilt = block
+            .as_advanced_builder()
+            .parent_hash(packed::Byte32::new([0xEE; 32]))
+            .build();
+        self.blocks[number as usize] = rebuilt;
+        self
+    }
+
     fn hash(&self, number: u64) -> [u8; 32] {
         self.blocks[number as usize].hash().unpack()
     }
@@ -221,8 +235,6 @@ fn size_in_block(tx: &TransactionView) -> i64 {
 /// invariant on purpose; the default is a coherent chain.
 #[derive(Default)]
 struct StoreSeed {
-    /// Blocks whose store `parent_hash` is corrupted (C5).
-    broken_parent: Option<u64>,
     /// Block whose tx index row 0 is stored as a non-cellbase (C3).
     no_cellbase: Option<u64>,
     /// The store's sync tip when the indexer lags the node: blocks above it
@@ -246,17 +258,12 @@ fn seed_store(chain: &FixtureChain, seed: &StoreSeed) -> Arc<CkbadgerStore> {
 fn put_block_rows(batch: &mut StoreBatch, chain: &FixtureChain, number: u64, seed: &StoreSeed) {
     let block = &chain.blocks[number as usize];
     let hash: [u8; 32] = block.hash().unpack();
-    let mut parent_hash: [u8; 32] = block.parent_hash().unpack();
-    if seed.broken_parent == Some(number) {
-        parent_hash = [0xEE; 32];
-    }
     let spec = &chain.specs[&number];
     let header_cycles: Option<i64> = spec.txs.iter().map(|tx| tx.cycles).sum::<Option<i64>>();
     batch.put_block_header(
         number as i64,
         &CachedBlockHeader {
             hash: hash.to_vec(),
-            parent_hash: parent_hash.to_vec(),
             timestamp: block.timestamp() as i64,
             epoch_number: 1,
             epoch_index: 0,
@@ -1329,15 +1336,8 @@ async fn test_pipeline_block_without_cellbase_fails() {
 
 #[tokio::test]
 async fn test_pipeline_broken_parent_link_fails() {
-    let chain = FixtureChain::build(5, BTreeMap::new());
-    let fixture = pipeline_app(
-        &chain,
-        StoreSeed {
-            broken_parent: Some(4),
-            ..Default::default()
-        },
-    )
-    .await;
+    let chain = FixtureChain::build(5, BTreeMap::new()).with_broken_parent(4);
+    let fixture = pipeline_app(&chain, StoreSeed::default()).await;
     let (status, json) = get_json(&fixture.app, "/pipeline").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
     let message = json["message"].as_str().unwrap();

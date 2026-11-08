@@ -217,6 +217,21 @@ impl LiveCellInfo {
             ckbadger_common::script_hash(code_hash, script_hash_type_byte(hash_type, "type"), args)
         })
     }
+
+    /// The data hash a script references for this cell's data, by CKB's
+    /// convention (`CellOutput::calc_data_hash`): 32 zero bytes for empty
+    /// data, else the stored blake2b of the data. The stored `data_hash` of an
+    /// empty cell is the blake2b of zero bytes (the indexer hashes every
+    /// output's data the same way, and the payload keeps it); every response
+    /// that names a cell's data hash reads it here. `None` only for a payload
+    /// with data and no stored hash.
+    pub fn script_data_hash(&self) -> Option<[u8; 32]> {
+        if self.data_size == 0 {
+            Some([0; 32])
+        } else {
+            self.data_hash
+        }
+    }
 }
 
 /// Every stored payload passed `check_fields` when it was written and
@@ -308,12 +323,15 @@ impl Deref for PositionedCellInfo {
 }
 
 /// A consumed cell as readers see it: the `cells` payload joined with its
-/// `consumed_cells` metadata. Built in memory only, never persisted.
+/// `consumed_cells` metadata. Built in memory only, never persisted. The
+/// consuming transaction is its canonical position; a reader that shows its
+/// hash resolves the positions of a whole response at once with
+/// [`crate::store::CkbadgerStore::consumer_tx_hashes`].
 #[derive(Debug, Clone)]
 pub struct ConsumedCellInfo {
     pub cell: LiveCellInfo,
     pub consumed_at_block: i64,
-    pub consumed_by_tx: Option<Vec<u8>>,
+    pub consumed_tx_idx: i32,
     pub created_at_block: i64,
 }
 
@@ -327,11 +345,26 @@ pub struct LockScriptEntry {
     pub args: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A `consumed_cells` value: the block that created the cell and the
+/// canonical position `(consumed_at_block, consumed_tx_idx)` of the
+/// transaction that consumed it. The consuming transaction's hash is not
+/// stored (`docs/prompts/DATA_DESIGN.md` principle 3): it is `tx_index` at
+/// that position. Bincode, fixed [`CONSUMED_CELL_META_SIZE`] bytes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsumedCellMeta {
     pub created_at_block: i64,
     pub consumed_at_block: i64,
-    pub consumed_by_tx: Option<Vec<u8>>,
+    pub consumed_tx_idx: i32,
+}
+
+/// Bytes of an encoded [`ConsumedCellMeta`]: `i64 + i64 + i32`.
+pub const CONSUMED_CELL_META_SIZE: usize = 20;
+
+impl ConsumedCellMeta {
+    /// The consuming transaction's canonical position.
+    pub fn consumer_position(&self) -> (i64, i32) {
+        (self.consumed_at_block, self.consumed_tx_idx)
+    }
 }
 
 /// How an address took part in one transaction, as stored in
@@ -456,26 +489,18 @@ pub struct TokenCellStats {
 }
 
 impl ConsumedCellInfo {
-    pub fn from_live_cell_info(
-        info: &LiveCellInfo,
-        consumed_at_block: i64,
-        created_at_block: i64,
-    ) -> Self {
-        Self::from_live_cell_info_with_consumer(info, consumed_at_block, None, created_at_block)
+    pub fn new(cell: &LiveCellInfo, meta: ConsumedCellMeta) -> Self {
+        Self {
+            cell: cell.clone(),
+            consumed_at_block: meta.consumed_at_block,
+            consumed_tx_idx: meta.consumed_tx_idx,
+            created_at_block: meta.created_at_block,
+        }
     }
 
-    pub fn from_live_cell_info_with_consumer(
-        info: &LiveCellInfo,
-        consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
-        created_at_block: i64,
-    ) -> Self {
-        Self {
-            cell: info.clone(),
-            consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
-            created_at_block,
-        }
+    /// The consuming transaction's canonical position.
+    pub fn consumer_position(&self) -> (i64, i32) {
+        (self.consumed_at_block, self.consumed_tx_idx)
     }
 
     pub fn to_positioned_cell_info(&self) -> PositionedCellInfo {
@@ -483,9 +508,36 @@ impl ConsumedCellInfo {
     }
 }
 
-/// Decode consumed cell metadata from the canonical schema.
-pub fn decode_consumed_cell_meta(value: &[u8]) -> Result<ConsumedCellMeta, bincode::Error> {
-    bincode::deserialize::<ConsumedCellMeta>(value)
+/// Decode a `consumed_cells` value. Anything but the
+/// [`CONSUMED_CELL_META_SIZE`]-byte layout — the earlier one stored the
+/// consuming transaction's hash (17 or 57 bytes), the one before it the whole
+/// cell — was written by an older layout: re-sync required. The writers store
+/// a real position, consumed at or after creation; a negative position or a
+/// consumption before the creation is a corrupt row.
+pub fn decode_consumed_cell_meta(value: &[u8]) -> anyhow::Result<ConsumedCellMeta> {
+    anyhow::ensure!(
+        value.len() == CONSUMED_CELL_META_SIZE,
+        "consumed_cells value has {} bytes, expected {} (created_at_block, consumed_at_block, \
+         consumed_tx_idx): written by an older layout, re-sync required",
+        value.len(),
+        CONSUMED_CELL_META_SIZE
+    );
+    let meta = bincode::deserialize::<ConsumedCellMeta>(value)?;
+    anyhow::ensure!(
+        meta.created_at_block >= 0 && meta.consumed_tx_idx >= 0,
+        "consumed_cells value holds a negative position (created_at_block={}, \
+         consumed_tx_idx={}): a corrupt row",
+        meta.created_at_block,
+        meta.consumed_tx_idx
+    );
+    anyhow::ensure!(
+        meta.consumed_at_block >= meta.created_at_block,
+        "consumed_cells value is consumed at block {} before its creation at block {}: a \
+         corrupt row",
+        meta.consumed_at_block,
+        meta.created_at_block
+    );
+    Ok(meta)
 }
 
 /// Decode created_at_block from the live cell marker value (8 bytes LE).
@@ -502,10 +554,13 @@ pub fn encode_live_cell_marker(created_at_block: i64) -> [u8; 8] {
     created_at_block.to_le_bytes()
 }
 
+/// A `block_headers` row. The parent hash is not stored: it is the hash of
+/// the row of the block below (`[0; 32]` for genesis), which the store holds
+/// for every block it holds (`docs/prompts/DATA_DESIGN.md` principle 3).
+/// Decoded strictly by [`decode_block_header`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedBlockHeader {
     pub hash: Vec<u8>,
-    pub parent_hash: Vec<u8>,
     pub timestamp: i64,
     pub epoch_number: i64,
     pub epoch_index: i32,
@@ -540,6 +595,24 @@ pub struct CachedBlockHeader {
     /// consensus header value. This field is intentionally required: an old
     /// bincode header must trigger a full re-sync, not a partial fallback.
     pub chain_time_ms: i64,
+}
+
+/// Decode the `block_headers` row of `block_number`: exactly one
+/// [`CachedBlockHeader`] (bincode, fixed-width integers, no trailing bytes).
+/// An earlier layout — with the parent hash, or without `chain_time_ms` —
+/// does not decode: re-sync from genesis.
+pub fn decode_block_header(block_number: i64, value: &[u8]) -> anyhow::Result<CachedBlockHeader> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<CachedBlockHeader>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "cannot decode block header at block {block_number} ({} bytes: {e}): written by an \
+                 older layout, re-sync from genesis",
+                value.len()
+            )
+        })
 }
 
 // ============================================
@@ -582,10 +655,31 @@ pub struct AddressBalance {
     /// paths through [`AddressBalance::cellbase_tx_increment`] and reversed by
     /// rollback from the deleted `addr_txs` rows at tx position 0.
     pub cellbase_txs_count: i64,
+    /// The first transaction touching the address, by its position
+    /// `(first_seen_block, first_seen_tx_idx)`: its hash is `tx_index` there.
     pub first_seen_block: i64,
-    pub first_seen_tx: Vec<u8>,
+    pub first_seen_tx_idx: i32,
+    /// The last transaction touching the address, by position.
     pub last_activity_block: i64,
-    pub last_activity_tx: Vec<u8>,
+    pub last_activity_tx_idx: i32,
+}
+
+/// Decode an `addr_balance` value: exactly one [`AddressBalance`] (bincode,
+/// fixed-width integers, no trailing bytes). The layout that stored the first
+/// and last transactions' hashes does not decode: re-sync required.
+pub fn decode_address_balance(lock_hash: &[u8], value: &[u8]) -> anyhow::Result<AddressBalance> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<AddressBalance>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "addr_balance of 0x{} ({} bytes) does not decode ({e}): written by an older layout, \
+                 re-sync required",
+                hex::encode(lock_hash),
+                value.len()
+            )
+        })
 }
 
 impl AddressBalance {
@@ -2676,7 +2770,90 @@ pub struct TxActions {
     pub participants: Vec<ParticipantDelta>,
 }
 
+/// The stored part of an `activities` row: what the transaction did. The row's
+/// key is its canonical position `(block_number, tx_index)`; the hash, the
+/// timestamp and the cellbase flag are `tx_index` at that position and the
+/// block hash is `block_headers` at that block, so none of them is stored
+/// (`docs/prompts/DATA_DESIGN.md` principle 3). Bincode (fixed-width
+/// integers), decoded strictly by [`decode_stored_tx_actions`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoredTxActions {
+    pub protocol_actions: Vec<ProtocolAction>,
+    pub type_calls: Vec<TypeCallEntry>,
+    pub lock_calls: Vec<LockCallEntry>,
+    pub participants: Vec<ParticipantDelta>,
+}
+
+/// [`StoredTxActions`] borrowed from a [`TxActions`] ([`TxActions::stored_ref`]),
+/// for encoding without a copy: it serializes exactly as the owned form, so
+/// the bulk build serializes it straight into its history chunk and the live
+/// writer through [`TxActions::encode_stored`] — the same bytes.
+#[derive(Serialize)]
+pub struct StoredTxActionsRef<'a> {
+    protocol_actions: &'a [ProtocolAction],
+    type_calls: &'a [TypeCallEntry],
+    lock_calls: &'a [LockCallEntry],
+    participants: &'a [ParticipantDelta],
+}
+
+/// Decode an `activities` value. The bytes must be exactly one
+/// [`StoredTxActions`]: a value of the earlier layout (which also stored the
+/// tx hash, block hash, block number, tx index, timestamp and cellbase flag)
+/// does not decode or leaves bytes over — re-sync required.
+pub fn decode_stored_tx_actions(value: &[u8]) -> anyhow::Result<StoredTxActions> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<StoredTxActions>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "activities value of {} bytes is not a stored TxActions ({e}): written by an older \
+                 layout, re-sync required",
+                value.len()
+            )
+        })
+}
+
 impl TxActions {
+    /// The stored part of this transaction, borrowed: what an `activities`
+    /// value serializes ([`StoredTxActions`]).
+    pub fn stored_ref(&self) -> StoredTxActionsRef<'_> {
+        StoredTxActionsRef {
+            protocol_actions: &self.protocol_actions,
+            type_calls: &self.type_calls,
+            lock_calls: &self.lock_calls,
+            participants: &self.participants,
+        }
+    }
+
+    /// The `activities` value of this transaction ([`StoredTxActions`]).
+    pub fn encode_stored(&self) -> Vec<u8> {
+        bincode::serialize(&self.stored_ref()).expect("serialize stored TxActions")
+    }
+
+    /// A stored row completed from its position, its `tx_index` entry and its
+    /// block's hash.
+    pub fn from_stored(
+        stored: StoredTxActions,
+        block_number: i64,
+        tx_index: i32,
+        tx: &TxIndexEntry,
+        block_hash: Vec<u8>,
+    ) -> Self {
+        Self {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash,
+            block_number,
+            tx_index,
+            timestamp: tx.timestamp,
+            is_cellbase: tx.is_cellbase,
+            protocol_actions: stored.protocol_actions,
+            type_calls: stored.type_calls,
+            lock_calls: stored.lock_calls,
+            participants: stored.participants,
+        }
+    }
+
     /// Capacity actually received by participants, in shannons. Sender outflow,
     /// self-change and fees are not counted a second time; issuance is excluded.
     /// Shared by transaction Value, activity aggregates and rollback.
@@ -3081,13 +3258,58 @@ impl DailyActivityStats {
 // Group I-b: Object Collection Activities (pre-computed)
 // ============================================
 
+/// One row of a collection's activity feed (`object_collection_activities` /
+/// `identity_collection_activities`) as readers see it. Only `actions` is
+/// stored (`encode_stored`): the key is the collection and the transaction's
+/// position, so the tx hash and timestamp are `tx_index` there and the block
+/// hash is `block_headers` at the block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectCollectionActivityEntry {
     pub tx_hash: Vec<u8>,
-    #[serde(default)]
     pub block_hash: Vec<u8>,
     pub timestamp_ms: i64,
     pub actions: Vec<AssetAction>,
+}
+
+impl ObjectCollectionActivityEntry {
+    /// The stored part of this row, borrowed: its actions, which a collection
+    /// activity value serializes (bincode `Vec<AssetAction>`).
+    pub fn stored(&self) -> &Vec<AssetAction> {
+        &self.actions
+    }
+
+    /// The stored value of this row ([`Self::stored`]).
+    pub fn encode_stored(&self) -> Vec<u8> {
+        bincode::serialize(self.stored()).expect("serialize collection activity actions")
+    }
+
+    /// A stored row completed from its position's `tx_index` entry and its
+    /// block's hash.
+    pub fn from_stored(actions: Vec<AssetAction>, tx: &TxIndexEntry, block_hash: Vec<u8>) -> Self {
+        Self {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash,
+            timestamp_ms: tx.timestamp,
+            actions,
+        }
+    }
+}
+
+/// Decode a collection activity value: exactly one `Vec<AssetAction>`
+/// (strict bincode). The earlier layout (tx hash, block hash, timestamp,
+/// actions) does not decode or leaves bytes over: re-sync required.
+pub fn decode_stored_collection_activity(value: &[u8]) -> anyhow::Result<Vec<AssetAction>> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize::<Vec<AssetAction>>(value)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "collection activity value of {} bytes is not a list of actions ({e}): written by \
+                 an older layout, re-sync required",
+                value.len()
+            )
+        })
 }
 
 /// One collection's mint / transfer / burn transactions on one UTC+8 stats
@@ -3560,20 +3782,43 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_consumed_cell_meta_current_schema() {
-        let info = sample_live_cell_info();
-        let consumed =
-            ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 999, Some(&[0xAA; 32]), 123);
+    fn consumed_cell_meta_is_20_bytes_and_round_trips() {
         let meta = ConsumedCellMeta {
             created_at_block: 123,
-            consumed_at_block: consumed.consumed_at_block,
-            consumed_by_tx: consumed.consumed_by_tx.clone(),
+            consumed_at_block: 999,
+            consumed_tx_idx: 7,
         };
         let bytes = bincode::serialize(&meta).unwrap();
+        assert_eq!(bytes.len(), CONSUMED_CELL_META_SIZE);
+        assert_eq!(
+            hex::encode(&bytes),
+            "7b00000000000000e70300000000000007000000"
+        );
         let decoded = decode_consumed_cell_meta(&bytes).unwrap();
-        assert_eq!(decoded.created_at_block, 123);
-        assert_eq!(decoded.consumed_at_block, 999);
-        assert_eq!(decoded.consumed_by_tx, Some(vec![0xAA; 32]));
+        assert_eq!(decoded, meta);
+        assert_eq!(decoded.consumer_position(), (999, 7));
+    }
+
+    #[test]
+    fn decode_consumed_cell_meta_refuses_the_hash_layout() {
+        /// The layout before the consumer became a position.
+        #[derive(Serialize)]
+        struct HashLayout {
+            created_at_block: i64,
+            consumed_at_block: i64,
+            consumed_by_tx: Option<Vec<u8>>,
+        }
+        for consumed_by_tx in [Some(vec![0xAA; 32]), None] {
+            let bytes = bincode::serialize(&HashLayout {
+                created_at_block: 123,
+                consumed_at_block: 999,
+                consumed_by_tx,
+            })
+            .unwrap();
+            let err = decode_consumed_cell_meta(&bytes).unwrap_err().to_string();
+            assert!(err.contains("re-sync required"), "{err}");
+            assert!(err.contains(&format!("{} bytes", bytes.len())), "{err}");
+        }
     }
 
     #[test]
@@ -3581,6 +3826,34 @@ mod tests {
         let bytes = encode_live_cell_marker(123);
         let decoded = decode_live_cell_marker(&bytes).unwrap();
         assert_eq!(decoded, 123);
+    }
+
+    /// Review 21: a negative consumer index or a consumption before the
+    /// creation is a corrupt row, refused at decode (it would otherwise be
+    /// reported as a missing transaction, or not at all).
+    #[test]
+    fn decode_consumed_cell_meta_refuses_impossible_positions() {
+        let encode = |created_at_block, consumed_at_block, consumed_tx_idx| {
+            bincode::serialize(&ConsumedCellMeta {
+                created_at_block,
+                consumed_at_block,
+                consumed_tx_idx,
+            })
+            .unwrap()
+        };
+        let negative = decode_consumed_cell_meta(&encode(5, 9, -1))
+            .unwrap_err()
+            .to_string();
+        assert!(negative.contains("negative position"), "{negative}");
+        let backwards = decode_consumed_cell_meta(&encode(9, 5, 0))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            backwards.contains("consumed at block 5 before its creation at block 9"),
+            "{backwards}"
+        );
+        let same_block = decode_consumed_cell_meta(&encode(9, 9, 0)).unwrap();
+        assert_eq!(same_block.consumer_position(), (9, 0));
     }
 
     #[test]
@@ -3601,6 +3874,108 @@ mod tests {
         let info = sample_live_cell_info();
         let bytes = info.encode().unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
+    }
+
+    // ---- collection activity value ----
+
+    #[test]
+    fn collection_activity_stores_only_its_actions_and_refuses_the_old_value() {
+        let entry = ObjectCollectionActivityEntry {
+            tx_hash: vec![0xAA; 32],
+            block_hash: vec![0xBB; 32],
+            timestamp_ms: 1_700_000_000_000,
+            actions: vec![AssetAction::Mint, AssetAction::Transfer],
+        };
+        let stored = entry.encode_stored();
+        assert_eq!(stored, bincode::serialize(&entry.actions).unwrap());
+        let actions = decode_stored_collection_activity(&stored).unwrap();
+        let tx = TxIndexEntry {
+            tx_hash: [0xAA; 32],
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let completed = ObjectCollectionActivityEntry::from_stored(actions, &tx, vec![0xBB; 32]);
+        assert_eq!(
+            bincode::serialize(&completed).unwrap(),
+            bincode::serialize(&entry).unwrap()
+        );
+        let old = bincode::serialize(&entry).unwrap();
+        let err = decode_stored_collection_activity(&old)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("re-sync required"), "{err}");
+    }
+
+    // ---- activities value: StoredTxActions ----
+
+    fn tx_actions_for_layout() -> TxActions {
+        TxActions {
+            tx_hash: vec![0xAA; 32],
+            block_hash: vec![0xBB; 32],
+            block_number: 7,
+            tx_index: 2,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![ProtocolAction::new(
+                "dao",
+                "deposit",
+                serde_json::json!({"k": 1}),
+            )],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::lock(&[0x11; 32]).unwrap(),
+                ckb_delta: -5,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: TAG_DAO,
+                roles: 0,
+            }],
+        }
+    }
+
+    #[test]
+    fn stored_tx_actions_hold_only_what_the_transaction_did_and_round_trip() {
+        let actions = tx_actions_for_layout();
+        let bytes = actions.encode_stored();
+        // The full value of the earlier layout carried 32 + 32 + 8 + 4 + 8 + 1
+        // bytes of position, hashes and time, plus two 8-byte length prefixes.
+        let full = bincode::serialize(&actions).unwrap();
+        assert_eq!(full.len() - bytes.len(), 32 + 32 + 8 + 4 + 8 + 1 + 16);
+        let stored = decode_stored_tx_actions(&bytes).unwrap();
+        let tx = TxIndexEntry {
+            tx_hash: [0xAA; 32],
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let completed = TxActions::from_stored(stored, 7, 2, &tx, vec![0xBB; 32]);
+        assert_eq!(
+            bincode::serialize(&completed).unwrap(),
+            full,
+            "completion restores every field"
+        );
+    }
+
+    #[test]
+    fn decode_stored_tx_actions_refuses_the_full_layout() {
+        let full = bincode::serialize(&tx_actions_for_layout()).unwrap();
+        let err = decode_stored_tx_actions(&full).unwrap_err().to_string();
+        assert!(err.contains("re-sync required"), "{err}");
+        let mut padded = tx_actions_for_layout().encode_stored();
+        padded.push(0);
+        assert!(decode_stored_tx_actions(&padded).is_err());
     }
 
     // ---- TxActions / ItemDelta / ParticipantDelta ----
@@ -4164,12 +4539,15 @@ mod tests {
             txs_count: 7,
             cellbase_txs_count: 4,
             first_seen_block: 100,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 1,
             last_activity_block: 500,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 2,
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: AddressBalance = bincode::deserialize(&bytes).unwrap();
+        // 16 + 16 + 4 + 8 + 8 + 8 + 8 + 4 + 8 + 4: the two transactions are
+        // positions (4 B each), not hashes (8 + 32 B each).
+        assert_eq!(bytes.len(), 84);
+        let decoded = decode_address_balance(&[0xAA; 32], &bytes).unwrap();
         assert_eq!(decoded.balance, 100_000_000_000);
         assert_eq!(decoded.used_capacity, 610_000_000_000);
         assert_eq!(decoded.live_cells_count, 3);
@@ -4177,7 +4555,46 @@ mod tests {
         assert_eq!(decoded.txs_count, 7);
         assert_eq!(decoded.cellbase_txs_count, 4);
         assert_eq!(decoded.first_seen_block, 100);
+        assert_eq!(decoded.first_seen_tx_idx, 1);
         assert_eq!(decoded.last_activity_block, 500);
+        assert_eq!(decoded.last_activity_tx_idx, 2);
+    }
+
+    #[test]
+    fn decode_address_balance_refuses_the_hash_layout() {
+        #[derive(Serialize)]
+        struct HashLayout {
+            balance: i128,
+            used_capacity: i128,
+            live_cells_count: i32,
+            total_cells_count: i64,
+            txs_count: i64,
+            cellbase_txs_count: i64,
+            first_seen_block: i64,
+            first_seen_tx: Vec<u8>,
+            last_activity_block: i64,
+            last_activity_tx: Vec<u8>,
+        }
+        let old = bincode::serialize(&HashLayout {
+            balance: 1,
+            used_capacity: 1,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count: 1,
+            cellbase_txs_count: 0,
+            first_seen_block: 100,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 500,
+            last_activity_tx: vec![0x02; 32],
+        })
+        .unwrap();
+        let err = decode_address_balance(&[0xAA; 32], &old)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("re-sync required") && err.contains("aaaa"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -4303,6 +4720,22 @@ mod tests {
             udt_amount: with_udt.then_some(1_000_000_000_000_000_000_000_000u128),
             data_hash: with_data_hash.then_some([0x44; 32]),
         }
+    }
+
+    /// 4(b): a cell's data hash as scripts reference it: zero for empty
+    /// data, whatever the payload stores for it; the stored hash otherwise.
+    #[test]
+    fn script_data_hash_is_zero_for_empty_data_and_the_stored_hash_otherwise() {
+        let mut empty = v2_cell(false, false, true);
+        empty.data_size = 0;
+        empty.data_hash = Some(ckb_hash::blake2b_256([]));
+        assert_eq!(empty.script_data_hash(), Some([0; 32]));
+        let mut code = v2_cell(false, false, true);
+        code.data_size = 4;
+        code.data_hash = Some([0x44; 32]);
+        assert_eq!(code.script_data_hash(), Some([0x44; 32]));
+        code.data_hash = None;
+        assert_eq!(code.script_data_hash(), None);
     }
 
     #[test]

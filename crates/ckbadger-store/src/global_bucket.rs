@@ -8,7 +8,10 @@
 //! function. There is no second copy.
 
 use crate::types::TAG_TYPE_CALL;
-use crate::types::{TxActions, TAG_DAO, TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_TOKEN};
+use crate::types::{
+    LockCallEntry, ParticipantDelta, ProtocolAction, StoredTxActions, TxActions, TypeCallEntry,
+    TAG_DAO, TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_TOKEN,
+};
 
 /// One global activity bucket. The discriminant is the 1-byte key prefix of
 /// `CF_TX_ACTIONS_BY_BUCKET`, so the order is part of the on-disk format.
@@ -98,42 +101,65 @@ pub fn classify_global_bucket(actions: &TxActions) -> Option<GlobalBucket> {
     if actions.is_cellbase {
         return None;
     }
+    Some(classify_parts(
+        &actions.protocol_actions,
+        &actions.participants,
+        &actions.type_calls,
+        &actions.lock_calls,
+    ))
+}
+
+/// [`classify_global_bucket`] of a stored `activities` row: what the
+/// transaction did is all the classification reads, and a stored row is
+/// never a cellbase's.
+pub fn classify_stored_global_bucket(stored: &StoredTxActions) -> GlobalBucket {
+    classify_parts(
+        &stored.protocol_actions,
+        &stored.participants,
+        &stored.type_calls,
+        &stored.lock_calls,
+    )
+}
+
+/// The one classification of a non-cellbase transaction, from what it did.
+fn classify_parts(
+    protocol_actions: &[ProtocolAction],
+    participants: &[ParticipantDelta],
+    type_calls: &[TypeCallEntry],
+    lock_calls: &[LockCallEntry],
+) -> GlobalBucket {
     // Precedence among item-action protocols follows the enum order (DAO
     // first), independent of the order the actions were emitted in.
-    if let Some(bucket) = actions
-        .protocol_actions
+    if let Some(bucket) = protocol_actions
         .iter()
         .filter_map(|action| protocol_item_bucket(&action.protocol))
         .min()
     {
-        return Some(bucket);
+        return bucket;
     }
-    if !actions.protocol_actions.is_empty() {
-        return Some(GlobalBucket::Protocol);
+    if !protocol_actions.is_empty() {
+        return GlobalBucket::Protocol;
     }
-    let combined_tags: u16 = actions
-        .participants
-        .iter()
-        .fold(0u16, |acc, p| acc | p.tags);
+    let combined_tags: u16 = participants.iter().fold(0u16, |acc, p| acc | p.tags);
     if combined_tags & TAG_DAO != 0 {
-        return Some(GlobalBucket::Dao);
+        return GlobalBucket::Dao;
     }
     if combined_tags & TAG_TOKEN != 0 {
-        return Some(GlobalBucket::Token);
+        return GlobalBucket::Token;
     }
     if combined_tags & TAG_OBJECT != 0 {
-        return Some(GlobalBucket::Object);
+        return GlobalBucket::Object;
     }
     if combined_tags & TAG_IDENTITY != 0 {
-        return Some(GlobalBucket::Identity);
+        return GlobalBucket::Identity;
     }
     if combined_tags & (TAG_TYPE_CALL | TAG_LOCK_CALL) != 0
-        || !actions.type_calls.is_empty()
-        || !actions.lock_calls.is_empty()
+        || !type_calls.is_empty()
+        || !lock_calls.is_empty()
     {
-        return Some(GlobalBucket::Script);
+        return GlobalBucket::Script;
     }
-    Some(GlobalBucket::Ckb)
+    GlobalBucket::Ckb
 }
 
 /// The `CF_TX_ACTIONS_BY_BUCKET` key a transaction's `TxActions` row owns, or

@@ -1,0 +1,144 @@
+{
+  "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf3xycnzvf3xycnzvf3xycnzvf3xycnzvgsa4m7y",
+  "capacity": "50000000000",
+  "cellOutputMolecule": {
+    "bytes": "0x6100000010000000180000006100000000743ba40b000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000003131313131313131313131313131313131313131",
+    "fields": [
+      {
+        "end": 4,
+        "label": "total_size",
+        "occupied": false,
+        "start": 0
+      },
+      {
+        "end": 8,
+        "label": "offset_capacity",
+        "occupied": false,
+        "start": 4
+      },
+      {
+        "end": 12,
+        "label": "offset_lock",
+        "occupied": false,
+        "start": 8
+      },
+      {
+        "end": 16,
+        "label": "offset_type",
+        "occupied": false,
+        "start": 12
+      },
+      {
+        "end": 24,
+        "label": "capacity",
+        "occupied": true,
+        "start": 16
+      },
+      {
+        "end": 28,
+        "label": "lock.total_size",
+        "occupied": false,
+        "start": 24
+      },
+      {
+        "end": 32,
+        "label": "lock.offset_code_hash",
+        "occupied": false,
+        "start": 28
+      },
+      {
+        "end": 36,
+        "label": "lock.offset_hash_type",
+        "occupied": false,
+        "start": 32
+      },
+      {
+        "end": 40,
+        "label": "lock.offset_args",
+        "occupied": false,
+        "start": 36
+      },
+      {
+        "end": 72,
+        "label": "lock.code_hash",
+        "occupied": true,
+        "start": 40
+      },
+      {
+        "end": 73,
+        "label": "lock.hash_type",
+        "occupied": true,
+        "start": 72
+      },
+      {
+        "end": 77,
+        "label": "lock.args_length",
+        "occupied": false,
+        "start": 73
+      },
+      {
+        "end": 97,
+        "label": "lock.args",
+        "occupied": true,
+        "start": 77
+      }
+    ],
+    "lockScriptHash": "0x95add7c28976054c39c8a2a95fe6e8a8053a9898a2417723daed5da0000bf92c",
+    "typeScriptHash": null
+  },
+  "codeCellOf": null,
+  "commonKnowledgeSize": "6100000000",
+  "commonKnowledgeSizeBreakdown": {
+    "capacityFieldBytes": 8,
+    "dataBytes": 0,
+    "lockScriptBytes": 53,
+    "totalBytes": 61,
+    "typeScriptBytes": 0
+  },
+  "consumedAtBlock": 4,
+  "consumedByTx": "0xee4bca16ac5aa95734409c7a6a87bed9190a9fac4ec535284c435f890e377646",
+  "consumingInputIndex": 0,
+  "createdAtBlock": 1,
+  "createdEpoch": {
+    "index": 1,
+    "length": 1800,
+    "number": 0
+  },
+  "createdTimestamp": "2026-09-22T01:10:00+00:00",
+  "currentSpendRequirements": [
+    {
+      "candidateCells": [],
+      "hashType": "type",
+      "historicalCells": [],
+      "kind": "lock",
+      "referenceHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "resolution": "not_found",
+      "versionHashes": []
+    }
+  ],
+  "data": "0x",
+  "dataAnalysis": {},
+  "dataHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "dataSize": 0,
+  "depGroupItems": null,
+  "isDepGroup": false,
+  "lifetimeMs": 1800000,
+  "liveAgeAtBlock": null,
+  "liveAgeMs": null,
+  "lock": {
+    "args": "0x3131313131313131313131313131313131313131",
+    "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hashType": "type"
+  },
+  "lockScriptHash": "0x95add7c28976054c39c8a2a95fe6e8a8053a9898a2417723daed5da0000bf92c",
+  "outputIndex": 0,
+  "protocolScript": {
+    "lock": null,
+    "type": null
+  },
+  "spentTimestamp": "2026-09-22T01:40:00+00:00",
+  "status": "dead",
+  "txHash": "0x2518f6535cd50d5f3c668f8d1f5a247b91c3cb01c28b612795cc5a9fad2b9188",
+  "type": null,
+  "typeScriptHash": null
+}

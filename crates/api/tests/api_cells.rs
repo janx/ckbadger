@@ -701,7 +701,8 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     let consumed_by_tx = vec![0xcd; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_consumed_cell_with_consumer(
+    // Consumed by `consumed_by_tx`, indexed at (456, 0) below.
+    batch.put_consumed_cell(
         &tx_hash,
         output_index,
         &LiveCellInfo {
@@ -718,7 +719,7 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         },
         123,
         456,
-        Some(&consumed_by_tx),
+        0,
     );
     // graph route requires creating tx location to exist
     batch.put_tx_hash_map(&tx_hash, 123, 0);
@@ -1423,9 +1424,9 @@ async fn test_get_address_resolves_lock_script_with_zero_live_cells() {
             txs_count: 3,
             cellbase_txs_count: 0,
             first_seen_block: 10,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 90,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -1502,9 +1503,9 @@ async fn test_get_address_keeps_exact_hash_type_for_live_address() {
             txs_count: 1,
             cellbase_txs_count: 0,
             first_seen_block: 77,
-            first_seen_tx: vec![0x51; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 77,
-            last_activity_tx: vec![0x51; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -1602,11 +1603,10 @@ async fn get_cell_json(tx_hash: &[u8], cell: LiveCellInfo) -> (StatusCode, serde
 async fn cell_detail_rejects_double_live_and_consumed_markers() {
     let store = test_store();
     let tx = vec![0xd4; 32];
-    let consumer = vec![0xd5; 32];
     let cell = cell_with(1, Some(1));
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(&tx, 0, &cell, 123);
-    batch.put_consumed_cell_with_consumer(&tx, 0, &cell, 123, 456, Some(&consumer));
+    batch.put_consumed_cell(&tx, 0, &cell, 123, 456, 0);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
@@ -1626,19 +1626,24 @@ async fn cell_detail_missing_outpoint_is_not_found() {
 }
 
 #[tokio::test]
-async fn cell_detail_rejects_missing_canonical_consumer() {
+async fn cell_detail_rejects_a_consumer_position_without_a_transaction() {
     let store = test_store();
     let tx = vec![0xd6; 32];
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_consumed_cell_with_consumer(&tx, 0, &cell_with(1, Some(1)), 123, 456, None);
+    // The consumed marker points at (456, 3); no transaction is indexed there.
+    batch.put_consumed_cell(&tx, 0, &cell_with(1, Some(1)), 123, 456, 3);
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
-    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(body["message"]
-        .as_str()
-        .unwrap()
-        .contains("consumed marker missing consumer"));
+    assert!(
+        body["message"].as_str().unwrap().contains(&format!(
+            "consumed_cells row of item=0x{0} outpoint=0x{0}:0 points at block=456, tx_idx=3, \
+                 which has no tx_index row",
+            hex::encode(&tx)
+        )),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -1647,14 +1652,8 @@ async fn cell_detail_rejects_same_block_consumer_before_creation() {
     let tx = vec![0xd7; 32];
     let consumer = vec![0xd8; 32];
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_consumed_cell_with_consumer(
-        &tx,
-        0,
-        &cell_with(1, Some(1)),
-        123,
-        123,
-        Some(&consumer),
-    );
+    // Consumed by `consumer` at (123, 0), before the creating tx at (123, 1).
+    batch.put_consumed_cell(&tx, 0, &cell_with(1, Some(1)), 123, 123, 0);
     for (hash, index) in [(&consumer, 0), (&tx, 1)] {
         batch.put_tx_hash_map(hash, 123, index);
         batch.put_tx_index(
@@ -1822,9 +1821,9 @@ fn seed_burn_lock(store: &Arc<CkbadgerStore>) -> Vec<u8> {
             txs_count: 9,
             cellbase_txs_count: 0,
             first_seen_block: 1,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 5,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -1966,9 +1965,9 @@ async fn test_get_address_lock_script_info_reports_deprecated_version() {
             txs_count: 1,
             cellbase_txs_count: 0,
             first_seen_block: 10,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 20,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -2003,9 +2002,9 @@ fn seed_pool_address_balance(store: &Arc<CkbadgerStore>, lock_hash: &[u8], txs_c
             txs_count,
             cellbase_txs_count: 0,
             first_seen_block: 1,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 10,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();
@@ -2241,7 +2240,6 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
         11,
         &ckbadger_store::CachedBlockHeader {
             hash: vec![0xbc; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_011,
             epoch_number: 0,
             epoch_index: 0,
@@ -2260,7 +2258,6 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
         &lock_hash[..20],
         11,
         0,
-        &named_tx,
         &ckbadger_store::types::AddrTxValue::new(
             0,
             false,
@@ -2308,11 +2305,11 @@ async fn test_prefix_transactions_endpoint_lists_named_participations() {
     let prefix = [0x99u8; 20];
     let mut batch = StoreBatch::new(store.as_ref());
     for (block, tx_byte) in [(10i64, 0xa1u8), (11, 0xa2)] {
+        seed_tx_at(&mut batch, &[tx_byte; 32], block, 0);
         batch.put_addr_tx_by_prefix(
             &prefix,
             block,
             0,
-            &[tx_byte; 32],
             &ckbadger_store::types::AddrTxValue::new(
                 0,
                 false,
@@ -2326,7 +2323,6 @@ async fn test_prefix_transactions_endpoint_lists_named_participations() {
         &[0x11u8; 20],
         12,
         0,
-        &[0xa3; 32],
         &ckbadger_store::types::AddrTxValue::new(0, false, false, 0),
     );
     batch.commit().unwrap();
@@ -2761,4 +2757,31 @@ async fn test_xudt_cell_without_an_amount_names_its_token_and_the_reason() {
             "noAmountReason": "xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)",
         })
     );
+}
+
+/// Review P1-2 / 27: the address transactions page reads its positions, then
+/// the page's `tx_index` entries and block headers with one multi_get each —
+/// nothing per row.
+#[tokio::test]
+async fn address_transactions_page_reads_entries_and_headers_once_per_page() {
+    let store = test_store();
+    let lock_hash = [0x43u8; 32];
+    for block in 40..52i64 {
+        seed_committed_activity(&store, &lock_hash, &[block as u8; 32], block, 0, 100, 0);
+    }
+    let app = create_router(test_config(store.clone())).await;
+    store.reset_read_call_counters();
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/addresses/0x{}/transactions?limit=5",
+            hex::encode(lock_hash)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 5);
+    assert_eq!(store.point_reads(ckbadger_store::CF_TX_INDEX), 0);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_TX_INDEX), 1);
+    assert_eq!(store.multi_gets(ckbadger_store::CF_BLOCK_HEADERS), 1);
 }

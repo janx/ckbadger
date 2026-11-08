@@ -18,7 +18,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_mnft(), &key)? {
+        match self.get_cf(self.cf_object_outpoints(), &key)? {
             Some(value) if value.is_empty() => anyhow::bail!(
                 "empty dotbit account id for outpoint: tx_hash=0x{}, output_index={}",
                 bytes_to_hex(tx_hash),
@@ -31,7 +31,7 @@ impl CkbadgerStore {
 
     /// Whether this outpoint carries the `.bit` AccountCell type script but
     /// was never materialized as an account (see
-    /// `keys::stats_prefix::DOTBIT_UNINDEXED_OUTPOINT`). The marker value is
+    /// `keys::object_outpoint_kind::DOTBIT_UNINDEXED`). The marker value is
     /// empty; any other value is corruption.
     pub fn is_dotbit_unindexed_outpoint(
         &self,
@@ -39,7 +39,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<bool> {
         let key = keys::encode_dotbit_unindexed_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_mnft(), &key)? {
+        match self.get_cf(self.cf_object_outpoints(), &key)? {
             Some(value) if !value.is_empty() => anyhow::bail!(
                 "unindexed .bit outpoint marker carries a value: tx_hash=0x{}, output_index={}, value_len={}",
                 bytes_to_hex(tx_hash),
@@ -55,7 +55,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<Vec<DotbitOutpointLookup>> {
-        let cf = self.cf_stats_mnft();
+        let cf = self.cf_object_outpoints();
         let keys: Vec<[u8; keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_dotbit_account_outpoint_key(tx_hash, *idx))
@@ -94,7 +94,8 @@ impl CkbadgerStore {
 
     /// Resolve live dotbit account outpoints by account IDs.
     ///
-    /// Scans dotbit outpoint index in `stats` and validates liveness via `live_cells`.
+    /// Reads the `.bit` kind of `object_outpoint_by_id` and validates liveness
+    /// via `live_cells`.
     /// Returns account_id -> (tx_hash, output_index) for accounts that currently have
     /// a live outpoint.
     ///
@@ -114,12 +115,12 @@ impl CkbadgerStore {
 
         for account_id in account_ids {
             let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
-            let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
+            let iter = self.prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix);
 
             for item in iter {
                 let (key, _) = item.map_err(|e| {
                     anyhow::anyhow!(
-                        "failed to iterate stats_object in get_live_dotbit_outpoints_by_account_ids: account_id=0x{}, error={}",
+                        "failed to iterate object_outpoint_by_id in get_live_dotbit_outpoints_by_account_ids: account_id=0x{}, error={}",
                         bytes_to_hex(account_id),
                         e
                     )
@@ -178,13 +179,13 @@ impl CkbadgerStore {
         account_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_dotbit_account_outpoints_by_account_id: account_id=0x{}, error={}",
+                    "failed to iterate object_outpoint_by_id in list_dotbit_account_outpoints_by_account_id: account_id=0x{}, error={}",
                     bytes_to_hex(account_id),
                     e
                 )
@@ -269,12 +270,61 @@ mod tests {
             .is_empty());
     }
 
+    /// Ruling 4 (C-4b follow-up): the unindexed AccountCell marker is an
+    /// `object_outpoints` row of its own kind, beside the indexed accounts'
+    /// kind; `stats_mnft` holds statistics only.
+    #[test]
+    fn unindexed_marker_is_an_object_outpoint_row_of_its_own_kind() {
+        let (_dir, store) = test_store();
+        let tx = [0xC5u8; 32];
+        let account_id = [0x11u8; 20];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dotbit_unindexed_outpoint(&tx, 0);
+        batch.put_dotbit_account_outpoint(&tx, 1, &account_id);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store
+                .iterator_cf(store.cf_stats_mnft(), rocksdb::IteratorMode::Start)
+                .count(),
+            0,
+            "stats_mnft holds no outpoint marker"
+        );
+        let rows: Vec<(Vec<u8>, Vec<u8>)> = store
+            .iterator_cf(store.cf_object_outpoints(), rocksdb::IteratorMode::Start)
+            .map(|row| {
+                let (key, value) = row.unwrap();
+                (key.to_vec(), value.to_vec())
+            })
+            .collect();
+        let mut indexed = vec![keys::object_outpoint_kind::DOTBIT_ACCOUNT];
+        indexed.extend_from_slice(&keys::encode_outpoint(&tx, 1));
+        let mut unindexed = vec![keys::object_outpoint_kind::DOTBIT_UNINDEXED];
+        unindexed.extend_from_slice(&keys::encode_outpoint(&tx, 0));
+        assert_eq!(
+            rows,
+            vec![(indexed, account_id.to_vec()), (unindexed, Vec::new())]
+        );
+        assert!(store.is_dotbit_unindexed_outpoint(&tx, 0).unwrap());
+        assert!(!store.is_dotbit_unindexed_outpoint(&tx, 1).unwrap());
+        assert_eq!(
+            store.get_dotbit_account_id_by_outpoint(&tx, 0).unwrap(),
+            None
+        );
+        assert_eq!(
+            store.get_dotbit_account_id_by_outpoint(&tx, 1).unwrap(),
+            Some(account_id.to_vec())
+        );
+    }
+
     #[test]
     fn test_dotbit_unindexed_outpoint_marker_with_a_value_is_corruption() {
         let (_dir, store) = test_store();
         let tx = [0xC4u8; 32];
         let key = keys::encode_dotbit_unindexed_outpoint_key(&tx, 2);
-        store.put_cf(store.cf_stats_mnft(), &key, b"x").unwrap();
+        store
+            .put_cf(store.cf_object_outpoints(), &key, b"x")
+            .unwrap();
 
         let err = store.is_dotbit_unindexed_outpoint(&tx, 2).unwrap_err();
         assert!(
@@ -289,7 +339,9 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_b = [0xC2u8; 32];
         let key = keys::encode_dotbit_account_outpoint_key(&tx_b, 5);
-        store.put_cf(store.cf_stats_mnft(), &key, b"").unwrap();
+        store
+            .put_cf(store.cf_object_outpoints(), &key, b"")
+            .unwrap();
 
         let dotbit_outpoints: Vec<(&[u8], i16)> = vec![(&tx_b, 5)];
         let err = store

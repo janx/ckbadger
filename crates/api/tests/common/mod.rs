@@ -67,10 +67,7 @@ pub async fn mount_consensus_rpc(server: &MockServer, result: serde_json::Value)
 }
 
 pub fn test_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 /// Seed a synced-chain genesis economic baseline into a domain store.
@@ -137,7 +134,6 @@ pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
                 number,
                 &CachedBlockHeader {
                     hash: vec![(number % 251) as u8; 32],
-                    parent_hash: vec![0u8; 32],
                     timestamp,
                     epoch_number: 1,
                     epoch_index: 0,
@@ -229,10 +225,7 @@ pub fn seed_sparse_daily_chart_history(store: &Arc<CkbadgerStore>) {
 }
 
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 pub fn split_test_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
@@ -1122,13 +1115,122 @@ pub async fn refresh_pool_mirror_once(
     refresher.refresh_once().await
 }
 
+/// Index `tx_hash` at its canonical position `(block, tx_idx)` (`tx_index` +
+/// `tx_hash_map`, a minimal non-cellbase entry): what a row that points at
+/// that position (a consumed cell's consumer, an activity) resolves to.
+pub fn seed_tx_at(batch: &mut StoreBatch, tx_hash: &[u8], block: i64, tx_idx: i32) {
+    batch.put_tx_hash_map(tx_hash, block, tx_idx);
+    batch.put_tx_index(
+        block,
+        tx_idx,
+        &TxIndexEntry {
+            tx_hash: tx_hash.try_into().expect("32-byte tx hash"),
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+}
+
+/// A minimal header of `block` with `hash` and raw / chain time `timestamp`:
+/// what an `activities` row at that block completes its block hash from.
+pub fn put_test_block_header(batch: &mut StoreBatch, block: i64, hash: &[u8], timestamp: i64) {
+    batch.put_block_header(
+        block,
+        &CachedBlockHeader {
+            hash: hash.to_vec(),
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: timestamp,
+        },
+    );
+}
+
+/// [`put_tx_actions_indexed`] for a store that may already hold the block's
+/// header (a fixture's tip header, say): the header is written only when the
+/// store has none for that block.
+pub fn put_tx_actions_indexed_keeping_headers(
+    store: &CkbadgerStore,
+    batch: &mut StoreBatch,
+    actions: &TxActions,
+) {
+    batch.put_tx_actions(actions);
+    index_tx_of_actions(batch, actions);
+    if store
+        .get_block_header(actions.block_number)
+        .unwrap()
+        .is_none()
+    {
+        put_test_block_header(
+            batch,
+            actions.block_number,
+            &actions.block_hash,
+            actions.timestamp,
+        );
+    }
+}
+
+/// The `tx_index` / `tx_hash_map` entry an `activities` row of `actions`
+/// resolves to.
+pub fn index_tx_of_actions(batch: &mut StoreBatch, actions: &TxActions) {
+    batch.put_tx_hash_map(&actions.tx_hash, actions.block_number, actions.tx_index);
+    batch.put_tx_index(
+        actions.block_number,
+        actions.tx_index,
+        &TxIndexEntry {
+            tx_hash: actions
+                .tx_hash
+                .as_slice()
+                .try_into()
+                .expect("32-byte tx hash"),
+            is_cellbase: actions.is_cellbase,
+            timestamp: actions.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+}
+
+/// `actions` as the indexer leaves it: its `activities` row plus the
+/// `tx_index` / `tx_hash_map` entry and the block header its position
+/// resolves to (an `activities` row stores neither the hash, the timestamp nor
+/// the block hash). For fixtures that seed no transaction or header of their
+/// own at that position.
+pub fn put_tx_actions_indexed(batch: &mut StoreBatch, actions: &TxActions) {
+    batch.put_tx_actions(actions);
+    index_tx_of_actions(batch, actions);
+    put_test_block_header(
+        batch,
+        actions.block_number,
+        &actions.block_hash,
+        actions.timestamp,
+    );
+}
+
 pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(
         321,
         &CachedBlockHeader {
             hash: vec![0x44; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123_456,
             epoch_number: 1,
             epoch_index: 0,
@@ -1233,7 +1335,6 @@ pub fn seed_committed_activity(
         block_number,
         &CachedBlockHeader {
             hash: block_hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -1263,7 +1364,6 @@ pub fn seed_committed_activity(
         lock_hash,
         block_number,
         tx_index,
-        tx_hash,
         &AddrTxValue::new(capacity_change, false, true, tags),
     );
     batch.commit().unwrap();
@@ -1289,9 +1389,9 @@ pub fn sync_collection_activity_daily(store: &CkbadgerStore, collection_id: &[u8
     ] {
         for item in store.prefix_iterator_cf(cf, &prefix) {
             let (key, value) = item.unwrap();
-            let (_, block, _, _, _) =
-                ckbadger_store::keys::decode_object_collection_activity_key(&key);
-            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value).unwrap();
+            let (_, block, _) =
+                ckbadger_store::keys::decode_object_collection_activity_key(&key).unwrap();
+            let actions = ckbadger_store::decode_stored_collection_activity(&value).unwrap();
             let header = store
                 .get_block_header(block)
                 .unwrap()
@@ -1300,7 +1400,7 @@ pub fn sync_collection_activity_daily(store: &CkbadgerStore, collection_id: &[u8
                 .add_row(
                     collection_id,
                     ckbadger_store::keys::stats_day_yyyymmdd(header.chain_time_ms).unwrap(),
-                    &entry.actions,
+                    &actions,
                 )
                 .unwrap();
         }
@@ -1325,7 +1425,7 @@ pub fn sync_address_tx_counters(store: &CkbadgerStore, lock_hash: &[u8]) {
         if !key.starts_with(lock_hash) {
             break;
         }
-        let (_, block, tx_idx, _) = ckbadger_store::keys::decode_addr_tx_key(&key);
+        let (_, block, tx_idx) = ckbadger_store::keys::decode_addr_tx_key(&key).unwrap();
         txs += 1;
         let entry = store
             .get_tx_index(block, tx_idx)
@@ -1584,9 +1684,7 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
         CrawlCandidate, DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
         StagedProbeOutcome,
     };
-    let dir = tempfile::tempdir().expect("tmp");
-    let s = std::sync::Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir); // keep the temp dir alive for the store's lifetime (mirrors test_store())
+    let s = std::sync::Arc::new(CkbadgerStore::open_test_network_temp().unwrap());
     let mut node = NodeRecord {
         own_addrs: vec!["/ip4/1.2.3.4/tcp/8115".into()],
         client_version: "0.119.0".into(),
@@ -1826,7 +1924,6 @@ fn writer_fixture_header(block_num: i64) -> CachedBlockHeader {
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     CachedBlockHeader {
         hash,
-        parent_hash: vec![0u8; 32],
         timestamp: WRITER_FIXTURE_TS_MS + block_num * 1_000,
         epoch_number: 11,
         epoch_index: (block_num % 1800) as i32,

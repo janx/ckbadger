@@ -21,6 +21,12 @@ pub struct ParsedCell {
 }
 
 impl ParsedCell {
+    /// Whether this output is a code cell, which `cell_by_data_hash` indexes
+    /// (the one rule: [`ckbadger_store::keys::is_code_cell`]).
+    pub fn is_code_cell(&self) -> bool {
+        ckbadger_store::keys::is_code_cell(&self.data)
+    }
+
     /// The `cells` payload of this output: the one conversion from a parsed
     /// output to the persisted cell. The payload keeps the script fields and
     /// derives the script hashes from them, so a code hash that is not 32

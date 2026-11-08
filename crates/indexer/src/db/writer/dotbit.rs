@@ -524,11 +524,12 @@ impl BatchWriter {
             if old_count <= 0 {
                 // Cross-check: read the raw DB value directly (bypassing cache)
                 // to confirm whether the inconsistency is in the cache or DB.
+                // A failed read propagates (finding 13): it names the store
+                // failure instead of a made-up count.
                 let raw_db_count = self
                     .store
-                    .get_identity_owner_count(collection_id, old_lock)
-                    .unwrap_or(-999);
-                bail!(
+                    .get_identity_owner_count(collection_id, old_lock)?;
+                return Err(super::aggregate_underflow(format!(
                     "dotbit identity owner count underflow: \
                      operation={}, account_id=0x{}, block={}, tx=0x{}, \
                      lock_hash=0x{}, owner_count={}, count_from_cache={}, raw_db_count={}, \
@@ -555,10 +556,10 @@ impl BatchWriter {
                     new_owner
                         .map(|h| format!("0x{}", hex::encode(h)))
                         .unwrap_or_else(|| "None".to_string()),
-                );
+                )));
             } else if old_count == 1 {
                 if agg.holders_count <= 0 {
-                    bail!(
+                    return Err(super::aggregate_underflow(format!(
                         "dotbit identity aggregate holders_count underflow: \
                          operation={}, account_id=0x{}, block={}, tx=0x{}, \
                          collection_id=0x{}, holders_count={}",
@@ -568,7 +569,7 @@ impl BatchWriter {
                         hex::encode(ctx.tx_hash),
                         hex::encode(collection_id),
                         agg.holders_count
-                    );
+                    )));
                 }
                 state.delete_identity_owner(collection_id, old_lock, batch);
                 agg.holders_count -= 1;
@@ -848,15 +849,19 @@ impl BatchWriter {
             let cid = &DOTBIT_SENTINEL_COLLECTION;
             let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
-                bail!(
-                    "dotbit identity live_count underflow on consume: account_id=0x{}, \
-                     block={}, tx=0x{}, live_count={}, created_at_block={}",
-                    hex::encode(account_id),
-                    block_number,
-                    hex::encode(tx_hash),
-                    agg.live_count,
-                    entry_snapshot.created_at_block
-                );
+                // The aggregate no longer counts an account its rows say is
+                // live: rebuild-required (Lane B carry-over, like B-7 F2).
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "dotbit identity live_count underflow on consume: account_id=0x{}, \
+                         block={}, tx=0x{}, current={}, delta=-1, created_at_block={}",
+                        hex::encode(account_id),
+                        block_number,
+                        hex::encode(tx_hash),
+                        agg.live_count,
+                        entry_snapshot.created_at_block
+                    )),
+                ));
             }
             agg.live_count -= 1;
             let ctx = OwnerTransitionContext {
@@ -970,19 +975,14 @@ mod tests {
     }
 
     fn test_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-        std::mem::forget(domain_dir);
-        std::mem::forget(append_dir);
+        let domain = Arc::new(CkbadgerStore::open_domain_temp().unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only_temp().unwrap());
         (domain, append)
     }
 
     fn make_header(block_num: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![block_num as u8; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_000_000 + block_num * 1000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1028,6 +1028,169 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         }
+    }
+
+    /// Finding 13: the `.bit` owner-transition underflows are
+    /// rebuild-required like F2, and the diagnostic raw count is the store's
+    /// value (no `-999` stand-in).
+    #[test]
+    fn owner_transition_underflows_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let (collection, old) = (vec![0xc1; 32], vec![0xc2; 32]);
+        let ctx = OwnerTransitionContext {
+            operation: "finding 13",
+            account_id: &[0xc3; 20],
+            block_number: 9,
+            tx_hash: &[0xc4; 32],
+            existing_entry: None,
+        };
+
+        let err = writer
+            .apply_dotbit_identity_owner_transition(
+                &collection,
+                Some(&old),
+                None,
+                &mut IdentityCollectionAggregate::default(),
+                &mut batch,
+                &mut state,
+                &ctx,
+            )
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("dotbit identity owner count underflow"),
+            "{text}"
+        );
+        assert!(text.contains("raw_db_count=0"), "{text}");
+
+        state.put_identity_owner_count(&collection, &old, 1, &mut batch);
+        let err = writer
+            .apply_dotbit_identity_owner_transition(
+                &collection,
+                Some(&old),
+                None,
+                &mut IdentityCollectionAggregate::default(),
+                &mut batch,
+                &mut state,
+                &ctx,
+            )
+            .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        assert!(
+            err.to_string()
+                .contains("dotbit identity aggregate holders_count underflow"),
+            "{err:#}"
+        );
+    }
+
+    /// Finding 13: the diagnostic read of the stored owner count propagates
+    /// its error instead of reporting `raw_db_count=-999`.
+    #[test]
+    fn owner_count_underflow_propagates_the_raw_count_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let (collection, old) = (vec![0xd1; 32], vec![0xd2; 32]);
+        store
+            .put_cf(
+                store.cf_stats_identity(),
+                &ckbadger_store::keys::encode_identity_owner_key(&collection, &old),
+                &[1, 2, 3],
+            )
+            .unwrap();
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        // The batch's cached count is 0; the stored row is corrupt.
+        state.put_identity_owner_count(&collection, &old, 0, &mut batch);
+        let ctx = OwnerTransitionContext {
+            operation: "finding 13",
+            account_id: &[0xd3; 20],
+            block_number: 9,
+            tx_hash: &[0xd4; 32],
+            existing_entry: None,
+        };
+        let err = writer
+            .apply_dotbit_identity_owner_transition(
+                &collection,
+                Some(&old),
+                None,
+                &mut IdentityCollectionAggregate::default(),
+                &mut batch,
+                &mut state,
+                &ctx,
+            )
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("invalid identity owner value length"),
+            "{text}"
+        );
+        assert!(!text.contains("-999"), "{text}");
+    }
+
+    /// Lane B carry-over 4(a): the `.bit` identity aggregate no longer counts
+    /// a live account the rows say is live: rebuild-required, like the spore
+    /// cluster underflows.
+    #[test]
+    fn an_account_live_count_underflow_on_consume_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let account = ParsedDotbitAccountOutput {
+            output_index: 6,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: vec![0x17; 20],
+                account: Some("carol.bit".to_string()),
+                type_script_hash: vec![0x27; 32],
+                next_account_id: None,
+                expired_at: None,
+                registered_at: None,
+                status: None,
+                owner_lock_hash: vec![0x37; 32],
+            },
+        };
+        let mut batch = StoreBatch::new(writer.store());
+        insert_account(&writer, &account, &[0x47; 32], 1, 0, &mut batch).unwrap();
+        batch.commit().unwrap();
+        let mut agg = store
+            .get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.live_count, 1);
+        agg.live_count = 0;
+        let mut seed = StoreBatch::new(&store);
+        seed.put_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = consume_account(
+            &writer,
+            &account.account.account_id,
+            2,
+            &[0x48; 32],
+            &mut batch,
+        )
+        .unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let text = err.to_string();
+        assert!(
+            text.contains("dotbit identity live_count underflow on consume"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&hex::encode(&account.account.account_id)),
+            "{text}"
+        );
+        assert!(text.contains("current=0"), "{text}");
+        assert!(text.contains("delta=-1"), "{text}");
+        assert!(text.contains("block=2"), "{text}");
     }
 
     #[test]
@@ -1852,7 +2015,6 @@ mod tests {
                 &owner,
                 200,
                 1,
-                &reactivate_tx_hash,
                 &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
             );
             batch.put_addr_balance(
@@ -1865,9 +2027,9 @@ mod tests {
                     txs_count: 1,
                     cellbase_txs_count: 0,
                     first_seen_block: 100,
-                    first_seen_tx: initial_tx_hash.clone(),
+                    first_seen_tx_idx: 0,
                     last_activity_block: 200,
-                    last_activity_tx: reactivate_tx_hash.clone(),
+                    last_activity_tx_idx: 0,
                 },
             );
             script_rows(batch, 2, 1, 100_00000000);

@@ -58,12 +58,8 @@ fn hour_of(ts: i64) -> i64 {
 // ---------------------------------------------------------------------------
 
 fn setup_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
-    let domain_dir = tempfile::tempdir().unwrap();
-    let append_dir = tempfile::tempdir().unwrap();
-    let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-    let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-    std::mem::forget(domain_dir);
-    std::mem::forget(append_dir);
+    let domain = Arc::new(CkbadgerStore::open_domain_temp().unwrap());
+    let append = Arc::new(CkbadgerStore::open_append_only_temp().unwrap());
     (domain, append)
 }
 
@@ -72,7 +68,6 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     CachedBlockHeader {
         hash,
-        parent_hash: vec![0u8; 32],
         timestamp,
         epoch_number: 11,
         epoch_index: (block_num % 1800) as i32,

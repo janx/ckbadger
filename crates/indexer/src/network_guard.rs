@@ -90,7 +90,6 @@ mod tests {
     fn header(hash: Vec<u8>) -> CachedBlockHeader {
         CachedBlockHeader {
             hash,
-            parent_hash: vec![0; 32],
             timestamp: 0,
             epoch_number: 0,
             epoch_index: 0,

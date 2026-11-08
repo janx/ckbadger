@@ -1505,7 +1505,7 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &mint_tx, 0),
             &[0],
         )
@@ -1513,12 +1513,12 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
     batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
             &[1],
         )
         .unwrap();
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -1535,7 +1535,8 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
         },
         300,
         400,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 300, 0);
     batch.put_tx_index(
@@ -1624,7 +1625,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &mint_tx, 0),
             &[0],
         )
@@ -1632,12 +1633,12 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
             &[1],
         )
         .unwrap();
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -1654,7 +1655,8 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -1691,7 +1693,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     seed_did_live_cell(&mut batch, &did_id, &transfer_tx, 200);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
             &[AssetAction::Transfer.compact()],
         )
@@ -2101,7 +2103,7 @@ async fn test_assets_bit_cell_item_activities() {
     batch.put_spore_outpoint(&mint_tx, 0, &identity_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&identity_id, &mint_tx, 0),
             &[0],
         )
@@ -2109,12 +2111,12 @@ async fn test_assets_bit_cell_item_activities() {
     batch.put_spore_outpoint(&transfer_tx, 0, &identity_id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&identity_id, &transfer_tx, 0),
             &[1],
         )
         .unwrap();
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -2131,7 +2133,8 @@ async fn test_assets_bit_cell_item_activities() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -2755,7 +2758,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         AssetAction::Transfer,
     );
-    core_batch.put_consumed_cell_with_consumer(
+    core_batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -2772,9 +2775,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
-    core_batch.put_consumed_cell_with_consumer(
+    core_batch.put_consumed_cell(
         &transfer_tx,
         0,
         &LiveCellInfo {
@@ -2791,7 +2795,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         },
         200,
         300,
-        Some(&burn_tx),
+        // Consumed by burn_tx, indexed at tx index 0 of that block.
+        0,
     );
     core_batch.put_tx_hash_map(&mint_tx, 100, 0);
     core_batch.put_tx_index(
@@ -2845,7 +2850,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0xB1; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_100,
             epoch_number: 0,
             epoch_index: 0,
@@ -2864,7 +2868,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         200,
         &CachedBlockHeader {
             hash: vec![0xB2; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -2883,7 +2886,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         &CachedBlockHeader {
             hash: vec![0xB3; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_300,
             epoch_number: 0,
             epoch_index: 0,
@@ -3123,7 +3125,7 @@ async fn test_assets_nft_item_activities_mnft() {
     );
     batch.put_mnft_token_outpoint(&mint_tx, 0, &token_id);
     batch.put_mnft_token_outpoint(&transfer_tx, 0, &token_id);
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -3140,7 +3142,8 @@ async fn test_assets_nft_item_activities_mnft() {
         },
         100,
         300,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -3289,7 +3292,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_1, 0, AssetAction::Transfer);
     batch.put_dotbit_account_outpoint(&transfer_tx_2, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_2, 0, AssetAction::Transfer);
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -3306,9 +3309,10 @@ async fn test_assets_nft_item_activities_dotbit() {
         },
         300,
         320,
-        Some(&transfer_tx_1),
+        // Consumed by transfer_tx_1, indexed at tx index 0 of that block.
+        0,
     );
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &transfer_tx_1,
         0,
         &LiveCellInfo {
@@ -3325,7 +3329,8 @@ async fn test_assets_nft_item_activities_dotbit() {
         },
         320,
         340,
-        Some(&transfer_tx_2),
+        // Consumed by transfer_tx_2, indexed at tx index 0 of that block.
+        0,
     );
     // Every canonical transaction has its `TxActions`; a `.bit` lifecycle
     // reads them for the account's own `dotbit` actions.
@@ -3343,6 +3348,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             0,
             0,
         ));
+        put_test_block_header(&mut batch, block, &[0xba; 32], 1_700_000_000 + block);
     }
     batch.put_tx_hash_map(&mint_tx, 300, 0);
     batch.put_tx_index(
@@ -3496,7 +3502,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
     batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0, AssetAction::Mint);
     batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0, AssetAction::Transfer);
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -3513,9 +3519,10 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         },
         100,
         200,
-        Some(&transfer_tx),
+        // Consumed by transfer_tx, indexed at tx index 0 of that block.
+        0,
     );
-    batch.put_consumed_cell_with_consumer(
+    batch.put_consumed_cell(
         &transfer_tx,
         0,
         &LiveCellInfo {
@@ -3532,7 +3539,8 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         },
         200,
         260,
-        Some(&burn_tx),
+        // Consumed by burn_tx, indexed at tx index 0 of that block.
+        0,
     );
     // Every canonical transaction has its `TxActions`; a `.bit` lifecycle
     // reads them for the account's own `dotbit` actions.
@@ -3546,6 +3554,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
             0,
             0,
         ));
+        put_test_block_header(&mut batch, block, &[0xba; 32], 1_700_000_000 + block);
     }
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
@@ -4195,7 +4204,6 @@ fn seed_dotcell_name(
         20_518_306,
         &CachedBlockHeader {
             hash: vec![0xB0; 32],
-            parent_hash: vec![0xB1; 32],
             timestamp: tip_timestamp_ms,
             epoch_number: 10,
             epoch_index: 0,
@@ -4960,7 +4968,6 @@ async fn dotcell_collection_activities_are_served_from_the_identity_cf() {
             700,
             &CachedBlockHeader {
                 hash: block_hash.clone(),
-                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_700,
                 epoch_number: 0,
                 epoch_index: 0,
@@ -5403,7 +5410,7 @@ async fn redesign_identity_item_uses_persisted_update_action() {
     batch.put_spore_outpoint(&tx, 0, &id);
     batch
         .put_raw_cf_by_name(
-            "stats_spore",
+            ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID,
             &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &tx, 0),
             &[5],
         )
@@ -5539,8 +5546,9 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     batch.commit().unwrap();
     // Rollback deletes a rolled-back block's collection rows
     // (REORG_HANDLING.md), so the reverted row (3) and the competing-branch
-    // row (4) are rollback bugs: every surface that counts or lists the
-    // collection's rows names the first one instead of skipping it.
+    // row (4) — rows at positions with no transaction — are rollback bugs:
+    // every surface that lists the collection's rows names the first one
+    // instead of skipping it.
     let id_hex = format!("0x{}", hex::encode(id));
     let app = create_router(test_config(store.clone())).await;
     // The count no longer walks the rows (J5: it is the derived row count), so
@@ -5553,25 +5561,17 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
         let message = json["message"].as_str().unwrap();
         assert!(
-            message.contains("collection activity row is not canonical")
-                && message.contains(&format!("collection={id_hex}"))
-                && message.contains("block=4")
-                && message.contains(&format!("tx=0x{}", hex::encode([0x22; 32])))
-                && message.contains("canonical location of the tx: block=2"),
+            message.contains(
+                "object_collection_activities points at block=4, tx_idx=0, which has no tx_index row"
+            ),
             "{path}: {json}"
         );
     }
-    for (block, tx, block_hash) in [(3, [0x23; 32], [0xbc; 32]), (4, [0x22; 32], [0xbd; 32])] {
+    for block in [3, 4] {
         store
             .delete_cf(
                 store.cf_object_collection_activities(),
-                &ckbadger_store::keys::encode_object_collection_activity_key(
-                    &id,
-                    block,
-                    0,
-                    &block_hash,
-                    &tx,
-                ),
+                &ckbadger_store::keys::encode_object_collection_activity_key(&id, block, 0),
             )
             .unwrap();
     }

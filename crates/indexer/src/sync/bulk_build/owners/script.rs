@@ -250,8 +250,14 @@ impl ScriptOwner {
                     .expect("sorted code hash must exist in script owner")
                     .clone();
 
-                // Preserve label fields from existing store data (written by label import)
-                if let Ok(Some(existing)) = domain_store.get_script_info(code_hash) {
+                // Preserve label fields from existing store data (written by
+                // label import); a row that cannot be read fails the finalize
+                // (the error names the code hash), and a corrupt one is
+                // rebuild-required (finding 12). Finalize stage, once per
+                // script: no per-row bulk work.
+                if let Some(existing) =
+                    crate::db::writer::read_script_info_row(domain_store, code_hash)?
+                {
                     if info.name.is_none() {
                         info.name = existing.name;
                     }
@@ -505,7 +511,7 @@ impl BulkReducer for ScriptOwner {
                     tx.block_number
                 );
             }
-            if native_type_id && cell.data.starts_with(b"\x7fELF") {
+            if native_type_id && ckbadger_store::keys::is_code_cell(&cell.data) {
                 let reference = cell.type_script_hash_id.ok_or_else(|| {
                     anyhow!(
                         "TYPE_ID ELF output lacks type hash at block {}",
@@ -1567,6 +1573,45 @@ mod tests {
         assert_eq!(type_info.type_owned_capacity_sum, 0);
         assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
         assert_eq!(type_info.type_owned_knowledge_sum, 0);
+    }
+
+    /// Ruling 6: finalize's read of the label fields propagates its error —
+    /// a corrupt `script_info` row fails the bulk finalize naming the code
+    /// hash instead of being skipped.
+    #[test]
+    fn script_owner_materialize_final_fails_on_a_corrupt_script_info_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+        let code_hash = vec![0x6d; 32];
+        domain_store
+            .put_cf(domain_store.cf_script_info(), &code_hash, b"garbage")
+            .unwrap();
+        let mut owner = ScriptOwner::default();
+        owner.infos.insert(
+            code_hash.clone(),
+            ScriptInfo {
+                code_hash: code_hash.clone(),
+                hash_type: 1,
+                cells_count: 1,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let err = owner.materialize_final(&mut materializer).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains(&hex::encode(&code_hash)), "{text}");
+        assert!(text.contains("script info"), "{text}");
+        assert!(
+            crate::lifecycle::is_rebuild_required(&err),
+            "a corrupt script_info row is rebuild-required (finding 12): {text}"
+        );
     }
 
     #[test]

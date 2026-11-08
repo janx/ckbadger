@@ -15,11 +15,10 @@ use std::time::Duration;
 use super::assets::{
     build_nft_item_activities_response, decode_activity_cursor, decode_item_id,
     decode_object_item_cursor, get_live_bit_cell_outpoints_by_identity_ids,
-    list_canonical_nft_collection_activities_page, list_identity_items_inner,
-    normalize_identity_activity_action_filter, normalize_nft_items_search,
-    normalize_nft_items_status, CollectionActivitiesParams, CollectionActivityResponse,
-    CollectionHolderResponse, CollectionItemResponse, MnftItemActivitiesParams,
-    MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
+    list_identity_items_inner, normalize_identity_activity_action_filter,
+    normalize_nft_items_search, normalize_nft_items_status, CollectionActivitiesParams,
+    CollectionActivityResponse, CollectionHolderResponse, CollectionItemResponse,
+    MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{
@@ -326,9 +325,8 @@ async fn list_identity_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
 
-    // Fetch canonical rows only; skip orphaned history entries.
-    let results = list_canonical_nft_collection_activities_page(
-        state.store.as_ref(),
+    // Rows keyed by position are canonical by construction.
+    let (results, headers, _) = super::assets::nft_collection_activity_page(
         state.store.as_ref(),
         &collection_id_bytes,
         (limit as usize) + 1,
@@ -339,8 +337,8 @@ async fn list_identity_collection_activities(
 
     let has_more = results.len() as i64 > limit;
     let page = super::assets::collection_activity_responses(
-        state.store.as_ref(),
         results.into_iter().take(limit as usize).collect(),
+        &headers,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

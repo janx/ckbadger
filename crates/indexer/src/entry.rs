@@ -108,6 +108,8 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
     .await
     .map_err(|e| anyhow::anyhow!("startup label import task panicked: {}", e))??;
 
+    // A store error already stopped the import above (`??`); what remains
+    // are metadata entries skipped as malformed (finding 14).
     if summary.errors.is_empty() {
         info!(
             "Startup label import completed: {} UDT, {} scripts, 0 errors",
@@ -115,10 +117,10 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
         );
     } else {
         for err in &summary.errors {
-            warn!("Label import error: {}", err);
+            warn!("Label import skipped a malformed metadata entry: {}", err);
         }
         warn!(
-            "Startup label import completed with {} errors: {} UDT, {} scripts",
+            "Startup label import completed with {} malformed metadata entries skipped: {} UDT, {} scripts",
             summary.errors.len(),
             summary.udt_labels_imported,
             summary.script_labels_imported
@@ -1898,7 +1900,6 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: day1_ts,
             epoch_number: 0,
             epoch_index: 0,
@@ -1914,7 +1915,6 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: day2_ts,
             epoch_number: 0,
             epoch_index: 0,
@@ -1959,7 +1959,7 @@ mod tests {
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
         batch.put_cell(&[0x10; 32], 0, &live_cell, 1);
-        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 1, 2);
+        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 1, 2, 1);
         batch.commit().unwrap();
 
         store
@@ -2080,7 +2080,6 @@ mod tests {
             CkbadgerStore::open_domain_with_runtime(domain_path, startup_runtime_config()).unwrap();
         let header = CachedBlockHeader {
             hash: vec![0x7f; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_704_067_200_000,
             epoch_number: 0,
             epoch_index: 0,

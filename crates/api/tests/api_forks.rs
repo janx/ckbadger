@@ -46,7 +46,7 @@ fn event(store: &CkbadgerStore, id: i64, kind: ReorgEventKind) {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[id as u8; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -60,7 +60,7 @@ async fn recent_fork_reports_persisted_superseding_tip_hash() {
     event(&store, id, ReorgEventKind::Automatic);
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[id as u8; 16]).unwrap();
     let bytes = store
-        .get_cf(store.cf_sync_meta(), key.as_bytes())
+        .get_cf(store.cf_reorg_events(), key.as_bytes())
         .unwrap()
         .unwrap();
     let mut record: ReorgEvent = bincode::deserialize(&bytes).unwrap();
@@ -68,7 +68,7 @@ async fn recent_fork_reports_persisted_superseding_tip_hash() {
     record.reconcile_interrupted = true;
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -200,7 +200,7 @@ async fn deep_detection_reports_recorded_tips_without_claiming_a_rollback() {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -319,7 +319,7 @@ async fn detail_resolves_two_old_blocks_from_one_canonical_uncle_pass() {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -459,7 +459,7 @@ async fn detail_proves_uncle_inclusion_competing_gap_and_later_tx_commit() {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -563,7 +563,7 @@ async fn detail_keeps_historical_drop_but_marks_reentered_block_canonical_now() 
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -656,7 +656,7 @@ async fn detail_fails_if_persisted_adopted_tip_is_not_retained_by_the_node() {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -772,7 +772,7 @@ async fn detail_reports_epoch_closed_without_uncle_or_tx_commit() {
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(&record).unwrap(),
         )
@@ -802,7 +802,7 @@ fn put_event(store: &CkbadgerStore, id: i64, uuid: u8, record: &ReorgEvent) -> S
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[uuid; 16]).unwrap();
     store
         .put_cf(
-            store.cf_sync_meta(),
+            store.cf_reorg_events(),
             key.as_bytes(),
             &bincode::serialize(record).unwrap(),
         )
@@ -1084,7 +1084,8 @@ async fn fork_rows_and_detail_blocks_name_listed_mining_pools_only() {
         ),
     )
     .unwrap();
-    let (app, _, orphan) = d7_switch_fixture(Some(dir.keep())).await;
+    // `dir` lives to the end of the test, past the router build that reads it.
+    let (app, _, orphan) = d7_switch_fixture(Some(dir.path().to_path_buf())).await;
 
     let (status, json) = get_json(&app, &d7(10, orphan.hash().as_slice())).await;
     assert_eq!(status, StatusCode::OK, "{json}");

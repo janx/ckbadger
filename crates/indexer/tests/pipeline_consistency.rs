@@ -50,11 +50,8 @@ fn make_cell(capacity: i64, data_size: i32, lock_seed: u8) -> ParsedCell {
 }
 
 fn setup_store() -> (Arc<CkbadgerStore>, BatchWriter) {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
     let writer = BatchWriter::new(store.clone(), store.clone());
-    // Leak the tempdir so it doesn't get cleaned up while store is open
-    std::mem::forget(dir);
     (store, writer)
 }
 
@@ -517,7 +514,7 @@ fn make_addr_delta(
     total_delta: i32,
     tx_delta: i64,
     block_num: i64,
-    tx_hash: &[u8],
+    tx_idx: i32,
     used_delta: i128,
 ) -> ckbadger_indexer::sync::types::AddressBalanceDelta {
     ckbadger_indexer::sync::types::AddressBalanceDelta {
@@ -528,9 +525,9 @@ fn make_addr_delta(
         cellbase_tx_delta: 0,
         used_delta,
         first_seen_block: block_num,
-        first_seen_tx: tx_hash.to_vec(),
+        first_seen_tx_idx: tx_idx,
         last_activity_block: block_num,
-        last_activity_tx: tx_hash.to_vec(),
+        last_activity_tx_idx: tx_idx,
     }
 }
 
@@ -551,11 +548,10 @@ fn apply_addr_changes(
 fn test_address_balance_update_receive() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xAAu8; 32];
-    let tx_hash = vec![0x01u8; 32];
 
     let changes: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash, 0),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, 1, 0),
     )]
     .into_iter()
     .collect();
@@ -574,12 +570,10 @@ fn test_address_balance_update_receive() {
 fn test_address_balance_update_send() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xAAu8; 32];
-    let tx_hash1 = vec![0x01u8; 32];
-    let tx_hash2 = vec![0x02u8; 32];
 
     let receive: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash1, 0),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, 1, 0),
     )]
     .into_iter()
     .collect();
@@ -587,7 +581,7 @@ fn test_address_balance_update_send() {
 
     let send: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        make_addr_delta(-30_00000000, 0, 1, 1, 2000, &tx_hash2, 0),
+        make_addr_delta(-30_00000000, 0, 1, 1, 2000, 2, 0),
     )]
     .into_iter()
     .collect();
@@ -604,13 +598,11 @@ fn test_address_balance_update_send() {
 fn test_address_balance_used_delta_applied() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xBBu8; 32];
-    let tx_hash1 = vec![0x01u8; 32];
-    let tx_hash2 = vec![0x02u8; 32];
 
     // Receive: creates a cell with 6100 CKB occupied
     let receive: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash1, 6100_00000000),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, 1, 6100_00000000),
     )]
     .into_iter()
     .collect();
@@ -622,7 +614,7 @@ fn test_address_balance_used_delta_applied() {
     // Consume old cell (-6100) and create new smaller cell (+4100)
     let update: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        make_addr_delta(0, 0, 1, 1, 2000, &tx_hash2, -2000_00000000),
+        make_addr_delta(0, 0, 1, 1, 2000, 2, -2000_00000000),
     )]
     .into_iter()
     .collect();
@@ -636,13 +628,12 @@ fn test_address_balance_used_delta_applied() {
 fn test_address_balance_used_underflow_errors() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xCCu8; 32];
-    let tx_hash = vec![0x01u8; 32];
 
     // Apply a negative used_delta larger than what exists (0)
     // Should fail fast instead of silently clamping.
     let changes: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash, -9999_00000000),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, 1, -9999_00000000),
     )]
     .into_iter()
     .collect();

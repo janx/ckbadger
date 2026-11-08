@@ -438,6 +438,48 @@ mod tests {
         (dir, store)
     }
 
+    /// The `tx_index` entry and block header each recorded row's position
+    /// resolves to: `(block, tx_idx, tx_hash, block_hash, timestamp_ms)`.
+    fn index_records(store: &CkbadgerStore, rows: &[(i64, i32, [u8; 32], [u8; 32], i64)]) {
+        let mut batch = StoreBatch::new(store);
+        for (block, tx_idx, tx_hash, block_hash, timestamp_ms) in rows {
+            batch.put_tx_index(
+                *block,
+                *tx_idx,
+                &ckbadger_store::types::TxIndexEntry {
+                    tx_hash: *tx_hash,
+                    is_cellbase: false,
+                    timestamp: *timestamp_ms,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 0,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            batch.put_block_header(
+                *block,
+                &ckbadger_store::types::CachedBlockHeader {
+                    hash: block_hash.to_vec(),
+                    timestamp: *timestamp_ms,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms: *timestamp_ms,
+                },
+            );
+        }
+        batch.commit().unwrap();
+    }
+
     #[test]
     fn test_mint_only() {
         let (_dir, store) = test_store();
@@ -458,6 +500,7 @@ mod tests {
             true,
         );
 
+        index_records(&store, &[(100, 1, tx_hash, block_hash, 1000)]);
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
@@ -508,6 +551,13 @@ mod tests {
             true,
         );
 
+        index_records(
+            &store,
+            &[
+                (200, 5, tx_hash, block_hash, 2000),
+                (200, 5, tx_hash, block_hash, 2000),
+            ],
+        );
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
@@ -545,6 +595,7 @@ mod tests {
             false,
         );
 
+        index_records(&store, &[(300, 2, tx_hash, block_hash, 3000)]);
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
@@ -593,6 +644,13 @@ mod tests {
             true,
         );
 
+        index_records(
+            &store,
+            &[
+                (400, 0, tx_hash, block_hash, 4000),
+                (400, 0, tx_hash, block_hash, 4000),
+            ],
+        );
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
@@ -642,6 +700,13 @@ mod tests {
             false,
         );
 
+        index_records(
+            &store,
+            &[
+                (500, 3, tx_hash, block_hash, 5000),
+                (500, 3, tx_hash, block_hash, 5000),
+            ],
+        );
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
@@ -680,6 +745,7 @@ mod tests {
             true,
         );
 
+        index_records(&store, &[(100, 1, tx_hash, block_hash, 1000)]);
         let mut batch = StoreBatch::new(&store);
         let inserted = acc
             .flush_identity(
@@ -728,6 +794,13 @@ mod tests {
         acc.record(&coll, &tx1, &object_a, &block_hash, 100, 1, 1000, true);
         acc.record(&coll, &tx2, &object_b, &block_hash, 100, 2, 1000, true);
 
+        index_records(
+            &store,
+            &[
+                (100, 1, tx1, block_hash, 1000),
+                (100, 2, tx2, block_hash, 1000),
+            ],
+        );
         let mut batch = StoreBatch::new(&store);
         let inserted = acc
             .flush_identity(
@@ -770,6 +843,13 @@ mod tests {
         acc.record(&coll_a, &tx1, &object, &block_hash_a, 100, 0, 1000, true);
         acc.record(&coll_b, &tx2, &object, &block_hash_b, 200, 1, 2000, true);
 
+        index_records(
+            &store,
+            &[
+                (100, 0, tx1, block_hash_a, 1000),
+                (200, 1, tx2, block_hash_b, 2000),
+            ],
+        );
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,

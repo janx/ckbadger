@@ -9,12 +9,11 @@ pub(crate) fn put_addr_tx(
     lock_hash: &[u8],
     block_num: i64,
     tx_idx: i32,
-    tx_hash: &[u8],
     value: &ckbadger_store::types::AddrTxValue,
 ) {
     // Written in the caller's block scope: the live batch's block journal
     // records the row's creation.
-    batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash, value);
+    batch.put_addr_tx(lock_hash, block_num, tx_idx, value);
 }
 
 /// `addr_txs_by_prefix` row for a protocol-named party.
@@ -26,10 +25,9 @@ pub(crate) fn put_addr_tx_by_prefix(
     prefix: &[u8],
     block_num: i64,
     tx_idx: i32,
-    tx_hash: &[u8],
     value: &ckbadger_store::types::AddrTxValue,
 ) {
-    batch.put_addr_tx_by_prefix(prefix, block_num, tx_idx, tx_hash, value);
+    batch.put_addr_tx_by_prefix(prefix, block_num, tx_idx, value);
 }
 
 pub(crate) fn put_tx_actions(
@@ -87,7 +85,10 @@ mod tests {
         );
         assert_eq!(iter.count(), 0);
         assert!(domain_store
-            .get_tx_actions(42, 3, &actions.tx_hash)
+            .get_cf(
+                domain_store.cf_tx_actions(),
+                &keys::encode_tx_actions_key(42, 3)
+            )
             .unwrap()
             .is_some());
     }
@@ -107,13 +108,12 @@ mod tests {
             &lock_hash,
             100,
             0,
-            &[0xAA; 32],
             &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
         domain_batch.commit().unwrap();
 
         // Verify data was written
-        let key = keys::encode_addr_tx_key(&lock_hash, 100, 0, &[0xAA; 32]);
+        let key = keys::encode_addr_tx_key(&lock_hash, 100, 0);
         assert!(domain_store
             .get_cf(domain_store.cf_addr_txs(), &key)
             .unwrap()

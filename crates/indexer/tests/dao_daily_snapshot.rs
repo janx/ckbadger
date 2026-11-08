@@ -21,9 +21,7 @@ fn rollback_to_100(store: &Arc<CkbadgerStore>, tip: i64) {
 }
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
     // Real consensus secondary_epoch_reward (mainnet and testnet agree). The
     // DAO snapshot recompute needs it for the per-block miner secondary split.
     store
@@ -74,7 +72,6 @@ fn seed_epoch_rows_for_dao_fixture(store: &CkbadgerStore) {
         for number in 0..*first_number {
             let mut header = first_header.clone();
             header.hash = vec![number as u8; 32];
-            header.parent_hash = vec![if number == 0 { 0 } else { (number - 1) as u8 }; 32];
             header.timestamp = prefix_time;
             header.chain_time_ms = prefix_time;
             header.epoch_index = number as i32;
@@ -173,7 +170,6 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         99,
         &CachedBlockHeader {
             hash: vec![0x63; 32],
-            parent_hash: vec![0x62; 32],
             timestamp: day_0407_end_ms,
             epoch_number: 1,
             epoch_index: 99,
@@ -199,7 +195,6 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         100,
         &CachedBlockHeader {
             hash: vec![0x64; 32],
-            parent_hash: vec![0x63; 32],
             timestamp: day_0408_t1_ms,
             epoch_number: 2,
             epoch_index: 0,
@@ -321,7 +316,6 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             101,
             &CachedBlockHeader {
                 hash: vec![0x65; 32],
-                parent_hash: vec![0x64; 32],
                 timestamp: day_0408_t2_ms,
                 epoch_number: 2,
                 epoch_index: 1,
@@ -431,7 +425,6 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         98,
         &CachedBlockHeader {
             hash: vec![0x62; 32],
-            parent_hash: vec![0x61; 32],
             timestamp: day_0408_start_ms - 11_000,
             epoch_number: 1,
             epoch_index: 1799,
@@ -457,7 +450,6 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         99,
         &CachedBlockHeader {
             hash: vec![0x63; 32],
-            parent_hash: vec![0x62; 32],
             timestamp: day_0408_start_ms,
             epoch_number: 2,
             epoch_index: 0,
@@ -482,7 +474,6 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         100,
         &CachedBlockHeader {
             hash: vec![0x64; 32],
-            parent_hash: vec![0x63; 32],
             timestamp: day_0408_mid_ms,
             epoch_number: 2,
             epoch_index: 1,
@@ -595,7 +586,6 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             101,
             &CachedBlockHeader {
                 hash: vec![0x65; 32],
-                parent_hash: vec![0x64; 32],
                 timestamp: day_0408_late_ms,
                 epoch_number: 2,
                 epoch_index: 2,
@@ -677,7 +667,6 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         100,
         &CachedBlockHeader {
             hash: vec![0x64; 32],
-            parent_hash: vec![0x63; 32],
             timestamp: day_0407_late_ms,
             epoch_number: 1,
             epoch_index: 99,
@@ -794,7 +783,6 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             101,
             &CachedBlockHeader {
                 hash: vec![0x65; 32],
-                parent_hash: vec![0x64; 32],
                 timestamp: day_0408_t1_ms,
                 epoch_number: 2,
                 epoch_index: 0,
@@ -822,7 +810,6 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             102,
             &CachedBlockHeader {
                 hash: vec![0x66; 32],
-                parent_hash: vec![0x65; 32],
                 timestamp: day_0408_t2_ms,
                 epoch_number: 2,
                 epoch_index: 1,
@@ -919,7 +906,6 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         99,
         &CachedBlockHeader {
             hash: vec![0x63; 32],
-            parent_hash: vec![0x62; 32],
             timestamp: day_0407_late_ms,
             epoch_number: 1,
             epoch_index: 99,
@@ -944,7 +930,6 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         100,
         &CachedBlockHeader {
             hash: vec![0x64; 32],
-            parent_hash: vec![0x63; 32],
             timestamp: day_0408_t1_ms,
             epoch_number: 2,
             epoch_index: 0,
@@ -1088,7 +1073,6 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             101,
             &CachedBlockHeader {
                 hash: vec![0x65; 32],
-                parent_hash: vec![0x64; 32],
                 timestamp: day_0408_t2_ms,
                 epoch_number: 2,
                 epoch_index: 1,

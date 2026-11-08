@@ -435,12 +435,14 @@ fn cached_header_to_block_response(
     header_info: Option<ckb_store_reader::BlockHeaderInfo>,
     extra: BlockExtra,
 ) -> Result<BlockResponse, ApiRouteError> {
-    let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
     let info = header_info.ok_or_else(|| {
         ApiError::internal(format!(
             "block {block_num} header evidence missing from node DB; configure ckb_db_path"
         ))
     })?;
+    // The store keeps no parent hash; the node's header of this block (found
+    // by the stored hash) names it.
+    let parent_hash = format_hash(&info.parent_hash);
     let context = format!("cached block {block_num} (0x{})", hex::encode(&header.hash));
     let nonce = format_nonce(info.nonce);
     let transactions_root = format_hash(&info.transactions_root);
@@ -1141,7 +1143,22 @@ fn read_block_uncle(
             summary.hash
         )));
     }
-    let sibling = canonical.parent_hash.as_slice() == uncle_header.parent_hash().as_slice();
+    // The canonical block's parent is the store's header of the block below.
+    let canonical_parent = match number {
+        0 => vec![0u8; 32],
+        _ => {
+            store
+                .get_block_header(number - 1)
+                .map_err(|e| error(e.to_string()))?
+                .ok_or_else(|| {
+                    error(format!(
+                        "no canonical block indexed below uncle height {number}"
+                    ))
+                })?
+                .hash
+        }
+    };
+    let sibling = canonical_parent.as_slice() == uncle_header.parent_hash().as_slice();
     let ms_after_sibling = if sibling {
         let uncle_ms = i64::try_from(uncle_header.timestamp()).map_err(|_| {
             error(format!(
@@ -1957,7 +1974,6 @@ mod tests {
             489,
             &ckbadger_store::CachedBlockHeader {
                 hash: vec![0x48; 32],
-                parent_hash: vec![0; 32],
                 timestamp: 1,
                 epoch_number: 1,
                 epoch_index: 0,
@@ -2058,7 +2074,6 @@ mod tests {
     fn test_block_response_uses_real_header_fields() {
         let header = ckbadger_store::CachedBlockHeader {
             hash: vec![0x22; 32],
-            parent_hash: vec![0x11; 32],
             timestamp: 1_705_733_626_764,
             epoch_number: 9128,
             epoch_index: 909,
@@ -2101,7 +2116,6 @@ mod tests {
     fn test_block_response_formats_nonce_as_numeric_hex() {
         let header = ckbadger_store::CachedBlockHeader {
             hash: vec![0x22; 32],
-            parent_hash: vec![0x11; 32],
             timestamp: 1_705_733_626_764,
             epoch_number: 9128,
             epoch_index: 909,
@@ -2147,7 +2161,6 @@ mod tests {
     fn invalid_cached_block_timestamp_is_an_error() {
         let header = ckbadger_store::CachedBlockHeader {
             hash: vec![0x22; 32],
-            parent_hash: vec![0x11; 32],
             timestamp: i64::MAX,
             epoch_number: 1,
             epoch_index: 0,

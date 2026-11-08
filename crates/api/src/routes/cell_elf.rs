@@ -128,10 +128,11 @@ pub enum RiscvAttributes {
     },
 }
 
-/// Whether `data` is an ELF file by its magic: the one rule for "this cell's
-/// data is code" (the cell page and the Type ID upgrade cohort both use it).
+/// Whether `data` is an ELF file by its magic: the workspace's one "this
+/// cell's data is code" rule, [`ckbadger_store::keys::is_code_cell`] (the cell
+/// page and the Type ID upgrade cohort both use it).
 pub fn has_elf_magic(data: &[u8]) -> bool {
-    data.starts_with(b"\x7fELF")
+    ckbadger_store::keys::is_code_cell(data)
 }
 
 /// Read a cell's data as an ELF file: `None` when it is not one (no magic).

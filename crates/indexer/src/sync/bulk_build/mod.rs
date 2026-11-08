@@ -71,6 +71,9 @@ use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PreparedFinalizeArtifacts {
     activity_sealed_rows: Vec<materialize::MaterializedRow>,
+    /// The `activity_addr_row_floor` record (finding 11), a `FinalSnapshot`
+    /// row: none for a run that sealed no block.
+    activity_snapshot_rows: Vec<materialize::MaterializedRow>,
     chain_sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
@@ -1327,6 +1330,7 @@ fn materialize_finalize_phases(
             tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
         perf_stats.record_finalize_step(2, finalize_started.elapsed());
         materializer.stream_sealed_aggregate_rows(&prepared.activity_sealed_rows)?;
+        materializer.materialize_final_snapshot(&prepared.activity_snapshot_rows)?;
     }
 
     // Step 3: chain stats (sealed aggregates)
@@ -1880,6 +1884,29 @@ impl ActivityStatsAccumulator {
         Ok(rows)
     }
 
+    /// `sync_meta` → `activity_addr_row_floor` at finalize: the UTC+8 hour of
+    /// the final watermark (the handoff tip's chain time). Every earlier hour,
+    /// and every day before its day, was sealed without address rows, so live
+    /// sync continues from this hour and fails fast on a block before it
+    /// (finding 11); live pruning starts here. `None` for a run that sealed
+    /// no block. Once per finalize: no per-row bulk work.
+    fn addr_row_floor_row(&self) -> Result<Option<materialize::MaterializedRow>> {
+        self.sealed_through_ms
+            .map(|watermark| {
+                let hour = keys::ActivityBucketKind::Hourly.bucket_label(watermark)?;
+                Ok(materialize::MaterializedRow::new(
+                    ckbadger_store::CF_SYNC_META,
+                    keys::sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR.to_vec(),
+                    hour.into_bytes(),
+                ))
+            })
+            .transpose()
+    }
+
+    /// The rows of the buckets still in memory at finalize: after the last
+    /// batch sealed every bucket complete at the final watermark, the buckets
+    /// open at the handoff tip (its UTC+8 day and hour). Each keeps its
+    /// address rows, which live sync continues from.
     fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
         let mut rows = Vec::with_capacity(self.daily_stats.len() + self.hourly_stats.len());
         // The days still open at finalize (the handoff tip's day).
@@ -1907,17 +1934,7 @@ impl ActivityStatsAccumulator {
                 bincode::serialize(&stats)?,
             ));
             if let Some(addrs) = self.daily_addrs.get(&date) {
-                let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
-                sorted.sort_unstable();
-                let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
-                rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_CHAIN,
-                    keys::encode_stats_key(
-                        keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-                        date.as_bytes(),
-                    ),
-                    flat,
-                ));
+                push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Daily, &date, addrs)?;
             }
         }
 
@@ -1938,17 +1955,7 @@ impl ActivityStatsAccumulator {
                 bincode::serialize(&stats)?,
             ));
             if let Some(addrs) = self.hourly_addrs.get(&hour) {
-                let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
-                sorted.sort_unstable();
-                let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
-                rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_CHAIN,
-                    keys::encode_stats_key(
-                        keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
-                        hour.as_bytes(),
-                    ),
-                    flat,
-                ));
+                push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Hourly, &hour, addrs)?;
             }
         }
 
@@ -2000,7 +2007,7 @@ fn drain_activity_bucket_rows(
         .collect::<Result<Vec<_>>>()?;
     sealed_buckets.sort();
 
-    let mut rows = Vec::with_capacity(sealed_buckets.len() * 2);
+    let mut rows = Vec::with_capacity(sealed_buckets.len());
     for bucket in sealed_buckets {
         let mut stats = stats_by_bucket.remove(&bucket).ok_or_else(|| {
             anyhow!(
@@ -2009,8 +2016,11 @@ fn drain_activity_bucket_rows(
                 bucket
             )
         })?;
-        let addrs = addrs_by_bucket.remove(&bucket);
-        stats.unique_address_count = addrs.as_ref().map_or(Ok(0), |set| {
+        // The bucket's address set dies with it (C-3): only its count is
+        // written. A sealed bucket ends at or below the watermark, so no later
+        // block reaches it, and bulk records no journal, so no rollback
+        // reopens it.
+        stats.unique_address_count = addrs_by_bucket.remove(&bucket).map_or(Ok(0), |set| {
             checked_unique_address_count(set.len(), &bucket)
         })?;
         let stats_prefix = if hourly {
@@ -2023,26 +2033,30 @@ fn drain_activity_bucket_rows(
             keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
             bincode::serialize(&stats)?,
         ));
-        if let Some(addrs) = addrs {
-            let mut sorted = addrs.into_iter().collect::<Vec<_>>();
-            sorted.sort_unstable();
-            let mut flat = Vec::with_capacity(sorted.len() * 32);
-            for hash in sorted {
-                flat.extend_from_slice(&hash);
-            }
-            let addr_prefix = if hourly {
-                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET
-            } else {
-                keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET
-            };
-            rows.push(materialize::MaterializedRow::new(
-                CF_STATS_CHAIN,
-                keys::encode_stats_key(addr_prefix, bucket.as_bytes()),
-                flat,
-            ));
-        }
     }
     Ok(rows)
+}
+
+/// One empty `ACTIVITY_*_ADDR_ROW` row per address of a bucket still open at
+/// finalize: live sync continues the bucket and needs its addresses to count
+/// each one once, then deletes the rows once the rollback coverage floor
+/// leaves the bucket.
+fn push_activity_addr_rows(
+    rows: &mut Vec<materialize::MaterializedRow>,
+    kind: keys::ActivityBucketKind,
+    bucket: &str,
+    addrs: &FxHashSet<[u8; 32]>,
+) -> Result<()> {
+    let mut sorted: Vec<&[u8; 32]> = addrs.iter().collect();
+    sorted.sort_unstable();
+    for lock_hash in sorted {
+        rows.push(materialize::MaterializedRow::new(
+            CF_STATS_CHAIN,
+            kind.addr_row_key(bucket, lock_hash)?,
+            Vec::new(),
+        ));
+    }
+    Ok(())
 }
 
 fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
@@ -3276,6 +3290,7 @@ impl BulkBuildRuntimeState {
         } = self;
 
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
+        materializer.materialize_final_snapshot(&prepared_finalize.activity_snapshot_rows)?;
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
         let frozen = interner.snapshot_for_reads();
         materializer.materialize_final_snapshot_bounded(|sink| {
@@ -3294,6 +3309,11 @@ impl BulkBuildRuntimeState {
     ) -> Result<PreparedFinalizeArtifacts> {
         Ok(PreparedFinalizeArtifacts {
             activity_sealed_rows: self.activity_stats.build_rows()?,
+            activity_snapshot_rows: self
+                .activity_stats
+                .addr_row_floor_row()?
+                .into_iter()
+                .collect(),
             chain_sealed_rows: self.chain_stats.build_rows(virtual_occupied)?,
         })
     }
@@ -3740,11 +3760,10 @@ pub struct BulkArtifactSnapshot {
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
     pub tx_actions_map: HashMap<Vec<u8>, TxActions>,
-    /// `CF_ADDR_TXS` rows, keyed by (lock_hash, block, tx_idx, tx_hash).
-    pub addr_txs: BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
-    /// `CF_ADDR_TXS_BY_PREFIX` rows, keyed by (prefix20, block, tx_idx, tx_hash).
-    pub addr_txs_by_prefix:
-        BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    /// `CF_ADDR_TXS` rows, keyed by (lock_hash, block, tx_idx).
+    pub addr_txs: BTreeMap<([u8; 32], i64, i32), ckbadger_store::types::AddrTxValue>,
+    /// `CF_ADDR_TXS_BY_PREFIX` rows, keyed by (prefix20, block, tx_idx).
+    pub addr_txs_by_prefix: BTreeMap<([u8; 20], i64, i32), ckbadger_store::types::AddrTxValue>,
     pub addr_prefix_stats: HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
     /// `CF_TX_ACTIONS_BY_BUCKET` keys, raw, in key order. Compared
     /// byte-for-byte against the live write path's rows.
@@ -3936,9 +3955,9 @@ where
         .owners
         .dao
         .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
-    let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir(temp_root_label);
+    let _remove_root = RemoveTestDirOnDrop(root.clone());
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -3948,81 +3967,121 @@ where
     let snapshot = {
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
-        domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         seed_test_genesis_baseline(domain_store.as_ref())?;
         // The consensus secondary epoch reward the indexer persists at
         // startup (the DAO reducer above is handed it directly); the DAO tip
         // summary after finalize reads it from the store.
         domain_store.set_secondary_epoch_reward(61_369_863_013_698)?;
-        start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
-        let mut materializer =
-            materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
-        let mut current_block = 0u64;
-        let mut processed_blocks = 0usize;
+        let state = run_bulk_stage_on_stores(
+            runtime,
+            &domain_store,
+            &append_store,
+            blocks,
+            chain_tip,
+            bulk_sync_threshold,
+        )?;
+        finish(domain_store.as_ref(), append_store.as_ref(), state)?
+    };
+    Ok(snapshot)
+}
 
-        for (block_idx, block) in blocks.iter().enumerate() {
-            if chain_tip.saturating_sub(current_block) <= bulk_sync_threshold {
-                break;
-            }
+/// Bulk-build `blocks` from genesis into `domain_store` / `append_store`
+/// (which hold the genesis baseline and the secondary epoch reward, as
+/// startup leaves them) through the production reducers, finalize and
+/// completion status: the stores end as a bulk build that reached the chain
+/// tip at the last block leaves them, ready for a restart into live sync
+/// (the bulk → live activity parity test, finding 27).
+pub(crate) fn bulk_build_into_stores_for_test(
+    domain_store: &Arc<CkbadgerStore>,
+    append_store: &Arc<CkbadgerStore>,
+    blocks: &[BlockResponseWithCycles],
+) -> Result<()> {
+    let last = blocks
+        .last()
+        .ok_or_else(|| anyhow!("bulk build test seam needs at least one block"))?;
+    let tip = u64::from_str_radix(last.block.header.number.trim_start_matches("0x"), 16)?;
+    let mut runtime = BulkBuildRuntimeState::default();
+    runtime
+        .owners
+        .dao
+        .set_secondary_epoch_reward(required_secondary_epoch_reward(domain_store.as_ref())?);
+    // A chain tip one above the last block puts every block behind it.
+    let state = run_bulk_stage_on_stores(runtime, domain_store, append_store, blocks, tip + 1, 0)?;
+    anyhow::ensure!(
+        state.processed_blocks == blocks.len(),
+        "bulk build test seam built {} of {} blocks",
+        state.processed_blocks,
+        blocks.len()
+    );
+    persist_bulk_sync_completion_status(domain_store.as_ref(), tip, i64::try_from(tip)?)
+}
 
-            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(
-                std::slice::from_ref(block),
-                true,
-                &FxHashMap::default(),
-            )?;
-            let history_count = pending.history_row_count();
-            let sealed_count = pending.sealed_rows.len();
-            let prepared = materialize::prepare_flush(
-                domain_store.as_ref(),
-                append_store.as_ref(),
-                pending.history_chunks,
-                pending.sealed_rows,
-            )?;
-            materializer.add_external_counts(history_count, sealed_count, 1);
-            if !prepared.append_batch.is_empty() {
-                append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
-            }
-            if !prepared.domain_batch.is_empty() {
-                domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
-            }
-            sync_totals.record_batch(&batch_stats)?;
-            let last_block_number = batch_stats
-                .last_block_number
-                .ok_or_else(|| anyhow!("bulk stage test batch missing last block number"))?;
-            current_block = u64::try_from(last_block_number).map_err(|_| {
-                anyhow!(
-                    "bulk stage test batch returned negative last block number: last_block_number={}",
-                    last_block_number
-                )
-            })?;
-            processed_blocks = block_idx + 1;
+/// The bulk stage of the test seams on open stores: the blocks behind
+/// `chain_tip - bulk_sync_threshold`, one per batch, then finalize, the
+/// handoff sync status and the DAO statistics.
+fn run_bulk_stage_on_stores(
+    mut runtime: BulkBuildRuntimeState,
+    domain_store: &Arc<CkbadgerStore>,
+    append_store: &Arc<CkbadgerStore>,
+    blocks: &[BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> Result<BulkStageTestState> {
+    let mut sync_totals = BulkBuildSyncTotals::default();
+    domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+    start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
+    let mut materializer =
+        materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
+    let mut current_block = 0u64;
+    let mut processed_blocks = 0usize;
+    for (block_idx, block) in blocks.iter().enumerate() {
+        if chain_tip.saturating_sub(current_block) <= bulk_sync_threshold {
+            break;
         }
 
-        let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
-        let sync_status = sync_totals.finalize_success(
-            domain_store.as_ref(),
-            false,
-            live_cell_summary.as_ref(),
-        )?;
-        crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
-            .refresh_latest_dao_statistics()?;
-        domain_store.clear_bulk_build_session_marker()?;
-        let report = materializer.finish();
-
-        finish(
+        let (batch_stats, _timings, pending) =
+            runtime.apply_blocks_hex(std::slice::from_ref(block), true, &FxHashMap::default())?;
+        let history_count = pending.history_row_count();
+        let sealed_count = pending.sealed_rows.len();
+        let prepared = materialize::prepare_flush(
             domain_store.as_ref(),
             append_store.as_ref(),
-            BulkStageTestState {
-                processed_blocks,
-                report,
-                sync_status,
-            },
-        )?
-    };
+            pending.history_chunks,
+            pending.sealed_rows,
+        )?;
+        materializer.add_external_counts(history_count, sealed_count, 1);
+        if !prepared.append_batch.is_empty() {
+            append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
+        }
+        if !prepared.domain_batch.is_empty() {
+            domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
+        }
+        sync_totals.record_batch(&batch_stats)?;
+        let last_block_number = batch_stats
+            .last_block_number
+            .ok_or_else(|| anyhow!("bulk stage test batch missing last block number"))?;
+        current_block = u64::try_from(last_block_number).map_err(|_| {
+            anyhow!(
+                "bulk stage test batch returned negative last block number: last_block_number={}",
+                last_block_number
+            )
+        })?;
+        processed_blocks = block_idx + 1;
+    }
 
-    let _ = std::fs::remove_dir_all(&root);
-    Ok(snapshot)
+    let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+    flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
+    let sync_status =
+        sync_totals.finalize_success(domain_store.as_ref(), false, live_cell_summary.as_ref())?;
+    crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
+        .refresh_latest_dao_statistics()?;
+    domain_store.clear_bulk_build_session_marker()?;
+    let report = materializer.finish();
+    Ok(BulkStageTestState {
+        processed_blocks,
+        report,
+        sync_status,
+    })
 }
 
 fn apply_pipeline_sync_status_for_test(
@@ -4132,6 +4191,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
+    let _remove_root = RemoveTestDirOnDrop(root.clone());
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -4154,15 +4214,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
                 let number = i64::try_from(number)?;
                 let mut hash = vec![0u8; 32];
                 hash[..8].copy_from_slice(&number.to_le_bytes());
-                let mut parent_hash = vec![0u8; 32];
-                if number > 0 {
-                    parent_hash[..8].copy_from_slice(&(number - 1).to_le_bytes());
-                }
                 prefix.put_block_header(
                     number,
                     &CachedBlockHeader {
                         hash,
-                        parent_hash,
                         timestamp: fixture_genesis_time,
                         chain_time_ms: fixture_genesis_time,
                         epoch_number: 0,
@@ -4223,8 +4278,6 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             sync_status,
         )?
     };
-
-    let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
 }
 
@@ -4236,7 +4289,12 @@ fn collect_bulk_artifact_snapshot(
 ) -> Result<BulkArtifactSnapshot> {
     let mut stats_dao_rows = Vec::new();
     for &name in ckbadger_store::DOMAIN_CFS {
-        if name.starts_with("stats_") || name.starts_with("dao_") {
+        // The `object_*` CFs hold the outpoint indexes that lived in
+        // `stats_spore` / `stats_mnft` until C-4b.
+        if name.starts_with("stats_")
+            || name.starts_with("dao_")
+            || name.starts_with("object_outpoint")
+        {
             for row in domain_store.iterator_cf(domain_store.cf(name), IteratorMode::Start) {
                 let (key, value) = row?;
                 stats_dao_rows.push((name, key.to_vec(), value.to_vec()));
@@ -4829,7 +4887,6 @@ fn build_history_rows_for_block(
     // Block header + hash index (2 rows per block).
     let header = CachedBlockHeader {
         hash: block.hash.to_vec(),
-        parent_hash: block.parent_hash.to_vec(),
         timestamp: block.timestamp_ms,
         epoch_number: block.epoch_number,
         epoch_index: block.epoch_index,
@@ -4932,21 +4989,13 @@ fn build_history_rows_for_block(
         )? {
             match id {
                 ckbadger_store::types::ParticipantId::Lock(lock_hash) => {
-                    let addr_tx_key = keys::encode_addr_tx_key(
-                        &lock_hash,
-                        tx.block_number,
-                        tx.tx_index,
-                        &tx.hash,
-                    );
+                    let addr_tx_key =
+                        keys::encode_addr_tx_key(&lock_hash, tx.block_number, tx.tx_index);
                     rows.push_serialized(CF_ADDR_TXS, &addr_tx_key, &value)?;
                 }
                 ckbadger_store::types::ParticipantId::LockPrefix(prefix) => {
-                    let key = keys::encode_addr_tx_by_prefix_key(
-                        &prefix,
-                        tx.block_number,
-                        tx.tx_index,
-                        &tx.hash,
-                    );
+                    let key =
+                        keys::encode_addr_tx_by_prefix_key(&prefix, tx.block_number, tx.tx_index);
                     rows.push_serialized(CF_ADDR_TXS_BY_PREFIX, &key, &value)?;
                 }
             }
@@ -4973,7 +5022,7 @@ fn build_history_rows_for_block(
                 &ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
-                    consumed_by_tx: Some(tx.hash.to_vec()),
+                    consumed_tx_idx: tx.tx_index,
                 },
             )?;
         }
@@ -5032,12 +5081,13 @@ fn build_history_rows_for_block(
     for built in &built_list {
         let tx_actions = &built.actions;
         if !tx_actions.is_cellbase {
-            let tx_actions_key = keys::encode_tx_actions_key(
-                tx_actions.block_number,
-                tx_actions.tx_index,
-                &tx_actions.tx_hash,
-            );
-            rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, tx_actions)?;
+            // Keyed by its position; the value is what the transaction did
+            // (`TxActions::stored_ref`, serialized straight into the chunk —
+            // the bytes of `encode_stored`): its hash, block hash, timestamp
+            // and cellbase flag are `tx_index` / `block_headers` there.
+            let tx_actions_key =
+                keys::encode_tx_actions_key(tx_actions.block_number, tx_actions.tx_index);
+            rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, &tx_actions.stored_ref())?;
             // Its global bucket row, derived by the same function the live
             // writer's `StoreBatch::put_tx_actions` uses, into the same rows.
             let bucket_key =
@@ -5065,10 +5115,12 @@ fn build_history_rows_for_block(
                 &DOTCELL_SENTINEL_COLLECTION,
                 tx_actions.block_number,
                 tx_actions.tx_index,
-                &tx_actions.block_hash,
-                &tx_actions.tx_hash,
             );
-            rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+            rows.push_serialized(
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
+                &activity_key,
+                entry.stored(),
+            )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
                 &DOTCELL_SENTINEL_COLLECTION,
@@ -5249,10 +5301,12 @@ fn build_history_rows_for_block(
                     &DOTBIT_SENTINEL_COLLECTION,
                     tx.block_number,
                     tx.tx_index,
-                    &tx.block_hash,
-                    &tx.tx_hash,
                 );
-                rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+                rows.push_serialized(
+                    CF_IDENTITY_COLLECTION_ACTIVITIES,
+                    &activity_key,
+                    entry.stored(),
+                )?;
                 fold_collection_activity_row(
                     &mut collection_activity_daily,
                     &DOTBIT_SENTINEL_COLLECTION,
@@ -5286,13 +5340,11 @@ fn build_history_rows_for_block(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             );
             rows.push_serialized(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &resolved_entry.entry,
+                resolved_entry.entry.stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -5316,13 +5368,11 @@ fn build_history_rows_for_block(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             );
             rows.push_serialized(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
                 &activity_key,
-                &resolved_entry.entry,
+                resolved_entry.entry.stored(),
             )?;
             fold_collection_activity_row(
                 &mut collection_activity_daily,
@@ -5367,7 +5417,8 @@ fn build_history_rows_for_block(
                 ));
             }
 
-            if keys::cell_has_data_hash_row(cell.data_size) {
+            // Code = ELF data (one 4-byte prefix compare, no interner read).
+            if keys::is_code_cell(&cell.data) {
                 let data_hash = cell.data_hash.as_ref().ok_or_else(|| {
                     anyhow!(
                         "bulk build cell with {} data bytes has no data hash: outpoint=0x{}:{}, block={}",
@@ -5557,11 +5608,9 @@ fn build_object_collection_activity_rows(
                     &DOTBIT_SENTINEL_COLLECTION,
                     tx.block_number,
                     tx.tx_index,
-                    &tx.block_hash,
-                    &tx.tx_hash,
                 )
                 .to_vec(),
-                bincode::serialize(&entry)?,
+                entry.encode_stored(),
             ));
             let delta = identity_activity_count_deltas
                 .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
@@ -5592,11 +5641,9 @@ fn build_object_collection_activity_rows(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             )
             .to_vec(),
-            bincode::serialize(&resolved_entry.entry)?,
+            resolved_entry.entry.encode_stored(),
         ));
     }
 
@@ -5616,11 +5663,9 @@ fn build_object_collection_activity_rows(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
-                &resolved_entry.entry.block_hash,
-                &resolved_entry.entry.tx_hash,
             )
             .to_vec(),
-            bincode::serialize(&resolved_entry.entry)?,
+            resolved_entry.entry.encode_stored(),
         ));
     }
 
@@ -6164,13 +6209,7 @@ fn collect_history_snapshot(
             );
         }
         let block_number = keys::decode_block_num(&key);
-        let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize CachedBlockHeader in bulk artifact snapshot helper: block_number={} error={}",
-                block_number,
-                e
-            )
-        })?;
+        let header = ckbadger_store::decode_block_header(block_number, &value)?;
         let indexed_block_number = domain_store
             .get_block_number_by_hash(&header.hash)?
             .ok_or_else(|| {
@@ -6205,17 +6244,11 @@ fn collect_history_snapshot(
         txs_by_hash.insert(tx_hash.to_vec(), tx_entry);
     }
 
+    // Every `activities` row, completed by the store's one reader, keyed by
+    // its raw key.
     let mut tx_actions_map = HashMap::new();
-    let activity_iter = domain_store.iterator_cf(domain_store.cf_tx_actions(), IteratorMode::Start);
-    for item in activity_iter {
-        let (key, value) = item?;
-        let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize TxActions in bulk artifact snapshot helper: key=0x{} error={}",
-                hex::encode(&key),
-                e
-            )
-        })?;
+    for actions in domain_store.list_tx_actions_recent(usize::MAX, None)? {
+        let key = keys::encode_tx_actions_key(actions.block_number, actions.tx_index);
         tx_actions_map.insert(key.to_vec(), actions);
     }
 
@@ -6232,16 +6265,15 @@ fn collect_history_snapshot(
 fn collect_addr_tx_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<(
-    BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
-    BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    BTreeMap<([u8; 32], i64, i32), ckbadger_store::types::AddrTxValue>,
+    BTreeMap<([u8; 20], i64, i32), ckbadger_store::types::AddrTxValue>,
     HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
 )> {
     let mut addr_txs = BTreeMap::new();
     for item in domain_store.iterator_cf(domain_store.cf_addr_txs(), IteratorMode::Start) {
         let (key, value) = item?;
-        let (lock_hash, block_num, tx_idx, tx_hash) = keys::decode_addr_tx_key(&key);
         addr_txs.insert(
-            (lock_hash, block_num, tx_idx, tx_hash),
+            keys::decode_addr_tx_key(&key)?,
             bincode::deserialize(&value)?,
         );
     }
@@ -6249,9 +6281,8 @@ fn collect_addr_tx_snapshot(
     for item in domain_store.iterator_cf(domain_store.cf_addr_txs_by_prefix(), IteratorMode::Start)
     {
         let (key, value) = item?;
-        let (prefix, block_num, tx_idx, tx_hash) = keys::decode_addr_tx_by_prefix_key(&key);
         addr_txs_by_prefix.insert(
-            (prefix, block_num, tx_idx, tx_hash),
+            keys::decode_addr_tx_by_prefix_key(&key)?,
             bincode::deserialize(&value)?,
         );
     }
@@ -6412,7 +6443,7 @@ fn collect_cell_snapshot(
         domain_store.iterator_cf(domain_store.cf_consumed_cells(), IteratorMode::Start);
     for item in consumed_iter {
         let (key, value) = item?;
-        let consumed: ConsumedCellMeta = bincode::deserialize(&value).map_err(|e| {
+        let consumed = ckbadger_store::types::decode_consumed_cell_meta(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize ConsumedCellMeta in bulk artifact snapshot helper: outpoint=0x{} error={}",
                 hex::encode(&key),
@@ -6476,13 +6507,7 @@ fn collect_core_owner_state_snapshot(
     let addr_iter = domain_store.iterator_cf(domain_store.cf_addr_balance(), IteratorMode::Start);
     for item in addr_iter {
         let (key, value) = item?;
-        let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize AddressBalance in core owner snapshot helper: lock_hash=0x{}, error={}",
-                hex::encode(&key),
-                e
-            )
-        })?;
+        let balance = ckbadger_store::decode_address_balance(&key, &value)?;
         address_balances.insert(key.to_vec(), balance);
     }
 
@@ -6768,6 +6793,17 @@ fn collect_core_owner_state_snapshot(
     })
 }
 
+/// Removes a test seam's [`unique_temp_test_dir`] root when dropped, on the
+/// error paths as well (an early `?` used to skip the removal and leave the
+/// stores behind). Declare it before the stores, so they close first.
+struct RemoveTestDirOnDrop(PathBuf);
+
+impl Drop for RemoveTestDirOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub(crate) fn unique_temp_test_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6810,8 +6846,8 @@ mod tests {
     use crate::sync::TEST_CELLBASE_WITNESS;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
-        AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
-        TokenTransferRecord, TxActions, BIT_CELL_SENTINEL_COLLECTION,
+        AssetAction, FiberChannelState, TokenInfo, TokenTransferRecord, TxActions,
+        BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ADDR_TXS, CF_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
@@ -7453,11 +7489,6 @@ mod tests {
             "0x{}",
             "02".repeat(20)
         )));
-        let create_tx_hash =
-            hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
-        let split_tx_hash =
-            hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
-
         let interner = interner::IdentityInterner::default();
         let (arena, _) =
             crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
@@ -7498,9 +7529,9 @@ mod tests {
             .expect("commit append");
 
         let expected = [
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1, &split_tx_hash),
-            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1),
+            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1),
         ];
 
         let mut actual_keys: HashSet<Vec<u8>> = HashSet::new();
@@ -7952,22 +7983,21 @@ mod tests {
             .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
-        let activity_rows: Vec<(Vec<u8>, TxActions)> = domain_store
+        let activity_keys: Vec<Vec<u8>> = domain_store
             .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
-            .map(|item| {
-                let (key, value) = item.expect("iterator item");
-                (
-                    key.to_vec(),
-                    bincode::deserialize(&value).expect("deserialize TxActions"),
-                )
-            })
+            .map(|item| item.expect("iterator item").0.to_vec())
             .collect();
+        let activity_rows = domain_store
+            .list_tx_actions_recent(usize::MAX, None)
+            .expect("read activities");
 
         // Only non-cellbase tx materialized to CF_TX_ACTIONS.
         assert_eq!(activity_rows.len(), 1);
-        let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
-        let (ref actual_key, ref split_actions) = activity_rows[0];
-        assert_eq!(*actual_key, split_key);
+        assert_eq!(
+            activity_keys,
+            vec![keys::encode_tx_actions_key(14_000_888, 1).to_vec()]
+        );
+        let split_actions = &activity_rows[0];
         assert_eq!(split_actions.tx_hash, split_tx_hash);
         assert!(!split_actions.is_cellbase);
         assert_eq!(split_actions.participants.len(), 2);
@@ -8033,12 +8063,8 @@ mod tests {
 
         // CF_TX_ACTIONS rows should NOT include cellbase.
         let tx_action_rows: Vec<TxActions> = domain_store
-            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
-            .map(|item| {
-                let (_key, value) = item.expect("iterator item");
-                bincode::deserialize(&value).expect("deserialize tx_actions")
-            })
-            .collect();
+            .list_tx_actions_recent(usize::MAX, None)
+            .expect("read activities");
 
         // tx_actions_list should include ALL txs (including cellbase) for stats accumulation.
         let cellbase_in_list = result.tx_actions_list.iter().any(|a| a.is_cellbase);
@@ -8142,11 +8168,9 @@ mod tests {
             .expect("commit append");
 
         let open_tx_actions: TxActions = domain_store
-            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
-            .map(|item| {
-                let (_key, value) = item.expect("iterator item");
-                bincode::deserialize::<TxActions>(&value).expect("deserialize TxActions")
-            })
+            .list_tx_actions_recent(usize::MAX, None)
+            .expect("read activities")
+            .into_iter()
             .find(|actions| !actions.is_cellbase)
             .expect("non-cellbase TxActions");
         assert!(
@@ -8229,65 +8253,86 @@ mod tests {
             .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
-        let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
-            domain_store
-                .iterator_cf(
-                    domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
-                    IteratorMode::Start,
+        let object_rows: std::collections::HashMap<Vec<u8>, Vec<AssetAction>> = domain_store
+            .iterator_cf(
+                domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
+                IteratorMode::Start,
+            )
+            .map(|item| {
+                let (key, value) = item.expect("iterator item");
+                (
+                    key.to_vec(),
+                    ckbadger_store::decode_stored_collection_activity(&value)
+                        .expect("deserialize object collection activity"),
                 )
-                .map(|item| {
-                    let (key, value) = item.expect("iterator item");
-                    (
-                        key.to_vec(),
-                        bincode::deserialize(&value)
-                            .expect("deserialize object collection activity"),
-                    )
-                })
-                .collect();
-        let identity_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
-            domain_store
-                .iterator_cf(
-                    domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
-                    IteratorMode::Start,
+            })
+            .collect();
+        let identity_rows: std::collections::HashMap<Vec<u8>, Vec<AssetAction>> = domain_store
+            .iterator_cf(
+                domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
+                IteratorMode::Start,
+            )
+            .map(|item| {
+                let (key, value) = item.expect("iterator item");
+                (
+                    key.to_vec(),
+                    ckbadger_store::decode_stored_collection_activity(&value)
+                        .expect("deserialize identity collection activity"),
                 )
-                .map(|item| {
-                    let (key, value) = item.expect("iterator item");
-                    (
-                        key.to_vec(),
-                        bincode::deserialize(&value)
-                            .expect("deserialize identity collection activity"),
+            })
+            .collect();
+        // The feeds complete each row from the position's tx_index entry and
+        // block header, which the same history rows wrote.
+        let completed: Vec<(i64, i32, Vec<u8>, Vec<u8>)> = domain_store
+            .list_object_collection_activities(&cluster_id, 10, None, None)
+            .expect("cluster feed")
+            .into_iter()
+            .chain(
+                domain_store
+                    .list_identity_collection_activities(
+                        &BIT_CELL_SENTINEL_COLLECTION,
+                        10,
+                        None,
+                        None,
                     )
-                })
-                .collect();
+                    .expect(".bit Cell feed"),
+            )
+            .map(|(block, idx, entry)| (block, idx, entry.tx_hash, entry.block_hash))
+            .collect();
+        assert_eq!(
+            completed,
+            vec![
+                (
+                    14_001_001,
+                    1,
+                    transfer_tx_hash.clone(),
+                    transfer_block_hash.clone()
+                ),
+                (
+                    14_001_000,
+                    0,
+                    create_tx_hash.clone(),
+                    create_block_hash.clone()
+                ),
+                (14_001_001, 1, transfer_tx_hash, transfer_block_hash),
+                (14_001_000, 0, create_tx_hash, create_block_hash),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&root);
 
-        let cluster_mint_key = keys::encode_object_collection_activity_key(
-            &cluster_id,
-            14_001_000,
-            0,
-            &create_block_hash,
-            &create_tx_hash,
-        );
-        let cluster_transfer_key = keys::encode_object_collection_activity_key(
-            &cluster_id,
-            14_001_001,
-            1,
-            &transfer_block_hash,
-            &transfer_tx_hash,
-        );
+        let cluster_mint_key =
+            keys::encode_object_collection_activity_key(&cluster_id, 14_001_000, 0);
+        let cluster_transfer_key =
+            keys::encode_object_collection_activity_key(&cluster_id, 14_001_001, 1);
         let bit_cell_mint_key = keys::encode_object_collection_activity_key(
             &BIT_CELL_SENTINEL_COLLECTION,
             14_001_000,
             0,
-            &create_block_hash,
-            &create_tx_hash,
         );
         let bit_cell_burn_key = keys::encode_object_collection_activity_key(
             &BIT_CELL_SENTINEL_COLLECTION,
             14_001_001,
             1,
-            &transfer_block_hash,
-            &transfer_tx_hash,
         );
 
         assert_eq!(object_rows.len(), 2);
@@ -8296,34 +8341,26 @@ mod tests {
         let cluster_mint = object_rows
             .get(cluster_mint_key.as_slice())
             .expect("cluster mint activity");
-        assert_eq!(cluster_mint.tx_hash, create_tx_hash);
-        assert_eq!(cluster_mint.block_hash, create_block_hash);
-        assert_eq!(cluster_mint.actions.len(), 1);
-        assert!(matches!(cluster_mint.actions[0], AssetAction::Mint));
+        assert_eq!(cluster_mint.len(), 1);
+        assert!(matches!(cluster_mint[0], AssetAction::Mint));
 
         let cluster_transfer = object_rows
             .get(cluster_transfer_key.as_slice())
             .expect("cluster transfer activity");
-        assert_eq!(cluster_transfer.tx_hash, transfer_tx_hash);
-        assert_eq!(cluster_transfer.block_hash, transfer_block_hash);
-        assert_eq!(cluster_transfer.actions.len(), 1);
-        assert!(matches!(cluster_transfer.actions[0], AssetAction::Transfer));
+        assert_eq!(cluster_transfer.len(), 1);
+        assert!(matches!(cluster_transfer[0], AssetAction::Transfer));
 
         let bit_cell_mint = identity_rows
             .get(bit_cell_mint_key.as_slice())
             .expect(".bit Cell mint activity");
-        assert_eq!(bit_cell_mint.tx_hash, create_tx_hash);
-        assert_eq!(bit_cell_mint.block_hash, create_block_hash);
-        assert_eq!(bit_cell_mint.actions.len(), 1);
-        assert!(matches!(bit_cell_mint.actions[0], AssetAction::Mint));
+        assert_eq!(bit_cell_mint.len(), 1);
+        assert!(matches!(bit_cell_mint[0], AssetAction::Mint));
 
         let bit_cell_burn = identity_rows
             .get(bit_cell_burn_key.as_slice())
             .expect(".bit Cell burn activity");
-        assert_eq!(bit_cell_burn.tx_hash, transfer_tx_hash);
-        assert_eq!(bit_cell_burn.block_hash, transfer_block_hash);
-        assert_eq!(bit_cell_burn.actions.len(), 1);
-        assert!(matches!(bit_cell_burn.actions[0], AssetAction::Burn));
+        assert_eq!(bit_cell_burn.len(), 1);
+        assert!(matches!(bit_cell_burn[0], AssetAction::Burn));
     }
 
     #[test]
@@ -8467,39 +8504,24 @@ mod tests {
         )
         .expect("dotbit collection activity rows");
 
-        let identity_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
+        let identity_rows: HashMap<Vec<u8>, Vec<AssetAction>> = rows
             .iter()
             .filter(|row| row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES)
             .map(|row| {
                 (
                     row.key.clone(),
-                    bincode::deserialize(&row.value)
+                    ckbadger_store::decode_stored_collection_activity(&row.value)
                         .expect("deserialize identity collection activity"),
                 )
             })
             .collect();
 
-        let mint_key = keys::encode_object_collection_activity_key(
-            &DOTBIT_SENTINEL_COLLECTION,
-            300,
-            0,
-            &[0xa0; 32],
-            &[0x31; 32],
-        );
-        let transfer_key = keys::encode_object_collection_activity_key(
-            &DOTBIT_SENTINEL_COLLECTION,
-            301,
-            0,
-            &[0xa1; 32],
-            &[0x32; 32],
-        );
-        let recycle_key = keys::encode_object_collection_activity_key(
-            &DOTBIT_SENTINEL_COLLECTION,
-            302,
-            0,
-            &[0xa2; 32],
-            &[0x33; 32],
-        );
+        let mint_key =
+            keys::encode_object_collection_activity_key(&DOTBIT_SENTINEL_COLLECTION, 300, 0);
+        let transfer_key =
+            keys::encode_object_collection_activity_key(&DOTBIT_SENTINEL_COLLECTION, 301, 0);
+        let recycle_key =
+            keys::encode_object_collection_activity_key(&DOTBIT_SENTINEL_COLLECTION, 302, 0);
 
         assert_eq!(identity_rows.len(), 3);
         assert_eq!(
@@ -8508,20 +8530,20 @@ mod tests {
         );
 
         let mint = identity_rows.get(mint_key.as_slice()).expect("dotbit mint");
-        assert_eq!(mint.actions.len(), 1);
-        assert!(matches!(mint.actions[0], AssetAction::Mint));
+        assert_eq!(mint.len(), 1);
+        assert!(matches!(mint[0], AssetAction::Mint));
 
         let transfer = identity_rows
             .get(transfer_key.as_slice())
             .expect("dotbit transfer");
-        assert_eq!(transfer.actions.len(), 1);
-        assert!(matches!(transfer.actions[0], AssetAction::Transfer));
+        assert_eq!(transfer.len(), 1);
+        assert!(matches!(transfer[0], AssetAction::Transfer));
 
         let recycle = identity_rows
             .get(recycle_key.as_slice())
             .expect("dotbit recycle");
-        assert_eq!(recycle.actions.len(), 1);
-        assert!(matches!(recycle.actions[0], AssetAction::Recycle));
+        assert_eq!(recycle.len(), 1);
+        assert!(matches!(recycle[0], AssetAction::Recycle));
     }
 
     /// Regression: mNFT token collection activities must be recorded during
@@ -8684,13 +8706,13 @@ mod tests {
         .expect("mnft collection activity rows");
 
         // Should produce object rows, not identity rows
-        let object_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
+        let object_rows: HashMap<Vec<u8>, Vec<AssetAction>> = rows
             .iter()
             .filter(|row| row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES)
             .map(|row| {
                 (
                     row.key.clone(),
-                    bincode::deserialize(&row.value)
+                    ckbadger_store::decode_stored_collection_activity(&row.value)
                         .expect("deserialize object collection activity"),
                 )
             })
@@ -8706,42 +8728,24 @@ mod tests {
         assert_eq!(identity_count, 0);
 
         // Verify mint
-        let mint_key = keys::encode_object_collection_activity_key(
-            &class_id,
-            400,
-            0,
-            &[0xb0; 32],
-            &[0x41; 32],
-        );
+        let mint_key = keys::encode_object_collection_activity_key(&class_id, 400, 0);
         let mint = object_rows.get(mint_key.as_slice()).expect("mnft mint");
-        assert_eq!(mint.actions.len(), 1);
-        assert!(matches!(mint.actions[0], AssetAction::Mint));
+        assert_eq!(mint.len(), 1);
+        assert!(matches!(mint[0], AssetAction::Mint));
 
         // Verify transfer
-        let transfer_key = keys::encode_object_collection_activity_key(
-            &class_id,
-            401,
-            0,
-            &[0xb1; 32],
-            &[0x42; 32],
-        );
+        let transfer_key = keys::encode_object_collection_activity_key(&class_id, 401, 0);
         let transfer = object_rows
             .get(transfer_key.as_slice())
             .expect("mnft transfer");
-        assert_eq!(transfer.actions.len(), 1);
-        assert!(matches!(transfer.actions[0], AssetAction::Transfer));
+        assert_eq!(transfer.len(), 1);
+        assert!(matches!(transfer[0], AssetAction::Transfer));
 
         // Verify burn
-        let burn_key = keys::encode_object_collection_activity_key(
-            &class_id,
-            402,
-            0,
-            &[0xb2; 32],
-            &[0x43; 32],
-        );
+        let burn_key = keys::encode_object_collection_activity_key(&class_id, 402, 0);
         let burn = object_rows.get(burn_key.as_slice()).expect("mnft burn");
-        assert_eq!(burn.actions.len(), 1);
-        assert!(matches!(burn.actions[0], AssetAction::Burn));
+        assert_eq!(burn.len(), 1);
+        assert!(matches!(burn[0], AssetAction::Burn));
 
         // Verify object activity count deltas (regression: was missing before fix)
         assert_eq!(
@@ -8949,7 +8953,6 @@ mod tests {
         // Verify presized produces identical output to standard bincode::serialize.
         let header = CachedBlockHeader {
             hash: vec![0xaa; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1710000000000,
             epoch_number: 100,
             epoch_index: 5,
@@ -8990,7 +8993,6 @@ mod tests {
     fn test_bincode_serialize_presized_empty_vec_field() {
         let header = CachedBlockHeader {
             hash: vec![],
-            parent_hash: vec![0u8; 32],
             timestamp: 0,
             epoch_number: 0,
             epoch_index: 0,
@@ -9045,6 +9047,84 @@ mod tests {
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
         assert!(!direct_snapshot_rows.is_empty());
+    }
+
+    /// The bulk build serializes an `activities` value and a collection
+    /// activity value straight into its history chunk from the borrowed
+    /// stored views (`TxActions::stored_ref`, `ObjectCollectionActivityEntry::stored`):
+    /// no `Vec` per row, and the bytes are exactly the live writer's
+    /// `encode_stored()`.
+    #[test]
+    fn history_chunk_writes_stored_activity_values_as_encode_stored() {
+        let tx_actions = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index: 3,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![ckbadger_store::types::ProtocolAction::new(
+                "spore",
+                "mint",
+                serde_json::json!({"id": "0x01"}),
+            )],
+            type_calls: vec![ckbadger_store::types::TypeCallEntry {
+                type_code_hash: vec![0x5c; 32],
+                type_hash_type: 1,
+                type_args: vec![7, 8],
+            }],
+            lock_calls: vec![ckbadger_store::types::LockCallEntry {
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 1,
+                lock_args: vec![9; 20],
+            }],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                id: ParticipantId::Lock([0x33; 32]),
+                ckb_delta: -100_00000000,
+                used_delta: 61_00000000,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            }],
+        };
+        let entry = ckbadger_store::types::ObjectCollectionActivityEntry {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            timestamp_ms: 1_700_000_000_000,
+            actions: vec![AssetAction::Mint, AssetAction::Transfer],
+        };
+
+        let mut chunk = materialize::EncodedHistoryChunk::with_capacity(2, 0);
+        chunk
+            .push_serialized(CF_TX_ACTIONS, b"tx", &tx_actions.stored_ref())
+            .unwrap();
+        chunk
+            .push_serialized(CF_OBJECT_COLLECTION_ACTIVITIES, b"col", entry.stored())
+            .unwrap();
+        let mut rows = Vec::new();
+        chunk
+            .consume(|cf, key, value| {
+                rows.push((cf, key.to_vec(), value.to_vec()));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (CF_TX_ACTIONS, b"tx".to_vec(), tx_actions.encode_stored()),
+                (
+                    CF_OBJECT_COLLECTION_ACTIVITIES,
+                    b"col".to_vec(),
+                    entry.encode_stored()
+                ),
+            ]
+        );
+        let stored = ckbadger_store::types::decode_stored_tx_actions(&rows[0].2).unwrap();
+        assert_eq!(stored.participants.len(), 1);
+        assert_eq!(
+            ckbadger_store::types::decode_stored_collection_activity(&rows[1].2).unwrap(),
+            entry.actions
+        );
     }
 
     #[test]
@@ -9122,6 +9202,44 @@ mod tests {
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 
+    /// Whether `key` is an `ACTIVITY_*_ADDR_ROW` row.
+    fn is_activity_addr_row(key: &[u8]) -> bool {
+        matches!(
+            key.first().copied(),
+            Some(
+                keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW
+                    | keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW
+            )
+        )
+    }
+
+    /// The rows of an oracle that never sealed, as bulk build writes them:
+    /// without the address rows of the buckets complete at `watermark_ms`
+    /// (C-3: a bucket's address set dies with it when it seals).
+    fn without_sealed_addr_rows(
+        rows: Vec<materialize::MaterializedRow>,
+        watermark_ms: i64,
+    ) -> Vec<materialize::MaterializedRow> {
+        rows.into_iter()
+            .filter(|row| {
+                let kind = match row.key.first().copied() {
+                    Some(keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW) => {
+                        keys::ActivityBucketKind::Daily
+                    }
+                    Some(keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW) => {
+                        keys::ActivityBucketKind::Hourly
+                    }
+                    _ => return true,
+                };
+                let bucket = std::str::from_utf8(&row.key[1..1 + kind.bucket_len()]).unwrap();
+                let end =
+                    bucket_end_from_utc8_key(bucket, kind == keys::ActivityBucketKind::Hourly)
+                        .unwrap();
+                !is_bucket_complete(end, watermark_ms)
+            })
+            .collect()
+    }
+
     #[test]
     fn activity_stats_seal_only_buckets_older_than_ckb_mtp() {
         let action = TxActions {
@@ -9161,7 +9279,12 @@ mod tests {
         let sealed = acc
             .apply_batch(&[block(1, 7_200_000), block(2, 10_800_000)], &[])
             .unwrap();
-        assert_eq!(sealed.len(), 2, "hourly stats + hourly address set");
+        assert_eq!(
+            sealed.len(),
+            1,
+            "hourly stats only: the address set dies with its sealed bucket"
+        );
+        assert!(!is_activity_addr_row(&sealed[0].key));
         let hour_key = ckbadger_common::block_datetime_from_ms(0)
             .format("%Y%m%d%H")
             .to_string();
@@ -9185,6 +9308,38 @@ mod tests {
         assert!(next.is_empty(), "new hour remains open");
         assert!(!acc.hourly_stats.contains_key(&hour_key));
         assert!(acc.daily_stats.contains_key(&day_key));
+    }
+
+    /// Finding 11: bulk finalize records the handoff tip's UTC+8 hour as the
+    /// activity address row floor (every earlier bucket was sealed without
+    /// address rows), a `FinalSnapshot` row; a run that sealed no block
+    /// records none.
+    #[test]
+    fn finalize_records_the_handoff_hour_as_the_activity_addr_row_floor() {
+        assert!(ActivityStatsAccumulator::default()
+            .addr_row_floor_row()
+            .unwrap()
+            .is_none());
+        // 2026-03-09 05:01 UTC+8.
+        let tip_time = 1_772_985_600_000 + 5 * 3_600_000 + 60_000;
+        let mut acc = ActivityStatsAccumulator::default();
+        acc.apply_batch(
+            &[facts::BlockFacts {
+                number: 7,
+                chain_time_ms: tip_time,
+                ..Default::default()
+            }],
+            &[],
+        )
+        .unwrap();
+        let row = acc.addr_row_floor_row().unwrap().expect("a sealed block");
+        assert_eq!(row.cf_name, ckbadger_store::CF_SYNC_META);
+        assert_eq!(row.key, keys::sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR);
+        assert_eq!(row.value, b"2026030905".to_vec());
+        assert_eq!(
+            ckbadger_store::cf_write_policy(row.cf_name),
+            ckbadger_store::CfWritePolicy::FinalSnapshot
+        );
     }
 
     #[test]
@@ -9218,7 +9373,7 @@ mod tests {
         one_shot
             .apply_tx_actions(std::slice::from_ref(&action))
             .unwrap();
-        let mut expected = one_shot.build_rows().unwrap();
+        let expected = one_shot.build_rows().unwrap();
 
         let mut incremental = ActivityStatsAccumulator::default();
         let mut actual = incremental
@@ -9230,6 +9385,14 @@ mod tests {
                 .unwrap(),
         );
         actual.extend(incremental.build_rows().unwrap());
+        // A bucket sealed by the incremental path keeps no address row
+        // (C-3); the one-shot oracle never seals.
+        let mut expected = without_sealed_addr_rows(
+            expected,
+            incremental
+                .sealed_through_ms
+                .expect("batches advanced the watermark"),
+        );
 
         let sort_rows = |rows: &mut Vec<materialize::MaterializedRow>| {
             rows.sort_by(|a, b| {
@@ -9265,7 +9428,6 @@ mod tests {
                 facts::BlockFacts {
                     number: 100,
                     hash: [0x01; 32],
-                    parent_hash: [0u8; 32],
                     timestamp_ms: ts1,
                     chain_time_ms: ts1,
                     epoch_number: 5,
@@ -9282,7 +9444,6 @@ mod tests {
                 facts::BlockFacts {
                     number: 101,
                     hash: [0x02; 32],
-                    parent_hash: [0u8; 32],
                     timestamp_ms: ts2,
                     chain_time_ms: ts2,
                     epoch_number: 5,
@@ -10228,7 +10389,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_stats_build_rows_emits_addr_set_entries() {
+    fn activity_stats_build_rows_emits_address_rows_of_open_buckets() {
         let tx_actions = TxActions {
             tx_hash: vec![0x11; 32],
             block_hash: vec![0x22; 32],
@@ -10261,40 +10422,24 @@ mod tests {
             .format("%Y%m%d%H")
             .to_string();
 
-        // Expect: ACTIVITY_DAILY row, ACTIVITY_DAILY_ADDR_SET row,
-        //         ACTIVITY_HOURLY row, ACTIVITY_HOURLY_ADDR_SET row
+        // Every bucket is open at finalize: ACTIVITY_DAILY row and the day's
+        // address row, ACTIVITY_HOURLY row and the hour's address row.
         assert_eq!(
             rows.len(),
             4,
-            "expected 4 rows: daily + daily_addr_set + hourly + hourly_addr_set"
+            "daily + daily address + hourly + hourly address"
         );
-
-        // Verify ACTIVITY_DAILY_ADDR_SET key and value
-        let daily_addr_set_key = keys::encode_stats_key(
-            keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            date_key.as_bytes(),
-        );
-        let daily_addr_row = rows
-            .iter()
-            .find(|r| r.key == daily_addr_set_key)
-            .expect("ACTIVITY_DAILY_ADDR_SET row must exist");
-        assert_eq!(daily_addr_row.cf_name, CF_STATS_CHAIN);
-        // Value is flat sorted 32-byte hashes; 1 participant => 32 bytes
-        assert_eq!(daily_addr_row.value.len(), 32);
-        assert_eq!(&daily_addr_row.value[..32], &[0x33; 32]);
-
-        // Verify ACTIVITY_HOURLY_ADDR_SET key and value
-        let hourly_addr_set_key = keys::encode_stats_key(
-            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
-            hour_key.as_bytes(),
-        );
-        let hourly_addr_row = rows
-            .iter()
-            .find(|r| r.key == hourly_addr_set_key)
-            .expect("ACTIVITY_HOURLY_ADDR_SET row must exist");
-        assert_eq!(hourly_addr_row.cf_name, CF_STATS_CHAIN);
-        assert_eq!(hourly_addr_row.value.len(), 32);
-        assert_eq!(&hourly_addr_row.value[..32], &[0x33; 32]);
+        for (kind, bucket) in [
+            (keys::ActivityBucketKind::Daily, date_key),
+            (keys::ActivityBucketKind::Hourly, hour_key),
+        ] {
+            let row = rows
+                .iter()
+                .find(|r| r.key == kind.addr_row_key(&bucket, &[0x33; 32]).unwrap())
+                .unwrap_or_else(|| panic!("{kind:?} address row must exist"));
+            assert_eq!(row.cf_name, CF_STATS_CHAIN);
+            assert!(row.value.is_empty());
+        }
     }
 
     /// J15: a transaction reaches each activity bucket map ONCE — the day and
@@ -10390,7 +10535,7 @@ mod tests {
     /// blocks share a chain time, one raw timestamp a day behind), repeated
     /// and prefix-only participants, cellbase-only blocks, protocol actions
     /// and script calls, and buckets whose only participants are cellbase or
-    /// prefix-only — which get stats but NO address-set row.
+    /// prefix-only — which get stats but NO address row.
     #[test]
     fn activity_runs_write_the_rows_of_per_transaction_folding() {
         use ckbadger_store::types::{
@@ -10547,30 +10692,44 @@ mod tests {
         let key = |prefix: u8, bucket: String| keys::encode_stats_key(prefix, bucket.as_bytes());
         let day = |t: i64| ckbadger_common::stats_bucket::stats_date_key(t).unwrap();
         let hour = |t: i64| ckbadger_common::stats_bucket::stats_hour_utc8_key(t).unwrap();
-        let row_keys: Vec<Vec<u8>> = expected.iter().map(|row| row.key.clone()).collect();
-        use keys::stats_prefix::{
-            ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_SET,
+        use keys::stats_prefix::{ACTIVITY_DAILY, ACTIVITY_HOURLY};
+        use keys::ActivityBucketKind::{Daily, Hourly};
+        let addr_row = |kind: keys::ActivityBucketKind, bucket: String, byte: u8| {
+            kind.addr_row_key(&bucket, &[byte; 32]).unwrap()
         };
         let mut wanted = vec![
             key(ACTIVITY_DAILY, day(base)),
-            key(ACTIVITY_DAILY_ADDR_SET, day(base)),
             key(ACTIVITY_DAILY, day(base + DAY)),
             key(ACTIVITY_HOURLY, hour(base)),
-            key(ACTIVITY_HOURLY_ADDR_SET, hour(base)),
             key(ACTIVITY_HOURLY, hour(base + HOUR)),
-            key(ACTIVITY_HOURLY_ADDR_SET, hour(base + HOUR)),
             key(ACTIVITY_HOURLY, hour(base + 2 * HOUR)),
             key(ACTIVITY_HOURLY, hour(base + DAY)),
         ];
+        // The oracle never seals, so it keeps every bucket's address rows.
+        // Cellbase (tx index 0) and prefix-only participants are not
+        // addresses.
+        for byte in [0x02, 0x03, 0x04, 0x06] {
+            wanted.push(addr_row(Daily, day(base), byte));
+        }
+        for byte in [0x02, 0x03, 0x04] {
+            wanted.push(addr_row(Hourly, hour(base), byte));
+        }
+        for byte in [0x02, 0x06] {
+            wanted.push(addr_row(Hourly, hour(base + HOUR), byte));
+        }
         wanted.sort();
-        let mut got = row_keys.clone();
+        let mut got: Vec<Vec<u8>> = expected.iter().map(|row| row.key.clone()).collect();
         got.sort();
         assert_eq!(
             got, wanted,
             "chain-time buckets only (none for 101's or 106's raw hour or day), and no \
-             address-set row for hour 08 or day two, whose only participants are \
+             address row for hour 08 or day two, whose only participants are \
              cellbase or prefix-only"
         );
+        // The production path seals every bucket but day two and its hour
+        // (the final watermark's), so it writes no address row (C-3).
+        let expected = without_sealed_addr_rows(expected, base + DAY);
+        assert!(expected.iter().all(|row| !is_activity_addr_row(&row.key)));
 
         // Production path, one batch: the hour and day boundaries fall
         // inside it, so it lands several runs and seals the first day.

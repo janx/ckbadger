@@ -335,9 +335,7 @@ fn unix(instant: &str) -> u64 {
 /// last round that finished inside it, and `ts` is the UTC+8 midnight.
 #[tokio::test]
 async fn daily_history_buckets_rounds_by_utc8_calendar_day() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     // UTC day 10-23 holds rounds of two UTC+8 days.
     put_round(&network, unix("2026-10-23T10:00:00Z"), 11); // 10-23 18:00 UTC+8
     put_round(&network, unix("2026-10-23T20:00:00Z"), 12); // 10-24 04:00 UTC+8
@@ -384,9 +382,7 @@ async fn daily_history_buckets_rounds_by_utc8_calendar_day() {
 
 #[tokio::test]
 async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     // D2: one round on UTC+8 days 10 and 12 (UTC midnight is 08:00 UTC+8, the
     // same calendar day); a UTC+8 day starts at `day * 86_400 - 28_800`.
     for day in [10u64, 12] {
@@ -424,9 +420,7 @@ async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() 
 
 #[tokio::test]
 async fn daily_history_future_to_never_includes_the_incomplete_or_future_day() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -478,9 +472,7 @@ async fn summary_uses_exact_verification_terms_and_checked_projections() {
 
 #[tokio::test]
 async fn summary_exposes_local_observer_and_directional_session_evidence() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     network
         .put_network_status(&LatestStatus {
             round_id: 9,
@@ -527,9 +519,7 @@ async fn summary_exposes_local_observer_and_directional_session_evidence() {
 
 #[tokio::test]
 async fn summary_preserves_the_observed_144_57_87_58_semantic_split() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     network
         .put_network_status(&LatestStatus {
             round_id: 53,
@@ -653,9 +643,7 @@ async fn history_uses_verified_peer_metric_names() {
 
 #[tokio::test]
 async fn history_day_excludes_the_incomplete_current_day() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -679,9 +667,7 @@ async fn history_fails_fast_when_bucket_timestamp_overflows() {
     use ckbadger_store::network_keys::{Granularity, Metric};
     use ckbadger_store::{CkbadgerStore, HistoryPoint};
 
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(CkbadgerStore::open_test_network_temp().unwrap());
     network
         .put_history_point(
             Metric::VerifiedPeers,
@@ -759,9 +745,7 @@ async fn peers_reject_unknown_state_and_observation_before_store_access() {
 
 #[tokio::test]
 async fn peers_fail_when_persisted_candidate_has_no_positive_evidence() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     network
         .checkpoint_crawl(
             &ActiveCrawl {
@@ -887,9 +871,7 @@ async fn peer_routes_expose_addressless_direct_session_as_orthogonal_positive_ev
 
 #[tokio::test]
 async fn staged_addressless_direct_session_is_hidden_until_completed_publication() {
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
     network
         .checkpoint_crawl(
             &ActiveCrawl {

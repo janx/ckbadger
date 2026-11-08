@@ -295,7 +295,9 @@ impl CkbadgerStore {
                 );
             }
             let block = if spec.name == CF_TX_ACTIONS {
-                i64::MAX - keys::decode_block_num(&key)
+                keys::decode_stored_tx_actions_key(&key)
+                    .map_err(|e| anyhow::anyhow!("rollback to {target}: {e:#}"))?
+                    .0
             } else {
                 keys::decode_block_num(&key)
             };
@@ -491,7 +493,7 @@ mod tests {
         batch
             .put_raw_cf_by_name(
                 CF_TX_ACTIONS,
-                &keys::encode_tx_actions_key(block, 0, &[block as u8; 32]),
+                &keys::encode_tx_actions_key(block, 0),
                 b"activity",
             )
             .unwrap();
@@ -647,7 +649,7 @@ mod tests {
                 .filter(|(row_cf, _)| *row_cf == cf)
                 .map(|(_, key)| {
                     if cf == CF_TX_ACTIONS {
-                        i64::MAX - keys::decode_block_num(key)
+                        keys::decode_stored_tx_actions_key(key).unwrap().0
                     } else {
                         keys::decode_block_num(key)
                     }
@@ -896,11 +898,7 @@ mod tests {
                 keys::encode_reorg_undo_log_key(9, UndoSeqScope::Journal.seq_base()).to_vec(),
                 9,
             ),
-            (
-                CF_TX_ACTIONS,
-                keys::encode_tx_actions_key(7, 0, &[7; 32]).to_vec(),
-                7,
-            ),
+            (CF_TX_ACTIONS, keys::encode_tx_actions_key(7, 0).to_vec(), 7),
         ] {
             let (store, _dir) = open();
             chain(&store);

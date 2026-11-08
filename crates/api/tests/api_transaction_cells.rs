@@ -156,7 +156,6 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
         7,
         &CachedBlockHeader {
             hash: block_hash.to_vec(),
-            parent_hash: vec![0; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -210,9 +209,12 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
             udt_amount: (i == 2).then_some(amount),
             data_hash: None,
         };
-        batch.put_consumed_cell_with_consumer(&prev_hash, i as i16, &cell, 7, 7, Some(&tx_hash));
-        batch.put_consumed_cell_with_consumer(&tx_hash, i as i16, &cell, 7, 8, Some(&[0x99; 32]));
+        // The inputs are consumed by this transaction at (7, 1), its outputs by
+        // the one seeded at (8, 0).
+        batch.put_consumed_cell(&prev_hash, i as i16, &cell, 7, 7, 1);
+        batch.put_consumed_cell(&tx_hash, i as i16, &cell, 7, 8, 0);
     }
+    seed_tx_at(&mut batch, &[0x99; 32], 8, 0);
     batch.commit().unwrap();
     if !missing_object {
         store

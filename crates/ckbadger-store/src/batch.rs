@@ -7,7 +7,7 @@ use ckbadger_common::TokenBalance;
 
 use crate::block_overlay::{JournalStats, SharedBlockOverlay};
 use crate::keys;
-use crate::store::{cf_spec, CkbadgerStore, RollbackClass, StoreWriteIntent};
+use crate::store::{cf_spec, CkbadgerStore, OutsideWriter, RollbackClass, StoreWriteIntent};
 use crate::types::*;
 
 /// How many keys one append-only existence probe reads at a time.
@@ -47,6 +47,10 @@ pub struct StoreBatch<'a> {
     /// refused (`CkbadgerStore::check_unjournaled_write`); `commit` returns
     /// it and writes nothing.
     discipline_error: Option<anyhow::Error>,
+    /// The writer of this unjournaled batch ([`Self::outside_journal`]): the
+    /// journal discipline admits its writes where an `OUTSIDE_JOURNAL` entry
+    /// names it.
+    writer: Option<OutsideWriter>,
 }
 
 /// The journaled side of a [`StoreBatch`]: the shared overlay, which
@@ -99,7 +103,18 @@ impl<'a> StoreBatch<'a> {
             pending_fiber_channel_by_commitment: HashMap::new(),
             journal: None,
             discipline_error: None,
+            writer: None,
         }
+    }
+
+    /// An unjournaled batch of `writer`: its writes to a whole column family
+    /// that `OUTSIDE_JOURNAL` reserves for `writer` (label import's CFs, the
+    /// derived aggregates) pass the journal discipline; any other batch's are
+    /// refused.
+    pub fn outside_journal(store: &'a CkbadgerStore, writer: OutsideWriter) -> Self {
+        let mut batch = Self::new(store);
+        batch.writer = Some(writer);
+        batch
     }
 
     /// A domain batch of a live write: its writes to `Journal`-class CFs go
@@ -593,7 +608,7 @@ impl<'a> StoreBatch<'a> {
         let checked = self
             .store
             .cf_name_for_handle(cf)
-            .and_then(|name| self.store.check_unjournaled_write(name, key));
+            .and_then(|name| self.store.check_unjournaled_write(name, key, self.writer));
         if let Err(error) = checked {
             self.discipline_error = Some(error);
         }
@@ -648,7 +663,7 @@ impl<'a> StoreBatch<'a> {
         }
         if self.journal.is_none() {
             self.store
-                .check_unjournaled_range_delete(cf_name, start, end)?;
+                .check_unjournaled_range_delete(cf_name, start, end, self.writer)?;
         }
         let cf = self.store.cf(cf_name);
         self.batch.delete_range_cf(cf, start, end);
@@ -776,6 +791,8 @@ impl<'a> StoreBatch<'a> {
     /// Write consumed cell (payload + metadata) in one batch. Only valid for TestUnified
     /// stores (domain + append-only CFs coexist). Production code should use separate batches:
     /// `put_cell_payload` on append-only batch + `put_consumed_cell_meta` on domain batch.
+    /// `(consumed_at_block, consumed_tx_idx)` is the consuming transaction's canonical
+    /// position; readers resolve its hash through `tx_index`.
     pub fn put_consumed_cell(
         &mut self,
         tx_hash: &[u8],
@@ -783,60 +800,36 @@ impl<'a> StoreBatch<'a> {
         info: &LiveCellInfo,
         created_at_block: i64,
         consumed_at_block: i64,
-    ) {
-        self.put_consumed_cell_with_consumer(
-            tx_hash,
-            output_index,
-            info,
-            created_at_block,
-            consumed_at_block,
-            None,
-        );
-    }
-
-    /// Write consumed cell with consumer tx (payload + metadata) in one batch. Only valid for
-    /// TestUnified stores (domain + append-only CFs coexist). Production code should use
-    /// separate batches: `put_cell_payload` on append-only batch +
-    /// `put_consumed_cell_meta` on domain batch.
-    pub fn put_consumed_cell_with_consumer(
-        &mut self,
-        tx_hash: &[u8],
-        output_index: i16,
-        info: &LiveCellInfo,
-        created_at_block: i64,
-        consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.put_consumed_cell_with_consumer_raw_key(
+        self.put_consumed_cell_raw_key(
             &key,
             info,
             created_at_block,
             consumed_at_block,
-            consumed_by_tx,
+            consumed_tx_idx,
         );
     }
 
-    /// Mark a cell as consumed using pre-encoded outpoint key. Only valid for TestUnified
-    /// stores (domain + append-only CFs coexist). Production code should use separate batches:
-    /// `put_cell_payload` on append-only batch + `put_consumed_cell_meta` on domain batch.
-    pub fn put_consumed_cell_with_consumer_raw_key(
+    /// [`Self::put_consumed_cell`] with a pre-encoded outpoint key. Only valid for TestUnified
+    /// stores.
+    pub fn put_consumed_cell_raw_key(
         &mut self,
         raw_key: &[u8],
         info: &LiveCellInfo,
         created_at_block: i64,
         consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
         self.put_test_store_cell_payload(raw_key, info);
-        let consumed = ConsumedCellMeta {
+        self.put_consumed_cell_meta_raw_key(
+            raw_key,
             created_at_block,
             consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
-        };
-        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
-        self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
+            consumed_tx_idx,
+        );
     }
 
     /// Write consumed cell metadata to CF_CONSUMED_CELLS. Call on domain store batch.
@@ -848,14 +841,14 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
         created_at_block: i64,
         consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         self.put_consumed_cell_meta_raw_key(
             &key,
             created_at_block,
             consumed_at_block,
-            consumed_by_tx,
+            consumed_tx_idx,
         );
     }
 
@@ -866,12 +859,12 @@ impl<'a> StoreBatch<'a> {
         raw_key: &[u8],
         created_at_block: i64,
         consumed_at_block: i64,
-        consumed_by_tx: Option<&[u8]>,
+        consumed_tx_idx: i32,
     ) {
         let consumed = ConsumedCellMeta {
             created_at_block,
             consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
+            consumed_tx_idx,
         };
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
         self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
@@ -1088,15 +1081,17 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_addr_balance(), lock_hash, &value);
     }
 
+    /// The `addr_txs` row of `lock_hash` at the transaction position
+    /// `(block_num, tx_idx)` (the key holds no tx hash: readers resolve it
+    /// through `tx_index`).
     pub fn put_addr_tx(
         &mut self,
         lock_hash: &[u8],
         block_num: i64,
         tx_idx: i32,
-        tx_hash: &[u8],
         value: &AddrTxValue,
     ) {
-        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
+        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
         let encoded = bincode::serialize(value).expect("serialize AddrTxValue");
         self.put_cf(self.store.cf_addr_txs(), &key, &encoded);
     }
@@ -1110,10 +1105,9 @@ impl<'a> StoreBatch<'a> {
         prefix: &[u8],
         block_num: i64,
         tx_idx: i32,
-        tx_hash: &[u8],
         value: &AddrTxValue,
     ) {
-        let key = keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx, tx_hash);
+        let key = keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx);
         let encoded = bincode::serialize(value).expect("serialize AddrTxValue");
         self.put_cf(self.store.cf_addr_txs_by_prefix(), &key, &encoded);
     }
@@ -1154,6 +1148,27 @@ impl<'a> StoreBatch<'a> {
     /// Remove one undo-log entry by its full `block + seq` key.
     pub fn delete_reorg_undo_log_key(&mut self, key: &[u8]) {
         self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
+    }
+
+    /// Write one reorg event (`reorg_events`, rollback class `Never`): `key`
+    /// is its `reorg:<ms>:<uuid>` history key, `value` the bincode
+    /// `ReorgEvent`.
+    pub fn put_reorg_event(&mut self, key: &[u8], value: &[u8]) {
+        self.put_cf(self.store.cf_reorg_events(), key, value);
+    }
+
+    /// Persist the UTC+8 activity hour the activity address rows are pruned to
+    /// (`sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR`) in the same atomic batch,
+    /// and the same block scope, as the deletions it describes.
+    pub fn put_activity_addr_row_floor(&mut self, hour_label: &str) {
+        assert!(
+            hour_label.len() == 10 && hour_label.bytes().all(|b| b.is_ascii_digit()),
+            "activity address row floor must be a UTC+8 hour label, got {hour_label:?}"
+        );
+        self.put_sync_meta(
+            keys::sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR,
+            hour_label.as_bytes(),
+        );
     }
 
     /// Persist one hourly family's retention state in the same atomic batch as
@@ -1409,22 +1424,41 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
+    /// A spore item's outpoint (`object_outpoints`) and its reverse-index row
+    /// (`object_outpoint_by_id`, value empty; an identity's action is
+    /// [`Self::put_spore_item_action`]).
     pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_spore(), key, spore_id);
-        // Reverse index: spore_id → outpoints
+        self.put_cf(self.store.cf_object_outpoints(), key, spore_id);
         let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_spore(), rev_key, &[] as &[u8]);
+        self.put_cf(self.store.cf_object_outpoint_by_id(), rev_key, &[] as &[u8]);
+    }
+
+    /// An identity item's (did:ckb, `.bit Cell`) output action on its
+    /// reverse-index row (`object_outpoint_by_id`).
+    pub fn put_spore_item_action(
+        &mut self,
+        id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+        action: AssetAction,
+    ) {
+        let key = keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index);
+        self.put_cf(
+            self.store.cf_object_outpoint_by_id(),
+            key,
+            [action.compact()],
+        );
     }
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, class_id);
+        self.put_cf(self.store.cf_object_outpoints(), key, class_id);
     }
 
     pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, token_id);
+        self.put_cf(self.store.cf_object_outpoints(), key, token_id);
     }
 
     pub fn put_dotbit_account_outpoint(
@@ -1434,14 +1468,15 @@ impl<'a> StoreBatch<'a> {
         account_id: &[u8],
     ) {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, account_id);
+        self.put_cf(self.store.cf_object_outpoints(), key, account_id);
     }
 
     /// Record that this `.bit` AccountCell-typed output holds no indexed
-    /// account. Domain store (`stats_mnft`); value empty.
+    /// account. Domain store (`object_outpoints`, kind `DOTBIT_UNINDEXED`);
+    /// value empty.
     pub fn put_dotbit_unindexed_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
         let key = keys::encode_dotbit_unindexed_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, []);
+        self.put_cf(self.store.cf_object_outpoints(), key, []);
     }
 
     pub fn put_dotbit_outpoint_by_account_id(
@@ -1452,7 +1487,11 @@ impl<'a> StoreBatch<'a> {
         action: AssetAction,
     ) {
         let key = keys::encode_dotbit_outpoint_by_account_id_key(account_id, tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_mnft(), key, [action.compact()]);
+        self.put_cf(
+            self.store.cf_object_outpoint_by_id(),
+            key,
+            [action.compact()],
+        );
     }
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
@@ -1638,11 +1677,11 @@ impl<'a> StoreBatch<'a> {
     /// The transaction's `TxActions` row and, for a non-cellbase transaction,
     /// its `CF_TX_ACTIONS_BY_BUCKET` row — always together, in this batch, so
     /// the index can never be durable without the row it points at.
+    /// The `activities` row of `actions` (keyed by its position, valued by
+    /// what it did: `TxActions::encode_stored`) and its global bucket row.
     pub fn put_tx_actions(&mut self, actions: &TxActions) {
-        let key =
-            keys::encode_tx_actions_key(actions.block_number, actions.tx_index, &actions.tx_hash);
-        let value = bincode::serialize(actions).expect("serialize TxActions");
-        self.put_cf(self.store.cf_tx_actions(), key, &value);
+        let key = keys::encode_tx_actions_key(actions.block_number, actions.tx_index);
+        self.put_cf(self.store.cf_tx_actions(), key, actions.encode_stored());
         if let Some(bucket_key) = crate::global_bucket::tx_actions_bucket_key(actions) {
             self.put_cf(self.store.cf_tx_actions_by_bucket(), bucket_key, b"");
         }
@@ -1657,15 +1696,13 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ObjectCollectionActivityEntry,
     ) {
-        let key = keys::encode_object_collection_activity_key(
-            collection_id,
-            block_num,
-            tx_idx,
-            &entry.block_hash,
-            &entry.tx_hash,
+        // Keyed by the transaction's position; only the actions are stored.
+        let key = keys::encode_object_collection_activity_key(collection_id, block_num, tx_idx);
+        self.put_cf(
+            self.store.cf_object_collection_activities(),
+            key,
+            entry.encode_stored(),
         );
-        let value = bincode::serialize(entry).expect("serialize ObjectCollectionActivityEntry");
-        self.put_cf(self.store.cf_object_collection_activities(), key, &value);
     }
 
     // ---- Identity collection activities ----
@@ -1696,15 +1733,13 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ObjectCollectionActivityEntry,
     ) {
-        let key = keys::encode_object_collection_activity_key(
-            collection_id,
-            block_num,
-            tx_idx,
-            &entry.block_hash,
-            &entry.tx_hash,
+        // Keyed by the transaction's position; only the actions are stored.
+        let key = keys::encode_object_collection_activity_key(collection_id, block_num, tx_idx);
+        self.put_cf(
+            self.store.cf_identity_collection_activities(),
+            key,
+            entry.encode_stored(),
         );
-        let value = bincode::serialize(entry).expect("serialize identity collection activity");
-        self.put_cf(self.store.cf_identity_collection_activities(), key, &value);
     }
 
     // ---- Statistics ----
@@ -2206,7 +2241,6 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         let header = CachedBlockHeader {
             hash: vec![1u8; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1000,
             epoch_number: 1,
             epoch_index: 0,
@@ -2327,7 +2361,7 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell_with_consumer(&tx_hash, 0, &info, 1, 22, Some(&[0x44; 32]));
+        batch.put_consumed_cell(&tx_hash, 0, &info, 1, 22, 4);
         batch.commit().unwrap();
 
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
@@ -2335,10 +2369,10 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap()
             .unwrap();
-        let decoded: ConsumedCellMeta = bincode::deserialize(&meta).unwrap();
+        let decoded = crate::types::decode_consumed_cell_meta(&meta).unwrap();
         assert_eq!(decoded.created_at_block, 1);
         assert_eq!(decoded.consumed_at_block, 22);
-        assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
+        assert_eq!(decoded.consumed_tx_idx, 4);
     }
 
     #[test]
@@ -2376,14 +2410,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAD; 32];
-        let tx_hash = [0xBE; 32];
         let addr_tx_value = AddrTxValue::new(500, false, true, 0);
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_addr_tx(&lock, 100, 0, &tx_hash, &addr_tx_value);
+        batch.put_addr_tx(&lock, 100, 0, &addr_tx_value);
         batch.commit().unwrap();
 
-        let key = keys::encode_addr_tx_key(&lock, 100, 0, &tx_hash);
+        let key = keys::encode_addr_tx_key(&lock, 100, 0);
         let raw = store.get_cf(store.cf_addr_txs(), &key).unwrap().unwrap();
         let decoded: AddrTxValue = bincode::deserialize(&raw).unwrap();
         assert_eq!(decoded, addr_tx_value);
@@ -2556,41 +2589,56 @@ mod tests {
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 
+    /// A collection activity row is keyed by its transaction's position and
+    /// stores only the actions; a second write at the position replaces the
+    /// first (a block hash is the header's, never a competing row's).
     #[test]
-    fn test_append_only_object_collection_activity_preserves_competing_block_hash_history() {
+    fn a_collection_activity_row_stores_only_its_actions_at_its_position() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = [0x12u8; 32];
-        let tx_hash = vec![0x44; 32];
-
-        let first = ObjectCollectionActivityEntry {
-            tx_hash: tx_hash.clone(),
-            block_hash: vec![0x31; 32],
+        let entry = |block_hash: u8, action| ObjectCollectionActivityEntry {
+            tx_hash: vec![0x44; 32],
+            block_hash: vec![block_hash; 32],
             timestamp_ms: 1_700_000_000_100,
-            actions: vec![AssetAction::Mint],
-        };
-        let second = ObjectCollectionActivityEntry {
-            tx_hash: tx_hash.clone(),
-            block_hash: vec![0x32; 32],
-            timestamp_ms: 1_700_000_000_200,
-            actions: vec![AssetAction::Transfer],
+            actions: vec![action],
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_activity(&collection_id, 100, 0, &first);
-        batch.put_object_collection_activity(&collection_id, 100, 0, &second);
+        batch.put_object_collection_activity(
+            &collection_id,
+            100,
+            0,
+            &entry(0x31, AssetAction::Mint),
+        );
+        batch.put_object_collection_activity(
+            &collection_id,
+            100,
+            0,
+            &entry(0x32, AssetAction::Transfer),
+        );
+        crate::object_ops::test_support::index_collection_activity(
+            &mut batch,
+            100,
+            0,
+            &entry(0x32, AssetAction::Transfer),
+        );
         batch.commit().unwrap();
 
+        let key = keys::encode_object_collection_activity_key(&collection_id, 100, 0);
+        assert_eq!(
+            store
+                .get_cf(store.cf_object_collection_activities(), &key)
+                .unwrap()
+                .unwrap(),
+            bincode::serialize(&vec![AssetAction::Transfer]).unwrap()
+        );
         let rows = store
             .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
-        assert_eq!(rows.len(), 2);
-        assert!(rows
-            .iter()
-            .any(|(_, _, entry)| entry.block_hash == vec![0x31; 32]));
-        assert!(rows
-            .iter()
-            .any(|(_, _, entry)| entry.block_hash == vec![0x32; 32]));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.block_hash, vec![0x32; 32]);
+        assert_eq!(rows[0].2.actions, vec![AssetAction::Transfer]);
     }
 
     /// P3.4: the append-only replay probe costs ONE `multi_get_cf`, not one
@@ -2903,7 +2951,7 @@ mod tests {
 
         let tx_hash = [0xCCu8; 32];
         let output_index: i16 = 0;
-        let consumed_by = [0xDDu8; 32];
+        let consumed_tx_idx = 3;
 
         let info = LiveCellInfo {
             capacity: 20000,
@@ -2932,7 +2980,7 @@ mod tests {
 
         // Consume via raw-key methods
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell_with_consumer_raw_key(&raw_key, &info, 5, 10, Some(&consumed_by));
+        batch.put_consumed_cell_raw_key(&raw_key, &info, 5, 10, consumed_tx_idx);
         batch.delete_cell_raw_key(&raw_key);
         batch.commit().unwrap();
 
@@ -2947,10 +2995,10 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &raw_key)
             .unwrap()
             .unwrap();
-        let meta: ConsumedCellMeta = bincode::deserialize(&meta_bytes).unwrap();
+        let meta = crate::types::decode_consumed_cell_meta(&meta_bytes).unwrap();
         assert_eq!(meta.created_at_block, 5);
         assert_eq!(meta.consumed_at_block, 10);
-        assert_eq!(meta.consumed_by_tx, Some(consumed_by.to_vec()));
+        assert_eq!(meta.consumed_tx_idx, consumed_tx_idx);
 
         // Verify canonical cell payload is still present in CF_CELLS
         let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();
@@ -3114,7 +3162,6 @@ mod tests {
         // Batch a: block header
         let header = CachedBlockHeader {
             hash: vec![0xAA; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 9999,
             epoch_number: 1,
             epoch_index: 0,

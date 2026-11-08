@@ -513,6 +513,15 @@ pub const CF_DOB_DECODED: &str = "dob_decoded";
 /// its canonical slot (`block ‖ tx_idx`): written by the on-demand cycles
 /// worker after the block committed, removed with the block on rollback.
 pub const CF_TX_GROUP_CYCLES: &str = "tx_group_cycles";
+/// Object outpoint index: `kind(1) + outpoint(34)` → the object id
+/// (`keys::object_outpoint_kind`; C-4b, from `stats_spore` / `stats_mnft`).
+pub const CF_OBJECT_OUTPOINTS: &str = "object_outpoints";
+/// Object outpoints by id: `kind(1) + id + outpoint(34)` → empty, or the
+/// identity's `AssetAction` byte (C-4b, from `stats_spore` / `stats_mnft`).
+pub const CF_OBJECT_OUTPOINT_BY_ID: &str = "object_outpoint_by_id";
+/// The reorg-event history, `reorg:<ms>:<uuid>` → `ReorgEvent` (C-4b, from
+/// `sync_meta`): the record of each fork switch and deep-fork detection.
+pub const CF_REORG_EVENTS: &str = "reorg_events";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 /// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
@@ -578,7 +587,9 @@ pub enum RollbackClass {
     /// range, nothing is journaled.
     RangeByBlock,
     /// Never rolled back: the append-only `cells` payloads (orphaned payloads
-    /// are unreachable once their markers are gone), the network store, and
+    /// are unreachable once their markers are gone), the network store,
+    /// `reorg_events` (the history of reorgs, written by reorg handling: a
+    /// rollback is itself recorded there, never undone), and
     /// `pending_proposals` (the proposal cache writes it out of band from
     /// mempool snapshots, with no block context; a committed proposal is
     /// removed after its batch commits and an expired one by the cache's
@@ -632,7 +643,7 @@ const fn cf(
 /// then the domain store in open order), then the network store.
 ///
 /// `RangeByBlock` is only for CFs whose key starts with the block number;
-/// `cells` and `pending_proposals` are `Never`, every other domain CF
+/// `cells`, `pending_proposals` and `reorg_events` are `Never`, every other domain CF
 /// (`dob_decoded` included) `Journal`. The network store is not chain data and
 /// is never rolled back.
 pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
@@ -721,6 +732,9 @@ mod cf_table {
         cf(CF_OBJECT_COLLECTION_ACTIVITY_COUNT,       Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_BIT_CELL_BY_ACCOUNT,                    Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_TX_GROUP_CYCLES,                        Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   RangeByBlock),
+        cf(CF_OBJECT_OUTPOINTS,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_REORG_EVENTS,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -730,6 +744,24 @@ mod cf_table {
 /// The spec of `name`, if it names a column family.
 pub fn cf_spec(name: &str) -> Option<&'static CfSpec> {
     CF_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// A writer an [`OUTSIDE_JOURNAL`] entry can name: the only one allowed to
+/// write that entry's keys outside the journal. An unjournaled write carries
+/// its writer — a [`crate::StoreBatch::outside_journal`] batch, or a direct
+/// write inside [`CkbadgerStore::outside_journal_scope`] on the scope's
+/// thread; any other unjournaled write carries none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideWriter {
+    /// `label_import::import_all` (indexer startup, `ckbadger label-import`).
+    LabelImport,
+    /// The derive scheduler and the rollback reset of derived aggregates.
+    Derive,
+    /// `BatchWriter::record_deep_fork`, which withdraws
+    /// `live_cell_summary:current`.
+    DeepForkRecord,
+    /// `BatchWriter::refresh_latest_dao_statistics`, the DAO tip summary.
+    DaoTipSummary,
 }
 
 /// One range of `Journal`-class keys that is legitimately written outside
@@ -749,6 +781,11 @@ pub struct OutsideJournal {
     /// batches journal it in their block's scope and only the owner writes it
     /// unjournaled.
     pub never_journaled: bool,
+    /// The one writer admitted: every whole-column-family entry (Lane B
+    /// carry-over 4c) and the two also-journaled `(cf, prefix)` entries
+    /// (ruling 5) name it; `None` for a never-journaled `(cf, prefix)` entry,
+    /// which names one narrow key range and admits any unjournaled writer.
+    pub writer: Option<OutsideWriter>,
 }
 
 const fn outside(
@@ -764,6 +801,46 @@ const fn outside(
         owner,
         reason,
         never_journaled,
+        writer: None,
+    }
+}
+
+/// A `(cf, key prefix)` entry with one unjournaled writer: only `writer`
+/// writes its keys outside the journal.
+const fn outside_by(
+    cf: &'static str,
+    key_prefix: &'static [u8],
+    writer: OutsideWriter,
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix,
+        owner,
+        reason,
+        never_journaled,
+        writer: Some(writer),
+    }
+}
+
+/// A whole-column-family entry: only `writer` writes the CF outside the
+/// journal.
+const fn whole_cf(
+    cf: &'static str,
+    writer: OutsideWriter,
+    owner: &'static str,
+    reason: &'static str,
+    never_journaled: bool,
+) -> OutsideJournal {
+    OutsideJournal {
+        cf,
+        key_prefix: b"",
+        owner,
+        reason,
+        never_journaled,
+        writer: Some(writer),
     }
 }
 
@@ -863,21 +940,15 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
     ),
     outside(
         CF_SYNC_META,
-        keys::REORG_EVENT_KEY_PREFIX,
-        "reorg handling (event record, reconciliation links)",
-        "the history of reorgs, not undo state",
-        NEVER,
-    ),
-    outside(
-        CF_SYNC_META,
         keys::sync_meta_keys::REORG_RECONCILE_PENDING,
         "reorg handling",
         "names the reorg event awaiting canonical replay",
         NEVER,
     ),
-    outside(
+    outside_by(
         CF_SYNC_META,
         keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        OutsideWriter::DeepForkRecord,
         "deep-fork record (withdraws it)",
         "a deep fork withdraws the summary until an operator resolves the fork; live batches \
          journal it per block",
@@ -897,79 +968,122 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         "a function of the sync tip, recomputed after every tip change",
         NEVER,
     ),
-    outside(
+    outside_by(
         CF_STATS_DAO,
         &[keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT],
+        OutsideWriter::DaoTipSummary,
         "DAO tip summary (refresh_latest_dao_statistics)",
         "the open day's row is a function of the tip, recomputed after every tip change; a \
          sealed day's row is journaled at its sealer block",
         ALSO_JOURNALED,
     ),
-    outside(CF_DAO_LIVE_AGG, b"", DERIVE, DERIVE_REASON, ALSO_JOURNALED),
-    outside(
+    whole_cf(
+        CF_DAO_LIVE_AGG,
+        OutsideWriter::Derive,
+        DERIVE,
+        DERIVE_REASON,
+        ALSO_JOURNALED,
+    ),
+    whole_cf(
         CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-        b"",
+        OutsideWriter::Derive,
         DERIVE,
         DERIVE_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_BIT_CELL_BY_ACCOUNT,
-        b"",
+        OutsideWriter::Derive,
         DERIVE,
         DERIVE_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS_BY_LABEL,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_VERSIONS_BY_FAMILY,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_FAMILIES,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_FAMILY_BY_NAME,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(
+    whole_cf(
         CF_SCRIPT_INFO,
-        b"",
+        OutsideWriter::LabelImport,
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
     ),
-    outside(CF_TOKENS, b"", LABEL_IMPORT, LABELS_REASON, ALSO_JOURNALED),
+    whole_cf(
+        CF_TOKENS,
+        OutsideWriter::LabelImport,
+        LABEL_IMPORT,
+        LABELS_REASON,
+        ALSO_JOURNALED,
+    ),
 ];
 
-/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any.
+/// The [`OUTSIDE_JOURNAL`] entry covering `(cf, key)`, if any, whoever the
+/// writer (the block overlay's never-journaled test).
 pub fn outside_journal_entry(cf: &str, key: &[u8]) -> Option<&'static OutsideJournal> {
     OUTSIDE_JOURNAL
         .iter()
         .find(|entry| entry.cf == cf && key.starts_with(entry.key_prefix))
+}
+
+/// The [`OUTSIDE_JOURNAL`] entry admitting an unjournaled write of `(cf, key)`
+/// by `writer`, if any: an entry that names no writer admits any, one that
+/// names a writer admits only that one.
+pub fn outside_journal_entry_for(
+    cf: &str,
+    key: &[u8],
+    writer: Option<OutsideWriter>,
+) -> Option<&'static OutsideJournal> {
+    OUTSIDE_JOURNAL.iter().find(|entry| {
+        entry.cf == cf
+            && key.starts_with(entry.key_prefix)
+            && entry.writer.is_none_or(|named| writer == Some(named))
+    })
+}
+
+/// An open [`CkbadgerStore::outside_journal_scope`]; closing it (drop) ends
+/// the scope.
+pub struct OutsideJournalScope<'a> {
+    store: &'a CkbadgerStore,
+}
+
+impl Drop for OutsideJournalScope<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.store.outside_writer_scope.lock() {
+            *slot = None;
+        }
+    }
 }
 
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
@@ -1175,6 +1289,9 @@ pub struct CkbadgerStore {
     /// Set by the indexer: outside bulk sync, an unjournaled commit may write
     /// a `Journal`-class key only where [`OUTSIDE_JOURNAL`] covers it.
     journal_discipline: AtomicBool,
+    /// The writer of direct (non-batch) unjournaled writes made on one thread
+    /// inside [`Self::outside_journal_scope`].
+    outside_writer_scope: Mutex<Option<(std::thread::ThreadId, OutsideWriter)>>,
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
@@ -1187,6 +1304,12 @@ pub struct CkbadgerStore {
     /// batched read instead of N point reads. Never compiled into the binary.
     #[cfg(any(test, feature = "read-call-counters"))]
     read_calls: ReadCallCounters,
+    /// Test-only: the temporary directory an `open_*_temp` store lives in,
+    /// removed when the store drops. The LAST field: fields drop in
+    /// declaration order and `db` is the first, so the database closes before
+    /// its directory is removed, however many `Arc`s shared the store.
+    #[cfg(any(test, feature = "test-store"))]
+    test_dir: Option<tempfile::TempDir>,
 }
 
 #[cfg(any(test, feature = "read-call-counters"))]
@@ -1202,6 +1325,9 @@ struct ReadCallCounters {
     /// Point reads (`get_cf` and each `multi_get_cf` key), by CF name, so a
     /// test can prove a read path never looks a row up in a CF.
     point_reads: Mutex<std::collections::HashMap<&'static str, u64>>,
+    /// `multi_get_cf` / `multi_get_cf_sorted` calls that read a CF, by CF
+    /// name, so a test can prove a page resolves its pointers with one call.
+    multi_gets: Mutex<std::collections::HashMap<&'static str, u64>>,
 }
 
 #[cfg(any(test, feature = "read-call-counters"))]
@@ -1213,6 +1339,17 @@ impl ReadCallCounters {
             .expect("point-read counter poisoned")
             .entry(cf_name)
             .or_insert(0) += 1;
+    }
+
+    /// One multi-get call over `cf_names` (each CF counted once).
+    fn count_multi_get(&self, cf_names: impl IntoIterator<Item = &'static str>) {
+        let mut counts = self.multi_gets.lock().expect("multi-get counter poisoned");
+        let mut seen = std::collections::HashSet::new();
+        for cf_name in cf_names {
+            if seen.insert(cf_name) {
+                *counts.entry(cf_name).or_insert(0) += 1;
+            }
+        }
     }
 
     fn count_iterated_row(&self, cf_name: &'static str) {
@@ -1400,6 +1537,7 @@ impl CkbadgerStore {
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             journal_discipline: AtomicBool::new(false),
+            outside_writer_scope: Mutex::new(None),
             is_secondary: false,
             memory_profile,
             runtime_config,
@@ -1407,6 +1545,8 @@ impl CkbadgerStore {
             cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
+            #[cfg(any(test, feature = "test-store"))]
+            test_dir: None,
         })
     }
 
@@ -1500,6 +1640,7 @@ impl CkbadgerStore {
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             journal_discipline: AtomicBool::new(false),
+            outside_writer_scope: Mutex::new(None),
             is_secondary: true,
             memory_profile,
             runtime_config,
@@ -1507,6 +1648,8 @@ impl CkbadgerStore {
             cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
+            #[cfg(any(test, feature = "test-store"))]
+            test_dir: None,
         })
     }
 
@@ -1649,6 +1792,50 @@ impl CkbadgerStore {
     /// Test helper: open a fresh network store (mirrors [`Self::open_test_unified`]).
     pub fn open_test_network<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         Self::open_network(path)
+    }
+
+    /// Test helper: a fresh unified store (every CF of every store class) in
+    /// a new temporary directory that goes with the store: removed when the
+    /// last handle drops, after the database closed.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_test_unified_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_test_unified(path))
+    }
+
+    /// Test helper: [`Self::open_test_network`] in a temporary directory that
+    /// goes with the store.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_test_network_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_test_network(path))
+    }
+
+    /// Test helper: [`Self::open_domain`] in a temporary directory that goes
+    /// with the store.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_domain_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_domain(path))
+    }
+
+    /// Test helper: [`Self::open_append_only`] in a temporary directory that
+    /// goes with the store.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn open_append_only_temp() -> anyhow::Result<Self> {
+        Self::open_in_test_dir(|path| Self::open_append_only(path))
+    }
+
+    /// The temporary directory an `open_*_temp` store lives in; `None` for a
+    /// store opened at a caller's path.
+    #[cfg(any(test, feature = "test-store"))]
+    pub fn test_dir(&self) -> Option<&Path> {
+        self.test_dir.as_ref().map(tempfile::TempDir::path)
+    }
+
+    #[cfg(any(test, feature = "test-store"))]
+    fn open_in_test_dir(open: impl FnOnce(&Path) -> anyhow::Result<Self>) -> anyhow::Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let mut store = open(dir.path())?;
+        store.test_dir = Some(dir);
+        Ok(store)
     }
 
     /// Catch up with primary instance writes (secondary only).
@@ -2161,6 +2348,15 @@ impl CkbadgerStore {
     pub fn cf_tx_group_cycles(&self) -> &ColumnFamily {
         self.cf(CF_TX_GROUP_CYCLES)
     }
+    pub fn cf_object_outpoints(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_OUTPOINTS)
+    }
+    pub fn cf_object_outpoint_by_id(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_OUTPOINT_BY_ID)
+    }
+    pub fn cf_reorg_events(&self) -> &ColumnFamily {
+        self.cf(CF_REORG_EVENTS)
+    }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
     }
@@ -2217,6 +2413,24 @@ impl CkbadgerStore {
             .lock()
             .expect("point-read counter poisoned")
             .clear();
+        self.read_calls
+            .multi_gets
+            .lock()
+            .expect("multi-get counter poisoned")
+            .clear();
+    }
+
+    /// `multi_get` calls that read column family `cf_name` since the last
+    /// reset (`0` when none did).
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn multi_gets(&self, cf_name: &str) -> u64 {
+        self.read_calls
+            .multi_gets
+            .lock()
+            .expect("multi-get counter poisoned")
+            .get(cf_name)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Point reads of one column family since the last reset (`0` when it
@@ -2313,7 +2527,11 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
         } else if self.journal_discipline_applies() {
-            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
+            self.check_unjournaled_write(
+                self.cf_name_for_handle(cf)?,
+                key,
+                self.direct_outside_writer()?,
+            )?;
         }
         let _guard = self
             .domain_write_gate
@@ -2327,7 +2545,11 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
         } else if self.journal_discipline_applies() {
-            self.check_unjournaled_write(self.cf_name_for_handle(cf)?, key)?;
+            self.check_unjournaled_write(
+                self.cf_name_for_handle(cf)?,
+                key,
+                self.direct_outside_writer()?,
+            )?;
         }
         let _guard = self
             .domain_write_gate
@@ -2367,6 +2589,8 @@ impl CkbadgerStore {
             for (cf, _) in &keys {
                 self.read_calls.count_point_read(self.cf_name_of(cf));
             }
+            self.read_calls
+                .count_multi_get(keys.iter().map(|(cf, _)| self.cf_name_of(cf)));
         }
         self.db.multi_get_cf(keys)
     }
@@ -2385,7 +2609,11 @@ impl CkbadgerStore {
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
         #[cfg(any(test, feature = "read-call-counters"))]
-        self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
+        {
+            self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
+            self.read_calls
+                .count_multi_get(keys.iter().map(|(cf, _)| self.cf_name_of(cf)));
+        }
         let n = keys.len();
         if n <= 1 {
             return self.db.multi_get_cf(keys);
@@ -2554,8 +2782,6 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
-            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
             | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(self.cf_stats_chain()),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -2572,17 +2798,10 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_HOURLY
             | keys::STATS_PREFIX_CLUSTER_DAILY
             | keys::STATS_PREFIX_SPORE_DAILY
-            | keys::STATS_PREFIX_SPORE_OUTPOINT
-            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(self.cf_stats_spore()),
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX => Ok(self.cf_stats_spore()),
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
-            | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
@@ -2611,8 +2830,6 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
             | keys::STATS_PREFIX_ACTIVITY_HOURLY
-            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
             | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW
             | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => Ok(CF_STATS_CHAIN),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -2629,17 +2846,10 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_HOURLY
             | keys::STATS_PREFIX_CLUSTER_DAILY
             | keys::STATS_PREFIX_SPORE_DAILY
-            | keys::STATS_PREFIX_SPORE_OUTPOINT
-            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(CF_STATS_SPORE),
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX => Ok(CF_STATS_SPORE),
             keys::STATS_PREFIX_OBJECT_HOURLY
             | keys::STATS_PREFIX_OBJECT_DAILY
             | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
-            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
-            | keys::STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(CF_STATS_MNFT),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
@@ -2742,22 +2952,63 @@ impl CkbadgerStore {
         self.journal_discipline.load(Ordering::Relaxed) && !self.is_bulk_sync_mode()
     }
 
+    /// Run this thread's direct (non-batch) writes as `writer` until the
+    /// returned guard drops: inside it, a direct unjournaled write is admitted
+    /// where an [`OUTSIDE_JOURNAL`] entry names `writer`. The scope belongs to
+    /// the thread that opened it (a sync writer such as label import; never
+    /// held across an `.await`), and scopes do not nest.
+    pub fn outside_journal_scope(
+        &self,
+        writer: OutsideWriter,
+    ) -> anyhow::Result<OutsideJournalScope<'_>> {
+        let mut slot = self
+            .outside_writer_scope
+            .lock()
+            .map_err(|_| anyhow::anyhow!("outside-journal scope lock poisoned"))?;
+        if let Some((thread, open)) = *slot {
+            anyhow::bail!(
+                "outside-journal scope {writer:?} requested while {open:?} is open on thread \
+                 {thread:?}: scopes do not nest"
+            );
+        }
+        *slot = Some((std::thread::current().id(), writer));
+        Ok(OutsideJournalScope { store: self })
+    }
+
+    /// The writer of a direct write on this thread: the open
+    /// [`Self::outside_journal_scope`]'s, if this thread opened it.
+    fn direct_outside_writer(&self) -> anyhow::Result<Option<OutsideWriter>> {
+        let slot = self
+            .outside_writer_scope
+            .lock()
+            .map_err(|_| anyhow::anyhow!("outside-journal scope lock poisoned"))?;
+        Ok(slot
+            .filter(|(thread, _)| *thread == std::thread::current().id())
+            .map(|(_, writer)| writer))
+    }
+
     /// Check one unjournaled write (a direct put / delete, or a write of an
-    /// unjournaled `StoreBatch`) against the journal discipline.
-    pub(crate) fn check_unjournaled_write(&self, cf: &str, key: &[u8]) -> anyhow::Result<()> {
+    /// unjournaled `StoreBatch`) by `writer` against the journal discipline.
+    pub(crate) fn check_unjournaled_write(
+        &self,
+        cf: &str,
+        key: &[u8],
+        writer: Option<OutsideWriter>,
+    ) -> anyhow::Result<()> {
         if !self.journal_discipline_applies() {
             return Ok(());
         }
         let journaled =
             cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
-        if !journaled || outside_journal_entry(cf, key).is_some() {
+        if !journaled || outside_journal_entry_for(cf, key, writer).is_some() {
             return Ok(());
         }
         anyhow::bail!(
             "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf} \
-             key=0x{}; a live write goes through a journaled batch in its block's scope, and a \
-             write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner \
-             and reason",
+             key=0x{} writer={writer:?}; a live write goes through a journaled batch in its \
+             block's scope, and a write that belongs outside the journal is listed in \
+             OUTSIDE_JOURNAL with its owner, reason and (for a whole column family) the one \
+             writer it admits",
             crate::bytes_to_hex(key)
         )
     }
@@ -2770,6 +3021,7 @@ impl CkbadgerStore {
         cf: &str,
         start: &[u8],
         end: &[u8],
+        writer: Option<OutsideWriter>,
     ) -> anyhow::Result<()> {
         if !self.journal_discipline_applies() {
             return Ok(());
@@ -2778,6 +3030,7 @@ impl CkbadgerStore {
             cf_spec(cf).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
         let covered = OUTSIDE_JOURNAL.iter().any(|entry| {
             entry.cf == cf
+                && entry.writer.is_none_or(|named| writer == Some(named))
                 && (entry.key_prefix.is_empty()
                     || (start.starts_with(entry.key_prefix) && end.starts_with(entry.key_prefix)))
         });
@@ -2786,7 +3039,7 @@ impl CkbadgerStore {
         }
         anyhow::bail!(
             "unjournaled range delete on a Journal-class CF outside the OUTSIDE_JOURNAL table: \
-             cf={cf} start=0x{} end=0x{}",
+             cf={cf} start=0x{} end=0x{} writer={writer:?}",
             crate::bytes_to_hex(start),
             crate::bytes_to_hex(end)
         )
@@ -3521,6 +3774,58 @@ pub struct FlushStats {
 mod tests {
     use super::*;
 
+    /// A temp test store owns its directory: shared through `Arc`s it stays,
+    /// and the last handle's drop closes the database (the first field) and
+    /// then removes the directory (the last field). The helpers used to
+    /// `mem::forget` the `TempDir`, leaking one RocksDB directory a call.
+    /// The directory must be gone afterwards: `TempDir`'s drop swallows its
+    /// error, so a failed removal would leave it, and a database still open
+    /// would write its LOG / MANIFEST on close and recreate it.
+    #[test]
+    fn a_temp_test_store_removes_its_directory_with_the_last_handle() {
+        type Open = fn() -> anyhow::Result<CkbadgerStore>;
+        let opens: [(&str, Open); 4] = [
+            ("unified", CkbadgerStore::open_test_unified_temp),
+            ("network", CkbadgerStore::open_test_network_temp),
+            ("domain", CkbadgerStore::open_domain_temp),
+            ("append-only", CkbadgerStore::open_append_only_temp),
+        ];
+        for (kind, open) in opens {
+            let store = std::sync::Arc::new(open().unwrap());
+            let dir = store
+                .test_dir()
+                .unwrap_or_else(|| panic!("{kind}: a temp store knows its directory"))
+                .to_path_buf();
+            assert!(
+                dir.join("CURRENT").exists(),
+                "{kind}: a RocksDB lives there"
+            );
+            let cf = store
+                .db
+                .cf_handle(CF_SYNC_META)
+                .or_else(|| store.db.cf_handle(CF_CELLS));
+            let cf = cf.or_else(|| store.db.cf_handle(CF_NET_NODES)).unwrap();
+            store.put_cf(cf, b"k", b"v").unwrap();
+            let shared = std::sync::Arc::clone(&store);
+            drop(store);
+            assert!(dir.exists(), "{kind}: a shared store keeps its directory");
+            drop(shared);
+            assert!(
+                !dir.exists(),
+                "{kind}: the last handle removes the directory, after the database closed"
+            );
+        }
+        // A store opened at a caller's path owns no directory.
+        let caller = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(caller.path()).unwrap();
+        assert!(store.test_dir().is_none());
+        drop(store);
+        assert!(
+            caller.path().exists(),
+            "the caller's directory is the caller's"
+        );
+    }
+
     #[test]
     fn compaction_control_rejects_missing_or_failed_property() {
         let path = Path::new("/tmp/domain");
@@ -3779,6 +4084,22 @@ mod tests {
 
     /// The per-CF point-read counter behind the API's "never reads a row
     /// by key" assertions counts both read shapes, per column family.
+    /// Each multi-get call counts once for every column family it reads.
+    #[test]
+    fn multi_gets_are_counted_per_column_family() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        store.reset_read_call_counters();
+        let (index, headers) = (store.cf_tx_index(), store.cf_block_headers());
+        store.multi_get_cf_sorted(vec![(index, b"a".as_slice()), (index, b"b".as_slice())]);
+        store.multi_get_cf(vec![(index, b"a".as_slice()), (headers, b"h".as_slice())]);
+        assert_eq!(store.multi_gets(CF_TX_INDEX), 2);
+        assert_eq!(store.multi_gets(CF_BLOCK_HEADERS), 1);
+        assert_eq!(store.multi_gets(CF_TX_ACTIONS), 0);
+        store.reset_read_call_counters();
+        assert_eq!(store.multi_gets(CF_TX_INDEX), 0);
+    }
+
     #[test]
     fn point_reads_are_counted_per_column_family() {
         let dir = TempDir::new().unwrap();
@@ -3807,7 +4128,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(DOMAIN_CFS.len(), 74);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5238,8 +5559,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 75);
-        assert_eq!(DOMAIN_CFS.len(), 71);
+        assert_eq!(CF_SPECS.len(), 78);
+        assert_eq!(DOMAIN_CFS.len(), 74);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5267,6 +5588,345 @@ mod tests {
             assert_eq!(cf_spec(spec.name), Some(spec));
         }
         assert_eq!(cf_spec("no_such_cf"), None);
+    }
+
+    /// C-5: `docs/STORE_SCHEMA.md`'s "Column Families" table is the reference
+    /// for every column family. It lists exactly the CFs of `CF_SPECS`, each
+    /// once, each marked with its spec's store (`**(append-only store)**`,
+    /// `**(network store)**`, unmarked = domain); its title states the
+    /// per-store counts of `CF_SPECS`; and every fixed-width key states the
+    /// total width the encoder writes (`= NB` after a key of several
+    /// components, `(NB` on a one-component key).
+    #[test]
+    fn store_schema_cf_table_matches_cf_specs() {
+        const DOC: &str = include_str!("../../../docs/STORE_SCHEMA.md");
+        let rows = store_schema_cf_table(DOC);
+
+        let wrong_store: Vec<String> = rows
+            .iter()
+            .filter_map(|(name, store, _)| {
+                let spec = cf_spec(name)?;
+                (spec.store != *store)
+                    .then(|| format!("{name}: marked {store:?}, CF_SPECS says {:?}", spec.store))
+            })
+            .collect();
+        assert!(
+            wrong_store.is_empty(),
+            "STORE_SCHEMA.md store markers differ from CF_SPECS:\n{}",
+            wrong_store.join("\n")
+        );
+
+        let mut doc_names: Vec<&str> = rows.iter().map(|(name, _, _)| *name).collect();
+        doc_names.sort_unstable();
+        let listed = doc_names.len();
+        doc_names.dedup();
+        assert_eq!(
+            doc_names.len(),
+            listed,
+            "a CF is listed twice in STORE_SCHEMA.md"
+        );
+        let mut spec_names: Vec<&str> = CF_SPECS.iter().map(|spec| spec.name).collect();
+        spec_names.sort_unstable();
+        let missing: Vec<&str> = spec_names
+            .iter()
+            .filter(|name| !doc_names.contains(name))
+            .copied()
+            .collect();
+        let unknown: Vec<&str> = doc_names
+            .iter()
+            .filter(|name| !spec_names.contains(name))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty() && unknown.is_empty(),
+            "STORE_SCHEMA.md CF table vs CF_SPECS: missing {missing:?}, not a CF {unknown:?}"
+        );
+
+        let count = |store: CfStore| CF_SPECS.iter().filter(|spec| spec.store == store).count();
+        let title = format!(
+            "# ckbadger-store Column Families ({} total: {} domain + {} append-only + {} network)",
+            CF_SPECS.len(),
+            count(CfStore::Domain),
+            count(CfStore::AppendOnly),
+            count(CfStore::Network)
+        );
+        assert_eq!(DOC.lines().next(), Some(title.as_str()));
+
+        let fixed_widths: &[(&str, usize)] = &[
+            (CF_CELLS, keys::OUTPOINT_KEY_SIZE),
+            (CF_LIVE_CELLS, keys::OUTPOINT_KEY_SIZE),
+            (CF_CONSUMED_CELLS, keys::OUTPOINT_KEY_SIZE),
+            (CF_REORG_UNDO_LOG_BY_BLOCK, keys::REORG_UNDO_LOG_KEY_SIZE),
+            (CF_BLOCK_HEADERS, keys::BLOCK_NUM_KEY_SIZE),
+            (CF_CELL_BY_LOCK, keys::CELL_INDEX_KEY_SIZE),
+            (CF_CELL_BY_TYPE, keys::CELL_INDEX_KEY_SIZE),
+            (CF_CELL_BY_DATA_HASH, keys::CELL_INDEX_KEY_SIZE),
+            (CF_CELL_BY_LOCK_CODE, keys::CELL_CODE_INDEX_KEY_SIZE),
+            (CF_CELL_BY_TYPE_CODE, keys::CELL_CODE_INDEX_KEY_SIZE),
+            (CF_ADDR_TXS, keys::ADDR_TX_KEY_SIZE),
+            (CF_ADDR_TXS_BY_PREFIX, keys::ADDR_TX_BY_PREFIX_KEY_SIZE),
+            (CF_DAO_DEPOSITS, keys::OUTPOINT_KEY_SIZE),
+            (CF_DAO_BY_WITHDRAW_TX, keys::OUTPOINT_KEY_SIZE),
+            (CF_DAO_BY_BLOCK, keys::DAO_BY_BLOCK_KEY_SIZE),
+            (CF_DAO_BY_LOCK_BLOCK, keys::DAO_BY_LOCK_BLOCK_KEY_SIZE),
+            (CF_DAO_BY_STATUS_BLOCK, keys::DAO_BY_STATUS_BLOCK_KEY_SIZE),
+            (
+                CF_TOKEN_HOLDERS_BY_BALANCE,
+                keys::TOKEN_HOLDER_BALANCE_KEY_SIZE,
+            ),
+            (CF_ADDR_TOKENS_BY_BALANCE, keys::ADDR_TOKEN_BALANCE_KEY_SIZE),
+            (CF_TOKEN_TRANSFERS, keys::TOKEN_TRANSFER_KEY_SIZE),
+            (
+                CF_OBJECT_COLLECTION_ACTIVITIES,
+                keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
+            ),
+            (
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
+                keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
+            ),
+            (
+                CF_COLLECTION_ACTIVITY_DAILY,
+                keys::COLLECTION_ACTIVITY_DAILY_KEY_SIZE,
+            ),
+            (
+                CF_DOTCELL_NAME_BY_OWNER,
+                keys::DOTCELL_NAME_BY_OWNER_KEY_SIZE,
+            ),
+            (CF_TX_ACTIONS, keys::TX_ACTIONS_KEY_SIZE),
+            (CF_TX_ACTIONS_BY_BUCKET, keys::TX_ACTIONS_BY_BUCKET_KEY_SIZE),
+            (CF_FIBER_CHANNELS, keys::FIBER_CHANNEL_KEY_SIZE),
+            (CF_ADDR_FIBER_CHANNELS, keys::ADDR_FIBER_CHANNEL_KEY_SIZE),
+            (CF_REORG_EVENTS, keys::REORG_EVENT_KEY_SIZE),
+            (CF_TX_INDEX, keys::encode_tx_slot_key(0, 0).len()),
+            (CF_TX_GROUP_CYCLES, keys::encode_tx_slot_key(0, 0).len()),
+            (CF_OBJECT_OUTPOINTS, keys::SPORE_OUTPOINT_KEY_SIZE),
+        ];
+        let wrong: Vec<String> = fixed_widths
+            .iter()
+            .filter_map(|(cf, width)| {
+                let (_, _, key) = rows
+                    .iter()
+                    .find(|(name, _, _)| name == cf)
+                    .unwrap_or_else(|| panic!("{cf} is not in the table"));
+                (!states_total(key, *width)).then(|| format!("{cf}: {width}B, table says `{key}`"))
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "STORE_SCHEMA.md key widths differ from the encoders:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// `(cf name, store marker, key cell)` of every row of STORE_SCHEMA.md's
+    /// "Column Families" table.
+    fn store_schema_cf_table(doc: &str) -> Vec<(&str, CfStore, &str)> {
+        let mut lines = doc
+            .lines()
+            .skip_while(|line| *line != "## Column Families")
+            .skip(1)
+            .skip_while(|line| !line.starts_with('|'));
+        let header = lines.next().expect("the Column Families table");
+        assert!(header.starts_with("| Column Family"), "{header}");
+        lines
+            .skip(1)
+            .take_while(|line| line.starts_with('|'))
+            .map(|line| {
+                let cells: Vec<&str> = line.split(" | ").collect();
+                let name_cell = cells[0].trim_start_matches('|').trim();
+                let name = name_cell
+                    .strip_prefix('`')
+                    .and_then(|rest| rest.split('`').next())
+                    .unwrap_or_else(|| panic!("a CF table row without a `name`: {line}"));
+                let store = if name_cell.contains("**(append-only store)**") {
+                    CfStore::AppendOnly
+                } else if name_cell.contains("**(network store)**") {
+                    CfStore::Network
+                } else {
+                    CfStore::Domain
+                };
+                (name, store, cells.get(1).map_or("", |key| key.trim()))
+            })
+            .collect()
+    }
+
+    /// C-5: the rollback-class table of `docs/prompts/REORG_HANDLING.md`
+    /// names exactly `CF_SPECS`'s `RangeByBlock` and `Never` CFs (`Journal`
+    /// is "every domain CF not listed below").
+    #[test]
+    fn reorg_handling_class_table_matches_cf_specs() {
+        const DOC: &str = include_str!("../../../docs/prompts/REORG_HANDLING.md");
+        for (class, label) in [
+            (RollbackClass::RangeByBlock, "`RangeByBlock`"),
+            (RollbackClass::Never, "`Never`"),
+        ] {
+            let rows: Vec<&str> = DOC
+                .lines()
+                .filter(|line| {
+                    line.strip_prefix('|')
+                        .is_some_and(|rest| rest.trim_start().starts_with(label))
+                })
+                .collect();
+            assert_eq!(rows.len(), 1, "one {label} row in the class table");
+            let cfs_cell = rows[0].split(" | ").nth(1).expect("the CF cell");
+            let mut listed: Vec<&str> = cfs_cell.split('`').skip(1).step_by(2).collect();
+            listed.sort_unstable();
+            let mut specs: Vec<&str> = CF_SPECS
+                .iter()
+                .filter(|spec| spec.rollback_class == class)
+                .map(|spec| spec.name)
+                .collect();
+            specs.sort_unstable();
+            assert_eq!(listed, specs, "REORG_HANDLING.md {label} row vs CF_SPECS");
+        }
+    }
+
+    /// C-5: every tracked doc that states how many column families there are
+    /// states `CF_SPECS`'s counts: "N domain" is the domain store's count and
+    /// "N CFs total" / "N CFs overall" the count of all three stores.
+    #[test]
+    fn tracked_docs_state_the_cf_specs_counts() {
+        const DOCS: &[(&str, &str)] = &[
+            ("CLAUDE.md", include_str!("../../../CLAUDE.md")),
+            ("README.md", include_str!("../../../README.md")),
+            (
+                "docs/STORE_SCHEMA.md",
+                include_str!("../../../docs/STORE_SCHEMA.md"),
+            ),
+            (
+                "docs/INDEXER_PIPELINE.md",
+                include_str!("../../../docs/INDEXER_PIPELINE.md"),
+            ),
+            (
+                "docs/ARCHITECTURE_MAP.md",
+                include_str!("../../../docs/ARCHITECTURE_MAP.md"),
+            ),
+        ];
+        let domain = CF_SPECS
+            .iter()
+            .filter(|spec| spec.store == CfStore::Domain)
+            .count();
+        let total = CF_SPECS.len();
+        let mut wrong = Vec::new();
+        let mut stated = 0;
+        for (path, doc) in DOCS {
+            for (phrase, expected) in [
+                (" domain", domain),
+                (" CFs total", total),
+                (" CFs overall", total),
+            ] {
+                for count in counts_stated_before(doc, phrase) {
+                    stated += 1;
+                    if count != expected {
+                        wrong.push(format!(
+                            "{path}: \"{count}{phrase}\", CF_SPECS has {expected}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(stated > 0, "no doc states a CF count any more");
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The numbers written directly before `phrase` in `doc` ("74 domain").
+    fn counts_stated_before(doc: &str, phrase: &str) -> Vec<usize> {
+        doc.match_indices(phrase)
+            .filter_map(|(at, _)| {
+                let digits: String = doc[..at]
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                (!digits.is_empty()).then(|| digits.chars().rev().collect::<String>())
+            })
+            .map(|digits| digits.parse().expect("a count"))
+            .collect()
+    }
+
+    #[test]
+    fn store_schema_table_helpers_read_names_key_cells_and_widths() {
+        let doc = "# t\n\n## Column Families\n\n| Column Family | Key | Value |\n| --- | --- | --- |\n\
+                   | `cells` **(append-only store)** | outpoint (34B) | payload |\n\
+                   | `net_nodes` **(network store)** | peer_id | node |\n\
+                   | `addr_txs` | lock(32) + desc(12) = 44B | v |\n\nafter\n| `not_a_row` | x | y |\n";
+        assert_eq!(
+            store_schema_cf_table(doc),
+            vec![
+                ("cells", CfStore::AppendOnly, "outpoint (34B)"),
+                ("net_nodes", CfStore::Network, "peer_id"),
+                ("addr_txs", CfStore::Domain, "lock(32) + desc(12) = 44B")
+            ]
+        );
+        assert!(states_total("outpoint (34B)", 34));
+        assert!(!states_total("key (134B)", 34));
+        assert!(!states_total("block_number + tx_index", 12));
+        assert!(states_total("lock(32) + desc(12) = 44B", 44));
+        // A component's width that equals the total is not the total.
+        assert!(!states_total(
+            "hash (32B) + block (8B BE) + outpoint (74B)",
+            74
+        ));
+        assert!(states_total(
+            "hash (32B) + block (8B BE) + outpoint (34B) = 74B",
+            74
+        ));
+        // Delta review N8: the components must add up to the stated total,
+        // and every one must state its width.
+        assert!(!states_total(
+            "hash (32B) + block (8B BE) + outpoint (35B) = 74B",
+            74
+        ));
+        assert!(!states_total(
+            "hash (32B) + block + outpoint (34B) = 74B",
+            74
+        ));
+        assert!(states_total(
+            "block_number (8B BE) + tx_index (4B BE) = 12B, the canonical slot",
+            12
+        ));
+        assert!(states_total(
+            "collection_id (32B padded) + day YYYYMMDD (4B BE) = 36B",
+            36
+        ));
+        assert_eq!(component_width("blake2b(cell_data) (32B)"), Some(32));
+        assert_eq!(component_width("tx_idx_desc(4)"), Some(4));
+        assert_eq!(component_width("block"), None);
+        assert_eq!(
+            counts_stated_before("74 domain + 1 append-only; the 68 domain CFs", " domain"),
+            vec![74, 68]
+        );
+        assert_eq!(
+            counts_stated_before("a domain", " domain"),
+            Vec::<usize>::new()
+        );
+    }
+
+    /// Whether the key cell `cell` states the key's total width `width`: a
+    /// key of several components (`a + b`) as `= NB`, with every component's
+    /// width stated (`name (NB…)` or `name(N)`) and summing to it; a
+    /// one-component key as `(NB` on its one component — never a component's
+    /// width that happens to equal the total.
+    fn states_total(cell: &str, width: usize) -> bool {
+        if !cell.contains(" + ") {
+            return cell.contains(&format!("({width}B"));
+        }
+        let Some((components, _)) = cell.split_once(&format!(" = {width}B")) else {
+            return false;
+        };
+        let widths: Option<Vec<usize>> = components.split(" + ").map(component_width).collect();
+        widths.is_some_and(|widths| widths.iter().sum::<usize>() == width)
+    }
+
+    /// The width a key component states in its last parenthesis: `(32B)`,
+    /// `(8B BE)`, `(32B padded)` or `(32)`.
+    fn component_width(component: &str) -> Option<usize> {
+        let (_, inside) = component.trim_end().strip_suffix(')')?.rsplit_once('(')?;
+        let digits: String = inside.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let rest = &inside[digits.len()..];
+        (rest.is_empty() || rest.starts_with('B'))
+            .then(|| digits.parse().ok())
+            .flatten()
     }
 
     /// Every OUTSIDE_JOURNAL entry names a `Journal`-class domain CF (the
@@ -5380,6 +6040,152 @@ mod tests {
             .is_err());
     }
 
+    /// Lane B carry-over 4(c): a whole-CF `OUTSIDE_JOURNAL` entry admits only
+    /// the writer it names. `tokens` and `dao_live_agg` are journaled by live
+    /// batches and written outside the journal only by label import and the
+    /// derive scheduler respectively; any other unjournaled write to them —
+    /// an untagged batch, another writer's batch, a direct write outside the
+    /// writer's scope or from another thread — is refused.
+    #[test]
+    fn whole_cf_outside_journal_entries_admit_only_their_writer() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let refused = |result: anyhow::Result<()>, what: &str| {
+            let error = result.expect_err(what).to_string();
+            assert!(error.contains("OUTSIDE_JOURNAL"), "{what}: {error}");
+        };
+
+        // Untagged: refused for both whole-CF entries.
+        let mut batch = crate::StoreBatch::new(&store);
+        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
+        refused(batch.commit(), "an untagged batch writing tokens");
+        let mut batch = crate::StoreBatch::new(&store);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
+            .unwrap();
+        refused(batch.commit(), "an untagged batch writing dao_live_agg");
+        refused(
+            store.put_cf(store.cf_tokens(), b"t", b"1"),
+            "a direct write to tokens outside the label import scope",
+        );
+
+        // The named writer passes; the other writer does not.
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
+            .unwrap();
+        batch
+            .delete_range_raw_cf_by_name(CF_OBJECT_COLLECTION_ACTIVITY_COUNT, b"", &[0xff])
+            .unwrap();
+        batch.commit().unwrap();
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
+        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
+        refused(batch.commit(), "the derive scheduler writing tokens");
+        let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::LabelImport);
+        batch
+            .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"2")
+            .unwrap();
+        refused(batch.commit(), "label import writing dao_live_agg");
+
+        // Direct writes inside the label import scope, on its thread.
+        {
+            let _scope = store
+                .outside_journal_scope(OutsideWriter::LabelImport)
+                .unwrap();
+            store.put_cf(store.cf_tokens(), b"t", b"1").unwrap();
+            store.put_cf(store.cf_script_info(), b"s", b"1").unwrap();
+            refused(
+                store.put_cf(store.cf_dao_live_agg(), b"d", b"3"),
+                "label import's scope writing dao_live_agg",
+            );
+            std::thread::scope(|threads| {
+                threads.spawn(|| {
+                    refused(
+                        store.put_cf(store.cf_tokens(), b"other", b"1"),
+                        "another thread during the label import scope",
+                    );
+                });
+            });
+            assert!(
+                store.outside_journal_scope(OutsideWriter::Derive).is_err(),
+                "scopes do not nest"
+            );
+        }
+        refused(
+            store.put_cf(store.cf_tokens(), b"t", b"2"),
+            "a direct write after the scope ended",
+        );
+
+        // The (cf, prefix) entries keep admitting any unjournaled writer.
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::SYNC_PROGRESS,
+                b"p",
+            )
+            .unwrap();
+    }
+
+    /// Ruling 5: the two also-journaled `(cf, prefix)` entries admit only
+    /// their one unjournaled writer — `live_cell_summary:current` the
+    /// deep-fork record, `stats_dao` 0x08 the DAO tip summary.
+    #[test]
+    fn also_journaled_prefix_entries_admit_only_their_writer() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let summary = keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT;
+        let open_day = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20261107");
+        let write = |writer: Option<OutsideWriter>, cf: &str, key: &[u8]| {
+            let mut batch = match writer {
+                Some(writer) => crate::StoreBatch::outside_journal(&store, writer),
+                None => crate::StoreBatch::new(&store),
+            };
+            batch.put_raw_cf_by_name(cf, key, b"v").unwrap();
+            batch.commit()
+        };
+        for (writer, cf, key, admitted) in [
+            (None, CF_SYNC_META, summary, false),
+            (
+                Some(OutsideWriter::DaoTipSummary),
+                CF_SYNC_META,
+                summary,
+                false,
+            ),
+            (
+                Some(OutsideWriter::DeepForkRecord),
+                CF_SYNC_META,
+                summary,
+                true,
+            ),
+            (None, CF_STATS_DAO, open_day.as_slice(), false),
+            (
+                Some(OutsideWriter::DeepForkRecord),
+                CF_STATS_DAO,
+                open_day.as_slice(),
+                false,
+            ),
+            (
+                Some(OutsideWriter::DaoTipSummary),
+                CF_STATS_DAO,
+                open_day.as_slice(),
+                true,
+            ),
+        ] {
+            let result = write(writer, cf, key);
+            assert_eq!(
+                result.is_ok(),
+                admitted,
+                "{writer:?} writing {cf}:{}: {result:?}",
+                String::from_utf8_lossy(key)
+            );
+        }
+        // The DAO tip summary's never-journaled rows still admit any writer.
+        let latest = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
+        write(None, CF_STATS_DAO, &latest).unwrap();
+    }
+
     /// A never-journaled key written through a journaled batch goes straight
     /// into the commit, with no journal entry; an also-journaled one is
     /// journaled in its block.
@@ -5425,9 +6231,8 @@ mod tests {
                 | CF_TX_ACTIONS
                 | CF_REORG_UNDO_LOG_BY_BLOCK
                 | CF_TX_GROUP_CYCLES => RollbackClass::RangeByBlock,
-                CF_CELLS | CF_PENDING_PROPOSALS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => {
-                    RollbackClass::Never
-                }
+                CF_CELLS | CF_PENDING_PROPOSALS | CF_REORG_EVENTS | CF_NET_NODES | CF_NET_STATS
+                | CF_NET_CRAWL => RollbackClass::Never,
                 _ => RollbackClass::Journal,
             };
             assert_eq!(spec.rollback_class, expected, "{}", spec.name);
@@ -5441,7 +6246,10 @@ mod tests {
     /// here is an option change, which needs its own paired bulk run. B-4
     /// adds two rows (`hodl_capacity_by_date`, `cell_dist_cohort_by_month`,
     /// the trackers' rows) and B-5c one (`tx_group_cycles`, the lazy cycles
-    /// record moved out of `sync_meta`); every other row is unchanged.
+    /// record moved out of `sync_meta`); C-4b three (`object_outpoints` and
+    /// `object_outpoint_by_id`, the outpoint indexes moved out of
+    /// `stats_spore` / `stats_mnft`, and `reorg_events`, the event history
+    /// moved out of `sync_meta`); every other row is unchanged.
     #[test]
     fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
         let actual = cf_option_snapshot();
@@ -5532,6 +6340,9 @@ mod tests {
     "object_collection_activity_count BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "bit_cell_by_account BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "tx_group_cycles BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_outpoints FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "reorg_events BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

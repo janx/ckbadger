@@ -757,13 +757,15 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(lock_hashes.len());
         for (res, lock_hash) in results.into_iter().zip(lock_hashes.iter()) {
             let existing: Option<AddressBalance> = match res {
-                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize address balance: lock_hash=0x{}, error={}",
-                        hex::encode(lock_hash),
-                        e
-                    )
-                })?),
+                Ok(Some(value)) => Some(
+                    ckbadger_store::decode_address_balance(lock_hash, &value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize address balance: lock_hash=0x{}, error={:#}",
+                            hex::encode(lock_hash),
+                            e
+                        )
+                    })?,
+                ),
                 Ok(None) => None,
                 Err(e) => {
                     bail!(
@@ -928,7 +930,7 @@ impl BatchWriter {
                     bal.txs_count = next_txs_count;
                     bal.cellbase_txs_count = next_cellbase_txs_count;
                     bal.last_activity_block = delta.last_activity_block;
-                    bal.last_activity_tx = delta.last_activity_tx.clone();
+                    bal.last_activity_tx_idx = delta.last_activity_tx_idx;
                     bal
                 }
                 None => {
@@ -959,9 +961,9 @@ impl BatchWriter {
                         txs_count: delta.tx_delta,
                         cellbase_txs_count: delta.cellbase_tx_delta,
                         first_seen_block: delta.first_seen_block,
-                        first_seen_tx: delta.first_seen_tx.clone(),
+                        first_seen_tx_idx: delta.first_seen_tx_idx,
                         last_activity_block: delta.last_activity_block,
-                        last_activity_tx: delta.last_activity_tx.clone(),
+                        last_activity_tx_idx: delta.last_activity_tx_idx,
                     }
                 }
             };
@@ -990,13 +992,7 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(code_hashes.len());
         for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
             let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
-                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize script info: code_hash=0x{}, error={}",
-                        hex::encode(code_hash),
-                        e
-                    )
-                })?),
+                Ok(Some(value)) => Some(super::decode_script_info_row(code_hash, &value)?),
                 Ok(None) => None,
                 Err(e) => {
                     bail!(
@@ -1079,16 +1075,23 @@ impl BatchWriter {
                 );
             }
 
-            let info = updated_map.entry(code_hash).or_insert_with(|| {
-                let mut info = existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    ..Default::default()
-                });
-                if let Ok(Some(fresh)) = self.store.get_script_info(code_hash) {
-                    info = overlay_script_metadata(info, &fresh);
+            let info = match updated_map.entry(code_hash) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let mut info =
+                        existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
+                            code_hash: code_hash.clone(),
+                            ..Default::default()
+                        });
+                    // The label fields as stored now; a row that cannot be
+                    // read fails the batch (the error names the code hash),
+                    // and a corrupt one is rebuild-required (finding 12).
+                    if let Some(fresh) = super::read_script_info_row(&self.store, code_hash)? {
+                        info = overlay_script_metadata(info, &fresh);
+                    }
+                    entry.insert(info)
                 }
-                info
-            });
+            };
 
             if *is_type {
                 let next_type_cells_count = checked_next_script_metric_i64(
@@ -1639,7 +1642,7 @@ impl BatchWriter {
                     .as_deref()
                     .zip(cell.type_hash_type)
                     .is_some_and(|(hash, kind)| crate::parser::script::is_type_id(hash, kind))
-                    || !cell.data.starts_with(b"\x7fELF")
+                    || !ckbadger_store::keys::is_code_cell(&cell.data)
                 {
                     continue;
                 }
@@ -2073,6 +2076,43 @@ mod tests {
         assert!(err
             .to_string()
             .contains("script type owned knowledge exceeds owned capacity"));
+    }
+
+    /// Ruling 6: the label overlay's read of the stored row propagates its
+    /// error — a corrupt `script_info` row fails the batch naming the code
+    /// hash instead of being skipped.
+    #[test]
+    fn a_corrupt_script_info_row_fails_the_usage_update_with_its_code_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let code_hash = vec![0x6c; 32];
+        store
+            .put_cf(store.cf_script_info(), &code_hash, b"garbage")
+            .unwrap();
+        let mut existing = HashMap::new();
+        existing.insert(
+            code_hash.clone(),
+            Some(ScriptInfo {
+                code_hash: code_hash.clone(),
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                ..Default::default()
+            }),
+        );
+        let mut changes = HashMap::new();
+        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains(&hex::encode(&code_hash)), "{text}");
+        assert!(text.contains("script info"), "{text}");
+        assert!(
+            crate::lifecycle::is_rebuild_required(&err),
+            "a corrupt script_info row is rebuild-required (finding 12): {text}"
+        );
     }
 
     #[test]
@@ -4293,6 +4333,13 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize script info"));
+        // Finding 12: the batch prefetch types a corrupt row as
+        // rebuild-required, naming the code hash.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        assert!(
+            err.to_string().contains(&hex::encode(&code_hash)),
+            "{err:#}"
+        );
     }
 
     #[test]

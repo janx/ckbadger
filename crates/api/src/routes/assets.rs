@@ -674,16 +674,13 @@ pub struct CollectionActivityResponse {
 }
 
 /// The wire rows of one page of a collection's activity rows: each row's
-/// actions and its block's chain time (one header `multi_get` per page). The
-/// one projection of the object and identity collection `/activities` lists.
+/// actions and its block's chain time, from the headers the page's completion
+/// read (`CollectionActivityPage`; no header read here). The one projection of
+/// the object and identity collection `/activities` lists.
 pub(crate) fn collection_activity_responses(
-    store: &CkbadgerStore,
     rows: Vec<(i64, i32, ObjectCollectionActivityEntry)>,
+    headers: &HashMap<i64, ckbadger_store::CachedBlockHeader>,
 ) -> anyhow::Result<Vec<CollectionActivityResponse>> {
-    let mut blocks: Vec<i64> = rows.iter().map(|(block, _, _)| *block).collect();
-    blocks.sort_unstable();
-    blocks.dedup();
-    let headers = store.get_block_headers_batch(&blocks)?;
     rows.into_iter()
         .map(|(block_number, tx_index, entry)| {
             let header = headers.get(&block_number).ok_or_else(|| {
@@ -1378,73 +1375,37 @@ pub(crate) fn normalize_identity_activity_action_filter(
     }
 }
 
-/// A transaction's canonical `(block, tx index, block hash)`.
-type CanonicalTxLocation = (i64, i32, Vec<u8>);
-
-/// Every collection activity row must name a canonical transaction at the
-/// row's own position: `docs/prompts/REORG_HANDLING.md` has rollback delete a
-/// rolled-back block's collection rows directly, so a row whose transaction is
-/// unknown, or sits elsewhere, or in a block whose canonical hash differs, is
-/// a rollback bug. It is an error naming the row, never a row skipped.
-fn ensure_canonical_collection_activity_rows(
-    store: &CkbadgerStore,
-    collection_id: &[u8],
-    rows: &[(i64, i32, ObjectCollectionActivityEntry)],
-) -> anyhow::Result<()> {
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let tx_hashes: Vec<Vec<u8>> = rows
-        .iter()
-        .map(|(_, _, entry)| entry.tx_hash.clone())
-        .collect();
-    let canonical: HashMap<Vec<u8>, Option<CanonicalTxLocation>> = store
-        .get_canonical_tx_identities_by_hash_batch(&tx_hashes)?
-        .into_iter()
-        .collect();
-    for (block_number, tx_index, entry) in rows {
-        let location = canonical.get(&entry.tx_hash).cloned().flatten();
-        if location.as_ref() != Some(&(*block_number, *tx_index, entry.block_hash.clone())) {
-            anyhow::bail!(
-                "collection activity row is not canonical: collection=0x{} block={} tx_index={} tx=0x{} block_hash=0x{}; canonical location of the tx: {}; rollback must delete a rolled-back block's collection rows (REORG_HANDLING.md) — fix the rollback, then purge and re-sync",
-                hex::encode(collection_id),
-                block_number,
-                tx_index,
-                hex::encode(&entry.tx_hash),
-                hex::encode(&entry.block_hash),
-                match location {
-                    Some((block, index, hash)) => format!(
-                        "block={block} tx_index={index} block_hash=0x{}",
-                        hex::encode(hash)
-                    ),
-                    None => "none".to_string(),
-                }
-            );
-        }
-    }
-    Ok(())
-}
-
 /// One page of a collection's activity rows, newest first, after `cursor`.
-/// Every row is checked canonical ([`ensure_canonical_collection_activity_rows`]).
+/// Every row is canonical by construction: it is keyed by its transaction's
+/// position and completed from `tx_index` and `block_headers` there, and a
+/// position without a transaction is an error in the store reader.
 pub(crate) fn list_canonical_nft_collection_activities_page(
     store: &CkbadgerStore,
-    _append_only_store: &CkbadgerStore,
     collection_id: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
     action_filter: Option<&str>,
 ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+    Ok(nft_collection_activity_page(store, collection_id, limit, cursor, action_filter)?.0)
+}
+
+/// [`list_canonical_nft_collection_activities_page`] with the block headers
+/// the page's completion read.
+pub(crate) fn nft_collection_activity_page(
+    store: &CkbadgerStore,
+    collection_id: &[u8],
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+    action_filter: Option<&str>,
+) -> anyhow::Result<ckbadger_store::CollectionActivityPage> {
     if limit == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), HashMap::new(), Vec::new()));
     }
-    let rows = if is_identity_sentinel(collection_id) {
-        store.list_identity_collection_activities(collection_id, limit, cursor, action_filter)?
+    if is_identity_sentinel(collection_id) {
+        store.list_identity_collection_activity_page(collection_id, limit, cursor, action_filter)
     } else {
-        store.list_object_collection_activities(collection_id, limit, cursor, action_filter)?
-    };
-    ensure_canonical_collection_activity_rows(store, collection_id, &rows)?;
-    Ok(rows)
+        store.list_object_collection_activity_page(collection_id, limit, cursor, action_filter)
+    }
 }
 
 /// Holder buckets of a collection's live items: how many holders own 1, 2,
@@ -2233,9 +2194,14 @@ fn asset_action_name(action: ckbadger_store::AssetAction) -> &'static str {
 /// What one lifecycle transaction means for one item. Computed once, here, and
 /// shared by the lifecycle action list and every item feed row's
 /// `itemContext`, so readers never re-derive it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) struct NftLifecycleRow {
     pub(super) tx_hash: Vec<u8>,
+    /// The transaction's canonical position and `tx_index` entry, resolved
+    /// once for every lifecycle transaction of the item.
+    pub(super) block_number: i64,
+    pub(super) tx_index: i32,
+    pub(super) entry: ckbadger_store::types::TxIndexEntry,
     /// The collection-level action name ("mint", "transfer", "update", ...).
     pub(super) action: &'static str,
     /// The item's own protocol actions in this transaction, in protocol
@@ -2534,48 +2500,119 @@ pub(super) fn nft_item_tx_meaning(
     })
 }
 
-/// The protocol actions of one lifecycle transaction of item `item_id`,
-/// from its canonical activity row.
-fn item_tx_protocol_actions(
+/// The protocol actions of lifecycle transactions of item `item_id`, by
+/// transaction hash, from their canonical activity rows: one `tx_hash_map` +
+/// `tx_index` read, one `block_headers` read and one `activities` read for
+/// all of them.
+fn item_txs_protocol_actions(
     state: &AppState,
     item_id: &[u8],
-    tx_hash: &[u8],
-) -> Result<Vec<ckbadger_store::types::ProtocolAction>, ApiRouteError> {
-    let (block, index) = state
-        .store
-        .get_tx_location(tx_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing lifecycle transaction 0x{} of item 0x{}",
-                hex::encode(tx_hash),
-                hex::encode(item_id)
-            ))
-        })?;
-    Ok(state
-        .store
-        .get_tx_actions(block, index, tx_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
-                hex::encode(tx_hash),
-                hex::encode(item_id)
-            ))
-        })?
-        .protocol_actions)
+    tx_hashes: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, Vec<ckbadger_store::types::ProtocolAction>>, ApiRouteError> {
+    let rows = locate_item_txs(state, item_id, tx_hashes)?;
+    item_located_txs_protocol_actions(state, item_id, &rows)
 }
 
-/// A `.cell` name's own protocol actions in one of its lifecycle
-/// transactions — the classification its item feed rows carry as
-/// `protocolActions`.
+/// A lifecycle transaction of an item: its hash, canonical position and
+/// `tx_index` entry.
+type LocatedItemTx = (Vec<u8>, i64, i32, ckbadger_store::types::TxIndexEntry);
+
+fn item_read_error(item_id: &[u8]) -> impl Fn(anyhow::Error) -> ApiRouteError + Copy + '_ {
+    move |e: anyhow::Error| {
+        ApiError::internal(format!(
+            "lifecycle transactions of item 0x{}: {e:#}",
+            hex::encode(item_id)
+        ))
+    }
+}
+
+/// The canonical position and entry of each of item `item_id`'s lifecycle
+/// transactions `tx_hashes`, in order: one `tx_hash_map` + `tx_index` read.
+fn locate_item_txs(
+    state: &AppState,
+    item_id: &[u8],
+    tx_hashes: &[Vec<u8>],
+) -> Result<Vec<LocatedItemTx>, ApiRouteError> {
+    state
+        .store
+        .get_txs_by_hash_batch(tx_hashes)
+        .map_err(item_read_error(item_id))?
+        .into_iter()
+        .map(|(hash, row)| {
+            row.map(|(block, index, entry)| (hash.clone(), block, index, entry))
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "missing lifecycle transaction 0x{} of item 0x{}",
+                        hex::encode(&hash),
+                        hex::encode(item_id)
+                    ))
+                })
+        })
+        .collect()
+}
+
+/// [`item_txs_protocol_actions`] of transactions already located: one
+/// `block_headers` read and one `activities` read for all of them.
+fn item_located_txs_protocol_actions(
+    state: &AppState,
+    item_id: &[u8],
+    rows: &[LocatedItemTx],
+) -> Result<HashMap<Vec<u8>, Vec<ckbadger_store::types::ProtocolAction>>, ApiRouteError> {
+    let item = item_read_error(item_id);
+    let mut blocks: Vec<i64> = rows.iter().map(|(_, block, _, _)| *block).collect();
+    blocks.sort_unstable();
+    blocks.dedup();
+    let headers = state.store.get_block_headers_batch(&blocks).map_err(item)?;
+    let resolved = rows
+        .iter()
+        .map(|(hash, block, index, entry)| {
+            let header = headers.get(block).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "lifecycle transaction 0x{} of item 0x{}: block {block} has no header",
+                    hex::encode(hash),
+                    hex::encode(item_id)
+                ))
+            })?;
+            Ok(ckbadger_store::ResolvedTx {
+                block_number: *block,
+                tx_index: *index,
+                entry,
+                block_hash: &header.hash,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    let actions = state.store.tx_actions_of(&resolved).map_err(item)?;
+    rows.iter()
+        .zip(actions)
+        .map(|((hash, ..), actions)| {
+            let actions = actions.ok_or_else(|| {
+                ApiError::internal(format!(
+                    "lifecycle transaction 0x{} of item 0x{} is a cellbase",
+                    hex::encode(hash),
+                    hex::encode(item_id)
+                ))
+            })?;
+            Ok((hash.clone(), actions.protocol_actions))
+        })
+        .collect()
+}
+
+/// A `.cell` name's own protocol actions in each of `tx_hashes`, some of its
+/// lifecycle transactions — the classification its item feed rows carry as
+/// `protocolActions` — by transaction hash, read with one
+/// [`item_txs_protocol_actions`] call for all of them.
 pub(super) fn dotcell_own_actions(
     state: &AppState,
     item_id: &[u8],
-    tx_hash: &[u8],
-) -> Result<Vec<String>, ApiRouteError> {
-    let actions = item_tx_protocol_actions(state, item_id, tx_hash)?;
-    Ok(dotcell_lifecycle_action(item_id, tx_hash, &actions)?.protocol_actions)
+    tx_hashes: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, Vec<String>>, ApiRouteError> {
+    item_txs_protocol_actions(state, item_id, tx_hashes)?
+        .into_iter()
+        .map(|(tx_hash, actions)| {
+            let own = dotcell_lifecycle_action(item_id, &tx_hash, &actions)?.protocol_actions;
+            Ok((tx_hash, own))
+        })
+        .collect()
 }
 
 pub(super) fn collect_nft_item_lifecycle_actions(
@@ -2614,32 +2651,49 @@ pub(super) fn collect_nft_item_lifecycle_actions(
         .get_consumed_cell_meta_batch(&outpoint_refs, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let mut consumer_positions = Vec::new();
     for (tx_hash, output_index) in outpoints {
         if let Some(meta) = consumed_meta.get(&(tx_hash.clone(), output_index)) {
-            let consumed_by_tx = meta.consumed_by_tx.clone().ok_or_else(|| {
-                ApiError::internal(format!(
-                    "consumed object outpoint missing consumer tx: nft_id=0x{}, tx_hash=0x{}, output_index={}",
-                    hex::encode(nft_id_bytes),
-                    hex::encode(&tx_hash),
-                    output_index
-                ))
-            })?;
-            consumed_txs.insert(consumed_by_tx);
+            consumer_positions.push(meta.consumer_position());
         }
         created_outputs.insert(tx_hash, output_index);
+    }
+    for consumer in state
+        .store
+        .consumer_tx_hashes(&consumer_positions)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "object lifecycle of 0x{}: {e:#}",
+                hex::encode(nft_id_bytes)
+            ))
+        })?
+    {
+        consumed_txs.insert(consumer.to_vec());
     }
 
     let mut lifecycle_txs: HashSet<Vec<u8>> = created_outputs.keys().cloned().collect();
     lifecycle_txs.extend(consumed_txs.iter().cloned());
+    // Every lifecycle transaction located once; the feeds use the position.
+    let hashes: Vec<Vec<u8>> = lifecycle_txs.into_iter().collect();
+    let located = locate_item_txs(state, nft_id_bytes, &hashes)?;
 
-    let mut rows = Vec::with_capacity(lifecycle_txs.len());
-    for tx_hash in lifecycle_txs {
-        // Only `.cell` and `.bit` name items in their protocol actions.
-        let protocol_actions = if matches!(
-            standard,
-            NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
-        ) {
-            item_tx_protocol_actions(state, nft_id_bytes, &tx_hash)?
+    // Only `.cell` and `.bit` name items in their protocol actions: one
+    // batched read of every lifecycle transaction's actions.
+    let names_items = matches!(
+        standard,
+        NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
+    );
+    let mut protocol_actions_by_tx = if names_items {
+        item_located_txs_protocol_actions(state, nft_id_bytes, &located)?
+    } else {
+        HashMap::new()
+    };
+    let mut rows = Vec::with_capacity(located.len());
+    for (tx_hash, block_number, tx_index, entry) in located {
+        let protocol_actions = if names_items {
+            protocol_actions_by_tx
+                .remove(&tx_hash)
+                .expect("every lifecycle transaction's actions were read")
         } else {
             Vec::new()
         };
@@ -2654,6 +2708,9 @@ pub(super) fn collect_nft_item_lifecycle_actions(
         )?;
         rows.push(NftLifecycleRow {
             tx_hash,
+            block_number,
+            tx_index,
+            entry,
             action: asset_action_name(meaning.action),
             protocol_actions: meaning.protocol_actions,
             ring_relink: meaning.ring_relink,
@@ -2672,32 +2729,18 @@ pub(super) fn build_nft_item_activities_response(
     cursor: Option<(i64, i32)>,
     action_filter: Option<&str>,
 ) -> Result<CursorPaginatedResponse<MnftItemActivityResponse>, ApiRouteError> {
+    // The lifecycle rows carry each transaction's position and entry.
     let lifecycle_rows =
         collect_nft_item_lifecycle_actions(state, nft_id_bytes, lifecycle_standard)?;
-    let tx_hashes: Vec<Vec<u8>> = lifecycle_rows
-        .iter()
-        .map(|row| row.tx_hash.clone())
-        .collect();
-    let tx_batch_rows = state
-        .store
-        .get_txs_by_hash_batch(&tx_hashes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut tx_rows_by_hash: HashMap<Vec<u8>, (i64, i32, ckbadger_store::types::TxIndexEntry)> =
-        HashMap::with_capacity(tx_batch_rows.len());
-    for (tx_hash, tx_row_opt) in tx_batch_rows {
-        let tx_row = tx_row_opt.ok_or_else(|| {
-            ApiError::internal(format!(
-                "nft lifecycle tx not found in tx index: nft_id=0x{}, tx_hash=0x{}",
-                hex::encode(nft_id_bytes),
-                hex::encode(&tx_hash)
-            ))
-        })?;
-        tx_rows_by_hash.insert(tx_hash, tx_row);
-    }
 
     let mut rows = Vec::with_capacity(lifecycle_rows.len());
     for NftLifecycleRow {
-        tx_hash, action, ..
+        tx_hash,
+        block_number,
+        tx_index,
+        entry: tx_entry,
+        action,
+        ..
     } in lifecycle_rows
     {
         if action_filter
@@ -2706,14 +2749,6 @@ pub(super) fn build_nft_item_activities_response(
         {
             continue;
         }
-        let (block_number, tx_index, tx_entry) =
-            tx_rows_by_hash.get(&tx_hash).cloned().ok_or_else(|| {
-                ApiError::internal(format!(
-                    "nft lifecycle tx lookup missing from batch result: nft_id=0x{}, tx_hash=0x{}",
-                    hex::encode(nft_id_bytes),
-                    hex::encode(&tx_hash)
-                ))
-            })?;
 
         rows.push(MnftItemActivityResponse {
             tx_hash: format!("0x{}", hex::encode(&tx_hash)),
@@ -3981,9 +4016,8 @@ async fn list_object_collection_activities(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
-    // Fetch canonical rows only; skip orphaned history entries.
-    let results = list_canonical_nft_collection_activities_page(
-        state.store.as_ref(),
+    // Rows keyed by position are canonical by construction.
+    let (results, headers, _) = nft_collection_activity_page(
         state.store.as_ref(),
         &collection_id_bytes,
         (limit as usize) + 1,
@@ -3993,11 +4027,9 @@ async fn list_object_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
-    let page = collection_activity_responses(
-        state.store.as_ref(),
-        results.into_iter().take(limit as usize).collect(),
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let page =
+        collection_activity_responses(results.into_iter().take(limit as usize).collect(), &headers)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let next_cursor = if has_more {
         page.last()
@@ -4651,7 +4683,6 @@ mod tests {
     fn make_header(hash_byte: u8) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4782,24 +4813,17 @@ mod tests {
         domain_batch.commit().unwrap();
 
         // Per REORG_HANDLING.md rollback deletes a rolled-back block's
-        // collection rows, so a row whose transaction is not canonical is a
-        // rollback bug: the feed and the count name it instead of hiding it.
-        let error = list_canonical_nft_collection_activities_page(
-            &domain,
-            &domain,
-            &collection_id,
-            3,
-            None,
-            None,
-        )
-        .map(|_| ())
-        .unwrap_err();
+        // collection rows, so a row at a position with no transaction is a
+        // rollback bug: the feed names it instead of hiding it.
+        let error =
+            list_canonical_nft_collection_activities_page(&domain, &collection_id, 3, None, None)
+                .map(|_| ())
+                .unwrap_err();
         let message = format!("{error:#}");
         assert!(
-            message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
-                && message.contains("block=30")
-                && message.contains(&format!("tx=0x{}", hex::encode(&stale_tx)))
-                && message.contains("not canonical"),
+            message.contains(
+                "object_collection_activities points at block=30, tx_idx=0, which has no tx_index row"
+            ),
             "{message}"
         );
 
@@ -4807,24 +4831,12 @@ mod tests {
         domain
             .delete_cf(
                 domain.cf_object_collection_activities(),
-                &ckbadger_store::keys::encode_object_collection_activity_key(
-                    &collection_id,
-                    30,
-                    0,
-                    &[0x30; 32],
-                    &stale_tx,
-                ),
+                &ckbadger_store::keys::encode_object_collection_activity_key(&collection_id, 30, 0),
             )
             .unwrap();
-        let listed = list_canonical_nft_collection_activities_page(
-            &domain,
-            &domain,
-            &collection_id,
-            3,
-            None,
-            None,
-        )
-        .unwrap();
+        let listed =
+            list_canonical_nft_collection_activities_page(&domain, &collection_id, 3, None, None)
+                .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].0, 20);
         assert_eq!(listed[1].0, 10);
@@ -4832,8 +4844,11 @@ mod tests {
         assert_eq!(listed[1].2.tx_hash, canonical_tx_old);
     }
 
+    /// A row is keyed by its position, so an abandoned branch's row cannot sit
+    /// beside the canonical one: the second write replaces the first, and the
+    /// block hash a row shows is the canonical header's.
     #[test]
-    fn test_collection_activity_helpers_fail_on_a_competing_block_hash_row() {
+    fn test_collection_activity_rows_take_the_block_hash_of_the_canonical_header() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xAC; 32];
@@ -4855,12 +4870,7 @@ mod tests {
             &collection_id,
             20,
             0,
-            &make_collection_activity(
-                &tx_hash,
-                &[0xAA; 32],
-                1_700_000_020_000,
-                AssetAction::Transfer,
-            ),
+            &make_collection_activity(&tx_hash, &[0xAA; 32], 1_700_000_020_000, AssetAction::Mint),
         );
         domain_batch.put_object_collection_activity(
             &collection_id,
@@ -4878,26 +4888,13 @@ mod tests {
         domain_batch.put_block_header(20, &make_header(0xBB));
         domain_batch.commit().unwrap();
 
-        // The 0xAA row names a block hash that is not the canonical header at
-        // block 20: an abandoned branch's row that rollback should have deleted.
-        let error = list_canonical_nft_collection_activities_page(
-            &domain,
-            &domain,
-            &collection_id,
-            10,
-            None,
-            None,
-        )
-        .map(|_| ())
-        .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
-                && message.contains("block=20")
-                && message.contains(&format!("tx=0x{}", hex::encode(&tx_hash)))
-                && message.contains(&format!("block_hash=0x{}", hex::encode([0xAA; 32]))),
-            "{message}"
-        );
+        let listed =
+            list_canonical_nft_collection_activities_page(&domain, &collection_id, 10, None, None)
+                .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].2.block_hash, make_header(0xBB).hash);
+        assert_eq!(listed[0].2.actions, vec![AssetAction::Transfer]);
+        assert_eq!(listed[0].2.timestamp_ms, 1_700_000_000_000, "tx_index time");
     }
 
     #[test]
@@ -5000,7 +4997,6 @@ mod tests {
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8 + 1; 32],
-                    parent_hash: vec![0; 32],
                     timestamp: ms,
                     epoch_number: 1,
                     epoch_index: 0,

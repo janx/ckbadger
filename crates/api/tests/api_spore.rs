@@ -387,7 +387,6 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0xA1; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_100,
             epoch_number: 0,
             epoch_index: 0,
@@ -406,7 +405,6 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         200,
         &CachedBlockHeader {
             hash: vec![0xA2; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -425,7 +423,6 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         300,
         &CachedBlockHeader {
             hash: vec![0xA3; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_300,
             epoch_number: 0,
             epoch_index: 0,
@@ -1496,14 +1493,8 @@ fn seed_spore_cell(
         None => batch.put_cell(&tx, index, &cell, block),
         Some((consumer, consumed_at)) => {
             index_tx(batch, consumer, consumed_at);
-            batch.put_consumed_cell_with_consumer(
-                &tx,
-                index,
-                &cell,
-                block,
-                consumed_at,
-                Some(&consumer),
-            );
+            // `index_tx` indexes every transaction at tx index 1.
+            batch.put_consumed_cell(&tx, index, &cell, block, consumed_at, 1);
         }
     }
 }

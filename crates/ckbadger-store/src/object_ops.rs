@@ -9,8 +9,22 @@ use crate::types::{
 
 pub(crate) type MnftBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
+/// One page of a collection activity feed, `(block_number, tx_index, entry)`
+/// rows newest first, with what its completion read: the block headers (one
+/// per distinct block) and each row's `tx_index` entry (in row order). A
+/// reader that also serves a header field (the chain time) or the whole
+/// transaction takes it from here instead of reading it again.
+pub type CollectionActivityPage = (
+    Vec<(i64, i32, ObjectCollectionActivityEntry)>,
+    HashMap<i64, crate::types::CachedBlockHeader>,
+    Vec<crate::types::TxIndexEntry>,
+);
+
 use crate::bytes_to_hex;
-use crate::types::{CollectionActivityDailyBlockDeltas, CollectionActivityDailyCounts};
+use crate::types::{
+    decode_stored_collection_activity, CollectionActivityDailyBlockDeltas,
+    CollectionActivityDailyCounts,
+};
 use std::collections::HashMap;
 
 /// Decode a `collection_activity_daily` value, naming the row on failure.
@@ -292,7 +306,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_object_collection_owner_counts: {}",
+                    "failed to iterate stats_mnft in list_object_collection_owner_counts: {}",
                     e
                 )
             })?;
@@ -392,7 +406,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_object_daily_deltas_in_range: {}",
+                    "failed to iterate stats_mnft in list_object_daily_deltas_in_range: {}",
                     e
                 )
             })?;
@@ -478,10 +492,8 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// List pre-computed activities for an object collection, newest first.
-    ///
-    /// Returns `(block_number, tx_index, entry)` tuples. Simple prefix scan
-    /// on `CF_OBJECT_COLLECTION_ACTIVITIES` with early termination at `limit`.
+    /// List pre-computed activities for an object collection, newest first:
+    /// `(block_number, tx_index, entry)`. See [`Self::list_collection_activities`].
     pub fn list_object_collection_activities(
         &self,
         collection_id: &[u8],
@@ -489,30 +501,49 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         action_filter: Option<&str>,
     ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
+        Ok(self
+            .list_object_collection_activity_page(collection_id, limit, cursor, action_filter)?
+            .0)
+    }
+
+    /// [`Self::list_object_collection_activities`] with the block headers the
+    /// page's completion read.
+    pub fn list_object_collection_activity_page(
+        &self,
+        collection_id: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        action_filter: Option<&str>,
+    ) -> anyhow::Result<CollectionActivityPage> {
+        self.list_collection_activities(
+            crate::store::CF_OBJECT_COLLECTION_ACTIVITIES,
+            collection_id,
+            limit,
+            cursor,
+            action_filter,
+        )
+    }
+
+    /// One page of a collection activity feed (`cf` is
+    /// `object_collection_activities` or `identity_collection_activities`),
+    /// newest first, strictly older than `cursor`, only the rows whose actions
+    /// contain `action_filter` when given. A prefix scan collects the page's
+    /// positions and actions; the page is then completed by one helper — the
+    /// tx hash and timestamp from `tx_index`, the block hash from
+    /// `block_headers`, one `multi_get` each. A key of another width or a
+    /// value that is not a list of actions is an error (re-sync required).
+    pub(crate) fn list_collection_activities(
+        &self,
+        cf: &'static str,
+        collection_id: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        action_filter: Option<&str>,
+    ) -> anyhow::Result<CollectionActivityPage> {
         if limit == 0 {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), HashMap::new(), Vec::new()));
         }
-
-        let prefix = keys::encode_object_collection_activity_prefix(collection_id);
-        let start_key = if let Some((cursor_block, cursor_tx_idx)) = cursor {
-            keys::encode_object_collection_activity_seek_after_key(
-                collection_id,
-                cursor_block,
-                cursor_tx_idx,
-            )
-        } else {
-            let mut k = [0u8; keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
-            k[..32].copy_from_slice(&prefix);
-            k
-        };
-
-        let iter = self.iterator_cf(
-            self.cf_object_collection_activities(),
-            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
-
-        let mut results = Vec::new();
-        let action_filter_parsed = match action_filter {
+        let action_filter = match action_filter {
             Some(s) => Some(match s {
                 "mint" => AssetAction::Mint,
                 "transfer" => AssetAction::Transfer,
@@ -520,70 +551,89 @@ impl CkbadgerStore {
                 "recycle" => AssetAction::Recycle,
                 "renew" => AssetAction::Renew,
                 "update" => AssetAction::Update,
-                other => anyhow::bail!(
-                    "unsupported action filter in list_object_collection_activities: {:?}",
-                    other
-                ),
+                other => anyhow::bail!("unsupported action filter in {cf}: {:?}", other),
             }),
             None => None,
         };
 
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate object_collection_activities in list_object_collection_activities: {}",
-                    e
+        let prefix = keys::encode_object_collection_activity_prefix(collection_id);
+        let start_key = match cursor {
+            Some((cursor_block, cursor_tx_idx)) => {
+                keys::encode_object_collection_activity_seek_after_key(
+                    collection_id,
+                    cursor_block,
+                    cursor_tx_idx,
                 )
-            })?;
+            }
+            None => prefix.to_vec(),
+        };
+        let iter = self.iterator_cf(
+            self.cf(cf),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+
+        let mut rows = Vec::new();
+        for item in iter {
+            let (key, value) =
+                item.map_err(|e| anyhow::anyhow!("failed to iterate {cf}: {}", e))?;
             if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() != keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE {
-                continue;
-            }
-
-            let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
-                keys::decode_object_collection_activity_key(&key);
-            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
-            if entry.tx_hash != tx_hash_from_key {
-                anyhow::bail!(
-                    "object_collection_activities key/value tx_hash mismatch in list_object_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
-                    bytes_to_hex(&prefix),
-                    block_num,
-                    tx_idx,
-                    bytes_to_hex(&tx_hash_from_key),
-                    bytes_to_hex(&entry.tx_hash)
-                );
-            }
-            if entry.block_hash != block_hash_from_key {
-                anyhow::bail!(
-                    "object_collection_activities key/value block_hash mismatch in list_object_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_block_hash=0x{}, value_block_hash=0x{}",
-                    bytes_to_hex(&prefix),
-                    block_num,
-                    tx_idx,
-                    bytes_to_hex(&block_hash_from_key),
-                    bytes_to_hex(&entry.block_hash)
-                );
-            }
-
-            // Apply action filter
-            if let Some(ref filter) = action_filter_parsed {
-                let matches = entry
-                    .actions
+            let (_, block_num, tx_idx) = keys::decode_object_collection_activity_key(&key)?;
+            let actions = decode_stored_collection_activity(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "{cf} row of collection 0x{} at block={block_num}, tx_idx={tx_idx}: {e:#}",
+                    bytes_to_hex(&prefix)
+                )
+            })?;
+            if let Some(filter) = &action_filter {
+                if !actions
                     .iter()
-                    .any(|a| std::mem::discriminant(a) == std::mem::discriminant(filter));
-                if !matches {
+                    .any(|a| std::mem::discriminant(a) == std::mem::discriminant(filter))
+                {
                     continue;
                 }
             }
-
-            results.push((block_num, tx_idx, entry));
-            if results.len() >= limit {
+            rows.push((block_num, tx_idx, actions));
+            if rows.len() >= limit {
                 break;
             }
         }
+        self.complete_collection_activities(cf, rows)
+    }
 
-        Ok(results)
+    /// Stored collection activity rows completed into entries: the tx hash and
+    /// timestamp from `tx_index` at each position, the block hash from
+    /// `block_headers` — one `multi_get` each for the whole slice. The headers
+    /// and the entries read come back with the rows.
+    fn complete_collection_activities(
+        &self,
+        row_kind: &str,
+        rows: Vec<(i64, i32, Vec<AssetAction>)>,
+    ) -> anyhow::Result<CollectionActivityPage> {
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
+        let entries = self.tx_index_entries_at(row_kind, &positions)?;
+        let mut blocks: Vec<i64> = positions.iter().map(|(block, _)| *block).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        let headers = self.get_block_headers_batch(&blocks)?;
+        let rows = rows
+            .into_iter()
+            .zip(&entries)
+            .map(|((block, tx_idx, actions), entry)| {
+                let header = headers.get(&block).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{row_kind} row at block={block}, tx_idx={tx_idx} has no block header"
+                    )
+                })?;
+                Ok((
+                    block,
+                    tx_idx,
+                    ObjectCollectionActivityEntry::from_stored(actions, entry, header.hash.clone()),
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((rows, headers, entries))
     }
 
     /// Count total activities for a collection (prefix scan, no deserialization).
@@ -608,6 +658,56 @@ impl CkbadgerStore {
             count += 1;
         }
         Ok(count)
+    }
+}
+
+/// Test fixtures: what a collection activity row's position resolves to.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::batch::StoreBatch;
+    use crate::types::{CachedBlockHeader, ObjectCollectionActivityEntry, TxIndexEntry};
+
+    /// The `tx_index` entry (tx hash, timestamp) and the block header (block
+    /// hash) the row of `entry` at `(block, tx_idx)` is completed from.
+    pub(crate) fn index_collection_activity(
+        batch: &mut StoreBatch,
+        block: i64,
+        tx_idx: i32,
+        entry: &ObjectCollectionActivityEntry,
+    ) {
+        batch.put_tx_index(
+            block,
+            tx_idx,
+            &TxIndexEntry {
+                tx_hash: entry.tx_hash.as_slice().try_into().unwrap(),
+                is_cellbase: false,
+                timestamp: entry.timestamp_ms,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_block_header(
+            block,
+            &CachedBlockHeader {
+                hash: entry.block_hash.clone(),
+                timestamp: entry.timestamp_ms,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: entry.timestamp_ms,
+            },
+        );
     }
 }
 
@@ -1181,6 +1281,12 @@ mod tests {
                 0,
                 &make_activity(&tx_hash, block * 1000, vec![AssetAction::Mint]),
             );
+            test_support::index_collection_activity(
+                &mut batch,
+                block,
+                0,
+                &make_activity(&tx_hash, block * 1000, vec![AssetAction::Mint]),
+            );
         }
         batch.commit().unwrap();
 
@@ -1216,14 +1322,32 @@ mod tests {
             0,
             &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
         );
+        test_support::index_collection_activity(
+            &mut batch,
+            100,
+            0,
+            &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
+        );
         batch.put_object_collection_activity(
             &cid,
             200,
             0,
             &make_activity(&[2u8; 32], 200000, vec![AssetAction::Transfer]),
         );
+        test_support::index_collection_activity(
+            &mut batch,
+            200,
+            0,
+            &make_activity(&[2u8; 32], 200000, vec![AssetAction::Transfer]),
+        );
         batch.put_object_collection_activity(
             &cid,
+            300,
+            0,
+            &make_activity(&[3u8; 32], 300000, vec![AssetAction::Burn]),
+        );
+        test_support::index_collection_activity(
+            &mut batch,
             300,
             0,
             &make_activity(&[3u8; 32], 300000, vec![AssetAction::Burn]),
@@ -1265,6 +1389,16 @@ mod tests {
                 vec![AssetAction::Mint, AssetAction::Burn],
             ),
         );
+        test_support::index_collection_activity(
+            &mut batch,
+            500,
+            0,
+            &make_activity(
+                &[5u8; 32],
+                500000,
+                vec![AssetAction::Mint, AssetAction::Burn],
+            ),
+        );
         batch.commit().unwrap();
 
         // Should match both mint and burn filters
@@ -1285,8 +1419,11 @@ mod tests {
         assert!(transfers.is_empty());
     }
 
+    /// The key is (collection, position), so a collection has one row per
+    /// transaction position: a second write replaces the first (the journal
+    /// rollback leaves no ghost row to keep beside it).
     #[test]
-    fn test_list_object_collection_activities_keeps_two_rows_same_position_different_tx_hash() {
+    fn a_collection_activity_position_holds_one_row() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let cid = [0x04u8; 32];
@@ -1298,41 +1435,119 @@ mod tests {
             1,
             &make_activity(&[0x10; 32], 100_000, vec![AssetAction::Mint]),
         );
-        batch.put_object_collection_activity(
-            &cid,
-            100,
-            1,
-            &make_activity(&[0x20; 32], 100_001, vec![AssetAction::Transfer]),
-        );
-        batch.put_object_collection_activity(
-            &cid,
-            99,
-            0,
-            &make_activity(&[0x30; 32], 99_000, vec![AssetAction::Burn]),
-        );
+        let replacing = make_activity(&[0x20; 32], 100_001, vec![AssetAction::Transfer]);
+        batch.put_object_collection_activity(&cid, 100, 1, &replacing);
+        test_support::index_collection_activity(&mut batch, 100, 1, &replacing);
+        let older = make_activity(&[0x30; 32], 99_000, vec![AssetAction::Burn]);
+        batch.put_object_collection_activity(&cid, 99, 0, &older);
+        test_support::index_collection_activity(&mut batch, 99, 0, &older);
         batch.commit().unwrap();
 
         let rows = store
             .list_object_collection_activities(&cid, 10, None, None)
             .unwrap();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].0, 100);
-        assert_eq!(rows[0].1, 1);
-        assert_eq!(rows[0].2.tx_hash, vec![0x10; 32]);
-        assert_eq!(rows[1].0, 100);
-        assert_eq!(rows[1].1, 1);
-        assert_eq!(rows[1].2.tx_hash, vec![0x20; 32]);
-        assert_eq!(rows[2].0, 99);
-        assert_eq!(rows[2].1, 0);
-        assert_eq!(rows[2].2.tx_hash, vec![0x30; 32]);
-
+        assert_eq!(
+            rows.iter()
+                .map(|(block, idx, entry)| (
+                    *block,
+                    *idx,
+                    entry.tx_hash.clone(),
+                    entry.actions.clone()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (100, 1, vec![0x20; 32], vec![AssetAction::Transfer]),
+                (99, 0, vec![0x30; 32], vec![AssetAction::Burn]),
+            ]
+        );
         let next = store
             .list_object_collection_activities(&cid, 10, Some((100, 1)), None)
             .unwrap();
         assert_eq!(next.len(), 1);
-        assert_eq!(next[0].0, 99);
-        assert_eq!(next[0].1, 0);
-        assert_eq!(next[0].2.tx_hash, vec![0x30; 32]);
+        assert_eq!((next[0].0, next[0].1), (99, 0));
+    }
+
+    /// Review 27: completing a collection page needs the header of every
+    /// row's block; a row whose block has none is an error naming it.
+    #[test]
+    fn a_collection_activity_whose_block_has_no_header_is_an_error() {
+        let (_dir, store) = test_domain_store();
+        let cid = [0x06u8; 32];
+        let entry = make_activity(&[0x10; 32], 100_000, vec![AssetAction::Mint]);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_object_collection_activity(&cid, 100, 1, &entry);
+        super::test_support::index_collection_activity(&mut batch, 100, 1, &entry);
+        batch.commit().unwrap();
+        store
+            .delete_cf(store.cf_block_headers(), &keys::encode_block_num(100))
+            .unwrap();
+        let err = store
+            .list_object_collection_activities(&cid, 10, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "object_collection_activities row at block=100, tx_idx=1 has no block header"
+            ),
+            "{err}"
+        );
+    }
+
+    /// Review 16: a collection page comes back with the headers its
+    /// completion read, one per distinct block, for the chain time.
+    #[test]
+    fn a_collection_activity_page_carries_the_headers_it_read() {
+        let (_dir, store) = test_domain_store();
+        let cid = [0x07u8; 32];
+        let mut batch = StoreBatch::new(&store);
+        for (block, tx_idx, tx) in [(100, 1, 0x10u8), (100, 2, 0x11), (99, 0, 0x12)] {
+            let entry = make_activity(&[tx; 32], 100_000 + block, vec![AssetAction::Mint]);
+            batch.put_object_collection_activity(&cid, block, tx_idx, &entry);
+            super::test_support::index_collection_activity(&mut batch, block, tx_idx, &entry);
+        }
+        batch.commit().unwrap();
+        store.reset_read_call_counters();
+        let (rows, headers, entries) = store
+            .list_object_collection_activity_page(&cid, 10, None, None)
+            .unwrap();
+        assert_eq!(store.read_call_counts(), (0, 2), "tx_index + block_headers");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.tx_hash)
+                .collect::<Vec<_>>(),
+            vec![[0x11; 32], [0x10; 32], [0x12; 32]],
+            "the page's tx_index entries, in row order"
+        );
+        let mut blocks: Vec<i64> = headers.keys().copied().collect();
+        blocks.sort_unstable();
+        assert_eq!(blocks, vec![99, 100]);
+        assert_eq!(headers[&100].chain_time_ms, 100_100);
+    }
+
+    #[test]
+    fn a_collection_activity_at_a_position_without_a_transaction_is_an_error() {
+        let (_dir, store) = test_domain_store();
+        let cid = [0x05u8; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_object_collection_activity(
+            &cid,
+            100,
+            1,
+            &make_activity(&[0x10; 32], 100_000, vec![AssetAction::Mint]),
+        );
+        batch.commit().unwrap();
+        let err = store
+            .list_object_collection_activities(&cid, 10, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "object_collection_activities points at block=100, tx_idx=1, which has no tx_index row"
+            ),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1348,8 +1563,20 @@ mod tests {
             0,
             &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
         );
+        test_support::index_collection_activity(
+            &mut batch,
+            100,
+            0,
+            &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
+        );
         batch.put_object_collection_activity(
             &cid_b,
+            200,
+            0,
+            &make_activity(&[2u8; 32], 200000, vec![AssetAction::Mint]),
+        );
+        test_support::index_collection_activity(
+            &mut batch,
             200,
             0,
             &make_activity(&[2u8; 32], 200000, vec![AssetAction::Mint]),
@@ -1379,6 +1606,12 @@ mod tests {
         for block in 100..105 {
             batch.put_object_collection_activity(
                 &cid,
+                block,
+                0,
+                &make_activity(&[block as u8; 32], block * 1000, vec![AssetAction::Mint]),
+            );
+            test_support::index_collection_activity(
+                &mut batch,
                 block,
                 0,
                 &make_activity(&[block as u8; 32], block * 1000, vec![AssetAction::Mint]),

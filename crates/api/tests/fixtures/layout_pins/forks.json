@@ -1,0 +1,34 @@
+{
+  "data": [
+    {
+      "depth": 2,
+      "detectedAt": "<detected at>",
+      "eventType": "reorg",
+      "firstOrphanHash": "0xd4f986cf2daf6eac58cc74777d87a21211c485f8ebbbeae29ab542a4a13d1c9d",
+      "firstOrphanStatus": "recorded",
+      "forkPointHash": "0xa85abf10d950c8b45498af8baf874ad123efb99a7defaf6450e9e35b36356a83",
+      "forkPointNumber": 4,
+      "id": "<event id>",
+      "newTipHash": "0xa85abf10d950c8b45498af8baf874ad123efb99a7defaf6450e9e35b36356a83",
+      "newTipNumber": 4,
+      "oldTipHash": "0x840a10a7d64d9b02896da32fa801b0d782db7f9480c1a9699e9227fb6a7a53e2",
+      "oldTipNumber": 6,
+      "orphanedBlocksCount": 2,
+      "orphanedTxsCount": 3,
+      "preview": null,
+      "previewStatus": "old_branch_unavailable",
+      "reconcileInterrupted": false,
+      "resolutionAction": null,
+      "resolutionNotes": null,
+      "resolvedAt": null,
+      "resolvedBy": null,
+      "reversesEvents": [],
+      "revertedByEvent": null,
+      "supersededByTipHash": null
+    }
+  ],
+  "hasMore": false,
+  "limit": 20,
+  "nextCursor": null,
+  "total": 1
+}

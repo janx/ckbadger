@@ -10,7 +10,6 @@ use crate::utils::{
 };
 use crate::AppState;
 use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
-use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -506,9 +505,9 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
     for item in iter {
         let (key, value) =
             item.map_err(|e| anyhow::anyhow!("failed to iterate addr_balance in warmup: {}", e))?;
-        let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
+        let balance = ckbadger_store::decode_address_balance(&key, &value).map_err(|e| {
             anyhow::anyhow!(
-                "failed to deserialize address balance in warmup: lock_hash=0x{}, error={}",
+                "failed to deserialize address balance in warmup: lock_hash=0x{}, error={:#}",
                 hex::encode(&key),
                 e
             )

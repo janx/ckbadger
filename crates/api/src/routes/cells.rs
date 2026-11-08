@@ -73,7 +73,6 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
-const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
 
 /// Convert a `semantic_tags` bitmap into human-readable script label strings.
 /// Returns an empty vec when no bits are set (including legacy `0` values).
@@ -1388,7 +1387,7 @@ fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
             mime_type: Some("application/pdf".to_string()),
             human_value: None,
         });
-    } else if data.starts_with(b"\x7FELF") {
+    } else if ckbadger_store::keys::is_code_cell(data) {
         guesses.push(CellDataGuess {
             kind: "magic_number".to_string(),
             confidence: "high".to_string(),
@@ -2076,8 +2075,9 @@ pub struct CellDetailResponse {
     /// Epoch of the creating block, from its indexed header.
     pub created_epoch: CellEpochResponse,
     /// The data hash a script references for this cell's data (CKB's
-    /// `CellOutput::calc_data_hash`: 32 zero bytes for empty data); `None`
-    /// only when the cell's bytes are unavailable.
+    /// `CellOutput::calc_data_hash`: 32 zero bytes for empty data), from
+    /// `LiveCellInfo::script_data_hash`; `None` only for a payload with data
+    /// and no stored hash.
     pub data_hash: Option<String>,
     pub status: String,
     pub consumed_at_block: Option<i64>,
@@ -2553,6 +2553,22 @@ fn code_cell_upgrade_cohort(
     if tx.is_cellbase() {
         return Ok(Vec::new());
     }
+    // Every input must have been consumed by this transaction: its canonical
+    // position is what each input's consumed marker points at.
+    let position = state
+        .store
+        .get_tx_location(tx_hash)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort transaction: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort transaction 0x{} is not indexed",
+                hex::encode(tx_hash)
+            ))
+        })?;
     let mut inputs = Vec::new();
     for input in tx.inputs() {
         let previous = input.previous_output();
@@ -2580,14 +2596,14 @@ fn code_cell_upgrade_cohort(
                     hex::encode(&previous_hash)
                 ))
             })?;
-        if consumed.consumed_by_tx.as_deref() != Some(tx_hash) {
+        if consumed.consumer_position() != position {
             return Err(ApiError::internal(format!(
                 "cell {outpoint} upgrade cohort input 0x{}:{index} has wrong consumer",
                 hex::encode(&previous_hash)
             )));
         }
         if let Some(type_hash) = consumed.cell.type_script_hash() {
-            inputs.push((previous_hash, index, type_hash, consumed.cell.data_hash));
+            inputs.push((previous_hash, index, type_hash, consumed.cell.clone()));
         }
     }
     let mut upgrades = Vec::new();
@@ -2622,11 +2638,9 @@ fn code_cell_upgrade_cohort(
                 matches.len()
             )));
         }
-        let (previous_hash, previous_index, _, previous_version) = matches[0];
-        let mut hasher = ckb_hash::new_blake2b();
-        hasher.update(&data.raw_data());
-        let mut version = [0u8; 32];
-        hasher.finalize(&mut version);
+        let (previous_hash, previous_index, _, previous_cell) = matches[0];
+        let (previous_version_hash, current_version_hash, binary_changed) =
+            upgrade_versions(previous_cell, &data.raw_data());
         upgrades.push(CodeCellUpgrade {
             previous_tx_hash: format!("0x{}", hex::encode(previous_hash)),
             previous_output_index: *previous_index,
@@ -2635,16 +2649,32 @@ fn code_cell_upgrade_cohort(
                 ApiError::internal(format!("cell {outpoint} upgrade output index overflow"))
             })?,
             type_script_hash: format!("0x{}", hex::encode(type_hash.as_slice())),
-            previous_version_hash: previous_version
-                .as_ref()
-                .map(|hash| format!("0x{}", hex::encode(hash))),
-            current_version_hash: format!("0x{}", hex::encode(version)),
-            binary_changed: previous_version
-                .as_ref()
-                .map(|hash| hash.as_slice() != version),
+            previous_version_hash,
+            current_version_hash,
+            binary_changed,
         });
     }
     Ok(upgrades)
+}
+
+/// The version hashes of a Type ID upgrade: the previous cell's data hash as
+/// a script references it (`LiveCellInfo::script_data_hash`, the one
+/// data-hash read path: 32 zero bytes for empty data) and the hash of the
+/// current output's data; `binary_changed` compares the two.
+fn upgrade_versions(
+    previous: &ckbadger_store::LiveCellInfo,
+    current_data: &[u8],
+) -> (Option<String>, String, Option<bool>) {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(current_data);
+    let mut version = [0u8; 32];
+    hasher.finalize(&mut version);
+    let previous_version = previous.script_data_hash();
+    (
+        previous_version.map(|hash| format!("0x{}", hex::encode(hash))),
+        format!("0x{}", hex::encode(version)),
+        previous_version.map(|hash| hash != version),
+    )
 }
 
 fn code_cell_type_id_versions(
@@ -4199,12 +4229,10 @@ async fn get_cell(
         created_at_block: info.created_at_block,
         created_timestamp,
         created_epoch,
-        data_hash: cell_data.as_ref().map(|bytes| {
-            format!(
-                "0x{}",
-                hex::encode(ckb_types::packed::CellOutput::calc_data_hash(bytes).as_slice())
-            )
-        }),
+        // The bytes were checked against the indexed hash above.
+        data_hash: info
+            .script_data_hash()
+            .map(|hash| format!("0x{}", hex::encode(hash))),
         status: status_str.to_string(),
         consumed_at_block,
         consumed_by_tx,
@@ -4337,66 +4365,6 @@ fn active_addresses_from_cache(
             last_activity_block: entry.last_activity_block,
         })
         .collect()
-}
-
-fn is_canonical_addr_tx(
-    store: &CkbadgerStore,
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash: &[u8],
-) -> anyhow::Result<bool> {
-    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(tx_hash)? else {
-        return Ok(false);
-    };
-    if canonical_block != block_num || canonical_tx_idx != tx_idx {
-        return Ok(false);
-    }
-    Ok(store
-        .get_tx_index(canonical_block, canonical_tx_idx)?
-        .is_some())
-}
-
-fn list_canonical_addr_txs_page(
-    store: &CkbadgerStore,
-    addr_tx_store: &CkbadgerStore,
-    lock_hash: &[u8],
-    limit: usize,
-    cursor: Option<(i64, i32)>,
-) -> anyhow::Result<Vec<(i64, i32, Vec<u8>, ckbadger_store::AddrTxValue)>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let scan_limit = ADDR_TX_SCAN_CHUNK_SIZE.max(limit);
-    let mut out = Vec::with_capacity(limit);
-    let mut scan_cursor = cursor;
-
-    loop {
-        let rows = addr_tx_store.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
-        if rows.is_empty() {
-            break;
-        }
-        let rows_len = rows.len();
-        let mut last_seen = None;
-        for (block_num, tx_idx, tx_hash, addr_tx_value) in rows {
-            last_seen = Some((block_num, tx_idx));
-            if is_canonical_addr_tx(store, block_num, tx_idx, &tx_hash)? {
-                out.push((block_num, tx_idx, tx_hash, addr_tx_value));
-                if out.len() >= limit {
-                    return Ok(out);
-                }
-            }
-        }
-        if rows_len < scan_limit {
-            break;
-        }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        scan_cursor = Some(last_seen_cursor);
-    }
-
-    Ok(out)
 }
 
 /// One `addr_txs_by_prefix` row.
@@ -4599,18 +4567,23 @@ async fn get_address_transactions(
         None
     };
 
-    // Fetch canonical recent transactions for this address (newest first).
-    // Each row now includes the materialized AddrTxValue with capacity_change and tx_type.
+    // The address's recent transactions (newest first), each with its
+    // AddrTxValue (capacity_change, tx_type) and its `tx_index` entry. Every
+    // row is canonical: its key is the transaction's position, which
+    // `tx_index` resolves (a position with no transaction is an error, never
+    // a row to skip). The page reads two iterators, one `tx_index` multi_get
+    // and one `block_headers` multi_get — nothing per row.
     let store = state.store.clone();
     let lock_hash_c = lock_hash.clone();
-    let addr_txs = tokio::task::spawn_blocking(move || {
-        list_canonical_addr_txs_page(
-            store.as_ref(),
-            store.as_ref(),
-            &lock_hash_c,
-            limit + 1,
-            cursor,
-        )
+    let (addr_txs, headers) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let rows = store.list_addr_tx_entries_recent(&lock_hash_c, limit + 1, cursor)?;
+        let mut blocks: Vec<i64> = rows.iter().take(limit).map(|(bn, _, _, _)| *bn).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        let headers = store.get_block_headers_batch(&blocks).map_err(|e| {
+            anyhow::anyhow!("failed to read block headers (address transactions): {e:#}")
+        })?;
+        Ok((rows, headers))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -4627,31 +4600,19 @@ async fn get_address_transactions(
         None
     };
 
-    // Deduplicate block header lookups: collect unique block numbers first.
-    let unique_blocks: Vec<i64> = {
-        let mut blocks: Vec<i64> = addr_txs.iter().map(|(bn, _, _, _)| *bn).collect();
-        blocks.sort_unstable();
-        blocks.dedup();
-        blocks
-    };
-    // Every row here is canonical, so its block header exists; a read failure,
-    // a missing header or an unrenderable timestamp is store corruption,
-    // reported with the block rather than served as an empty timestamp.
-    let mut block_timestamps: HashMap<i64, String> = HashMap::with_capacity(unique_blocks.len());
-    for block_num in unique_blocks {
-        let header = state
-            .store
-            .get_block_header(block_num)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to read block header for block {block_num} (address transactions): {e}"
-                ))
-            })?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing block header for block {block_num}, which holds a canonical address transaction"
-                ))
-            })?;
+    // Every row here is canonical, so its block header exists; a missing
+    // header or an unrenderable timestamp is store corruption, reported with
+    // the block rather than served as an empty timestamp.
+    let mut block_timestamps: HashMap<i64, String> = HashMap::with_capacity(headers.len());
+    for block_num in addr_txs.iter().map(|(block_num, ..)| *block_num) {
+        if block_timestamps.contains_key(&block_num) {
+            continue;
+        }
+        let header = headers.get(&block_num).ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing block header for block {block_num}, which holds a canonical address transaction"
+            ))
+        })?;
         let ts = chrono::DateTime::from_timestamp_millis(header.timestamp)
             .ok_or_else(|| {
                 ApiError::internal(format!(
@@ -4666,7 +4627,7 @@ async fn get_address_transactions(
     let committed_txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
         .map(
-            |(block_number, tx_idx, tx_hash, addr_val)| -> Result<
+            |(block_number, _tx_idx, tx_entry, addr_val)| -> Result<
                 AddressTransactionResponse,
                 (axum::http::StatusCode, axum::Json<ApiError>),
             > {
@@ -4675,27 +4636,7 @@ async fn get_address_transactions(
                         "address transaction at block {block_number} has no resolved block timestamp"
                     ))
                 })?;
-
-                let tx_entry = state
-                    .store
-                    .get_tx_index(block_number, tx_idx)
-                    .map_err(|e| {
-                        ApiError::internal(format!(
-                            "failed to read tx_index for tx 0x{} at block {}:{}: {}",
-                            hex::encode(&tx_hash),
-                            block_number,
-                            tx_idx,
-                            e
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "missing tx_index for canonical tx 0x{} at block {}:{}",
-                            hex::encode(&tx_hash),
-                            block_number,
-                            tx_idx
-                        ))
-                    })?;
+                let tx_hash = tx_entry.tx_hash;
 
                 // capacity_change and tx_type come from materialized AddrTxValue — no cell reads needed.
                 let capacity_change = addr_val.capacity_change;
@@ -4719,7 +4660,7 @@ async fn get_address_transactions(
                 let script_labels = script_labels_from_semantic_tags(tx_entry.semantic_tags);
 
                 Ok(AddressTransactionResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
+                    tx_hash: format!("0x{}", hex::encode(tx_hash)),
                     block_number: Some(block_number),
                     tx_type: tx_type.to_string(),
                     capacity_change: (capacity_change as i128).to_string(),
@@ -4989,6 +4930,38 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         }
+    }
+
+    /// Review P1-4: a Type ID upgrade whose previous cell had empty data
+    /// reports CKB's zero data hash as the previous version (the hash a
+    /// script references, as the cell page serves it), not the blake2b of
+    /// zero bytes the payload stores.
+    #[test]
+    fn upgrade_versions_serve_the_zero_hash_of_an_empty_previous_cell() {
+        let stored_empty_hash: [u8; 32] = ckb_hash::blake2b_256([]);
+        let previous = LiveCellInfo {
+            data_size: 0,
+            data_hash: Some(stored_empty_hash),
+            ..make_payload()
+        };
+        let current = b"\x7fELF\x02\x01\x01code";
+        let (previous_hash, current_hash, changed) = upgrade_versions(&previous, current);
+        assert_eq!(previous_hash, Some(format!("0x{}", "00".repeat(32))));
+        assert_eq!(
+            current_hash,
+            format!("0x{}", hex::encode(ckb_hash::blake2b_256(current)))
+        );
+        assert_eq!(changed, Some(true));
+
+        // A non-empty previous binary keeps its stored hash.
+        let same = LiveCellInfo {
+            data_size: i32::try_from(current.len()).unwrap(),
+            data_hash: Some(ckb_hash::blake2b_256(current)),
+            ..make_payload()
+        };
+        let (previous_hash, _, changed) = upgrade_versions(&same, current);
+        assert_eq!(previous_hash, Some(current_hash));
+        assert_eq!(changed, Some(false));
     }
 
     fn make_info() -> ckbadger_store::PositionedCellInfo {
@@ -6358,18 +6331,17 @@ mod tests {
         assert_eq!(labels.len(), 8);
     }
 
+    /// An `addr_txs` row is keyed by its transaction's position, so it is
+    /// canonical by construction; a row whose position has no transaction (an
+    /// orphan the journal rollback would have deleted) is an error, not a row
+    /// the page skips.
     #[test]
-    fn test_list_canonical_addr_txs_page_filters_orphaned_entries() {
+    fn test_address_transactions_page_rejects_an_orphaned_position() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let lock_hash = [0xAA; 32];
-
-        let stale_tx = vec![0x30; 32];
-        let canonical_tx_new = vec![0x20; 32];
-        let canonical_tx_old = vec![0x10; 32];
-
-        let tx_index = TxIndexEntry {
-            tx_hash: [0u8; 32],
+        let tx_index = |hash: [u8; 32]| TxIndexEntry {
+            tx_hash: hash,
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -6380,43 +6352,41 @@ mod tests {
             semantic_tags: 0,
         };
         let mut domain_batch = StoreBatch::new(&domain);
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            30,
-            0,
-            &stale_tx,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            20,
-            0,
-            &canonical_tx_new,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        domain_batch.put_addr_tx(
-            &lock_hash,
-            10,
-            0,
-            &canonical_tx_old,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
-        domain_batch.put_tx_index(20, 0, &tx_index);
-        domain_batch.put_tx_index(10, 0, &tx_index);
+        for block in [30, 20, 10] {
+            domain_batch.put_addr_tx(
+                &lock_hash,
+                block,
+                0,
+                &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
+            );
+        }
+        domain_batch.put_tx_index(20, 0, &tx_index([0x20; 32]));
+        domain_batch.put_tx_index(10, 0, &tx_index([0x10; 32]));
         domain_batch.commit().unwrap();
 
-        let rows = list_canonical_addr_txs_page(&domain, &domain, &lock_hash, 3, None).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, 20);
-        assert_eq!(rows[1].0, 10);
-        assert_eq!(rows[0].2, canonical_tx_new);
-        assert_eq!(rows[1].2, canonical_tx_old);
-        // AddrTxValue is propagated through from the store.
-        assert_eq!(rows[0].3.tx_type_str(), "received");
-        assert_eq!(rows[1].3.tx_type_str(), "received");
+        let err = domain
+            .list_addr_txs_recent(&lock_hash, 3, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!(
+                "addr_txs row of 0x{} points at block=30, tx_idx=0, which has no tx_index row",
+                hex::encode(lock_hash)
+            )),
+            "{err}"
+        );
+        let rows = domain
+            .list_addr_txs_recent(&lock_hash, 2, Some((30, 0)))
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|(block, _, hash, value)| (*block, hash.clone(), value.tx_type_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (20, vec![0x20; 32], "received"),
+                (10, vec![0x10; 32], "received")
+            ]
+        );
     }
 
     #[test]
@@ -6477,7 +6447,6 @@ mod tests {
                 number,
                 &ckbadger_store::types::CachedBlockHeader {
                     hash: vec![number as u8; 32],
-                    parent_hash: vec![0; 32],
                     timestamp: chain_time_ms,
                     chain_time_ms,
                     epoch_number: 0,

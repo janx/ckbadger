@@ -1,0 +1,51 @@
+{
+  "activity": {
+    "blockNumber": 4,
+    "isCellbase": false,
+    "lockCalls": [],
+    "participants": [
+      {
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf3xycnzvf3xycnzvf3xycnzvf3xycnzvgsa4m7y",
+        "ckbDelta": "-50000000000",
+        "itemDeltas": [],
+        "lockHash": "0x95add7c28976054c39c8a2a95fe6e8a8053a9898a2417723daed5da0000bf92c",
+        "lockHashPrefix": null,
+        "lockKind": "Default Lock",
+        "roles": [],
+        "tags": 0,
+        "usedDelta": "-6100000000"
+      },
+      {
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfjxgeryv3jxgeryv3jxgeryv3jxgeryvsvmkkzj",
+        "ckbDelta": "49900000000",
+        "itemDeltas": [],
+        "lockHash": "0xe283d25800772fa5df7552b9e1e60bc7a34848acb7d329b0c94f1ffe767c46e7",
+        "lockHashPrefix": null,
+        "lockKind": "Default Lock",
+        "roles": [],
+        "tags": 0,
+        "usedDelta": "6100000000"
+      }
+    ],
+    "protocolActions": [],
+    "timestamp": "1790041200000",
+    "txHash": "0xee4bca16ac5aa95734409c7a6a87bed9190a9fac4ec535284c435f890e377646",
+    "txIndex": 1,
+    "typeCalls": []
+  },
+  "blockHash": "0xa85abf10d950c8b45498af8baf874ad123efb99a7defaf6450e9e35b36356a83",
+  "blockNumber": 4,
+  "cycles": null,
+  "cyclesStatus": "pending",
+  "fee": "100000000",
+  "hash": "0xee4bca16ac5aa95734409c7a6a87bed9190a9fac4ec535284c435f890e377646",
+  "index": 1,
+  "inputsCount": 1,
+  "isCellbase": false,
+  "outputCapacity": "49900000000",
+  "outputsCount": 1,
+  "pays": null,
+  "timestamp": "2026-09-22T01:40:00+00:00",
+  "txSize": 233,
+  "value": "49900000000"
+}

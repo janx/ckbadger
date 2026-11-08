@@ -1115,7 +1115,7 @@ fn seed_data_hash_rows(store: &Arc<CkbadgerStore>, data_hash: &[u8]) {
     batch
         .put_cell_payload_by_outpoint(&[0x02; 32], 1, &data_cell(6, data_hash))
         .unwrap();
-    batch.put_consumed_cell(&[0x02; 32], 1, &data_cell(6, data_hash), 7, 9);
+    batch.put_consumed_cell(&[0x02; 32], 1, &data_cell(6, data_hash), 7, 9, 1);
     batch.put_cell_by_data_hash(data_hash, 7, &[0x02; 32], 1);
     batch.commit().unwrap();
 }

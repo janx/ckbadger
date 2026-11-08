@@ -889,7 +889,6 @@ mod tests {
     #[test]
     fn test_count_new_addresses_rejects_missing_prefetch_key() {
         let lock = vec![0x66; 32];
-        let tx_hash = vec![0xaa; 32];
         let changes = HashMap::from([(
             lock.clone(),
             crate::sync::types::AddressBalanceDelta {
@@ -900,9 +899,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: 10,
                 first_seen_block: 1,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: tx_hash,
+                last_activity_tx_idx: 0,
             },
         )]);
         let error = count_new_addresses(
@@ -922,7 +921,6 @@ mod tests {
         let addr_new = vec![0x11; 32];
         let addr_existing_live = vec![0x22; 32];
         let addr_existing_zero = vec![0x33; 32];
-        let tx_hash = vec![0xAA; 32];
 
         changes.insert(
             addr_new.clone(),
@@ -934,9 +932,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: 10,
                 first_seen_block: 1,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: tx_hash.clone(),
+                last_activity_tx_idx: 0,
             },
         );
         changes.insert(
@@ -949,9 +947,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: 5,
                 first_seen_block: 1,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: tx_hash.clone(),
+                last_activity_tx_idx: 0,
             },
         );
         changes.insert(
@@ -964,9 +962,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: 7,
                 first_seen_block: 1,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: tx_hash,
+                last_activity_tx_idx: 0,
             },
         );
 
@@ -1010,9 +1008,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: 0,
                 first_seen_block: 1,
-                first_seen_tx: vec![0x44; 32],
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: vec![0x44; 32],
+                last_activity_tx_idx: 0,
             },
         )]);
         let existing = HashMap::from([(
@@ -1037,7 +1035,6 @@ mod tests {
         use crate::sync::types::AddressBalanceDelta;
 
         let mut changes: HashMap<Vec<u8>, AddressBalanceDelta> = HashMap::new();
-        let tx_hash = vec![0xBB; 32];
         changes.insert(
             vec![0x44; 32],
             AddressBalanceDelta {
@@ -1048,9 +1045,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: 0,
                 first_seen_block: 1,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: tx_hash.clone(),
+                last_activity_tx_idx: 0,
             },
         );
         changes.insert(
@@ -1063,9 +1060,9 @@ mod tests {
                 cellbase_tx_delta: 0,
                 used_delta: -2,
                 first_seen_block: 1,
-                first_seen_tx: tx_hash.clone(),
+                first_seen_tx_idx: 0,
                 last_activity_block: 1,
-                last_activity_tx: tx_hash,
+                last_activity_tx_idx: 0,
             },
         );
 

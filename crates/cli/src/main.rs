@@ -134,9 +134,10 @@ fn raise_fd_limit() -> Result<u64> {
 
 /// Fail fast if `fd_limit` is too low to run the indexer.
 ///
-/// The indexer opens many RocksDB SST files during bulk sync (59 column
-/// families × multiple SST levels).  Below [`FD_LIMIT_MIN`] the open will
-/// fail mid-sync, leaving RocksDB in an incomplete state.
+/// The indexer opens many RocksDB SST files during bulk sync (every column
+/// family of both chain stores, `ckbadger_store::CF_SPECS`, × multiple SST
+/// levels).  Below [`FD_LIMIT_MIN`] the open will fail mid-sync, leaving
+/// RocksDB in an incomplete state.
 fn check_fd_limit_for_indexer(fd_limit: u64) -> Result<()> {
     if fd_limit < FD_LIMIT_MIN {
         bail!(

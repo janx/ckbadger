@@ -1,0 +1,21 @@
+{
+  "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgmnt9xa",
+  "balance": "100000000000",
+  "commonKnowledgeSize": "17100000000",
+  "liveCellsCount": 1,
+  "lockScript": {
+    "args": "0x0101010101010101010101010101010101010101",
+    "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hashType": "type"
+  },
+  "lockScriptHash": "0xbe1a32103e168e4e382dcaf294c7743c7a482c02a1b3b8656262071333f1cff7",
+  "lockScriptInfo": {
+    "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "deprecated": false,
+    "name": "Default Lock",
+    "scriptKind": "lock"
+  },
+  "pendingSummary": null,
+  "recentActivitiesCount": 3,
+  "transactionsCount": 3
+}

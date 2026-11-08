@@ -550,7 +550,6 @@ mod tests {
             7,
             &CachedBlockHeader {
                 hash: vec![7; 32],
-                parent_hash: vec![6; 32],
                 timestamp: 1_700_000_000_123,
                 chain_time_ms: 1_700_000_000_123,
                 epoch_number: 0,

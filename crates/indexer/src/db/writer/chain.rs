@@ -38,7 +38,6 @@ impl BatchWriter {
             })?;
             let header = CachedBlockHeader {
                 hash: block.hash.clone(),
-                parent_hash: block.parent_hash.clone(),
                 timestamp: block.timestamp.timestamp_millis(),
                 epoch_number: block.epoch_number,
                 epoch_index: block.epoch_index,

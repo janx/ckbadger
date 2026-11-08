@@ -188,7 +188,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_spore(), &key)? {
+        match self.get_cf(self.cf_object_outpoints(), &key)? {
             // The value is the item id verbatim, at its natural width: 32 bytes
             // for spores and `.bit Cell`, 20 or 32 for did:ckb. Truncating to a
             // fixed 32 bytes would drop shorter ids on the floor, and the live
@@ -207,7 +207,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<Vec<SporeOutpointLookup>> {
-        let cf = self.cf_stats_spore();
+        let cf = self.cf_object_outpoints();
         let keys: Vec<[u8; keys::SPORE_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_spore_outpoint_key(tx_hash, *idx))
@@ -261,13 +261,13 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         let prefix = keys::encode_spore_outpoint_by_id_prefix(spore_id);
         let expected_key_len = keys::spore_outpoint_by_id_key_len(spore_id.len());
-        let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
             let (key, _value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_spore in list_spore_outpoints_by_spore_id: {}",
+                    "failed to iterate object_outpoint_by_id in list_spore_outpoints_by_spore_id: {}",
                     e
                 )
             })?;
@@ -532,6 +532,126 @@ mod tests {
         (dir, store)
     }
 
+    /// C-4b: the object outpoint indexes are two CFs of their own, keyed by
+    /// the object kind; `stats_spore` / `stats_mnft` keep only statistics.
+    /// Every writer lands there and every typed reader finds its kind only.
+    #[test]
+    fn object_outpoint_rows_live_in_their_own_cfs_keyed_by_kind() {
+        use crate::batch::StoreBatch;
+        use crate::keys::object_outpoint_kind;
+        use crate::types::AssetAction;
+        let (_dir, store) = test_store();
+        let tx = [0x5au8; 32];
+        let (spore, did, class, token, account) = (
+            [0x51u8; 32],
+            [0x52u8; 20],
+            [0x53u8; 24],
+            [0x54u8; 24],
+            [0x55u8; 20],
+        );
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&tx, 0, &spore);
+        batch.put_spore_outpoint(&tx, 1, &did);
+        batch.put_spore_item_action(&did, &tx, 1, AssetAction::Transfer);
+        batch.put_mnft_class_outpoint(&tx, 2, &class);
+        batch.put_mnft_token_outpoint(&tx, 3, &token);
+        batch.put_dotbit_account_outpoint(&tx, 4, &account);
+        batch.put_dotbit_outpoint_by_account_id(&account, &tx, 4, AssetAction::Mint);
+        batch.commit().unwrap();
+
+        let rows = |cf: &rocksdb::ColumnFamily| -> Vec<(Vec<u8>, Vec<u8>)> {
+            store
+                .iterator_cf(cf, rocksdb::IteratorMode::Start)
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        };
+        assert!(rows(store.cf_stats_spore()).is_empty());
+        assert!(rows(store.cf_stats_mnft()).is_empty());
+        let outpoints = rows(store.cf_object_outpoints());
+        assert_eq!(
+            outpoints
+                .iter()
+                .map(|(key, value)| (key[0], value.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (object_outpoint_kind::SPORE_ITEM, spore.to_vec()),
+                (object_outpoint_kind::SPORE_ITEM, did.to_vec()),
+                (object_outpoint_kind::MNFT_CLASS, class.to_vec()),
+                (object_outpoint_kind::MNFT_TOKEN, token.to_vec()),
+                (object_outpoint_kind::DOTBIT_ACCOUNT, account.to_vec()),
+            ]
+        );
+        let by_id = rows(store.cf_object_outpoint_by_id());
+        assert_eq!(
+            by_id
+                .iter()
+                .map(|(key, value)| (key[0], key.len(), value.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (object_outpoint_kind::SPORE_ITEM, 1 + 32 + 34, vec![]),
+                (
+                    object_outpoint_kind::SPORE_ITEM,
+                    1 + 20 + 34,
+                    vec![AssetAction::Transfer.compact()]
+                ),
+                (
+                    object_outpoint_kind::DOTBIT_ACCOUNT,
+                    1 + 20 + 34,
+                    vec![AssetAction::Mint.compact()]
+                ),
+            ]
+        );
+
+        // Each typed reader finds its own kind only.
+        assert_eq!(
+            store.get_spore_id_by_outpoint(&tx, 0).unwrap(),
+            Some(spore.to_vec())
+        );
+        assert_eq!(store.get_spore_id_by_outpoint(&tx, 2).unwrap(), None);
+        assert_eq!(
+            store.get_mnft_class_id_by_outpoint(&tx, 2).unwrap(),
+            Some(class.to_vec())
+        );
+        assert_eq!(store.get_mnft_class_id_by_outpoint(&tx, 3).unwrap(), None);
+        assert_eq!(
+            store.get_mnft_token_id_by_outpoint(&tx, 3).unwrap(),
+            Some(token.to_vec())
+        );
+        assert_eq!(
+            store.list_mnft_token_outpoints_by_token_id(&token).unwrap(),
+            vec![(tx.to_vec(), 3)]
+        );
+        assert_eq!(
+            store.list_mnft_class_outputs_of_tx(&tx).unwrap(),
+            vec![(2, class.to_vec())]
+        );
+        assert_eq!(
+            store.get_dotbit_account_id_by_outpoint(&tx, 4).unwrap(),
+            Some(account.to_vec())
+        );
+        assert_eq!(
+            store
+                .list_dotbit_account_outpoints_by_account_id(&account)
+                .unwrap(),
+            vec![(tx.to_vec(), 4)]
+        );
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&did).unwrap(),
+            vec![(tx.to_vec(), 1)]
+        );
+        assert_eq!(
+            store.get_identity_item_action(&did, &tx, 1).unwrap(),
+            AssetAction::Transfer
+        );
+        assert_eq!(
+            store.get_dotbit_item_action(&account, &tx, 4).unwrap(),
+            AssetAction::Mint
+        );
+    }
+
     /// Non-aliasing, both directions: a 20-byte item id whose bytes are a
     /// prefix of a 32-byte item id shares the scan prefix, so neither id may
     /// ever see the other's outpoints. Real shapes: did:ckb ids are the
@@ -786,7 +906,7 @@ mod tests {
             let tx = [tx_byte; 32];
             let key = keys::encode_spore_outpoint_key(&tx, 1);
             store
-                .put_cf(store.cf_stats_spore(), &key, &bad_value)
+                .put_cf(store.cf_object_outpoints(), &key, &bad_value)
                 .unwrap();
 
             let outpoints: Vec<(&[u8], i16)> = vec![(&tx, 1)];

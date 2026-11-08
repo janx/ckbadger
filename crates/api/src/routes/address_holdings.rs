@@ -486,7 +486,7 @@ fn classify(
         Some(ProtocolScript::MnftToken) => {
             let id = store
                 .get_cf(
-                    store.cf_stats_mnft(),
+                    store.cf_object_outpoints(),
                     &keys::encode_mnft_token_outpoint_key(hash, index),
                 )?
                 .context("missing indexed mNFT outpoint")?;
@@ -861,16 +861,27 @@ async fn cells(
                 hex::encode(&rows.last().expect("nonempty next page").0)
             )
         });
+        let held_since = identities_held_since(
+            &state,
+            &rows
+                .iter()
+                .map(|(_, hash, index, info, evidence)| (hash.as_slice(), *index, info, evidence))
+                .collect::<Vec<_>>(),
+        )
+        .with_context(|| format!("address 0x{} identity holdings", hex::encode(&owner)))?;
         let rows = rows
             .into_iter()
-            .map(|(_, hash, index, info, evidence)| {
-                cell_response(&state, &hash, index, &info, evidence).with_context(|| {
-                    format!(
-                        "address 0x{} cell 0x{}:{index}",
-                        hex::encode(&owner),
-                        hex::encode(hash)
-                    )
-                })
+            .zip(held_since)
+            .map(|((_, hash, index, info, evidence), held_since)| {
+                cell_response(&state, &hash, index, &info, evidence, held_since).with_context(
+                    || {
+                        format!(
+                            "address 0x{} cell 0x{}:{index}",
+                            hex::encode(&owner),
+                            hex::encode(hash)
+                        )
+                    },
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         if params.class.is_some() {
@@ -997,7 +1008,8 @@ async fn dao_cells_by_capacity(
                      DAO cell of {capacity} shannons it was ordered as",
                     hex::encode(&hash)
                 );
-                cell_response(&state, &hash, index, &info, evidence).with_context(|| {
+                // A DAO cell is no identity: it has no held-since history.
+                cell_response(&state, &hash, index, &info, evidence, None).with_context(|| {
                     format!(
                         "address 0x{} DAO cell 0x{}:{index}",
                         hex::encode(&owner),
@@ -1028,12 +1040,16 @@ fn script(code: &[u8], hash_type: i16, args: &[u8]) -> Result<ScriptResponse> {
         args: format!("0x{}", hex::encode(args)),
     })
 }
+/// One cell row. `held_since` is the row's identity history
+/// ([`identities_held_since`], read for the whole page): `Some` exactly for
+/// an identity cell.
 fn cell_response(
     state: &AppState,
     hash: &[u8],
     index: i16,
     info: &PositionedCellInfo,
     evidence: Evidence,
+    held_since: Option<i64>,
 ) -> Result<Cell> {
     // Derived once per row by `owner_cell` / `classify`; never re-hashed here.
     let (lock_hash, type_hash) = (evidence.lock_hash, evidence.type_hash);
@@ -1117,18 +1133,15 @@ fn cell_response(
                     | IdentityExtra::DotCell { expired_at, .. } => Some(expired_at),
                     IdentityExtra::DidCkb => None,
                 };
-                held_since_block = Some(identity_held_since(
-                    state,
-                    id,
-                    entry.standard,
-                    hash,
-                    index,
-                    info,
-                    &lock_hash,
-                )?);
+                held_since_block =
+                    Some(held_since.context("identity holding lacks its held-since history")?);
             }
         }
     }
+    ensure!(
+        held_since.is_none() || held_since_block.is_some(),
+        "held-since history for a cell that is no identity holding"
+    );
     if evidence.class == Class::Token {
         ensure!(
             display.as_ref().and_then(|d| d.amount.as_deref())
@@ -1164,18 +1177,62 @@ fn cell_response(
     })
 }
 
-/// Follow exact canonical consume→recreate links, stopping on ownership change
-/// or a disconnected mint. An earlier same-owner incarnation after a burn is
-/// not continuous ownership. This history is read only for returned identities.
-fn identity_held_since(
+/// The `held_since_block` of every identity row of a page (`None` for the
+/// other rows), in order: each identity's consumed predecessors
+/// ([`identity_predecessors`]), then every predecessor's consumer resolved
+/// with one `consumer_tx_hashes` read for the page, then each history
+/// followed ([`identity_held_since`]). Read only for returned identities.
+fn identities_held_since(
+    state: &AppState,
+    rows: &[(&[u8], i16, &PositionedCellInfo, &Evidence)],
+) -> Result<Vec<Option<i64>>> {
+    let mut histories = Vec::with_capacity(rows.len());
+    for (hash, index, _, evidence) in rows {
+        histories.push(match &evidence.item {
+            Some((id, Item::Identity(entry))) => Some(
+                identity_predecessors(state, id, entry.standard, hash, *index).with_context(
+                    || {
+                        format!(
+                            "identity 0x{} at 0x{}:{index}",
+                            hex::encode(id),
+                            hex::encode(hash)
+                        )
+                    },
+                )?,
+            ),
+            _ => None,
+        });
+    }
+    let positions: Vec<(i64, i32)> = histories
+        .iter()
+        .flatten()
+        .flatten()
+        .map(|(_, _, previous)| previous.consumer_position())
+        .collect();
+    let mut consumers = state.store.consumer_tx_hashes(&positions)?.into_iter();
+    rows.iter()
+        .zip(histories)
+        .map(|((hash, index, info, evidence), history)| {
+            let Some(consumed) = history else {
+                return Ok(None);
+            };
+            let consumers: Vec<[u8; 32]> = consumers.by_ref().take(consumed.len()).collect();
+            identity_held_since(hash, info, &evidence.lock_hash, consumed, consumers)
+                .with_context(|| format!("identity cell 0x{}:{index}", hex::encode(hash)))
+                .map(Some)
+        })
+        .collect()
+}
+
+/// The consumed earlier outpoints of identity `id`, whose current outpoint is
+/// `hash:index`: its canonical reverse history, each step's consumed cell.
+fn identity_predecessors(
     state: &AppState,
     id: &[u8],
     standard: IdentityStandard,
     hash: &[u8],
     index: i16,
-    info: &PositionedCellInfo,
-    lock_hash: &[u8; 32],
-) -> Result<i64> {
+) -> Result<Vec<(Vec<u8>, i16, ckbadger_store::ConsumedCellInfo)>> {
     let outpoints = if standard == IdentityStandard::DotBit {
         state
             .store
@@ -1187,7 +1244,7 @@ fn identity_held_since(
         outpoints.iter().any(|(h, i)| h == hash && *i == index),
         "identity reverse history lacks current outpoint"
     );
-    let mut predecessors = HashMap::new();
+    let mut consumed = Vec::new();
     for (h, i) in outpoints {
         if h == hash && i == index {
             continue;
@@ -1207,14 +1264,7 @@ fn identity_held_since(
                 "identity reverse history contradicts canonical outpoint index: 0x{}:{i}",
                 hex::encode(&h)
             );
-            let consumer = previous
-                .consumed_by_tx
-                .clone()
-                .context("identity history consumed marker lacks consuming transaction")?;
-            ensure!(
-                predecessors.insert(consumer, (h, i, previous)).is_none(),
-                "identity history has multiple predecessors in one transaction"
-            );
+            consumed.push((h, i, previous));
         } else {
             ensure!(
                 state
@@ -1226,6 +1276,36 @@ fn identity_held_since(
             // Reverted immutable payloads may remain; without a canonical marker
             // they prove no step in the current ownership history.
         }
+    }
+    Ok(consumed)
+}
+
+/// Follow exact canonical consume→recreate links from the identity's current
+/// outpoint `hash` (`consumed`: its predecessors, `consumers`: the hash of
+/// the transaction that consumed each), stopping on ownership change or a
+/// disconnected mint. An earlier same-owner incarnation after a burn is not
+/// continuous ownership.
+fn identity_held_since(
+    hash: &[u8],
+    info: &PositionedCellInfo,
+    lock_hash: &[u8; 32],
+    consumed: Vec<(Vec<u8>, i16, ckbadger_store::ConsumedCellInfo)>,
+    consumers: Vec<[u8; 32]>,
+) -> Result<i64> {
+    ensure!(
+        consumers.len() == consumed.len(),
+        "{} identity predecessors but {} resolved consumers",
+        consumed.len(),
+        consumers.len()
+    );
+    let mut predecessors = HashMap::new();
+    for (consumer, (h, i, previous)) in consumers.into_iter().zip(consumed) {
+        ensure!(
+            predecessors
+                .insert(consumer.to_vec(), (h, i, previous))
+                .is_none(),
+            "identity history has multiple predecessors in one transaction"
+        );
     }
     let mut tx = hash.to_vec();
     let mut since = info.created_at_block;

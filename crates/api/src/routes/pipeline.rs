@@ -350,6 +350,9 @@ fn hex(bytes: &[u8]) -> String {
 /// hash, so it is cached by hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NodeBody {
+    /// The node header's parent hash (the store keeps no parent hash: the
+    /// parent of block n is the store's header of block n-1).
+    parent_hash: [u8; 32],
     /// `(number, hash)` of each embedded uncle, in embedding order.
     uncles: Vec<(i64, [u8; 32])>,
     zone: Vec<ZoneProposal>,
@@ -529,6 +532,7 @@ fn load_node_body(
         )));
     }
     let body = NodeBody {
+        parent_hash: block.parent_hash().unpack(),
         uncles: block
             .uncles()
             .into_iter()
@@ -622,14 +626,15 @@ fn build_chain(
     chain: &LoadedChain,
     pays: &HashMap<i64, Option<CellbasePays>>,
 ) -> Result<Vec<PipelineBlock>, String> {
-    // C5: the blocks read form one chain.
+    // C5: the blocks read form one chain: each node block names the store's
+    // block below it as its parent.
     for (parent, block) in chain.blocks.values().zip(chain.blocks.values().skip(1)) {
-        if block.header.parent_hash != parent.hash {
+        if block.body.parent_hash != parent.hash {
             return Err(format!(
                 "C5: block {} {} names parent {} but block {} is {}",
                 block.number,
                 hex(&block.hash),
-                hex(&block.header.parent_hash),
+                hex(&block.body.parent_hash),
                 parent.number,
                 hex(&parent.hash)
             ));
@@ -756,7 +761,7 @@ fn build_chain(
         shown.push(PipelineBlock {
             number,
             hash: hex(&block.hash),
-            parent_hash: hex(&block.header.parent_hash),
+            parent_hash: hex(&block.body.parent_hash),
             timestamp,
             tx_count: txs.len(),
             bytes,

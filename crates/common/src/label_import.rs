@@ -30,5 +30,7 @@ fn default_network() -> String {
 pub struct LabelImportResult {
     pub udt_labels_imported: i64,
     pub script_labels_imported: i64,
+    /// Metadata entries skipped because their metadata is malformed; a store
+    /// error stops the import instead of landing here.
     pub errors: Vec<String>,
 }

@@ -438,6 +438,10 @@ pub(crate) fn import_all(
     tokens: &[TokenMetadata],
     scripts: &[ScriptMetadata],
 ) -> Result<LabelImportResult> {
+    // Label import writes its CFs directly, outside the block journal: the
+    // journal discipline admits those writes from this scope only (Lane B
+    // carry-over 4c, `OUTSIDE_JOURNAL`'s label-import entries).
+    let _label_import = store.outside_journal_scope(ckbadger_store::OutsideWriter::LabelImport)?;
     let registrations = validate_script_registrations(store, scripts, network)?;
     let mut result = LabelImportResult::default();
     for token in tokens {
@@ -450,21 +454,33 @@ pub(crate) fn import_all(
             _ => token.mainnet.as_ref().or(token.testnet.as_ref()),
         };
         if let Some(deployment) = deployment {
-            match upsert_token_label(store, token, deployment) {
-                Ok(true) => result.udt_labels_imported += 1,
-                Ok(false) => {}
+            // A malformed metadata entry is collected and skipped; a store
+            // error (a failed read or write, a journal-discipline refusal)
+            // stops the import (finding 14).
+            match prepare_token_label(token, deployment) {
+                Ok(prepared) => {
+                    write_token_label(store, token, &prepared).with_context(|| {
+                        format!(
+                            "label import: network={network} token={} type_hash=0x{}",
+                            token.symbol,
+                            hex::encode(&prepared.type_hash)
+                        )
+                    })?;
+                    result.udt_labels_imported += 1;
+                }
                 Err(e) => result.errors.push(format!("Token {}: {}", token.symbol, e)),
             }
         }
     }
+    // Every script entry's metadata was validated by the preflight above, so
+    // what fails here is the store: it stops the import (finding 14).
     for script in scripts {
         if script.disabled {
             continue;
         }
-        match upsert_script_label_validated(store, script, network, &registrations) {
-            Ok(()) => result.script_labels_imported += 1,
-            Err(e) => result.errors.push(format!("Script {}: {}", script.name, e)),
-        }
+        upsert_script_label_validated(store, script, network, &registrations)
+            .with_context(|| format!("label import: network={network} script={}", script.name))?;
+        result.script_labels_imported += 1;
     }
     set_family_versions_counts(store)?;
     info!(
@@ -538,31 +554,71 @@ fn script_family_id(script: &ScriptMetadata) -> Result<&str> {
     })
 }
 
-fn upsert_token_label(
-    store: &CkbadgerStore,
+/// A token label's deployment, decoded from its metadata entry.
+struct PreparedTokenLabel {
+    type_hash: Vec<u8>,
+    hash_type: u8,
+    code_hash: Vec<u8>,
+    args: Vec<u8>,
+}
+
+/// Decode a token label's deployment: pure metadata validation, the only
+/// per-entry failure label import collects instead of stopping (finding 14).
+fn prepare_token_label(
     token: &TokenMetadata,
     deployment: &TokenDeployment,
-) -> Result<bool> {
-    let type_hash = compute_type_hash(deployment)?;
-    let label_hash_type = ScriptParser::parse_hash_type(&deployment.hash_type);
-    let label_type_code_hash = decode_hex(&deployment.code_hash).map_err(|e| {
+) -> Result<PreparedTokenLabel> {
+    let code_hash = decode_hex(&deployment.code_hash).map_err(|e| {
         anyhow::anyhow!(
             "invalid type script code_hash for token {}: {}",
             token.symbol,
             e
         )
     })?;
-    let label_type_args = decode_hex(&deployment.args).map_err(|e| {
+    let args = decode_hex(&deployment.args).map_err(|e| {
         anyhow::anyhow!("invalid type script args for token {}: {}", token.symbol, e)
     })?;
+    // Metadata, not node data: an unknown label is a collected entry error,
+    // checked before the script hash reads it.
+    let hash_type =
+        ckbadger_common::hash_type_from_label(&deployment.hash_type).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid type script hash_type `{}` for token {}",
+                deployment.hash_type,
+                token.symbol
+            )
+        })?;
+    Ok(PreparedTokenLabel {
+        type_hash: compute_type_hash(deployment)?,
+        hash_type,
+        code_hash,
+        args,
+    })
+}
 
+#[cfg(test)]
+fn upsert_token_label(
+    store: &CkbadgerStore,
+    token: &TokenMetadata,
+    deployment: &TokenDeployment,
+) -> Result<()> {
+    write_token_label(store, token, &prepare_token_label(token, deployment)?)
+}
+
+/// Write one decoded token label; every store error propagates.
+fn write_token_label(
+    store: &CkbadgerStore,
+    token: &TokenMetadata,
+    prepared: &PreparedTokenLabel,
+) -> Result<()> {
+    let type_hash = &prepared.type_hash;
     let mut info =
         store
-            .get_token(&type_hash)?
+            .get_token(type_hash)?
             .unwrap_or_else(|| ckbadger_store::types::TokenInfo {
-                type_code_hash: label_type_code_hash.clone(),
-                hash_type: label_hash_type,
-                type_args: label_type_args.clone(),
+                type_code_hash: prepared.code_hash.clone(),
+                hash_type: prepared.hash_type,
+                type_args: prepared.args.clone(),
                 standard: token.standard.clone(),
                 name: None,
                 symbol: None,
@@ -578,7 +634,7 @@ fn upsert_token_label(
 
     if let Some(conflict) = label_override_conflicts(&info, token) {
         warn!(
-            type_hash = %format!("0x{}", hex::encode(&type_hash)),
+            type_hash = %format!("0x{}", hex::encode(type_hash)),
             label = %token.symbol,
             %conflict,
             "token label overrides differing pre-existing metadata (labels take \
@@ -598,8 +654,8 @@ fn upsert_token_label(
     info.description = token.description.clone();
     info.standard = token.standard.clone();
 
-    store.put_token_direct(&type_hash, &info)?;
-    Ok(true)
+    store.put_token_direct(type_hash, &info)?;
+    Ok(())
 }
 
 fn selected_script_deployments(
@@ -793,8 +849,8 @@ fn validate_script_registrations(
             }
         }
         // Cleanup used to swallow malformed excluded metadata and corrupt rows.
-        // Validate every touched read before token import or any script mutation;
-        // per-entry write errors are otherwise only collected in the summary.
+        // Validate every touched read before token import or any script
+        // mutation; a later store error stops the import too (finding 14).
         for deployment in &excluded {
             let reference = deployment_reference(deployment);
             let code_hash = decode_hex(reference)
@@ -1981,6 +2037,69 @@ disabled = true
             assert!(store.list_script_families().unwrap().is_empty());
             assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
         }
+    }
+
+    /// Finding 14: a store error stops the import instead of becoming a
+    /// logged per-entry error — a corrupt stored token row, a corrupt
+    /// `script_info` row of an active deployment — while a malformed token
+    /// entry (metadata validation) is still collected and skipped.
+    #[test]
+    fn label_import_propagates_store_errors_and_collects_only_metadata_errors() {
+        let token = bundled::udt_labels()
+            .into_iter()
+            .find(|token| !token.disabled && token.mainnet.is_some())
+            .unwrap();
+        let type_hash = compute_type_hash(token.mainnet.as_ref().unwrap()).unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_cf(store.cf_tokens(), &type_hash, b"corrupt")
+            .unwrap();
+        let error = import_all(&store, "mainnet", std::slice::from_ref(&token), &[]).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&token.symbol) && message.contains(&hex::encode(&type_hash)),
+            "{message}"
+        );
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_cf(store.cf_script_info(), &[0x51; 32], b"corrupt")
+            .unwrap();
+        let error = import_all(&store, "mainnet", &[], &[startup_metadata()]).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("Startup Family") && message.contains(&"51".repeat(32)),
+            "{message}"
+        );
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut malformed = token.clone();
+        malformed.mainnet.as_mut().unwrap().code_hash = "0xgg".into();
+        let result = import_all(&store, "mainnet", &[malformed], &[]).unwrap();
+        assert_eq!(result.udt_labels_imported, 0);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("invalid type script code_hash"),
+            "{:?}",
+            result.errors
+        );
+
+        // An unknown hash_type label is collected too, never a panic
+        // (delta review: `parse_hash_type` is for node-validated labels).
+        let mut bad_hash_type = token;
+        bad_hash_type.mainnet.as_mut().unwrap().hash_type = "bogus".into();
+        let result = import_all(&store, "mainnet", &[bad_hash_type], &[]).unwrap();
+        assert_eq!(result.udt_labels_imported, 0);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("invalid type script hash_type `bogus`"),
+            "{:?}",
+            result.errors
+        );
     }
 
     #[test]

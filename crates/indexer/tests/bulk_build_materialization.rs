@@ -499,6 +499,10 @@ fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+/// The 4 data bytes both outputs of the typed-data fixture carry: the ELF
+/// magic, so each is a code cell with a `cell_by_data_hash` row (C-2).
+const CODE_DATA: &str = "0x7f454c46";
+
 fn same_block_typed_data_create_then_consume_fixture() -> BlockResponseWithCycles {
     let create_tx = TransactionView {
         hash: format!("0x{}", "c1".repeat(32)),
@@ -517,7 +521,7 @@ fn same_block_typed_data_create_then_consume_fixture() -> BlockResponseWithCycle
             lock: fixture_lock_script(),
             type_: Some(fixture_type_script()),
         }],
-        outputs_data: vec!["0xdeadbeef".to_string()],
+        outputs_data: vec![CODE_DATA.to_string()],
         witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
@@ -538,7 +542,7 @@ fn same_block_typed_data_create_then_consume_fixture() -> BlockResponseWithCycle
             lock: fixture_lock_script(),
             type_: Some(fixture_type_script()),
         }],
-        outputs_data: vec!["0xdeadbeef".to_string()],
+        outputs_data: vec![CODE_DATA.to_string()],
         witnesses: vec!["0x".to_string()],
     };
 
@@ -1080,7 +1084,9 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
     let type_hash = ScriptParser::compute_script_hash(&fixture_type_script());
     let type_code_hash =
         hex::decode(&fixture_type_script().code_hash[2..]).expect("type code hash");
-    let data_hash = ScriptParser::compute_data_hash(&hex::decode("deadbeef").expect("output data"));
+    let data_hash = ScriptParser::compute_data_hash(
+        &hex::decode(CODE_DATA.trim_start_matches("0x")).expect("output data"),
+    );
 
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
@@ -1094,7 +1100,9 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
         &ConsumedCellMeta {
             created_at_block: 14_000_777,
             consumed_at_block: 14_000_777,
-            consumed_by_tx: Some(consume_tx_hash.clone()),
+            // The consuming transaction is the block's second
+            // (`transactions[1]`); its hash is `tx_index` at that position.
+            consumed_tx_idx: 1,
         }
     );
 
@@ -1157,12 +1165,13 @@ fn bulk_build_materializes_tx_actions_from_single_pass() {
     // Cellbase (tx index 0) is excluded — the API filters them at read time.
     assert_eq!(snapshot.tx_actions_map.len(), 1);
 
-    let consume_key = keys::encode_tx_actions_key(14_000_321, 1, &consume_tx_hash);
+    let consume_key = keys::encode_tx_actions_key(14_000_321, 1).to_vec();
 
     let consume_actions = snapshot
         .tx_actions_map
         .get(&consume_key)
         .expect("consume tx actions");
+    assert_eq!(consume_actions.tx_hash, consume_tx_hash);
     assert!(!consume_actions.is_cellbase);
     assert_eq!(consume_actions.participants.len(), 1);
     assert_eq!(

@@ -61,10 +61,6 @@ const VOLATILE_SYNC_META: &[(&[u8], &str)] = &[
     ),
 ];
 
-/// Prefix of the reorg event history (`reorg:<ms>:<uuid>`): the record of the
-/// rollback itself, never chain state.
-const REORG_EVENT_PREFIX: &[u8] = b"reorg:";
-
 /// A derivation's start / finish wall-clock times are telemetry; its state,
 /// version and run counter are compared.
 fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
@@ -121,6 +117,11 @@ fn dump_domain(store: &CkbadgerStore) -> Dump {
     let mut dump = Dump::new();
     let mut undo: BTreeMap<Vec<u8>, Vec<Vec<u8>>> = BTreeMap::new();
     for &cf in DOMAIN_CFS {
+        // The reorg event history (`reorg_events`, `reorg:<ms>:<uuid>`) is
+        // the record of the rollback itself, never chain state.
+        if cf == ckbadger_store::CF_REORG_EVENTS {
+            continue;
+        }
         for row in store.iterator_cf(store.cf(cf), rocksdb::IteratorMode::Start) {
             let (key, value) = row.expect("iterate domain CF");
             let mut value = value.to_vec();
@@ -131,10 +132,9 @@ fn dump_domain(store: &CkbadgerStore) -> Dump {
                 continue;
             }
             if cf == ckbadger_store::CF_SYNC_META {
-                if key.starts_with(REORG_EVENT_PREFIX)
-                    || VOLATILE_SYNC_META
-                        .iter()
-                        .any(|(volatile, _)| key.as_ref() == *volatile)
+                if VOLATILE_SYNC_META
+                    .iter()
+                    .any(|(volatile, _)| key.as_ref() == *volatile)
                 {
                     continue;
                 }
@@ -206,8 +206,8 @@ fn compare_dumps(actual: &Dump, expected: &Dump, context: &str) -> Result<(), St
 // Stores and runs
 // ---------------------------------------------------------------------------
 
-struct Stores {
-    domain: Arc<CkbadgerStore>,
+pub(crate) struct Stores {
+    pub(crate) domain: Arc<CkbadgerStore>,
     _append: Arc<CkbadgerStore>,
     indexer: Indexer,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
@@ -245,7 +245,7 @@ fn open_fixture_stores() -> FixtureStores {
 
 /// The stores the property runs on, driven by an indexer (under the journal
 /// discipline, as in production).
-fn open_stores() -> Stores {
+pub(crate) fn open_stores() -> Stores {
     let FixtureStores {
         domain,
         _append: append,
@@ -267,7 +267,7 @@ fn open_stores() -> Stores {
 /// Write `chain[..=upto]` as live batches following `plan` (inclusive block
 /// ranges in order, covering the chain from 0); a batch that crosses `upto` is
 /// truncated there, exactly like a store whose tip stopped at `upto`.
-async fn sync_prefix(
+pub(crate) async fn sync_prefix(
     stores: &Stores,
     chain: &[BlockResponseWithCycles],
     plan: &[RangeInclusive<usize>],
@@ -530,6 +530,12 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_SPORE_BY_CLUSTER, None),
     (ckbadger_store::CF_CLUSTER_AGG, None),
     (ckbadger_store::CF_STATS_SPORE, None),
+    // C-4b: the object outpoint indexes (spore / did:ckb / `.bit Cell` items,
+    // mNFT classes and tokens, `.bit` accounts) moved out of `stats_spore` /
+    // `stats_mnft`; written by the same object-loop writes, in the block of
+    // the output they index.
+    (ckbadger_store::CF_OBJECT_OUTPOINTS, None),
+    (ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID, None),
     (ckbadger_store::CF_IDENTITY_DATA, None),
     (ckbadger_store::store::CF_IDENTITY_BY_COLLECTION, None),
     (ckbadger_store::store::CF_STATS_IDENTITY, None),
@@ -594,8 +600,9 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     // B-3 mnft.rs: the object type-index rows (`stats_mnft` 0x16) carry the
     // block whose output carried them; the mNFT entity rows were scoped with
     // the object loop (96802ea4). `stats_mnft` holds the object entity stats,
-    // the type index, the mNFT / `.bit` outpoint indexes and the collection
-    // owner counts, all written per block now.
+    // the type index and the collection owner counts, all written per block
+    // now (the outpoint indexes and the unindexed `.bit` AccountCell markers
+    // are `object_outpoints` / `object_outpoint_by_id`, C-4b).
     (ckbadger_store::CF_MNFT_DATA, None),
     (ckbadger_store::CF_MNFT_BY_COLLECTION, None),
     (ckbadger_store::CF_STATS_MNFT, None),
@@ -1106,6 +1113,46 @@ fn transfer_chain(blocks: u64) -> Vec<BlockResponseWithCycles> {
     chain.blocks
 }
 
+/// A chain longer than the rollback coverage window (`blocks` > 1000): ten
+/// minutes a block from `T0`, each block's one transaction moving owner
+/// `n % 8`'s cell back to that owner, less one CKB of fee, so the cells never
+/// run dry and every hour sees six owners.
+fn long_transfer_chain(blocks: u64) -> Vec<BlockResponseWithCycles> {
+    let mut chain = ChainBuilder::new();
+    chain.genesis(
+        T0,
+        (1..=8u8)
+            .map(|owner| (output(10_000, lock(owner), None), "0x".to_string()))
+            .collect(),
+    );
+    let mut cells: Vec<([u8; 32], u64)> = (0..8).map(|_| (tx_hash(0xc000), 10_000)).collect();
+    for n in 1..blocks {
+        let owner = (n as usize) % 8;
+        let (prev_tx, capacity) = cells[owner];
+        let prev_index = if prev_tx == tx_hash(0xc000) {
+            owner as u32
+        } else {
+            0
+        };
+        let tag = 0x4000 + n as u16;
+        chain.push(
+            T0 + n * 10 * MINUTE,
+            vec![tx(
+                tag,
+                vec![input(prev_tx, prev_index)],
+                vec![(
+                    output(capacity - 1, lock(owner as u8 + 1), None),
+                    "0x".to_string(),
+                )],
+                vec![],
+            )],
+        );
+        cells[owner] = (tx_hash(tag), capacity - 1);
+    }
+    let _ = chain.next_number();
+    chain.blocks
+}
+
 // ---------------------------------------------------------------------------
 // The protocol chain: every entity kind, inside the rolled-back ranges
 // ---------------------------------------------------------------------------
@@ -1260,7 +1307,7 @@ fn funding(index: u32) -> CellInput {
 /// in blocks 1..=16 (10 minutes apart from 23:00 UTC+8, so the UTC+8 day and
 /// two UTC hours turn inside the range), then `plain_blocks` blocks of plain
 /// transfers so a 36-deep rollback can land below every event.
-fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
+pub(crate) fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
     let t = |n: u64| T_EVENING + n * 10 * MINUTE;
     let cluster_id = [0x11u8; 32];
     let spore_id = [0x12u8; 32];
@@ -1555,14 +1602,17 @@ fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
             vec![],
         )],
     );
-    // 15: a data cell (a `cell_by_data_hash` row) ...
+    // 15: a code cell (a `cell_by_data_hash` row) ...
     chain.push(
         t(15),
         vec![tx(
             0x0f01,
             vec![funding(11)],
             vec![
-                (output(1_000, lock(0x0f), None), data(b"code-cell-bytes")),
+                (
+                    output(1_000, lock(0x0f), None),
+                    data(b"\x7fELF\x02\x01\x01code-cell-bytes"),
+                ),
                 plain(FUND - 1_001, 0x2b),
             ],
             vec![],
@@ -1605,7 +1655,7 @@ fn protocol_chain(plain_blocks: u64) -> Vec<BlockResponseWithCycles> {
 // Cases
 // ---------------------------------------------------------------------------
 
-fn single_block_plan(len: usize) -> Vec<RangeInclusive<usize>> {
+pub(crate) fn single_block_plan(len: usize) -> Vec<RangeInclusive<usize>> {
     (0..len).map(|n| n..=n).collect()
 }
 
@@ -1621,6 +1671,103 @@ async fn protocol_chain_single_block_batches_roll_back_byte_equal() {
     let chain = protocol_chain(0);
     let plan = single_block_plan(chain.len());
     assert_rollback_properties(&chain, &plan, 16, &[13, 10, 5]).await;
+}
+
+/// C-2: the protocol chain's one code cell (block 15) is its only
+/// `cell_by_data_hash` row, kept when block 16 consumes it — so the rollback
+/// cases above restore a real row; every other cell with data (the spore,
+/// cluster, mNFT, `.bit`, did:ckb, `.cell` and xUDT cells) is not code.
+#[tokio::test]
+async fn protocol_chain_files_only_its_code_cell_by_data_hash() {
+    let chain = protocol_chain(0);
+    let stores = open_stores();
+    sync_prefix(&stores, &chain, &single_block_plan(chain.len()), 0, 16).await;
+    let store = &stores.domain;
+    let rows: Vec<Vec<u8>> = store
+        .iterator_cf(store.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
+        .map(|item| item.unwrap().0.to_vec())
+        .collect();
+    let code = b"\x7fELF\x02\x01\x01code-cell-bytes";
+    let expected = keys::encode_cell_index_key(
+        &ckbadger_indexer::parser::ScriptParser::compute_data_hash(code),
+        15,
+        &tx_hash(0x0f01),
+        0,
+    );
+    assert_eq!(rows, vec![expected], "the code cell, and nothing else");
+    assert!(
+        store
+            .get_cell(&tx_hash(0x0f01), 0, &stores._append)
+            .unwrap()
+            .is_none(),
+        "block 16 consumed the code cell; its row stays"
+    );
+}
+
+/// C-4b: `sync_meta` holds only fixed keys — each a `sync_meta_keys`
+/// constant, or one of the closed `derive:<aggregate>` /
+/// `hourly_retention_state:<family>` families — after a live sync with a
+/// derivation and a reorg; the reorg's event lives in `reorg_events`.
+#[tokio::test]
+async fn sync_meta_holds_only_fixed_keys_and_reorg_events_their_own_cf() {
+    let chain = protocol_chain(0);
+    let stores = open_stores();
+    sync_with_derive(
+        &stores,
+        &chain,
+        &single_block_plan(chain.len()),
+        16,
+        Some(Derive::CompleteAt(4)),
+    )
+    .await;
+    reorg_to(&stores.indexer, 13).await.unwrap();
+    let fixed: &[&[u8]] = &[
+        sync_meta_keys::SYNC_STATUS,
+        sync_meta_keys::SYNC_RUNTIME,
+        sync_meta_keys::RUNTIME_STATUS,
+        sync_meta_keys::REORG_RECONCILE_PENDING,
+        sync_meta_keys::HODL_CURSOR,
+        sync_meta_keys::CELL_DIST_CURSOR,
+        sync_meta_keys::SYNC_PROGRESS,
+        sync_meta_keys::MEMORY_STATS,
+        sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+        sync_meta_keys::BACKGROUND_TASKS,
+        sync_meta_keys::NETWORK_IDENTITY,
+        sync_meta_keys::GENESIS_BASELINE,
+        sync_meta_keys::SECONDARY_EPOCH_REWARD,
+        sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
+        sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+        sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR,
+    ];
+    let families: &[&[u8]] = &[
+        sync_meta_keys::DERIVE_META_PREFIX,
+        sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX,
+    ];
+    let store = &stores.domain;
+    let mut keys_seen = Vec::new();
+    for row in store.iterator_cf(store.cf_sync_meta(), rocksdb::IteratorMode::Start) {
+        let (key, _) = row.unwrap();
+        let key = key.to_vec();
+        assert!(
+            fixed.contains(&key.as_slice())
+                || families.iter().any(|family| key.starts_with(family)),
+            "sync_meta key {:?} is not a fixed key",
+            String::from_utf8_lossy(&key)
+        );
+        keys_seen.push(key);
+    }
+    assert!(keys_seen
+        .iter()
+        .any(|key| key.starts_with(sync_meta_keys::DERIVE_META_PREFIX)));
+    let events = store.list_reorg_events(10, None).unwrap();
+    assert_eq!(events.len(), 1, "the reorg's event");
+    assert_eq!(
+        store
+            .iterator_cf(store.cf_reorg_events(), rocksdb::IteratorMode::Start)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1839,6 +1986,233 @@ async fn plain_transfers_single_block_batches_roll_back_byte_equal() {
     let chain = transfer_chain(12);
     let plan = single_block_plan(chain.len());
     assert_rollback_property(&chain, &plan, 11, 8).await;
+}
+
+/// C-3: the activity address rows of the buckets behind the rollback
+/// coverage floor are deleted by the live batches that move the floor past
+/// them, one bucket a batch (finding 10), each in its batch's first block's
+/// scope with the cursor it moves. A rollback of those blocks writes both
+/// back; the replay prunes them again and ends where the first sync did.
+///
+/// The floor (and the journal rows its advance pruned) never moves back, so
+/// the journal and the coverage contract are outside the rollback comparison,
+/// and the journal outside the replay one.
+#[tokio::test]
+async fn activity_address_rows_behind_the_coverage_floor_are_pruned_and_restored() {
+    use keys::ActivityBucketKind::{Daily, Hourly};
+    // Ten minutes a block from 2026-09-22 09:00 UTC+8; block 90 opens
+    // 2026-09-23. Batches of 90 to 1079 (no floor yet), then one block a
+    // batch: batch b commits floor b - 1001, and prunes the oldest final
+    // bucket, so the 34 buckets behind the last floor (198, 18:00 on the
+    // second day: the first day's hours 09 to 23 and the day, the second
+    // day's hours 00 to 17) are gone well before the tip. The batches above
+    // the fork 1175 pruned the second day's hours 14 to 17.
+    let chain = long_transfer_chain(1_200);
+    let mut plan = chunked_plan(1_080, 90);
+    plan.extend((1_080..=1_199).map(|block| block..=block));
+    let (tip, fork) = (1_199usize, 1_175usize);
+    let without_journal = |mut dump: Dump| {
+        dump.retain(|(cf, key), _| {
+            *cf != ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK
+                && !(*cf == ckbadger_store::CF_SYNC_META
+                    && key.as_slice() == sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT)
+        });
+        dump
+    };
+    let address_buckets = |store: &CkbadgerStore| -> Vec<(u8, String)> {
+        let mut buckets = std::collections::BTreeSet::new();
+        for row in store.iterator_cf(store.cf_stats_chain(), rocksdb::IteratorMode::Start) {
+            let (key, _) = row.unwrap();
+            let kind = match key[0] {
+                keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW => Daily,
+                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW => Hourly,
+                _ => continue,
+            };
+            let label = String::from_utf8(key[1..1 + kind.bucket_len()].to_vec()).unwrap();
+            buckets.insert((key[0], label));
+        }
+        buckets.into_iter().collect()
+    };
+    let hour_of = |store: &CkbadgerStore, block: i64| {
+        Hourly
+            .bucket_label(
+                store
+                    .get_block_header(block)
+                    .unwrap()
+                    .unwrap()
+                    .chain_time_ms,
+            )
+            .unwrap()
+    };
+
+    let rolled = open_stores();
+    sync_prefix(&rolled, &chain, &plan, 0, tip).await;
+    let at_tip = dump_domain(&rolled.domain);
+    let floor_hour = hour_of(&rolled.domain, 198);
+    assert_eq!(floor_hour, "2026092318");
+    assert_eq!(
+        rolled
+            .domain
+            .get_activity_addr_row_floor()
+            .unwrap()
+            .as_deref(),
+        Some(floor_hour.as_str())
+    );
+    let kept = address_buckets(&rolled.domain);
+    assert!(kept.contains(&(
+        keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+        floor_hour.clone()
+    )));
+    assert!(
+        kept.iter().all(|(prefix, label)| {
+            if *prefix == keys::stats_prefix::ACTIVITY_DAILY_ADDR_ROW {
+                label.as_str() >= &floor_hour[..8]
+            } else {
+                *label >= floor_hour
+            }
+        }),
+        "no address row of a bucket before the floor's hour and day: {kept:?}"
+    );
+
+    reorg_to(&rolled.indexer, fork as i64).await.unwrap();
+    // The rollback undid the prunes of blocks 1181, 1187, 1193 and 1199:
+    // the second day's hours 14 to 17 have their rows again (and the rows
+    // blocks 1176 to 1199 wrote are gone), and the cursor is back on hour 14
+    // (block 1175's prune left it there).
+    let restored = address_buckets(&rolled.domain);
+    let back: Vec<(u8, String)> = restored
+        .iter()
+        .filter(|bucket| !kept.contains(bucket))
+        .cloned()
+        .collect();
+    assert_eq!(
+        back,
+        (14..=17)
+            .map(|hour| (
+                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+                format!("20260923{hour}")
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        rolled
+            .domain
+            .get_activity_addr_row_floor()
+            .unwrap()
+            .as_deref(),
+        Some("2026092314")
+    );
+
+    let reference = open_stores();
+    sync_prefix(&reference, &chain, &plan, 0, fork).await;
+    compare_dumps(
+        &without_journal(dump_domain(&rolled.domain)),
+        &without_journal(dump_domain(&reference.domain)),
+        &format!("rollback {tip} -> {fork}"),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+
+    sync_prefix(&rolled, &chain, &plan, fork + 1, tip).await;
+    let without_journal_only = |mut dump: Dump| {
+        dump.retain(|(cf, _), _| *cf != ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK);
+        dump
+    };
+    compare_dumps(
+        &without_journal_only(dump_domain(&rolled.domain)),
+        &without_journal_only(at_tip),
+        &format!("replay {} ..= {tip} after rollback to {fork}", fork + 1),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+}
+
+/// Finding 27 (bulk → live parity of the activity rows): a store bulk-built
+/// to block 200 and then synced live until the coverage floor has left the
+/// handoff hour and day holds the same activity rows of `stats_chain` — the
+/// bucket counts and the address rows — and the same
+/// `activity_addr_row_floor` cursor as a store synced live from genesis with
+/// the same live batches after the handoff.
+#[tokio::test]
+async fn bulk_handoff_then_live_past_the_floor_writes_the_activity_rows_of_a_live_chain() {
+    use keys::stats_prefix::{
+        ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_ROW,
+    };
+    // Ten minutes a block from 2026-09-22 09:00 UTC+8: the handoff block 200
+    // is in hour 2026092318. At the tip 1260 the floor is block 259 (04:10
+    // on the third day), so both stores have pruned the handoff hour, the
+    // handoff day and the third day's first hours. Live batches: 100 blocks
+    // a batch to block 999 (no floor before the committed tip reaches
+    // 1000), then one block a batch, so the prune keeps up with the floor.
+    let chain = long_transfer_chain(1_261);
+    let (handoff, tip) = (200usize, 1_260usize);
+    let mut plan = chunked_plan(1_000, 100);
+    plan.extend((1_000..=tip).map(|block| block..=block));
+
+    let live = open_stores();
+    sync_prefix(&live, &chain, &plan, 0, tip).await;
+
+    let FixtureStores {
+        domain,
+        _append: append,
+        _dirs,
+    } = open_fixture_stores();
+    ckbadger_indexer::sync::bulk_build_into_stores_for_test(&domain, &append, &chain[..=handoff])
+        .unwrap_or_else(|e| panic!("bulk build to {handoff}: {e:#}"));
+    assert_eq!(
+        domain.get_activity_addr_row_floor().unwrap().as_deref(),
+        Some("2026092318"),
+        "bulk finalize records the handoff hour"
+    );
+    let indexer = restart(domain.clone(), append.clone(), NETWORK)
+        .unwrap_or_else(|e| panic!("restart after the bulk build: {e:#}"));
+    let bulk = Stores {
+        domain,
+        _append: append,
+        indexer,
+        _dirs,
+    };
+    sync_prefix(&bulk, &chain, &plan, handoff + 1, tip).await;
+
+    let activity_rows = |store: &CkbadgerStore| -> Dump {
+        dump_domain(store)
+            .into_iter()
+            .filter(|((cf, key), _)| {
+                (*cf == ckbadger_store::CF_STATS_CHAIN
+                    && matches!(
+                        key.first().copied(),
+                        Some(
+                            ACTIVITY_DAILY
+                                | ACTIVITY_HOURLY
+                                | ACTIVITY_DAILY_ADDR_ROW
+                                | ACTIVITY_HOURLY_ADDR_ROW
+                        )
+                    ))
+                    || (*cf == ckbadger_store::CF_SYNC_META
+                        && key.as_slice() == sync_meta_keys::ACTIVITY_ADDR_ROW_FLOOR)
+            })
+            .collect()
+    };
+    let expected = activity_rows(&live.domain);
+    assert_eq!(
+        live.domain
+            .get_activity_addr_row_floor()
+            .unwrap()
+            .as_deref(),
+        Some("2026092404"),
+        "the live store's prune caught up with the floor"
+    );
+    assert!(
+        expected
+            .keys()
+            .any(|(cf, key)| *cf == ckbadger_store::CF_STATS_CHAIN
+                && key[0] == ACTIVITY_HOURLY_ADDR_ROW),
+        "the tip's buckets keep address rows"
+    );
+    compare_dumps(
+        &activity_rows(&bulk.domain),
+        &expected,
+        &format!("bulk to {handoff} then live to {tip} vs live from genesis"),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
 }
 
 #[tokio::test]

@@ -241,10 +241,7 @@ fn lookup(tx: RpcTransactionView, status: NodeTxStatus) -> PoolTxLookup {
 }
 
 fn test_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 fn refresher(

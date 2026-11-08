@@ -30,7 +30,6 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
         123,
         &CachedBlockHeader {
             hash: hash.clone(),
-            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -560,9 +559,9 @@ async fn test_search_on_chain_address_reports_its_cell_count() {
             txs_count: 5,
             cellbase_txs_count: 0,
             first_seen_block: 1,
-            first_seen_tx: vec![0x01; 32],
+            first_seen_tx_idx: 0,
             last_activity_block: 9,
-            last_activity_tx: vec![0x02; 32],
+            last_activity_tx_idx: 0,
         },
     );
     batch.commit().unwrap();

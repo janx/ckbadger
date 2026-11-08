@@ -411,7 +411,6 @@ mod tests {
     fn make_header(hash_byte: u8, ts_ms: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: ts_ms,
             epoch_number: 0,
             epoch_index: 0,
@@ -509,7 +508,7 @@ mod tests {
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(store);
-        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_reorg_event(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING, key.as_bytes());
         if superseded {
             // A superseded observation can remain pending while an older
@@ -526,12 +525,11 @@ mod tests {
                 superseded_by_tip_hash: None,
                 ..event
             };
-            batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
+            batch.put_reorg_event(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
         }
         batch.commit().unwrap();
         // The chain 0..=11 as the live writer leaves it: each header and the
         // sync tip it advances to in its block's journaled scope.
-        let mut parent = vec![0; 32];
         for height in 0..=11 {
             let hash = match height {
                 9 => 0xb9,
@@ -541,9 +539,7 @@ mod tests {
                 _ => height as u8,
             };
             let mut header = make_header(hash, 1_700_000_000_000);
-            header.parent_hash = parent;
             header.transactions_count = 0;
-            parent = header.hash.clone();
             commit_journaled_sync_block(store, height, &header, |_| {});
         }
         // Startup and execute_reorg end with the DAO tip summary: every block
@@ -586,7 +582,6 @@ mod tests {
             let mut parent = store.get_block_header(target).unwrap().unwrap().hash;
             for height in target + 1..=12 {
                 let mut header = make_header(0xc0 + height as u8, 1_700_000_000_000);
-                header.parent_hash = parent;
                 header.transactions_count = 0;
                 parent = header.hash.clone();
                 batch.put_block_header(height, &header);
@@ -804,7 +799,7 @@ mod tests {
                 ..store.get_reorg_event(1000).unwrap().unwrap().event
             };
             let mut batch = StoreBatch::new(&store);
-            batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
+            batch.put_reorg_event(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
             batch.commit().unwrap();
             let replay_headers: Vec<_> = (target + 1..=11)
                 .map(|height| (height, store.get_block_header(height).unwrap().unwrap()))

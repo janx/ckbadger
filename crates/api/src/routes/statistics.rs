@@ -5614,7 +5614,6 @@ mod tests {
     fn window_header(number: i64, ts_ms: i64, compact_target: u32) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![number as u8; 32],
-            parent_hash: vec![0u8; 32],
             timestamp: ts_ms,
             epoch_number: 0,
             epoch_index: 0,
@@ -6182,7 +6181,6 @@ mod tests {
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8; 32],
-                    parent_hash: vec![0u8; 32],
                     timestamp: ts_ms,
                     epoch_number: epoch,
                     epoch_index: 0,
@@ -6236,7 +6234,6 @@ mod tests {
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8; 32],
-                    parent_hash: vec![0u8; 32],
                     timestamp: ts_ms,
                     epoch_number: epoch,
                     epoch_index: 0,
@@ -6280,7 +6277,6 @@ mod tests {
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8; 32],
-                    parent_hash: vec![0u8; 32],
                     timestamp: ts_ms,
                     epoch_number: 0,
                     epoch_index: number as i32,

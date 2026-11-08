@@ -18,6 +18,8 @@ ckb-hash = { workspace = true }
 hex = { workspace = true }
 libc = { workspace = true }
 num_cpus = "1.17"
+# Only behind `test-store` (never in a release build).
+tempfile = { workspace = true, optional = true }
 
 [features]
 # Compile the read/write call counters used to prove that a hot path issues one
@@ -25,6 +27,11 @@ num_cpus = "1.17"
 # other crates opt in through their dev-dependencies, so it never reaches a
 # release build.
 read-call-counters = []
+# Test stores that own their temporary directory (`open_*_temp`), removed when
+# the last handle drops, after the database closed. Always on for this crate's
+# own tests; other crates opt in through their dev-dependencies, so neither the
+# field nor `tempfile` reaches a release build.
+test-store = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

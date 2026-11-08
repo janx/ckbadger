@@ -11,10 +11,7 @@ use ckbadger_store::{LiveCellInfo, PositionedCellInfo};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-    std::mem::forget(dir);
-    store
+    Arc::new(CkbadgerStore::open_test_unified_temp().unwrap())
 }
 
 /// The seed bytes go into the script args, so distinct seeds are distinct
@@ -88,7 +85,7 @@ fn test_consume_cell_moves_to_consumed() {
 
     // Consume: move to consumed_cells and delete from live_cells
     let mut batch = StoreBatch::new(&store);
-    batch.put_consumed_cell(&tx_hash, 0, &cell.cell, cell.created_at_block, 1001);
+    batch.put_consumed_cell(&tx_hash, 0, &cell.cell, cell.created_at_block, 1001, 1);
     batch.delete_cell(&tx_hash, 0);
     batch.commit().unwrap();
 
@@ -292,7 +289,7 @@ fn test_list_cells_by_type_prefix_scan() {
 
     // Verify consumed cells are not returned by type prefix scan
     let mut batch = StoreBatch::new(&store);
-    batch.put_consumed_cell(&tx1, 0, &cell1.cell, cell1.created_at_block, 700);
+    batch.put_consumed_cell(&tx1, 0, &cell1.cell, cell1.created_at_block, 700, 1);
     batch.delete_cell(&tx1, 0);
     batch.delete_cell_by_type(&type_hash, 500, &tx1, 0);
     batch.commit().unwrap();
