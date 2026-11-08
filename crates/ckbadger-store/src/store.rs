@@ -3431,7 +3431,7 @@ impl CkbadgerStore {
         Ok(())
     }
 
-    /// Memtable and SST state of one CF this store opens, from RocksDB's
+    /// Whether one CF this store opens holds unflushed rows, from RocksDB's
     /// per-CF properties (read only).
     pub fn cf_flush_state(&self, cf_name: &str) -> anyhow::Result<CfFlushState> {
         let cf = self.opened_cf(cf_name)?;
@@ -3440,14 +3440,25 @@ impl CkbadgerStore {
                 self.db
                     .property_int_value_cf(cf, property)
                     .map_err(Into::into),
-                &format!("CF {cf_name} {property}"),
+                format_args!("CF {cf_name} {property}"),
             )
         };
         Ok(CfFlushState {
             active_entries: read("rocksdb.num-entries-active-mem-table")?,
             unflushed_immutables: read("rocksdb.num-immutable-mem-table")?,
-            live_sst_bytes: read("rocksdb.live-sst-files-size")?,
         })
+    }
+
+    /// Bytes of the live SST files of one CF this store opens (read only).
+    pub fn cf_live_sst_bytes(&self, cf_name: &str) -> anyhow::Result<u64> {
+        let cf = self.opened_cf(cf_name)?;
+        let property = "rocksdb.live-sst-files-size";
+        required_flush_property(
+            self.db
+                .property_int_value_cf(cf, property)
+                .map_err(Into::into),
+            format_args!("CF {cf_name} {property}"),
+        )
     }
 
     /// The handle of `name`, or an error naming it when this store does not
@@ -3813,7 +3824,7 @@ impl CkbadgerStore {
                     self.db
                         .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
                         .map_err(Into::into),
-                    &format!("CF {cf_name} rocksdb.mem-table-flush-pending"),
+                    format_args!("CF {cf_name} rocksdb.mem-table-flush-pending"),
                 )?;
                 mem_table_flush_pending =
                     mem_table_flush_pending
@@ -3825,7 +3836,7 @@ impl CkbadgerStore {
                     self.db
                         .property_int_value_cf(cf, "rocksdb.cur-size-active-mem-table")
                         .map_err(Into::into),
-                    &format!("CF {cf_name} rocksdb.cur-size-active-mem-table"),
+                    format_args!("CF {cf_name} rocksdb.cur-size-active-mem-table"),
                 )?;
                 active_memtable_bytes =
                     active_memtable_bytes.checked_add(active).ok_or_else(|| {
@@ -3843,7 +3854,11 @@ impl CkbadgerStore {
     }
 }
 
-fn required_flush_property(value: anyhow::Result<Option<u64>>, name: &str) -> anyhow::Result<u64> {
+/// `name` is formatted only when the property is missing or unreadable.
+fn required_flush_property(
+    value: anyhow::Result<Option<u64>>,
+    name: impl std::fmt::Display,
+) -> anyhow::Result<u64> {
     match value {
         Ok(Some(value)) => Ok(value),
         Ok(None) => anyhow::bail!("RocksDB flush property unavailable: {name}"),
@@ -3870,15 +3885,13 @@ fn required_compaction_property(
     }
 }
 
-/// One column family's memtable and SST state ([`CkbadgerStore::cf_flush_state`]).
+/// Whether one column family holds unflushed rows ([`CkbadgerStore::cf_flush_state`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CfFlushState {
     /// Entries (puts and deletes) in the active memtable.
     pub active_entries: u64,
     /// Immutable memtables not flushed yet.
     pub unflushed_immutables: u64,
-    /// Bytes of the CF's live SST files.
-    pub live_sst_bytes: u64,
 }
 
 /// Lightweight snapshot of write-side flush activity, sampled by the
@@ -5134,7 +5147,7 @@ mod tests {
 
     /// `flush_column_families` is one waiting flush of exactly the listed
     /// CFs: their no-WAL rows reach SSTs, any other CF keeps its memtable,
-    /// and `cf_flush_state` reports both.
+    /// and `cf_flush_state` / `cf_live_sst_bytes` report both.
     #[test]
     fn flush_column_families_flushes_only_the_listed_cfs() {
         let dir = TempDir::new().unwrap();
@@ -5147,9 +5160,9 @@ mod tests {
         let unflushed = CfFlushState {
             active_entries: 1,
             unflushed_immutables: 0,
-            live_sst_bytes: 0,
         };
         assert_eq!(store.cf_flush_state(CF_TX_HASH_MAP).unwrap(), unflushed);
+        assert_eq!(store.cf_live_sst_bytes(CF_TX_HASH_MAP).unwrap(), 0);
 
         store
             .flush_column_families(&[CF_TX_HASH_MAP, CF_BLOCK_HASH_INDEX])
@@ -5162,9 +5175,10 @@ mod tests {
                 (0, 0),
                 "{flushed}"
             );
-            assert!(state.live_sst_bytes > 0, "{flushed}: {state:?}");
+            assert!(store.cf_live_sst_bytes(flushed).unwrap() > 0, "{flushed}");
         }
         assert_eq!(store.cf_flush_state(CF_ADDR_BALANCE).unwrap(), unflushed);
+        assert_eq!(store.cf_live_sst_bytes(CF_ADDR_BALANCE).unwrap(), 0);
         assert_eq!(
             store
                 .get_cf(store.cf(CF_TX_HASH_MAP), b"tx")
@@ -5174,8 +5188,8 @@ mod tests {
         );
     }
 
-    /// A CF name this store does not open is an error naming it, for both
-    /// helpers, and so is an empty list; nothing is flushed.
+    /// A CF name this store does not open is an error naming it, for every
+    /// helper, and so is an empty list; nothing is flushed.
     #[test]
     fn flush_column_families_rejects_a_cf_outside_the_store() {
         let dir = TempDir::new().unwrap();
@@ -5188,6 +5202,8 @@ mod tests {
                 .to_string();
             assert!(error.contains(foreign), "{error}");
             let error = store.cf_flush_state(foreign).unwrap_err().to_string();
+            assert!(error.contains(foreign), "{error}");
+            let error = store.cf_live_sst_bytes(foreign).unwrap_err().to_string();
             assert!(error.contains(foreign), "{error}");
         }
         // RocksDB reads an empty list as "every CF".

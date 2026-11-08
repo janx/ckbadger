@@ -8280,11 +8280,7 @@ mod tests {
             move || {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 loop {
-                    if observed_store
-                        .cf_flush_state(CF_TX_HASH_MAP)?
-                        .live_sst_bytes
-                        > 0
-                    {
+                    if observed_store.cf_live_sst_bytes(CF_TX_HASH_MAP)? > 0 {
                         return Ok(materialize::MaterializationReport::default());
                     }
                     if Instant::now() >= deadline {
@@ -8366,14 +8362,19 @@ mod tests {
                 (0, 0),
                 "{cf}"
             );
-            assert!(state.live_sst_bytes > 0, "{cf}: {state:?}");
+            let sst_bytes = domain_store.cf_live_sst_bytes(cf).expect("SST bytes");
+            assert!(sst_bytes > 0, "{cf}");
         }
         for &cf in ckbadger_store::BATCH_LOOP_ONLY_CFS {
-            let state = domain_store.cf_flush_state(cf).expect("flush state");
+            let active_entries = domain_store
+                .cf_flush_state(cf)
+                .expect("flush state")
+                .active_entries;
+            let sst_bytes = domain_store.cf_live_sst_bytes(cf).expect("SST bytes");
             assert_eq!(
-                (state.active_entries, state.live_sst_bytes),
+                (active_entries, sst_bytes),
                 (1, 0),
-                "phase 12 flushed batch-loop-only CF {cf}: {state:?}"
+                "phase 12 flushed batch-loop-only CF {cf}"
             );
         }
 
