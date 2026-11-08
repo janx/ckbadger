@@ -1116,21 +1116,22 @@ impl CfSpec {
             CfSelect::Tier(tier) => self.buffer_tier as u8 == tier as u8,
             CfSelect::BulkHot => self.bulk_hot_memtable,
             CfSelect::Compaction(compaction) => self.compaction as u8 == compaction as u8,
-            CfSelect::FinalizeWritten => {
-                matches!(self.store, CfStore::Domain) && self.finalize_writes()
-            }
+            CfSelect::FinalizeWritten => self.is_finalize_written(),
             CfSelect::BatchLoopOnly => {
-                matches!(self.store, CfStore::Domain) && !self.finalize_writes()
+                matches!(self.store, CfStore::Domain) && !self.is_finalize_written()
             }
         }
     }
 
-    /// The write policies the bounded bulk finalize materializer accepts.
-    const fn finalize_writes(&self) -> bool {
-        matches!(
-            self.write_policy,
-            CfWritePolicy::SealedAggregate | CfWritePolicy::FinalSnapshot
-        )
+    /// Whether bulk finalize phases 2-11 may write this CF: a domain CF of
+    /// one of the two write policies the bounded finalize materializer
+    /// accepts. [`FINALIZE_WRITTEN_CFS`] is the projection of this predicate.
+    pub const fn is_finalize_written(&self) -> bool {
+        matches!(self.store, CfStore::Domain)
+            && matches!(
+                self.write_policy,
+                CfWritePolicy::SealedAggregate | CfWritePolicy::FinalSnapshot
+            )
     }
 }
 
@@ -5842,6 +5843,16 @@ mod tests {
         for name in APPEND_CFS.iter().chain(NETWORK_CFS) {
             assert!(!FINALIZE_WRITTEN_CFS.contains(name), "{name}");
             assert!(!BATCH_LOOP_ONLY_CFS.contains(name), "{name}");
+        }
+        // `CfSpec::is_finalize_written` is the predicate the bounded
+        // finalize sink checks per row; the list is its projection.
+        for spec in CF_SPECS {
+            assert_eq!(
+                spec.is_finalize_written(),
+                FINALIZE_WRITTEN_CFS.contains(&spec.name),
+                "{}",
+                spec.name
+            );
         }
         // Lane 0 §7.1 classed this history feed with the finalize-written
         // CFs; its policy (Class A) keeps it out of finalize.
