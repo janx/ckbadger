@@ -362,28 +362,65 @@ fn read_dep_cell_info(
     }))
 }
 
-/// Expand a dep_group cell into its constituent outpoints.
+/// Expand an on-chain transaction's `dep_type = dep_group` cell dep
+/// `dep_tx_hash:dep_index` into its member out points.
+///
+/// The node accepted the transaction, so it resolved this dep group by the
+/// consensus rule: the dep cell exists and its data decodes as a dep group
+/// ([`decode_dep_group`]). Data that is missing or does not decode is a broken
+/// invariant, not an empty member list (D-4a). `CkbChainReader::get_cell_data`
+/// answers `None` both for an absent cell and for a failed read; for an
+/// on-chain dep either is the same violation.
 fn expand_dep_group(
     ckb_store: &ckb_store_reader::CkbChainReader,
-    tx_hash_bytes: &[u8; 32],
-    output_index: u32,
-) -> Vec<(Vec<u8>, i16)> {
-    let data = match ckb_store.get_cell_data(tx_hash_bytes, output_index) {
-        Some(d) => d,
-        None => return vec![],
-    };
-    let result = crate::routes::cells::parse_dep_group(&data, data.len() as i32);
-    let items = match result.items {
-        Some(items) if result.is_dep_group => items,
-        _ => return vec![],
-    };
-    items
+    tx_hash_hex: &str,
+    dep_tx_hash: &[u8; 32],
+    dep_index: u32,
+) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+    let data = ckb_store
+        .get_cell_data(dep_tx_hash, dep_index)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "tx {tx_hash_hex}: dep_group cell dep 0x{}:{dep_index} has no data in the CKB store",
+                hex::encode(dep_tx_hash)
+            )
+        })?;
+    decode_dep_group(&data).map_err(|e| {
+        anyhow::anyhow!(
+            "tx {tx_hash_hex}: dep_group cell dep 0x{}:{dep_index}: {e}",
+            hex::encode(dep_tx_hash)
+        )
+    })
+}
+
+/// Decode a dep group cell's data into its member out points by the consensus
+/// rule (`ckb_types::core::cell::parse_dep_group_data`): non-empty data that is
+/// a molecule `OutPointVec` with at least one member. A member's index is an
+/// output index, so it fits `i16` for any out point the chain resolved; one
+/// that does not is an error naming the member.
+fn decode_dep_group(data: &[u8]) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+    use ckb_types::{packed, prelude::*};
+    anyhow::ensure!(!data.is_empty(), "dep group data is empty");
+    let members = packed::OutPointVec::from_slice(data).map_err(|e| {
+        anyhow::anyhow!(
+            "dep group data ({} bytes) is not an OutPointVec: {e}",
+            data.len()
+        )
+    })?;
+    anyhow::ensure!(!members.is_empty(), "dep group has no members");
+    members
         .into_iter()
-        .filter_map(|item| {
-            let hash =
-                hex::decode(item.tx_hash.strip_prefix("0x").unwrap_or(&item.tx_hash)).ok()?;
-            let index = i16::try_from(item.output_index).ok()?;
-            Some((hash, index))
+        .enumerate()
+        .map(|(item, out_point)| {
+            let tx_hash = out_point.tx_hash().raw_data().to_vec();
+            let index: u32 = out_point.index().unpack();
+            let index = i16::try_from(index).map_err(|_| {
+                anyhow::anyhow!(
+                    "dep group member {item} (0x{}:{index}) has an output index beyond i16",
+                    hex::encode(&tx_hash)
+                )
+            })?;
+            Ok((tx_hash, index))
         })
         .collect()
 }
@@ -393,7 +430,8 @@ fn expand_dep_group(
 /// `Ok(None)` if the CKB store is unavailable or the transaction is not found.
 /// A dep cell the store has not indexed yet is skipped (the node can be ahead
 /// of the store; the caller falls back to global resolution for any code_hash
-/// not in the mapping); a store read error propagates (finding 8).
+/// not in the mapping); a store read error propagates (finding 8), and so does
+/// a `dep_group` dep that does not expand by the consensus rule (D-4a).
 pub fn resolve_dep_cells_for_transaction(
     state: &crate::AppState,
     tx_hash_hex: &str,
@@ -444,12 +482,19 @@ pub fn resolve_dep_cells_for_transaction(
         })?;
 
         if dep.dep_type == "dep_group" {
-            if dep_tx_hash.len() == 32 {
-                let mut dep_tx_arr = [0u8; 32];
-                dep_tx_arr.copy_from_slice(&dep_tx_hash);
-                let expanded = expand_dep_group(ckb_store, &dep_tx_arr, dep_index);
-                outpoints.extend(expanded);
-            }
+            let dep_tx_arr: [u8; 32] = dep_tx_hash.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "tx {tx_hash_hex}: dep_group cell dep tx hash {} has {} bytes, expected 32",
+                    dep.out_point.tx_hash,
+                    dep_tx_hash.len()
+                )
+            })?;
+            outpoints.extend(expand_dep_group(
+                ckb_store,
+                tx_hash_hex,
+                &dep_tx_arr,
+                dep_index,
+            )?);
         } else {
             let index = i16::try_from(dep_index).map_err(|e| {
                 anyhow::anyhow!("tx {tx_hash_hex}: cell dep index {dep_index} exceeds i16: {e}")
@@ -899,6 +944,50 @@ pub fn list_version_code_cells(
 mod tests {
     use super::*;
 
+    fn dep_group_data(members: &[([u8; 32], u32)]) -> Vec<u8> {
+        let mut data = (members.len() as u32).to_le_bytes().to_vec();
+        for (tx_hash, index) in members {
+            data.extend_from_slice(tx_hash);
+            data.extend_from_slice(&index.to_le_bytes());
+        }
+        data
+    }
+
+    /// D-4a: a dep group decodes into its members in order.
+    #[test]
+    fn decode_dep_group_returns_every_member() {
+        let data = dep_group_data(&[([0x01; 32], 0), ([0x02; 32], 300)]);
+        assert_eq!(
+            decode_dep_group(&data).unwrap(),
+            vec![(vec![0x01; 32], 0), (vec![0x02; 32], 300)]
+        );
+    }
+
+    /// D-4a: data the consensus rule does not resolve as a dep group (empty,
+    /// not an `OutPointVec`, a truncated one, no members) is an error, never an
+    /// empty member list; so is a member index beyond any output index.
+    #[test]
+    fn decode_dep_group_rejects_what_consensus_does_not_resolve() {
+        let truncated = {
+            let mut data = dep_group_data(&[([0x01; 32], 0), ([0x02; 32], 1)]);
+            data.truncate(data.len() - 1);
+            data
+        };
+        for (data, expected) in [
+            (Vec::new(), "dep group data is empty"),
+            (b"not an OutPointVec".to_vec(), "is not an OutPointVec"),
+            (truncated, "is not an OutPointVec"),
+            (dep_group_data(&[]), "dep group has no members"),
+            (
+                dep_group_data(&[([0x01; 32], 0), ([0x03; 32], 40_000)]),
+                "member 1 (0x0303",
+            ),
+        ] {
+            let error = decode_dep_group(&data).unwrap_err().to_string();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+    }
+
     #[test]
     fn historical_family_candidate_keeps_retired_type_provenance_out_of_current_resolution() {
         let dir = tempfile::tempdir().unwrap();
@@ -971,7 +1060,7 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         // The type-id reference is the derived hash of the cell's TYPE_ID script.
         let reference = crate::utils::address::compute_script_hash(
-            &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[0x13; 32],
         );
@@ -997,12 +1086,7 @@ mod tests {
                 lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some(
-                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                ),
+                type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x13; 32]),
                 udt_amount: None,

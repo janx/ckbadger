@@ -409,6 +409,12 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
 /// The first four bytes of every RISC-V binary CKB-VM runs (ELF magic).
 pub const ELF_MAGIC: [u8; 4] = *b"\x7fELF";
 
+/// The consensus Type ID script's code hash: 25 zero bytes, then `TYPE_ID`.
+/// For readers that build a Type ID script from its args; recognising one is
+/// [`is_type_id_script`]'s job (this code hash, referenced by type).
+pub const TYPE_ID_CODE_HASH: [u8; HASH32_LEN] =
+    *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0TYPE_ID";
+
 /// Whether `(code_hash, hash_type)` is the consensus Type ID script: the
 /// all-zero code hash ending in `TYPE_ID`, referenced by type (hash_type 1).
 pub fn is_type_id_script(code_hash: &[u8], hash_type: i16) -> bool {
@@ -2506,6 +2512,14 @@ mod tests {
         let mut other = type_id;
         other[0] = 1;
         assert!(!is_type_id_script(&other, 1));
+        // The constant readers build Type ID scripts from is the one the rule
+        // recognises: the consensus hex `0x00…00545950455f4944`.
+        assert_eq!(TYPE_ID_CODE_HASH, type_id);
+        assert_eq!(
+            hex::encode(TYPE_ID_CODE_HASH),
+            "00000000000000000000000000000000000000000000000000545950455f4944"
+        );
+        assert!(is_type_id_script(&TYPE_ID_CODE_HASH, 1));
     }
 
     #[test]

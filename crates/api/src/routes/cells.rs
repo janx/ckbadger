@@ -2439,9 +2439,10 @@ fn current_spend_requirements(
                     "cell {outpoint} {kind} reference has invalid hash_type {hash_type}"
                 ))
             })?;
-            let built_in_type_id = kind == "type"
-                && hash_type == 1
-                && hex::encode(hash) == ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH;
+            // The consensus Type ID script runs built in: the one rule,
+            // `keys::is_type_id_script`.
+            let built_in_type_id =
+                kind == "type" && ckbadger_store::keys::is_type_id_script(hash, hash_type);
             let (resolution, hashes) = if built_in_type_id {
                 ("builtin", Vec::new())
             } else {
@@ -2611,11 +2612,7 @@ fn code_cell_upgrade_cohort(
         let Some(type_script) = output.type_().to_opt() else {
             continue;
         };
-        if type_script.code_hash().as_slice()
-            != hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                .expect("constant hex")
-            || type_script.hash_type().as_slice() != [1]
-        {
+        if !is_type_id_type_script(&type_script) {
             continue;
         }
         // Code by the one rule the cell page uses: the ELF magic. Whether the
@@ -2655,6 +2652,13 @@ fn code_cell_upgrade_cohort(
         });
     }
     Ok(upgrades)
+}
+
+/// Whether a node-format script is the consensus Type ID script, by the one
+/// rule (`keys::is_type_id_script`).
+fn is_type_id_type_script(script: &ckb_types::packed::Script) -> bool {
+    let hash_type: u8 = script.hash_type().into();
+    ckbadger_store::keys::is_type_id_script(script.code_hash().as_slice(), i16::from(hash_type))
 }
 
 /// The version hashes of a Type ID upgrade: the previous cell's data hash as
@@ -4970,6 +4974,41 @@ mod tests {
 
     fn positioned(cell: LiveCellInfo) -> ckbadger_store::PositionedCellInfo {
         ckbadger_store::PositionedCellInfo::new(cell, 100)
+    }
+
+    /// D-4b: the Type ID upgrade cohort follows only the consensus Type ID
+    /// script (`keys::is_type_id_script`): the Type ID code hash referenced by
+    /// `type`; the same code hash referenced by `data` or `data1`, or another
+    /// code hash by `type`, is not one.
+    #[test]
+    fn upgrade_cohort_recognises_only_the_consensus_type_id_script() {
+        use ckb_types::{core::ScriptHashType, packed, prelude::*};
+        let script = |code_hash: [u8; 32], hash_type: ScriptHashType| {
+            packed::Script::new_builder()
+                .code_hash(packed::Byte32::new(code_hash))
+                .hash_type(hash_type.into())
+                .args(ckb_types::bytes::Bytes::from(vec![0x4b; 32]).pack())
+                .build()
+        };
+        let type_id = ckbadger_store::keys::TYPE_ID_CODE_HASH;
+        assert!(is_type_id_type_script(&script(
+            type_id,
+            ScriptHashType::Type
+        )));
+        assert!(!is_type_id_type_script(&script(
+            type_id,
+            ScriptHashType::Data
+        )));
+        assert!(!is_type_id_type_script(&script(
+            type_id,
+            ScriptHashType::Data1
+        )));
+        let mut other = type_id;
+        other[0] = 1;
+        assert!(!is_type_id_type_script(&script(
+            other,
+            ScriptHashType::Type
+        )));
     }
 
     #[test]
