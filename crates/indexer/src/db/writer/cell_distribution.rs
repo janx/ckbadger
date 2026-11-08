@@ -120,7 +120,7 @@ impl CellDistributionTracker {
             Some(cursor) => Self::from_rows(cohorts, cursor),
             None if cohorts.is_empty() => Ok(Self::new()),
             None => Err(super::corrupt_stored_row(format!(
-                "cell_dist_cohort_by_month holds {} rows but there is no cell_dist_cursor. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                "cell_dist_cohort_by_month holds {} rows but there is no cell_dist_cursor",
                 cohorts.len()
             ))),
         }
@@ -657,6 +657,12 @@ mod tests {
         batch.commit().unwrap();
         let err = CellDistributionTracker::load(&store).unwrap_err();
         assert_rebuild_required(&err, "no cell_dist_cursor");
+        // Fix round, finding 7: the remedy is said once, by the error type.
+        assert_eq!(
+            err.to_string(),
+            "cell_dist_cohort_by_month holds 1 rows but there is no cell_dist_cursor; \
+             delete RocksDB and re-sync from genesis"
+        );
     }
 
     /// D-4c: a consume the bucket totals cannot explain (no live cell in the

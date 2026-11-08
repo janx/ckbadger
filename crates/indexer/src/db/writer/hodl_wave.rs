@@ -89,7 +89,7 @@ impl HodlWaveTracker {
             Some(cursor) => Self::from_rows(rows, cursor),
             None if rows.is_empty() => Ok(Self::new()),
             None => Err(super::corrupt_stored_row(format!(
-                "hodl_capacity_by_date holds {} rows but there is no hodl_cursor. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                "hodl_capacity_by_date holds {} rows but there is no hodl_cursor",
                 rows.len()
             ))),
         }
@@ -572,6 +572,12 @@ mod tests {
         batch.commit().unwrap();
         let err = HodlWaveTracker::load(&store).unwrap_err();
         assert!(err.to_string().contains("no hodl_cursor"), "{err}");
+        // Fix round, finding 7: the remedy is said once, by the error type.
+        assert_eq!(
+            err.to_string(),
+            "hodl_capacity_by_date holds 1 rows but there is no hodl_cursor; \
+             delete RocksDB and re-sync from genesis"
+        );
         // D-4c: rows without their cursor are not a state any sync leaves.
         assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
