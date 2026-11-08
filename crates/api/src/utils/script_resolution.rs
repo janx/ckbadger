@@ -400,12 +400,13 @@ fn expand_dep_group(
     })
 }
 
-/// Decode a dep group cell's data into its member out points by the consensus
-/// rule (`ckb_types::core::cell::parse_dep_group_data`): non-empty data that is
-/// a molecule `OutPointVec` with at least one member. A member's index is an
-/// output index, so it fits `i16` for any out point the chain resolved; one
-/// that does not is an error naming the member.
-fn decode_dep_group(data: &[u8]) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+/// The member out points of a dep group cell's data, by the consensus rule
+/// (`ckb_types::core::cell::parse_dep_group_data`): non-empty data that is a
+/// molecule `OutPointVec` with at least one member. The one structural rule
+/// for every dep group decode in the API: a declared `dep_group` cell dep
+/// (`decode_dep_group`, the tx page's resolved dependencies) and the cell
+/// page's dep group classification.
+pub(crate) fn dep_group_members(data: &[u8]) -> anyhow::Result<ckb_types::packed::OutPointVec> {
     use ckb_types::{packed, prelude::*};
     anyhow::ensure!(!data.is_empty(), "dep group data is empty");
     let members = packed::OutPointVec::from_slice(data).map_err(|e| {
@@ -415,7 +416,16 @@ fn decode_dep_group(data: &[u8]) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         )
     })?;
     anyhow::ensure!(!members.is_empty(), "dep group has no members");
-    members
+    Ok(members)
+}
+
+/// Decode a dep group cell's data into its member out points by the consensus
+/// rule ([`dep_group_members`]), as store keys. A member's index is an
+/// output index, so it fits `i16` for any out point the chain resolved; one
+/// that does not is an error naming the member.
+fn decode_dep_group(data: &[u8]) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+    use ckb_types::prelude::*;
+    dep_group_members(data)?
         .into_iter()
         .enumerate()
         .map(|(item, out_point)| {

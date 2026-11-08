@@ -5147,3 +5147,33 @@ async fn script_lookup_fails_on_a_dep_group_dep_with_an_undecodable_cell_data_ro
         "{message}"
     );
 }
+
+/// Fix round, finding 3: an empty dep group (a valid `OutPointVec` with no
+/// members, which consensus does not resolve) fails both API rules that
+/// expand a declared `dep_group` cell dep: the per-tx script lookup and the
+/// tx page's resolved cell deps. Before, the cell deps page decoded it with a
+/// bare `OutPointVec` read and answered an empty dependency.
+#[tokio::test]
+async fn an_empty_dep_group_fails_both_dep_group_expansions() {
+    let (app, user_hash, deployment_hash) =
+        dep_group_lookup_fixture(0u32.to_le_bytes().to_vec(), 0).await;
+
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("dep group has no members"), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:0")),
+        "{message}"
+    );
+
+    let (status, json) = get_json(&app, &format!("/transactions/{user_hash}/cell-deps")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("dep group has no members"), "{message}");
+    assert!(
+        message.contains(&format!("malformed dep group {deployment_hash}:0")),
+        "{message}"
+    );
+}
