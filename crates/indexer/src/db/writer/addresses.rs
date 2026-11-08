@@ -1629,8 +1629,11 @@ impl BatchWriter {
                             .store
                             .get_script_reference_version_hash(1, &reference)?,
                     };
+                    // A stored binding and a stored input cell that
+                    // contradict each other are a row set no sync leaves:
+                    // rebuild-required (D-4c ruling).
                     if current.is_some() && cell.data_hash.is_none() {
-                        bail!("active type-id input lacks data hash: reference=0x{} block={} tx=0x{} input=0x{}:{}", hex::encode(reference), tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index);
+                        return Err(super::corrupt_stored_row(format!("active type-id input lacks data hash: reference=0x{} block={} tx=0x{} input=0x{}:{}", hex::encode(reference), tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index)));
                     }
                     if current.is_some()
                         && current.as_deref() == cell.data_hash.as_ref().map(|hash| hash.as_slice())
@@ -4668,6 +4671,80 @@ mod tests {
             .read_script_reference_info(&[(reference.clone(), 1)])
             .unwrap_err();
         assert_rebuild_required(&err, "failed to deserialize script reference info");
+        assert!(
+            err.to_string().contains(&hex::encode(&reference)),
+            "{err:#}"
+        );
+    }
+
+    /// Coordinator ruling on D-4c (`addresses.rs:1625` at fd9a5e09): a stored
+    /// Type ID binding and a stored Type ID input cell without a data hash
+    /// contradict each other, a row set no sync leaves: rebuild-required (a
+    /// retry cannot repair stored state).
+    #[test]
+    fn an_active_type_id_input_without_data_hash_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let args = [0x61; 32];
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(
+            &keys::TYPE_ID_CODE_HASH,
+            1,
+            &args,
+        );
+        let mut seed = StoreBatch::new(&store);
+        seed.put_script_reference_to_version(1, &reference, &[0x62; 32]);
+        seed.commit().unwrap();
+        let input = ckbadger_store::LiveCellInfo {
+            capacity: 10000,
+            lock_code_hash: [0x12; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_code_hash: Some(keys::TYPE_ID_CODE_HASH),
+            type_hash_type: Some(1),
+            type_args: Some(args.to_vec()),
+            data_size: 0,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let inputs = HashMap::from([(
+            (vec![0x63; 32], 0i16),
+            ckbadger_store::PositionedCellInfo::new(input, 30),
+        )]);
+        let txs = vec![crate::sync::types::TxData {
+            hash: [0x64; 32],
+            block_number: 31,
+            tx_index: 1,
+            inputs_count: 1,
+            outputs_count: 0,
+            is_cellbase: false,
+            inputs: vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: [0x63; 32],
+                previous_output_index: 0,
+                since: 0,
+            }],
+            cells: vec![],
+            witnesses: vec![],
+            total_input_capacity: 10000,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            semantic_tags: 0,
+        }];
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .materialize_script_versions_and_families_with_chain(
+                &[],
+                &txs,
+                &HashMap::new(),
+                &inputs,
+                &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
+                &mut batch,
+            )
+            .unwrap_err();
+        assert_rebuild_required(&err, "active type-id input lacks data hash");
         assert!(
             err.to_string().contains(&hex::encode(&reference)),
             "{err:#}"
