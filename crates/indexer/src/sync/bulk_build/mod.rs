@@ -254,7 +254,6 @@ impl BulkBuildEngine {
         let mut cumulative_sealed_rows: usize = 0;
         let mut _flush_send_count: usize = 0;
         let mut last_bottleneck: Option<String> = None;
-        let mut last_owner_memory = runtime.memory_breakdown_bytes();
 
         let interrupted_stage = 'bulk_loop: loop {
             if indexer.is_shutdown_requested() {
@@ -307,12 +306,15 @@ impl BulkBuildEngine {
 
             let before_batch_prefetch_bytes = buffer.retained_block_bytes()?;
             let before_batch_flush_bytes = flush_channel.reserved_bytes()?;
-            let before_batch_memory = retained_memory_breakdown(
-                &last_owner_memory,
-                before_batch_prefetch_bytes,
-                before_batch_flush_bytes,
-                None,
-            )?;
+            // Walked only for a guard failure message (OWNER_MEMORY_WALK_EVERY_BATCHES).
+            let before_batch_memory = || {
+                retained_memory_breakdown(
+                    &runtime.memory_breakdown_bytes(),
+                    before_batch_prefetch_bytes,
+                    before_batch_flush_bytes,
+                    None,
+                )
+            };
             let before_batch_store_memory = sampler.latest().store_memory;
             let process_memory = memory_guard.checkpoint(
                 "before_batch",
@@ -351,16 +353,38 @@ impl BulkBuildEngine {
             if indexer.is_shutdown_requested() {
                 break 'bulk_loop Some("after_batch_build");
             }
+            let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
+                anyhow!(
+                    "bulk build batch missing last block number: current_block={} batch_block_count={}",
+                    current_block,
+                    batch_block_count
+                )
+            })?;
+            let last_block_u64 = u64::try_from(last_block_number).map_err(|_| {
+                anyhow!(
+                    "bulk build last block number is negative: last_block_number={}",
+                    last_block_number
+                )
+            })?;
+            // The prefetch fetches up to `initial_handoff` and no further, so
+            // the batch that reaches it is the last one.
+            let is_last_batch = last_block_u64 >= initial_handoff;
             let memory_accounting_started = Instant::now();
-            last_owner_memory = runtime.memory_breakdown_bytes();
+            let owner_memory = owner_memory_walk_due(batch_count, is_last_batch)
+                .then(|| runtime.memory_breakdown_bytes());
             let pending_flush_bytes = pending_flush.allocated_bytes()?;
-            let after_build_memory = retained_memory_breakdown(
-                &last_owner_memory,
-                buffer.retained_block_bytes()?,
-                flush_channel.reserved_bytes()?,
-                Some(pending_flush_bytes),
-            )?;
             let memory_accounting_elapsed = memory_accounting_started.elapsed();
+            let after_build_prefetch_bytes = buffer.retained_block_bytes()?;
+            let after_build_flush_bytes = flush_channel.reserved_bytes()?;
+            // Walked only for a guard failure message (OWNER_MEMORY_WALK_EVERY_BATCHES).
+            let after_build_memory = || {
+                retained_memory_breakdown(
+                    &runtime.memory_breakdown_bytes(),
+                    after_build_prefetch_bytes,
+                    after_build_flush_bytes,
+                    Some(pending_flush_bytes),
+                )
+            };
             let after_build_store_memory = sampler.latest().store_memory;
             memory_guard.checkpoint(
                 "after_batch_build",
@@ -404,19 +428,6 @@ impl BulkBuildEngine {
             _flush_send_count += 1;
             sync_totals.record_batch(&batch_stats)?;
 
-            let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
-                anyhow!(
-                    "bulk build batch missing last block number: current_block={} batch_block_count={}",
-                    current_block,
-                    batch_block_count
-                )
-            })?;
-            let last_block_u64 = u64::try_from(last_block_number).map_err(|_| {
-                anyhow!(
-                    "bulk build last block number is negative: last_block_number={}",
-                    last_block_number
-                )
-            })?;
             batch_span.record("end_block", last_block_u64);
             indexer.progress.record_batch(
                 last_block_u64,
@@ -522,12 +533,15 @@ impl BulkBuildEngine {
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
             sample.prefetch_depth = prefetch_depth as u64;
             sample.prefetch_retained_block_bytes = prefetch_retained_block_bytes;
-            sample.owner_memory_bytes = last_owner_memory.clone();
-            let accounted_retained_bytes = checked_retained_memory_total(
-                &last_owner_memory,
+            let OwnerMemorySampleFields {
+                owner_memory_bytes,
+                accounted_retained_bytes,
+            } = owner_memory_sample_fields(
+                owner_memory.as_ref(),
                 prefetch_retained_block_bytes,
                 flush_reserved_bytes,
             )?;
+            sample.owner_memory_bytes = owner_memory_bytes;
             sample.accounted_retained_bytes = accounted_retained_bytes;
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
@@ -544,7 +558,10 @@ impl BulkBuildEngine {
 
             // Publish bulk-build metrics to shared atomics for progress monitor -> TUI.
             // Must happen before record_bulk_sync_perf_batch_sample moves sample.
-            let owner_mem_total = checked_memory_map_total(&sample.owner_memory_bytes)?;
+            let owner_mem_total = owner_memory
+                .as_ref()
+                .map(checked_memory_map_total)
+                .transpose()?;
             indexer.bulk_build_perf.record_batch_bytes(batch_bytes);
             indexer.bulk_build_perf.record_disk_telemetry(
                 disk_state.as_deref(),
@@ -672,9 +689,9 @@ impl BulkBuildEngine {
                 last_bottleneck = Some(output.bottleneck.to_string());
             }
 
-            // Periodic memory summary every 10 batches
-            if batch_count.is_multiple_of(10) {
-                let total_mb = checked_memory_map_total(&last_owner_memory)? / (1024 * 1024);
+            // Memory summary on every batch that walked the owner maps.
+            if let Some(owner_memory) = owner_memory.as_ref() {
+                let total_mb = checked_memory_map_total(owner_memory)? / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
                 let interner_slots = runtime.interner.slot_len();
@@ -730,16 +747,21 @@ impl BulkBuildEngine {
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
+        // A fresh owner walk at the end of the batch loop (OWNER_MEMORY_WALK_EVERY_BATCHES).
         let before_finalize_memory = retained_memory_breakdown(
-            &last_owner_memory,
+            &runtime.memory_breakdown_bytes(),
             buffer.retained_block_bytes()?,
             flush_channel.reserved_bytes()?,
             None,
         )?;
+        info!(
+            retained_memory_mb = checked_memory_map_total(&before_finalize_memory)? / (1024 * 1024),
+            "Bulk build retained memory before finalize"
+        );
         memory_guard.checkpoint(
             "before_finalize",
             indexer.progress.current(),
-            &before_finalize_memory,
+            &|| Ok(before_finalize_memory.clone()),
             &sampler.latest().store_memory,
         )?;
 
@@ -3584,6 +3606,61 @@ fn checked_retained_memory_total(
                 flush_reserved_bytes
             )
         })
+}
+
+/// Batches between exact walks of the bulk reducers' owner maps for the memory
+/// breakdown (`BulkBuildRuntimeState::memory_breakdown_bytes`). The walk also
+/// runs on the first batch, on the last batch (the one that reaches the
+/// prefetch's handoff block), before finalize, and inside a memory-guard
+/// failure message. A batch's perf sample carries the owner fields only when
+/// that batch walked; otherwise they are absent, never carried forward.
+///
+/// Why not every batch: the walk visits every entry of the script, token, DAO,
+/// fiber, object and activity-stats maps, with a `bincode::serialized_size`
+/// each. Measured from the perf runs' own per-batch samples it cost 100–110 ms
+/// per batch (max about 300 ms) on the foreground thread between one batch's
+/// build and the next: 36 s over 358 batches in candC3-2 and 57 s over 521
+/// batches in baseC-6, 3.6–6.6 % of build time.
+///
+/// Why not maintained counters: counters that reproduce these numbers would
+/// add work to the per-cell / per-tx success path in about 45 maps across six
+/// owners, plus a size recomputation on every value update. The breakdown only
+/// feeds telemetry and failure messages (the guard decides on process RSS +
+/// swap), so it is sampled instead.
+pub(crate) const OWNER_MEMORY_WALK_EVERY_BATCHES: u64 = 10;
+
+/// Whether 0-based batch `batch_index` walks the owner maps: the first batch,
+/// every [`OWNER_MEMORY_WALK_EVERY_BATCHES`]-th batch, and the last batch.
+fn owner_memory_walk_due(batch_index: u64, is_last_batch: bool) -> bool {
+    is_last_batch || batch_index.is_multiple_of(OWNER_MEMORY_WALK_EVERY_BATCHES)
+}
+
+/// One batch's owner fields for its perf sample: the per-owner breakdown and
+/// the retained total built from it, both from this batch's walk, or both
+/// absent.
+#[derive(Debug, Default, PartialEq)]
+struct OwnerMemorySampleFields {
+    owner_memory_bytes: Option<HashMap<String, u64>>,
+    accounted_retained_bytes: Option<u64>,
+}
+
+fn owner_memory_sample_fields(
+    owner_memory: Option<&HashMap<String, u64>>,
+    prefetch_retained_block_bytes: u64,
+    flush_reserved_bytes: u64,
+) -> Result<OwnerMemorySampleFields> {
+    let Some(owner_memory) = owner_memory else {
+        return Ok(OwnerMemorySampleFields::default());
+    };
+    let accounted = checked_retained_memory_total(
+        owner_memory,
+        prefetch_retained_block_bytes,
+        flush_reserved_bytes,
+    )?;
+    Ok(OwnerMemorySampleFields {
+        owner_memory_bytes: Some(owner_memory.clone()),
+        accounted_retained_bytes: Some(accounted),
+    })
 }
 
 fn retained_memory_breakdown(
@@ -9093,6 +9170,83 @@ mod tests {
                 )
             );
         }
+    }
+
+    /// D-9: over a run of 25 batches, the owner-memory walk runs on the first
+    /// batch, every `OWNER_MEMORY_WALK_EVERY_BATCHES`-th batch and the last
+    /// one, and exactly those batches' `samples.jsonl` lines carry the owner
+    /// fields (fresh); every other line omits them.
+    #[test]
+    fn owner_fields_are_in_the_samples_of_walked_batches_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut run = crate::bulk_sync_perf::BulkSyncPerfRun::start_for_test(
+            dir.path(),
+            "run-1",
+            "0.1.0+test@abcdef123456",
+        )
+        .unwrap();
+        let last_batch = 24u64;
+        let mut walks = 0u64;
+        for batch_index in 0..=last_batch {
+            let owner_memory =
+                owner_memory_walk_due(batch_index, batch_index == last_batch).then(|| {
+                    walks += 1;
+                    HashMap::from([
+                        ("owner.object".to_string(), 1_000 + batch_index),
+                        ("live_cells".to_string(), 50),
+                    ])
+                });
+            let OwnerMemorySampleFields {
+                owner_memory_bytes,
+                accounted_retained_bytes,
+            } = owner_memory_sample_fields(owner_memory.as_ref(), 11, 22).unwrap();
+            let mut sample = crate::bulk_sync_perf::BatchSample::new(
+                1,
+                1.0,
+                0.0,
+                None,
+                None,
+                None,
+                "2026-11-08T00:00:00.000Z".to_string(),
+                None,
+                None,
+                None,
+                None,
+            );
+            sample.batch_index = batch_index;
+            sample.owner_memory_bytes = owner_memory_bytes;
+            sample.accounted_retained_bytes = accounted_retained_bytes;
+            run.record_batch_sample(sample).unwrap();
+        }
+        assert_eq!(walks, 4);
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        let mut with_owner_fields = Vec::new();
+        for line in samples
+            .lines()
+            .filter(|line| line.contains("\"kind\":\"batch\""))
+        {
+            let json: serde_json::Value = serde_json::from_str(line).unwrap();
+            let sample = &json["sample"];
+            let batch_index = sample["batch_index"].as_u64().unwrap();
+            let breakdown = sample.get("owner_memory_bytes");
+            let accounted = sample.get("accounted_retained_bytes");
+            assert_eq!(breakdown.is_some(), accounted.is_some(), "{line}");
+            if let (Some(breakdown), Some(accounted)) = (breakdown, accounted) {
+                assert_eq!(
+                    breakdown["owner.object"].as_u64(),
+                    Some(1_000 + batch_index)
+                );
+                // 1_000 + batch + 50 owner bytes, 11 prefetch, 22 flush reserved.
+                assert_eq!(accounted.as_u64(), Some(1_000 + batch_index + 50 + 11 + 22));
+                with_owner_fields.push(batch_index);
+            }
+        }
+        assert_eq!(with_owner_fields, vec![0, 10, 20, 24]);
+        assert_eq!(OWNER_MEMORY_WALK_EVERY_BATCHES, 10);
+        // A last batch on the cadence walks once.
+        assert!(owner_memory_walk_due(20, true));
+        assert!(!owner_memory_walk_due(21, false));
     }
 
     #[test]

@@ -119,8 +119,15 @@ pub struct BatchSample {
     pub disk_avg_queue_depth: Option<f64>,
     pub disk_in_flight: Option<u64>,
     pub disk_state: Option<String>,
-    pub owner_memory_bytes: HashMap<String, u64>,
-    pub accounted_retained_bytes: u64,
+    /// Per-owner memory from this batch's own walk of the owner maps; `None`,
+    /// and omitted from `samples.jsonl`, on a batch without one
+    /// (`bulk_build::OWNER_MEMORY_WALK_EVERY_BATCHES`). Never carried forward.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_memory_bytes: Option<HashMap<String, u64>>,
+    /// The owner total plus prefetched and flush-reserved bytes; present
+    /// exactly when `owner_memory_bytes` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accounted_retained_bytes: Option<u64>,
     pub live_cell_count: u64,
     pub cumulative_history_rows: u64,
     pub cumulative_sealed_rows: u64,
@@ -224,8 +231,8 @@ impl BatchSample {
             disk_avg_queue_depth: None,
             disk_in_flight: None,
             disk_state: None,
-            owner_memory_bytes: HashMap::new(),
-            accounted_retained_bytes: 0,
+            owner_memory_bytes: None,
+            accounted_retained_bytes: None,
             live_cell_count: 0,
             cumulative_history_rows: 0,
             cumulative_sealed_rows: 0,
@@ -573,8 +580,10 @@ impl BulkSyncPerfRun {
         };
         let disk_telemetry_status = disk_telemetry_status(&self.batch_samples);
         let mut peak_owner_memory_bytes = HashMap::new();
+        // Peaks over the batches that walked the owner maps (the first, every
+        // `OWNER_MEMORY_WALK_EVERY_BATCHES`-th and the last).
         for sample in &self.batch_samples {
-            for (owner, bytes) in &sample.owner_memory_bytes {
+            for (owner, bytes) in sample.owner_memory_bytes.iter().flatten() {
                 let current_peak = peak_owner_memory_bytes.entry(owner.clone()).or_insert(0);
                 *current_peak = (*current_peak).max(*bytes);
             }
@@ -2442,6 +2451,37 @@ mod tests {
         assert!(samples.contains("\"build_ms\""));
     }
 
+    /// D-9: a batch sample taken without a fresh owner-memory walk carries no
+    /// owner fields at all in `samples.jsonl` — neither the per-owner
+    /// breakdown nor the retained total built from it — rather than an empty
+    /// or stale value.
+    #[test]
+    fn batch_samples_without_a_fresh_owner_walk_omit_the_owner_fields() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        let batch_line = samples
+            .lines()
+            .find(|line| line.contains("\"kind\":\"batch\""))
+            .expect("batch sample line");
+        assert!(
+            !batch_line.contains("\"owner_memory_bytes\""),
+            "{batch_line}"
+        );
+        assert!(
+            !batch_line.contains("\"accounted_retained_bytes\""),
+            "{batch_line}"
+        );
+        assert!(
+            batch_line.contains("\"memory_accounting_ms\""),
+            "{batch_line}"
+        );
+    }
+
     #[test]
     fn test_batch_samples_keep_pipeline_retained_byte_accounting() {
         let dir = TempDir::new().unwrap();
@@ -2450,7 +2490,7 @@ mod tests {
         let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
         sample.prefetch_retained_block_bytes = 11;
         sample.flush_reserved_bytes = 22;
-        sample.accounted_retained_bytes = 33;
+        sample.accounted_retained_bytes = Some(33);
         run.record_batch_sample(sample).unwrap();
 
         let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
@@ -3109,12 +3149,10 @@ mod tests {
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
 
         let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
-        sample
-            .owner_memory_bytes
-            .insert("live_cells".to_string(), 4096);
-        sample
-            .owner_memory_bytes
-            .insert("owner.dao".to_string(), 2048);
+        sample.owner_memory_bytes = Some(std::collections::HashMap::from([
+            ("live_cells".to_string(), 4096),
+            ("owner.dao".to_string(), 2048),
+        ]));
         run.record_batch_sample(sample).unwrap();
         run.set_materialization_report(MaterializationReport {
             streamed_history_rows: 11,
