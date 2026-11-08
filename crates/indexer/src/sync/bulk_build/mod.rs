@@ -8948,6 +8948,131 @@ mod tests {
         assert!(result.unwrap().is_none());
     }
 
+    /// The UDT transfer-cell helpers build a cell from facts whose type script
+    /// parts may be missing; each failure names the cell's side, outpoint,
+    /// block, tx and tx_index exactly as below. Pins the text of every arm on
+    /// both sides (the context is formatted only when an arm fails).
+    #[test]
+    fn udt_transfer_cell_errors_name_outpoint_block_and_tx() {
+        let interner = interner::IdentityInterner::default();
+        let script_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let code_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let args_id = interner.intern_bytes(vec![0xcc; 20]);
+        let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+        let frozen = interner.snapshot_for_reads();
+
+        type Parts = (
+            Option<InternId>,
+            Option<InternId>,
+            Option<i16>,
+            Option<InternId>,
+        );
+        let arms: [(Parts, &str); 4] = [
+            (
+                (None, Some(code_hash_id), Some(1), Some(args_id)),
+                "type_script_hash_id",
+            ),
+            (
+                (Some(script_hash_id), None, Some(1), Some(args_id)),
+                "type_code_hash_id",
+            ),
+            (
+                (
+                    Some(script_hash_id),
+                    Some(code_hash_id),
+                    None,
+                    Some(args_id),
+                ),
+                "type_hash_type",
+            ),
+            (
+                (Some(script_hash_id), Some(code_hash_id), Some(1), None),
+                "type_args_id",
+            ),
+        ];
+        let tx_with = |inputs: Vec<ResolvedInputFacts>, cells: Vec<CellFacts>| ResolvedTxFacts {
+            tx_hash: [0xcd; 32],
+            block_number: 123_456,
+            block_hash: [0x01; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            block_dao_ar: 0,
+            tx_index: 9,
+            dotbit_action: None,
+            resolved_inputs: inputs,
+            cells: cells.into(),
+        };
+
+        for ((type_hash, type_code, hash_type, type_args), field) in arms {
+            let output = CellFacts {
+                outpoint: OutPointKey::new([0xab; 32], 7),
+                created_at_block: 123_456,
+                created_by_block_dao_ar: 0,
+                capacity: 142_00000000,
+                lock_script_hash_id: lock_id,
+                lock_code_hash_id: lock_id,
+                lock_hash_type: 1,
+                lock_args_id: args_id,
+                type_script_hash_id: type_hash,
+                type_code_hash_id: type_code,
+                type_hash_type: hash_type,
+                type_args_id: type_args,
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: Some(1000),
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            };
+            let input = ResolvedInputFacts {
+                outpoint: OutPointKey::new([0xef; 32], 3),
+                created_at_block: 100,
+                created_by_block_dao_ar: 0,
+                capacity: 142_00000000,
+                occupied_capacity: 142_00000000,
+                udt_amount: Some(1000),
+                lock_script_hash_id: lock_id,
+                lock_code_hash_id: lock_id,
+                lock_hash_type: 1,
+                lock_args_id: args_id,
+                type_script_hash_id: type_hash,
+                type_code_hash_id: type_code,
+                type_hash_type: hash_type,
+                type_args_id: type_args,
+                data_size: 16,
+                data_hash: None,
+                semantic_tag: CellSemanticTag::Xudt,
+                dao_state: None,
+                dao_compensation_ars: None,
+                protocol_facts: None,
+            };
+            let tx = tx_with(vec![input.clone()], vec![output.clone()]);
+
+            let output_error = parsed_udt_cell_from_output(&output, &frozen, &tx)
+                .expect_err("output arm must fail");
+            assert_eq!(
+                output_error.to_string(),
+                format!(
+                    "missing {field} for bulk build token transfer cell: output outpoint=0x{}:7 block=123456 tx=0x{} tx_index=9",
+                    "ab".repeat(32),
+                    "cd".repeat(32)
+                )
+            );
+            let input_error =
+                parsed_udt_cell_from_input(&input, &frozen, &tx).expect_err("input arm must fail");
+            assert_eq!(
+                input_error.to_string(),
+                format!(
+                    "missing {field} for bulk build token transfer cell: input outpoint=0x{}:3 block=123456 tx=0x{} tx_index=9",
+                    "ef".repeat(32),
+                    "cd".repeat(32)
+                )
+            );
+        }
+    }
+
     #[test]
     fn test_bincode_serialize_presized_matches_standard() {
         // Verify presized produces identical output to standard bincode::serialize.

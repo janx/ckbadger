@@ -1422,6 +1422,62 @@ mod tests {
     use crate::sync::types::InternId;
     use ckbadger_store::{ScriptFamilyInfo, ScriptReferenceInfo, ScriptVersionInfo};
 
+    /// A daily script delta that overflows names the script kind with its
+    /// hash_type, the metric, code hash, operands, block, tx and tx_index
+    /// exactly as below, for both kinds and both metrics. The kind is
+    /// formatted only when the arithmetic fails.
+    #[test]
+    fn script_daily_delta_overflow_names_kind_hash_type_and_tx() {
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xcd; 32],
+            block_number: 777,
+            block_hash: [0x01; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 5,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: Vec::new().into(),
+        };
+        let code_hash = [0x5c; 32];
+        for (is_type, kind) in [(false, "lock"), (true, "type")] {
+            let mut capacity_owner = ScriptOwner::default();
+            capacity_owner
+                .record_daily_delta(&code_hash, 2, is_type, 20240102, i128::MAX, 0, &tx)
+                .expect("first capacity delta fits");
+            let capacity_error = capacity_owner
+                .record_daily_delta(&code_hash, 2, is_type, 20240102, 1, 0, &tx)
+                .expect_err("capacity delta must overflow");
+            assert_eq!(
+                capacity_error.to_string(),
+                format!(
+                    "script {kind}(hash_type=2) daily owned_capacity_delta overflow: code_hash=0x{}, current={}, delta=1, block=777, tx=0x{}, tx_index=5",
+                    "5c".repeat(32),
+                    i128::MAX,
+                    "cd".repeat(32)
+                )
+            );
+
+            let mut knowledge_owner = ScriptOwner::default();
+            knowledge_owner
+                .record_daily_delta(&code_hash, 4, is_type, 20240102, 0, i128::MIN, &tx)
+                .expect("first knowledge delta fits");
+            let knowledge_error = knowledge_owner
+                .record_daily_delta(&code_hash, 4, is_type, 20240102, 0, -1, &tx)
+                .expect_err("knowledge delta must overflow");
+            assert_eq!(
+                knowledge_error.to_string(),
+                format!(
+                    "script {kind}(hash_type=4) daily owned_knowledge_delta overflow: code_hash=0x{}, current={}, delta=-1, block=777, tx=0x{}, tx_index=5",
+                    "5c".repeat(32),
+                    i128::MIN,
+                    "cd".repeat(32)
+                )
+            );
+        }
+    }
+
     #[test]
     fn script_owner_reduces_lock_and_type_live_usage() {
         let lock_code_hash = vec![0x11; 32];

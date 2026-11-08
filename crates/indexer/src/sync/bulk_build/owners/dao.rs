@@ -1496,6 +1496,94 @@ mod tests {
     use crate::parser::dao::DAO_CODE_HASH;
     use crate::sync::types::InternId;
 
+    /// A DAO-tagged cell without its DAO state fails with the block, tx,
+    /// tx_index and side + outpoint exactly as below, on both sides. The
+    /// location is formatted only when the arm fails.
+    #[test]
+    fn dao_cell_view_missing_state_names_block_tx_and_outpoint() {
+        let interner = IdentityInterner::default();
+        let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let output = CellFacts {
+            outpoint: OutPointKey::new([0xab; 32], 7),
+            created_at_block: 900,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            lock_script_hash_id: lock_id,
+            lock_code_hash_id: lock_id,
+            lock_hash_type: 1,
+            lock_args_id: lock_id,
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            occupied_capacity: 102_00000000,
+            data_size: 8,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Dao,
+            dao_state: None,
+            protocol_facts: None,
+        };
+        let input = ResolvedInputFacts {
+            outpoint: OutPointKey::new([0xef; 32], 3),
+            created_at_block: 800,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            occupied_capacity: 102_00000000,
+            data_size: 8,
+            data_hash: None,
+            udt_amount: None,
+            lock_script_hash_id: lock_id,
+            lock_code_hash_id: lock_id,
+            lock_hash_type: 1,
+            lock_args_id: lock_id,
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            semantic_tag: CellSemanticTag::Dao,
+            dao_state: None,
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xcd; 32],
+            block_number: 900,
+            block_hash: [0x01; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 2,
+            dotbit_action: None,
+            resolved_inputs: vec![input.clone()],
+            cells: vec![output.clone()].into(),
+        };
+
+        let output_error =
+            DaoCellView::from_output(&output, &ctx, &tx).expect_err("output must fail");
+        assert_eq!(
+            output_error.to_string(),
+            format!(
+                "missing DAO state for DAO cell in bulk reducer: block=900, tx=0x{}, tx_index=2, output outpoint=0x{}:7",
+                "cd".repeat(32),
+                "ab".repeat(32)
+            )
+        );
+        let input_error = DaoCellView::from_input(&input, &ctx, &tx).expect_err("input must fail");
+        assert_eq!(
+            input_error.to_string(),
+            format!(
+                "missing DAO state for DAO cell in bulk reducer: block=900, tx=0x{}, tx_index=2, input outpoint=0x{}:3",
+                "cd".repeat(32),
+                "ef".repeat(32)
+            )
+        );
+    }
+
     /// Regression: previously the running-sum formula crashed at block 64 with
     /// "negative unclaimed compensation -1" due to double integer truncation.
     /// The new approach computes exact per-deposit compensation, matching the
