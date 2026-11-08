@@ -12978,7 +12978,8 @@ mod tests {
         }
 
         fn blocks() -> (Vec<BlockResponseWithCycles>, Vec<u8>, Vec<u8>, Vec<u8>) {
-            let type_id_hash = format!("0x{}", crate::parser::script::TYPE_ID_CODE_HASH);
+            let type_id_hash =
+                format!("0x{}", hex::encode(ckbadger_store::keys::TYPE_ID_CODE_HASH));
             let id_a = typed_script(type_id_hash.clone(), 0xa1);
             let id_a_reference = ScriptParser::compute_script_hash(&id_a);
             let id_b = typed_script(type_id_hash, 0xb1);

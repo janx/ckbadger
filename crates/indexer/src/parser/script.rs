@@ -2,10 +2,6 @@ use ckb_hash::new_blake2b;
 
 use crate::rpc::{parse_hex_to_bytes, Script};
 
-/// TypeID script code_hash (all-zeros prefix + "TYPE_ID" ASCII).
-pub const TYPE_ID_CODE_HASH: &str =
-    "00000000000000000000000000000000000000000000000000545950455f4944";
-
 /// The consensus type-id script, compared without allocating on the bulk path
 /// (the one rule: [`ckbadger_store::keys::is_type_id_script`]).
 pub(crate) fn is_type_id(code_hash: &[u8], hash_type: i16) -> bool {
@@ -58,7 +54,7 @@ mod tests {
 
     #[test]
     fn type_id_filter_is_exact_and_does_not_accept_data_hash_references() {
-        let hash = hex::decode(TYPE_ID_CODE_HASH).unwrap();
+        let hash = ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec();
         assert!(is_type_id(&hash, 1));
         assert!(!is_type_id(&hash, 0));
         assert!(!is_type_id(&hash[1..], 1));

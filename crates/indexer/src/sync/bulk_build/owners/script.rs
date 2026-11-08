@@ -2196,7 +2196,7 @@ mod tests {
         let lock_args_id = interner.intern_bytes(vec![0x03; 20]);
         let type_script_hash_id = interner.intern_bytes(registered.clone());
         let type_code_hash_id =
-            interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+            interner.intern_bytes(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec());
         let type_args_id = interner.intern_bytes(vec![0x05; 32]);
         let frozen = interner.snapshot_for_reads();
         let ctx = ReducerContext::new(&frozen);
@@ -2328,7 +2328,7 @@ mod tests {
             let lock_args_id = interner.intern_bytes(vec![0x03; 20]);
             let type_script_hash_id = interner.intern_bytes(reference_hash.clone());
             let type_code_hash_id = interner.intern_bytes(if native_type_id {
-                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()
+                ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec()
             } else {
                 vec![0x04; 32]
             });
@@ -2528,7 +2528,7 @@ mod tests {
         interner.intern_bytes(vec![0x02; 32]);
         interner.intern_bytes(vec![0x03; 20]);
         let reference_hash_id = interner.intern_bytes(reference_hash.clone());
-        interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+        interner.intern_bytes(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec());
         interner.intern_bytes(vec![0x05; 20]);
         interner.intern_bytes(vec![0x06; 32]);
         interner.intern_bytes(vec![0x07; 20]);
@@ -2876,7 +2876,7 @@ mod tests {
         interner.intern_bytes(vec![0x12; 32]);
         interner.intern_bytes(vec![0x13; 20]);
         let reference_hash_id = interner.intern_bytes(reference_hash.clone());
-        interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+        interner.intern_bytes(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec());
         interner.intern_bytes(vec![0x15; 20]);
         interner.intern_bytes(vec![0x16; 32]);
         interner.intern_bytes(vec![0x17; 20]);

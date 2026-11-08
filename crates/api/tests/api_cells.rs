@@ -2640,7 +2640,7 @@ async fn test_code_cell_with_non_psabi_riscv_attributes_is_served() {
         &hex::decode("0e65e63058c5b76b44ab13c15e9245fb8c301e04").unwrap(),
     );
     let type_id = fixture_script(
-        ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH,
+        &hex::encode(ckbadger_store::keys::TYPE_ID_CODE_HASH),
         ScriptHashType::Type,
         &hex::decode("4b673f820a6278ece8515bc358ccf5bf6ef385736d30bc2a990f923fe7f33b95").unwrap(),
     );
@@ -2804,7 +2804,7 @@ async fn spend_requirements_call_only_the_consensus_type_id_script_builtin() {
         (ScriptHashType::Data, "not_found"),
     ] {
         let type_script = fixture_script(
-            ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH,
+            &hex::encode(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             hash_type,
             &[0x4b; 32],
         );

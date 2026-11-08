@@ -2805,7 +2805,7 @@ mod tests {
         let writer = BatchWriter::new(store.clone(), append.clone());
         let binary = vec![0x42; 32];
         let registered = vec![0x52; 32];
-        let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
+        let type_id = ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec();
 
         store
             .put_script_version(
@@ -2989,7 +2989,7 @@ mod tests {
         crate::db::writer::journal_test_support::journaled_headers(&store, 100..=100);
         let binary = vec![0x42; 32];
         let registered = vec![0x52; 32];
-        let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
+        let type_id = ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec();
 
         store
             .put_script_version(
@@ -3145,7 +3145,7 @@ mod tests {
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
-            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[0x33; 32],
         );
@@ -3191,7 +3191,7 @@ mod tests {
             lock_hash_type: 1,
             lock_args: vec![],
             lock_script_hash: vec![0x22; 32],
-            type_code_hash: Some(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec()),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 32]),
             type_script_hash: Some(reference.clone()),
@@ -3587,7 +3587,7 @@ mod tests {
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
-            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[0x33; 32],
         );
@@ -3632,12 +3632,7 @@ mod tests {
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 32]),
             data_size: 10,
@@ -4239,7 +4234,7 @@ mod tests {
         // The type-id reference is the derived hash of the code cell's own
         // type script (TYPE_ID, `type`, empty args).
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
-            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[],
         );
@@ -4277,12 +4272,7 @@ mod tests {
                 lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some(
-                    hex::decode(crate::parser::script::TYPE_ID_CODE_HASH)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                ),
+                type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 31_560,

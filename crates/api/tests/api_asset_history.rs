@@ -2888,7 +2888,7 @@ async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
     let store = test_store();
     let cluster = [0x77; 32];
     let args = [0x83; 32];
-    let code = hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap();
+    let code = ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec();
     let type_hash = compute_script_hash(&code, 1, &args);
     let elf = include_bytes!("../../dob-decoder/tests/fixtures/nervape3x-98b7af5e.elf");
     let raw = if matches!(case, DecoderCellCase::NonElf) {

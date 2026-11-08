@@ -2792,11 +2792,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     set_script_fixture_block_tx_count(&store, 30, 2);
     set_script_fixture_block_tx_count(&store, 40, 2);
     // The type-id reference is the derived hash of the code cells' TYPE_ID script.
-    let reference = compute_script_hash(
-        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
-        1,
-        &[0x13; 32],
-    );
+    let reference = compute_script_hash(&ckbadger_store::keys::TYPE_ID_CODE_HASH, 1, &[0x13; 32]);
     let binary = [0x41; 32];
     let history = ScriptVersionInfo {
         version_hash: binary.to_vec(),
@@ -2853,12 +2849,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
                 lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some(
-                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                ),
+                type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x13; 32]),
                 udt_amount: None,
@@ -3003,12 +2994,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
@@ -3135,12 +3121,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
@@ -4400,11 +4381,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
     set_script_fixture_block_tx_count(&store, 10, 2);
     set_script_fixture_block_tx_count(&store, 11, 2);
     // The type-id reference is the derived hash of the code cells' TYPE_ID script.
-    let reference = compute_script_hash(
-        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
-        1,
-        &[0x13; 32],
-    );
+    let reference = compute_script_hash(&ckbadger_store::keys::TYPE_ID_CODE_HASH, 1, &[0x13; 32]);
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
     let anchors = [vec![0x61; 32], vec![0x71; 32]];
     let families = ["First", "Second"];
@@ -4476,12 +4453,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                     lock_code_hash: [0x12; 32],
                     lock_hash_type: 1,
                     lock_args: vec![],
-                    type_code_hash: Some(
-                        hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                    ),
+                    type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                     type_hash_type: Some(1),
                     type_args: Some(vec![0x13; 32]),
                     data_size: 32,
@@ -4901,11 +4873,7 @@ async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound
 async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_code() {
     let store = test_store();
     // The type-id reference is the derived hash of the code cell's TYPE_ID script.
-    let reference = compute_script_hash(
-        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
-        1,
-        &[0x13; 32],
-    );
+    let reference = compute_script_hash(&ckbadger_store::keys::TYPE_ID_CODE_HASH, 1, &[0x13; 32]);
     let mapped_binary = vec![0x41; 32];
     let actual_binary = [0x42; 32];
     let mut batch = StoreBatch::new(store.as_ref());
@@ -4950,12 +4918,7 @@ async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_cod
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
