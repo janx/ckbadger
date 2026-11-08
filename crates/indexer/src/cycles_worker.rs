@@ -14,10 +14,19 @@ const TASK_NAME: &str = "cycles_calculate";
 /// Two file name patterns are recognized:
 /// - `tx_{hash}` — calculate cycles for one transaction
 /// - `blk_{number}` — calculate cycles for all txs in a block, then write block total
-pub fn spawn_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, request_dir: PathBuf) {
+///
+/// A request file is removed only once it has been served, so requests queued
+/// while no worker runs wait for the next one. The worker writes `tx_index`,
+/// `tx_group_cycles` and `block_headers`, so it must never run beside a bulk
+/// build (`entry::start_cycles_worker`).
+pub fn spawn_cycles_worker(
+    store: Arc<CkbadgerStore>,
+    ckb_rpc_url: String,
+    request_dir: PathBuf,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         run_cycles_worker(store, ckb_rpc_url, request_dir).await;
-    });
+    })
 }
 
 async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, request_dir: PathBuf) {
