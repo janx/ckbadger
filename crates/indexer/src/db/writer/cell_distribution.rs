@@ -84,18 +84,22 @@ impl CellDistributionTracker {
     ) -> Result<Self> {
         let last_snapshot_date = NaiveDate::parse_from_str(&cursor.last_snapshot_date, "%Y%m%d")
             .map_err(|e| {
-                anyhow!(
+                super::corrupt_stored_row(format!(
                     "corrupt cell_dist cursor last_snapshot_date '{}': {e}",
                     cursor.last_snapshot_date
-                )
+                ))
             })?;
         let mut cohort_accum = BTreeMap::new();
         for (month, used, bal) in cohorts {
             if used < 0 || bal < 0 {
-                bail!("negative cohort accumulator in stored cell_dist tracker: month={month}, used={used}, balance={bal}");
+                return Err(super::corrupt_stored_row(format!(
+                    "negative cohort accumulator in stored cell_dist tracker: month={month}, used={used}, balance={bal}"
+                )));
             }
             if cohort_accum.insert(month.clone(), (used, bal)).is_some() {
-                bail!("duplicate cohort month in stored cell_dist tracker: month={month}");
+                return Err(super::corrupt_stored_row(format!(
+                    "duplicate cohort month in stored cell_dist tracker: month={month}"
+                )));
             }
         }
 
@@ -115,10 +119,10 @@ impl CellDistributionTracker {
         match store.get_cell_dist_cursor()? {
             Some(cursor) => Self::from_rows(cohorts, cursor),
             None if cohorts.is_empty() => Ok(Self::new()),
-            None => bail!(
+            None => Err(super::corrupt_stored_row(format!(
                 "cell_dist_cohort_by_month holds {} rows but there is no cell_dist_cursor. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
                 cohorts.len()
-            ),
+            ))),
         }
     }
 
@@ -207,34 +211,31 @@ impl CellDistributionTracker {
         }
 
         let bucket = size_bucket(occupied_capacity);
+        // The bucket totals are stored aggregates: a consume they cannot
+        // explain is rebuild-required (D-4c). The subtraction of a positive
+        // capacity can only overflow below `i128::MIN`, an underflow too.
         if self.count_by_bucket[bucket] <= 0 {
-            bail!(
+            return Err(super::aggregate_underflow(format!(
                 "live cell count underflow on consume: bucket={}, count={}, occupied_capacity={}",
-                bucket,
-                self.count_by_bucket[bucket],
-                occupied_capacity
-            );
+                bucket, self.count_by_bucket[bucket], occupied_capacity
+            )));
         }
 
         let current = self.total_capacity_by_bucket[bucket];
         let next = current
             .checked_sub(occupied_capacity as i128)
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                super::aggregate_underflow(format!(
                     "capacity subtraction overflow: bucket={}, current={}, occupied_capacity={}",
-                    bucket,
-                    current,
-                    occupied_capacity
-                )
+                    bucket, current, occupied_capacity
+                ))
             })?;
 
         if next < 0 {
-            bail!(
+            return Err(super::aggregate_underflow(format!(
                 "live capacity underflow on consume: bucket={}, current={}, occupied_capacity={}",
-                bucket,
-                current,
-                occupied_capacity
-            );
+                bucket, current, occupied_capacity
+            )));
         }
 
         // Update global totals
@@ -298,7 +299,10 @@ impl CellDistributionTracker {
             .copied()
             .unwrap_or((0, 0));
         if current.0 < 0 || current.1 < 0 {
-            bail!("negative cohort accumulator before delta: cohort_month={cohort_month}, used={}, balance={}", current.0, current.1);
+            return Err(super::aggregate_underflow(format!(
+                "negative cohort accumulator before delta: cohort_month={cohort_month}, used={}, balance={}",
+                current.0, current.1
+            )));
         }
         let used = current.0.checked_add(used_capacity_delta).ok_or_else(|| {
             anyhow::anyhow!(
@@ -317,7 +321,9 @@ impl CellDistributionTracker {
             )
         })?;
         if used < 0 || balance < 0 {
-            bail!("address cohort accumulator underflow: cohort_month={cohort_month}, used={used}, balance={balance}, used_delta={used_capacity_delta}, balance_delta={balance_delta}");
+            return Err(super::aggregate_underflow(format!(
+                "address cohort accumulator underflow: cohort_month={cohort_month}, used={used}, balance={balance}, used_delta={used_capacity_delta}, balance_delta={balance_delta}"
+            )));
         }
         self.cohort_accum.insert(cohort_month, (used, balance));
         Ok(())
@@ -594,6 +600,125 @@ mod tests {
         tracker.record_block(7).unwrap();
         let err = tracker.record_block(6).unwrap_err();
         assert!(err.to_string().contains("must ascend"), "{err}");
+    }
+
+    fn assert_rebuild_required(err: &anyhow::Error, what: &str) {
+        assert!(
+            crate::lifecycle::is_rebuild_required(err),
+            "{what}: {err:#}"
+        );
+        assert!(err.to_string().contains(what), "{what}: {err:#}");
+    }
+
+    fn cursor_with(
+        count_by_bucket: [i64; NUM_BUCKETS],
+        total_capacity_by_bucket: [i128; NUM_BUCKETS],
+        last_snapshot_date: &str,
+    ) -> CellDistTrackerCursor {
+        CellDistTrackerCursor {
+            count_by_bucket,
+            total_capacity_by_bucket,
+            last_snapshot_date: last_snapshot_date.to_string(),
+            last_processed_block: 1,
+        }
+    }
+
+    /// D-4c: stored tracker rows the tracker cannot hold (an undecodable
+    /// cursor date, a negative cohort row, a month listed twice) are
+    /// corruption the chain cannot repair: rebuild-required.
+    #[test]
+    fn corrupt_stored_rows_are_rebuild_required() {
+        let ok = || cursor_with([0; NUM_BUCKETS], [0; NUM_BUCKETS], "20240101");
+        let err = CellDistributionTracker::from_rows(
+            Vec::new(),
+            cursor_with([0; NUM_BUCKETS], [0; NUM_BUCKETS], "2024-13-01"),
+        )
+        .unwrap_err();
+        assert_rebuild_required(&err, "corrupt cell_dist cursor last_snapshot_date");
+        let err = CellDistributionTracker::from_rows(vec![("2024-01".to_string(), -1, 0)], ok())
+            .unwrap_err();
+        assert_rebuild_required(&err, "negative cohort accumulator in stored");
+        let err = CellDistributionTracker::from_rows(
+            vec![("2024-01".to_string(), 1, 1), ("2024-01".to_string(), 2, 2)],
+            ok(),
+        )
+        .unwrap_err();
+        assert_rebuild_required(&err, "duplicate cohort month");
+    }
+
+    /// D-4c: cohort rows without the cursor that describes them are not a
+    /// state any sync leaves: rebuild-required.
+    #[test]
+    fn cohort_rows_without_a_cursor_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_dist_cohort("2024-01", 1, 1).unwrap();
+        batch.commit().unwrap();
+        let err = CellDistributionTracker::load(&store).unwrap_err();
+        assert_rebuild_required(&err, "no cell_dist_cursor");
+    }
+
+    /// D-4c: a consume the bucket totals cannot explain (no live cell in the
+    /// bucket, less capacity than the cell, a total so negative the
+    /// subtraction overflows) is rebuild-required.
+    #[test]
+    fn consume_underflows_are_rebuild_required() {
+        let mut tracker = CellDistributionTracker::new();
+        let err = tracker.cell_consumed(61_00000000).unwrap_err();
+        assert_rebuild_required(&err, "live cell count underflow on consume");
+
+        let mut tracker = CellDistributionTracker::from_rows(
+            Vec::new(),
+            cursor_with([1, 0, 0, 0, 0, 0], [60_00000000, 0, 0, 0, 0, 0], "20240101"),
+        )
+        .unwrap();
+        let err = tracker.cell_consumed(61_00000000).unwrap_err();
+        assert_rebuild_required(&err, "live capacity underflow on consume");
+
+        let mut tracker = CellDistributionTracker::from_rows(
+            Vec::new(),
+            cursor_with([1, 0, 0, 0, 0, 0], [i128::MIN, 0, 0, 0, 0, 0], "20240101"),
+        )
+        .unwrap();
+        let err = tracker.cell_consumed(61_00000000).unwrap_err();
+        assert_rebuild_required(&err, "capacity subtraction overflow");
+    }
+
+    /// D-4c: a cohort accumulator going (or found) negative is
+    /// rebuild-required.
+    #[test]
+    fn cohort_underflows_are_rebuild_required() {
+        let day = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let mut tracker = CellDistributionTracker::new();
+        let err = tracker.apply_cohort_delta(day, -1, 0).unwrap_err();
+        assert_rebuild_required(&err, "address cohort accumulator underflow");
+
+        tracker.cohort_accum.insert(cohort_month(day), (-1, 0));
+        let err = tracker.apply_cohort_delta(day, 1, 0).unwrap_err();
+        assert_rebuild_required(&err, "negative cohort accumulator before delta");
+    }
+
+    /// D-4c: the caller's invariants stay plain errors: they are not stored
+    /// state (blocks out of order, a non-positive consumed capacity, a cursor
+    /// before any block, an overflow).
+    #[test]
+    fn caller_invariants_stay_plain_errors() {
+        let mut tracker = CellDistributionTracker::new();
+        tracker.record_block(7).unwrap();
+        let err = tracker.record_block(7).unwrap_err();
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let err = tracker.cell_consumed(0).unwrap_err();
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let err = CellDistributionTracker::new().cursor().unwrap_err();
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let day = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        tracker
+            .cohort_accum
+            .insert(cohort_month(day), (i128::MAX, 0));
+        let err = tracker.apply_cohort_delta(day, 1, 0).unwrap_err();
+        assert!(err.to_string().contains("overflow"), "{err:#}");
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     /// Staging every row and loading it back yields the same tracker; a

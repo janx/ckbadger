@@ -451,8 +451,10 @@ impl BatchWriter {
                     let net = sent
                         .checked_sub(received)
                         .expect("ordered TokenBalance subtraction");
+                    // The stored holder balance cannot explain the spend:
+                    // rebuild-required (D-4c).
                     old_balance.checked_sub(&net).ok_or_else(|| {
-                        anyhow::anyhow!(
+                        super::aggregate_underflow(format!(
                             "token holder balance underflow: type_hash=0x{}, lock_hash=0x{}, block={}, balance={}, received={}, sent={}",
                             hex::encode(type_hash),
                             hex::encode(lock_hash),
@@ -460,7 +462,7 @@ impl BatchWriter {
                             old_balance,
                             received,
                             sent
-                        )
+                        ))
                     })?
                 };
 
@@ -1859,6 +1861,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("token holder balance underflow"));
+        // D-4c: the stored holder balance cannot explain the spend:
+        // rebuild-required.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     #[test]
@@ -1971,6 +1976,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing block chain time"));
+        // D-4c: a batch input the caller failed to supply is not stored
+        // state: a plain error.
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     // -- apply_onchain_token_info binding semantics -----------------------------

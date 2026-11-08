@@ -38,6 +38,24 @@ pub(crate) fn aggregate_underflow(diagnosis: String) -> anyhow::Error {
     anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(diagnosis))
 }
 
+/// A stored aggregate outside the range the chain can produce (a used
+/// capacity above its capacity, owned knowledge above owned capacity,
+/// cellbase transactions above all transactions): like an underflow, the
+/// aggregate no longer matches the chain, so the sync stops rebuild-required
+/// (D-4c).
+pub(crate) fn aggregate_out_of_range(diagnosis: String) -> anyhow::Error {
+    anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(diagnosis))
+}
+
+/// A stored row its reader cannot hold: it does not decode, or it describes
+/// a state no sync leaves (a negative or duplicated tracker row, tracker rows
+/// without their cursor). Corruption the chain cannot repair, so the sync
+/// stops rebuild-required (the F1 policy; finding 12 and its siblings, D-4c);
+/// a failed read stays a plain error (the store failed, not the row).
+pub(crate) fn corrupt_stored_row(diagnosis: String) -> anyhow::Error {
+    anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(diagnosis))
+}
+
 /// Decode a stored `script_info` row. An undecodable row is corruption the
 /// chain cannot repair, so it is rebuild-required (finding 12, the F1
 /// policy) from the live batch writer and from the bulk finalize alike; a
