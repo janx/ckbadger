@@ -3247,6 +3247,7 @@ impl Indexer {
                 .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
             let block = store
                 .get_block(&hash)
+                .with_context(|| format!("Block {} read from CKB RocksDB failed", num))?
                 .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
             let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
             Ok(rpc_block.into())
@@ -3291,7 +3292,13 @@ impl Indexer {
 
                         // Batch 2: multi_get headers + uncles + proposals (3N keys),
                         // body still per-block prefix iteration
-                        let block_opts = store.get_blocks_batch(&hashes);
+                        let block_opts = store.get_blocks_batch(&hashes).with_context(|| {
+                            format!(
+                                "CKB RocksDB batch read of blocks {}..={} failed",
+                                chunk[0],
+                                chunk[chunk.len() - 1]
+                            )
+                        })?;
 
                         // Batch 3: multi_get all block extensions (N keys)
                         let ext_opts = store.get_block_exts_batch(&hashes);

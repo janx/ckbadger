@@ -790,7 +790,7 @@ async fn get_transaction(
         }
         None => {
             let ckb_block_number =
-                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
+                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes)?;
             Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number))
         }
     }
@@ -1397,7 +1397,7 @@ async fn get_transaction_detail(
 
         let Some(tx_lookup) = tx_lookup else {
             let ckb_block_number =
-                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
+                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes)?;
             return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
         };
 
@@ -1406,7 +1406,7 @@ async fn get_transaction_detail(
         // and a pool row that links here must not become a dead link for them.
         if !tx_lookup.is_pending_like() && !tx_lookup.is_committed() {
             let ckb_block_number =
-                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
+                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes)?;
             return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
         }
 
@@ -1706,7 +1706,7 @@ async fn get_transaction_detail(
             .as_slice()
             .try_into()
             .expect("validated transaction hash");
-        let tx_view = ckb_store.get_transaction(&tx_hash_arr).ok_or_else(|| ApiError::internal(format!(
+        let tx_view = ckb_store.get_transaction(&tx_hash_arr).map_err(ApiError::node_store)?.ok_or_else(|| ApiError::internal(format!(
             "canonical transaction {tx_hash_hex} at block {block_number}:{tx_idx} is missing from CKB RocksDB"
         )))?;
         let (
@@ -2354,11 +2354,14 @@ fn build_inputs_outputs_from_ckb(
                     .as_slice()
                     .try_into()
                     .expect("validated input hash");
-                let previous = reader.get_transaction(&hash).ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "missing CKB RocksDB input transaction while {input_context}"
-                    ))
-                })?;
+                let previous = reader
+                    .get_transaction(&hash)
+                    .map_err(ApiError::node_store)?
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "missing CKB RocksDB input transaction while {input_context}"
+                        ))
+                    })?;
                 let data = previous
                     .outputs_data()
                     .get(prev_index as usize)
@@ -2580,7 +2583,10 @@ async fn get_cell_deps(
         )));
     };
 
-    if let Some(tx_view) = store.get_transaction(&tx_hash) {
+    if let Some(tx_view) = store
+        .get_transaction(&tx_hash)
+        .map_err(ApiError::node_store)?
+    {
         return ok(super::transaction_structure::resolved_dependencies(
             &tx_view,
             store,
@@ -2785,20 +2791,25 @@ fn cycles_enqueue_response(enqueue_result: Result<(), String>) -> CyclesStatusRe
     }
 }
 
+/// The block the node stores the transaction in; `Ok(None)` without a node
+/// reader or when the node does not store it, an error when the read fails.
 fn lookup_tx_block_number_in_ckb_store(
     ckb_store: Option<&Arc<ckb_store_reader::CkbChainReader>>,
     hash_bytes: &[u8],
-) -> Option<u64> {
+) -> Result<Option<u64>, ApiRouteError> {
     if hash_bytes.len() != 32 {
-        return None;
+        return Ok(None);
     }
 
-    let store = ckb_store?;
+    let Some(store) = ckb_store else {
+        return Ok(None);
+    };
     let mut tx_hash = [0u8; 32];
     tx_hash.copy_from_slice(hash_bytes);
-    store
+    Ok(store
         .get_transaction_with_block_number(&tx_hash)
-        .map(|(_, block_number)| block_number)
+        .map_err(ApiError::node_store)?
+        .map(|(_, block_number)| block_number))
 }
 
 fn missing_tx_lookup_error(hash_bytes: &[u8], ckb_block_number: Option<u64>) -> ApiRouteError {
@@ -2909,12 +2920,15 @@ fn find_proposal_window_hit(
                 header.hash.len()
             ))
         })?;
-        let block = ckb_store.get_block(&hash).ok_or_else(|| {
-            ApiError::internal(format!(
-                "{context}: block 0x{} missing from node DB",
-                hex::encode(hash)
-            ))
-        })?;
+        let block = ckb_store
+            .get_block(&hash)
+            .map_err(ApiError::node_store)?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "{context}: block 0x{} missing from node DB",
+                    hex::encode(hash)
+                ))
+            })?;
         headers.insert(bn, (header.hash, header.timestamp));
         Ok(Some(block_proposal_zone(&block)))
     };

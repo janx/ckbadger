@@ -5028,6 +5028,16 @@ async fn dep_group_lookup_fixture(
     dep_cell_data: Vec<u8>,
     dep_index: u32,
 ) -> (axum::Router, String, String) {
+    dep_group_lookup_fixture_with_live_row(dep_cell_data, dep_index, None).await
+}
+
+/// [`dep_group_lookup_fixture`], plus an optional raw `COLUMN_CELL_DATA` row
+/// (`"12"`) stored for the dep cell, as the node keeps one for a live cell.
+async fn dep_group_lookup_fixture_with_live_row(
+    dep_cell_data: Vec<u8>,
+    dep_index: u32,
+    live_cell_data_row: Option<Vec<u8>>,
+) -> (axum::Router, String, String) {
     use ckb_types::{bytes::Bytes, core, packed, prelude::*};
     let deployment = core::TransactionBuilder::default()
         .output(packed::CellOutput::new_builder().build())
@@ -5045,12 +5055,26 @@ async fn dep_group_lookup_fixture(
         .build();
     let user_hash = format!("0x{}", hex::encode(user.hash().as_slice()));
     let deployment_hash = format!("0x{}", hex::encode(deployment.hash().as_slice()));
+    let deployment_tx_hash: [u8; 32] = deployment.hash().unpack();
     let chain = seed_ckb_chain(&[core::BlockBuilder::default()
         .number(1u64.pack())
         .epoch(core::EpochNumberWithFraction::new(0, 1, 1800).pack())
         .transaction(deployment)
         .transaction(user)
         .build()]);
+    if let Some(row) = live_cell_data_row {
+        let mut options = Options::default();
+        options.create_missing_column_families(true);
+        let descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+            .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+            .collect();
+        let db = DB::open_cf_descriptors(&options, &chain.path, descriptors).unwrap();
+        let cf = db.cf_handle("12").unwrap();
+        let mut key = deployment_tx_hash.to_vec();
+        key.extend_from_slice(&dep_index.to_le_bytes());
+        db.put_cf(&cf, key, row).unwrap();
+        db.flush_cf(&cf).unwrap();
+    }
     let store = test_store();
     let app = create_router(test_config_with_ckb_db_path(
         store.clone(),
@@ -5116,8 +5140,8 @@ async fn script_lookup_expands_a_well_formed_dep_group_dep() {
 }
 
 /// D-4a: an on-chain `dep_group` dep whose cell the node has no data for is a
-/// broken invariant too (`CkbChainReader::get_cell_data` answers `None` both
-/// for an absent cell and for a failed read), not an empty member list.
+/// broken invariant too (`CkbChainReader::get_cell_data` answers `None` for a
+/// cell the node does not store), not an empty member list.
 #[tokio::test]
 async fn script_lookup_fails_on_a_dep_group_dep_without_cell_data() {
     let mut data = 1u32.to_le_bytes().to_vec();
@@ -5134,4 +5158,29 @@ async fn script_lookup_fails_on_a_dep_group_dep_without_cell_data() {
         "{message}"
     );
     assert!(message.contains("no data"), "{message}");
+}
+
+/// D-2b: a dep group dep whose live cell data row is stored but does not
+/// decode is a node store error naming the row, the tx and the dep. Before,
+/// the reader returned the row's raw bytes as the cell's data.
+#[tokio::test]
+async fn script_lookup_fails_on_a_dep_group_dep_with_an_undecodable_cell_data_row() {
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0x5a; 32]);
+    data.extend_from_slice(&3u32.to_le_bytes());
+    let (app, user_hash, deployment_hash) =
+        dep_group_lookup_fixture_with_live_row(data, 0, Some(vec![5, 5, 5])).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("undecodable CKB cell data row"),
+        "{message}"
+    );
+    assert!(message.contains(&user_hash), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:0")),
+        "{message}"
+    );
 }

@@ -76,6 +76,13 @@ impl ApiError {
         )
     }
 
+    /// A CKB node store read that failed, or found a stored row it cannot
+    /// decode; the reader's error names the key. A row that is simply absent
+    /// is the reader's `Ok(None)`, which each caller handles as its own case.
+    pub fn node_store(error: anyhow::Error) -> (StatusCode, Json<Self>) {
+        Self::internal(format!("CKB node store read failed: {error:#}"))
+    }
+
     /// A state that only exists while the indexer is still starting up, and that
     /// resolves on its own as sync progresses (e.g. the genesis baseline or the
     /// first daily snapshot has not been written yet).

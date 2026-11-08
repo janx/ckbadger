@@ -1483,7 +1483,7 @@ fn cellbase_transaction_actions(
     let node = node.ok_or_else(|| {
         anyhow::anyhow!("cellbase activity at block {block} requires CKB RocksDB reader")
     })?;
-    let tx = node.get_transaction(&entry.tx_hash).ok_or_else(|| {
+    let tx = node.get_transaction(&entry.tx_hash)?.ok_or_else(|| {
         anyhow::anyhow!(
             "cellbase transaction 0x{} at block {block} missing from CKB RocksDB",
             hex::encode(entry.tx_hash)

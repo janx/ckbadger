@@ -3851,11 +3851,16 @@ async fn get_cell(
 
     let node_tx = if let Some(reader) = state.ckb_store.as_ref() {
         let hash: [u8; 32] = hash_bytes.as_slice().try_into().expect("validated hash");
-        Some(reader.get_transaction(&hash).ok_or_else(|| {
-            ApiError::internal(format!(
-                "cell transaction for {outpoint} missing from CKB RocksDB"
-            ))
-        })?)
+        Some(
+            reader
+                .get_transaction(&hash)
+                .map_err(ApiError::node_store)?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "cell transaction for {outpoint} missing from CKB RocksDB"
+                    ))
+                })?,
+        )
     } else {
         None
     };
@@ -4146,11 +4151,14 @@ async fn get_cell(
                     "cell {outpoint} has invalid consuming tx hash {tx_hash}"
                 ))
             })?;
-        let tx = reader.get_transaction(&spent_hash).ok_or_else(|| {
-            ApiError::internal(format!(
-                "spending transaction {tx_hash} for cell {outpoint} missing from CKB RocksDB"
-            ))
-        })?;
+        let tx = reader
+            .get_transaction(&spent_hash)
+            .map_err(ApiError::node_store)?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "spending transaction {tx_hash} for cell {outpoint} missing from CKB RocksDB"
+                ))
+            })?;
         let matches: Vec<usize> = tx
             .inputs()
             .into_iter()

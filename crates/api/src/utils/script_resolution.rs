@@ -369,8 +369,9 @@ fn read_dep_cell_info(
 /// consensus rule: the dep cell exists and its data decodes as a dep group
 /// ([`decode_dep_group`]). Data that is missing or does not decode is a broken
 /// invariant, not an empty member list (D-4a). `CkbChainReader::get_cell_data`
-/// answers `None` both for an absent cell and for a failed read; for an
-/// on-chain dep either is the same violation.
+/// answers `None` for a cell the node does not store (for an on-chain dep, that
+/// violation) and an error for a failed read or an undecodable row, which
+/// propagates with the dep named.
 fn expand_dep_group(
     ckb_store: &ckb_store_reader::CkbChainReader,
     tx_hash_hex: &str,
@@ -379,6 +380,12 @@ fn expand_dep_group(
 ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
     let data = ckb_store
         .get_cell_data(dep_tx_hash, dep_index)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "tx {tx_hash_hex}: dep_group cell dep 0x{}:{dep_index}: {e:#}",
+                hex::encode(dep_tx_hash)
+            )
+        })?
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "tx {tx_hash_hex}: dep_group cell dep 0x{}:{dep_index} has no data in the CKB store",
@@ -449,7 +456,7 @@ pub fn resolve_dep_cells_for_transaction(
             )
         })?;
 
-    let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) else {
+    let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr)? else {
         return Ok(None);
     };
     let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);

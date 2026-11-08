@@ -684,7 +684,8 @@ fn read_block_evidence(
         .map_err(|_| error("invalid stored hash".into()))?;
     let block = node
         .get_block(&hash)
-        .ok_or_else(|| error("indexed block is unavailable or malformed in the node DB".into()))?;
+        .map_err(|e| error(format!("CKB node store read failed: {e:#}")))?
+        .ok_or_else(|| error("indexed block is unavailable in the node DB".into()))?;
     if block.number() != block_num as u64
         || block.transactions().len() != header.transactions_count as usize
     {
@@ -1106,7 +1107,8 @@ fn read_block_uncle(
         .map_err(|_| error("invalid stored block hash".into()))?;
     let block = node
         .get_block(&hash)
-        .ok_or_else(|| error("indexed block is unavailable or malformed in the node DB".into()))?;
+        .map_err(|e| error(format!("CKB node store read failed: {e:#}")))?
+        .ok_or_else(|| error("indexed block is unavailable in the node DB".into()))?;
     let uncle_count = block.data().uncles().len();
     if block.number() != block_num as u64 || uncle_count != header.uncles_count as usize {
         return Err(error(format!(
@@ -1700,17 +1702,21 @@ async fn get_block_proposals(
             header.hash.len()
         ))
     })?;
-    let block = ckb_store.get_block(&hash).ok_or_else(|| {
-        ApiError::internal(format!(
-            "block {block_number} 0x{} is indexed but not in the node DB",
-            hex::encode(hash)
-        ))
-    })?;
+    let block = ckb_store
+        .get_block(&hash)
+        .map_err(ApiError::node_store)?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "block {block_number} 0x{} is indexed but not in the node DB",
+                hex::encode(hash)
+            ))
+        })?;
 
     let window = state.consensus().await?.tx_proposal_window;
     let zone = block_proposal_zone(&block);
     let short_ids: Vec<Vec<u8>> = zone.iter().map(|p| p.short_id.clone()).collect();
-    let commitments = resolve_committed_txs(ckb_store, window, block_number, &short_ids);
+    let commitments = resolve_committed_txs(ckb_store, window, block_number, &short_ids)
+        .map_err(ApiError::node_store)?;
 
     let proposals = zone
         .into_iter()
@@ -1836,6 +1842,7 @@ fn read_proposal_fees(
             .ok_or_else(|| format!("no canonical header at block {number} below tip {tip}"))?;
         let block = node
             .get_block_by_number(number as u64)
+            .map_err(|e| format!("canonical block {number}: CKB node store read failed: {e:#}"))?
             .ok_or_else(|| format!("canonical block {number} is not in the node DB"))?;
         if block.hash().as_slice() != indexed.hash.as_slice() {
             return Err(format!(

@@ -1075,7 +1075,7 @@ fn cell_response(
                 .as_ref()
                 .context("cell display requires CKB RocksDB reader")?;
             let tx = reader
-                .get_transaction(&hash.try_into()?)
+                .get_transaction(&hash.try_into()?)?
                 .context("cell display transaction missing from CKB RocksDB")?;
             let data = tx
                 .outputs_data()

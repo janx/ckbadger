@@ -460,7 +460,7 @@ fn node_cell(
 ) -> anyhow::Result<(packed::CellOutput, ckb_types::bytes::Bytes)> {
     let hash: [u8; 32] = outpoint.tx_hash().unpack();
     let index: u32 = outpoint.index().unpack();
-    let tx = reader.get_transaction(&hash).ok_or_else(|| {
+    let tx = reader.get_transaction(&hash)?.ok_or_else(|| {
         anyhow::anyhow!(
             "dependency/input transaction 0x{} missing from CKB RocksDB",
             hex::encode(hash)

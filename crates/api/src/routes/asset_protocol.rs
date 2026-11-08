@@ -403,7 +403,7 @@ pub(crate) fn raw_transaction(
     })?;
     let hash: [u8; 32] = version.tx_hash.as_slice().try_into()?;
     let (tx, block) = reader
-        .get_transaction_with_block_number(&hash)
+        .get_transaction_with_block_number(&hash)?
         .ok_or_else(|| anyhow::anyhow!("protocol transaction missing in CKB store: {context}"))?;
     anyhow::ensure!(
         block as i128 == version.response.block_number as i128,
