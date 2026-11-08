@@ -660,7 +660,7 @@ impl ObjectOwner {
             agg.activities_count = checked_next_i64(
                 agg.activities_count,
                 *delta,
-                &format!("{} activities_count", label),
+                format_args!("{label} activities_count"),
                 collection_id,
                 0,
             )?;
@@ -2480,7 +2480,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     -1,
-                    &format!("{} holders_count remove", label),
+                    format_args!("{label} holders_count remove"),
                     old_owner,
                     0,
                 )?;
@@ -2495,7 +2495,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     1,
-                    &format!("{} holders_count add", label),
+                    format_args!("{label} holders_count add"),
                     new_owner,
                     0,
                 )?;
@@ -2535,7 +2535,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     -1,
-                    &format!("{standard} holders_count remove"),
+                    format_args!("{standard} holders_count remove"),
                     old_owner,
                     0,
                 )?;
@@ -2550,7 +2550,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     1,
-                    &format!("{standard} holders_count add"),
+                    format_args!("{standard} holders_count add"),
                     new_owner,
                     0,
                 )?;
@@ -2963,10 +2963,12 @@ fn classify_nft_collection_from_protocol(
     }
 }
 
+/// `label` is formatted only when the arithmetic fails, so callers pass a
+/// `&'static str` or `format_args!` (never a `format!` built per call).
 fn checked_next_i64(
     current: i64,
     delta: i64,
-    label: &str,
+    label: impl std::fmt::Display,
     key: &[u8],
     block_number: i64,
 ) -> Result<i64> {

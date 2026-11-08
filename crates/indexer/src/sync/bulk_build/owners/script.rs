@@ -188,15 +188,15 @@ impl ScriptOwner {
             return Ok(());
         }
 
+        // The kind is formatted only if the arithmetic below fails.
         let kind = if is_type { "type" } else { "lock" };
-        let kind_context = format!("{kind}(hash_type={hash_type})");
         let entry = self
             .daily_deltas
             .entry((code_hash.to_vec(), hash_type, is_type, date_yyyymmdd))
             .or_default();
         entry.owned_capacity_delta = checked_signed_i128(
             code_hash,
-            &kind_context,
+            format_args!("{kind}(hash_type={hash_type})"),
             "daily owned_capacity_delta",
             entry.owned_capacity_delta,
             owned_capacity_delta,
@@ -204,7 +204,7 @@ impl ScriptOwner {
         )?;
         entry.owned_knowledge_delta = checked_signed_i128(
             code_hash,
-            &kind_context,
+            format_args!("{kind}(hash_type={hash_type})"),
             "daily owned_knowledge_delta",
             entry.owned_knowledge_delta,
             owned_knowledge_delta,
@@ -1339,7 +1339,7 @@ fn checked_next_i128(
 
 fn checked_signed_i128(
     code_hash: &[u8],
-    script_kind: &str,
+    script_kind: impl std::fmt::Display,
     metric: &str,
     current: i128,
     delta: i128,
