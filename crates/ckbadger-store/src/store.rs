@@ -3393,6 +3393,82 @@ impl CkbadgerStore {
         Ok(())
     }
 
+    /// One waiting flush of exactly `cfs`. With `atomic_flush` RocksDB
+    /// switches every listed CF's memtable in one write-thread pass and
+    /// flushes them as one job (`DBImpl::Flush(options, column_families)`):
+    /// serially on one flush thread, installed together. Each name must be a
+    /// CF this store opens, and the list must not be empty (RocksDB reads an
+    /// empty list as "every CF"); otherwise nothing is flushed.
+    ///
+    /// Bulk finalize flushes its two domain sets with it:
+    /// [`BATCH_LOOP_ONLY_CFS`] once the drain has committed its last batch,
+    /// [`FINALIZE_WRITTEN_CFS`] in phase 12.
+    pub fn flush_column_families(&self, cfs: &[&str]) -> anyhow::Result<()> {
+        if cfs.is_empty() {
+            anyhow::bail!("flush_column_families needs at least one column family");
+        }
+        let started = std::time::Instant::now();
+        let handles = cfs
+            .iter()
+            .map(|&name| self.opened_cf(name))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.db
+            .flush_cfs_opt(&handles, &rocksdb::FlushOptions::default())
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "flush_column_families failed on {} CFs [{}]: {}",
+                    cfs.len(),
+                    cfs.join(","),
+                    e
+                )
+            })?;
+        let elapsed_ms = started.elapsed().as_millis();
+        info!(
+            elapsed_ms,
+            cfs = cfs.len(),
+            "Flushed column family memtables to SST"
+        );
+        Ok(())
+    }
+
+    /// Memtable and SST state of one CF this store opens, from RocksDB's
+    /// per-CF properties (read only).
+    pub fn cf_flush_state(&self, cf_name: &str) -> anyhow::Result<CfFlushState> {
+        let cf = self.opened_cf(cf_name)?;
+        let read = |property: &str| {
+            required_flush_property(
+                self.db
+                    .property_int_value_cf(cf, property)
+                    .map_err(Into::into),
+                &format!("CF {cf_name} {property}"),
+            )
+        };
+        Ok(CfFlushState {
+            active_entries: read("rocksdb.num-entries-active-mem-table")?,
+            unflushed_immutables: read("rocksdb.num-immutable-mem-table")?,
+            live_sst_bytes: read("rocksdb.live-sst-files-size")?,
+        })
+    }
+
+    /// The handle of `name`, or an error naming it when this store does not
+    /// open that CF.
+    fn opened_cf(&self, name: &str) -> anyhow::Result<&ColumnFamily> {
+        if !Self::cf_allowed(self.store_class, name) {
+            anyhow::bail!(
+                "column family '{}' is not a {:?} store column family",
+                name,
+                self.store_class
+            );
+        }
+        self.db.cf_handle(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "column family '{}' is not open in this {:?} store",
+                name,
+                self.store_class
+            )
+        })
+    }
+
     /// Disable auto-compactions on all column families.
     /// Call during bulk sync to avoid compaction competing with writes.
     pub fn disable_auto_compactions(&self) {
@@ -3792,6 +3868,17 @@ fn required_compaction_property(
             path.display()
         ),
     }
+}
+
+/// One column family's memtable and SST state ([`CkbadgerStore::cf_flush_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CfFlushState {
+    /// Entries (puts and deletes) in the active memtable.
+    pub active_entries: u64,
+    /// Immutable memtables not flushed yet.
+    pub unflushed_immutables: u64,
+    /// Bytes of the CF's live SST files.
+    pub live_sst_bytes: u64,
 }
 
 /// Lightweight snapshot of write-side flush activity, sampled by the
@@ -5043,6 +5130,74 @@ mod tests {
         // Verify data is readable after flush
         let val = store.get_cf(cf, b"nowal-key").unwrap();
         assert_eq!(val.as_deref(), Some(b"nowal-value".as_slice()));
+    }
+
+    /// `flush_column_families` is one waiting flush of exactly the listed
+    /// CFs: their no-WAL rows reach SSTs, any other CF keeps its memtable,
+    /// and `cf_flush_state` reports both.
+    #[test]
+    fn flush_column_families_flushes_only_the_listed_cfs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = WriteBatch::default();
+        batch.put_cf(store.cf(CF_TX_HASH_MAP), b"tx", b"a");
+        batch.put_cf(store.cf(CF_BLOCK_HASH_INDEX), b"block", b"b");
+        batch.put_cf(store.cf(CF_ADDR_BALANCE), b"addr", b"c");
+        store.write_batch_no_wal(batch).unwrap();
+        let unflushed = CfFlushState {
+            active_entries: 1,
+            unflushed_immutables: 0,
+            live_sst_bytes: 0,
+        };
+        assert_eq!(store.cf_flush_state(CF_TX_HASH_MAP).unwrap(), unflushed);
+
+        store
+            .flush_column_families(&[CF_TX_HASH_MAP, CF_BLOCK_HASH_INDEX])
+            .unwrap();
+
+        for flushed in [CF_TX_HASH_MAP, CF_BLOCK_HASH_INDEX] {
+            let state = store.cf_flush_state(flushed).unwrap();
+            assert_eq!(
+                (state.active_entries, state.unflushed_immutables),
+                (0, 0),
+                "{flushed}"
+            );
+            assert!(state.live_sst_bytes > 0, "{flushed}: {state:?}");
+        }
+        assert_eq!(store.cf_flush_state(CF_ADDR_BALANCE).unwrap(), unflushed);
+        assert_eq!(
+            store
+                .get_cf(store.cf(CF_TX_HASH_MAP), b"tx")
+                .unwrap()
+                .as_deref(),
+            Some(b"a".as_slice())
+        );
+    }
+
+    /// A CF name this store does not open is an error naming it, for both
+    /// helpers, and so is an empty list; nothing is flushed.
+    #[test]
+    fn flush_column_families_rejects_a_cf_outside_the_store() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.put_cf(store.cf(CF_TX_HASH_MAP), b"tx", b"a").unwrap();
+        for foreign in [CF_CELLS, CF_NET_NODES, "no_such_cf"] {
+            let error = store
+                .flush_column_families(&[CF_TX_HASH_MAP, foreign])
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(foreign), "{error}");
+            let error = store.cf_flush_state(foreign).unwrap_err().to_string();
+            assert!(error.contains(foreign), "{error}");
+        }
+        // RocksDB reads an empty list as "every CF".
+        let error = store.flush_column_families(&[]).unwrap_err().to_string();
+        assert!(error.contains("at least one column family"), "{error}");
+        assert_eq!(
+            store.cf_flush_state(CF_TX_HASH_MAP).unwrap().active_entries,
+            1,
+            "a refused flush must not switch any CF"
+        );
     }
 
     #[test]

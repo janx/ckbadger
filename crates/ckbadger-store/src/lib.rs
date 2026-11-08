@@ -88,9 +88,9 @@ pub use stats_ops::DaoDayFacts;
 pub use store::{
     cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
     known_domain_secondary_store_paths, secondary_store_path, BufferTier, CfCompaction,
-    CfCompression, CfSpec, CfStore, CfWritePolicy, CkbadgerStore, FlushStats, MemoryProfile,
-    OutsideJournalScope, OutsideWriter, RollbackClass, SecondaryStoreOwner, StoreRuntimeConfig,
-    ALL_CFS, BATCH_LOOP_ONLY_CFS, CF_SPECS, FINALIZE_WRITTEN_CFS,
+    CfCompression, CfFlushState, CfSpec, CfStore, CfWritePolicy, CkbadgerStore, FlushStats,
+    MemoryProfile, OutsideJournalScope, OutsideWriter, RollbackClass, SecondaryStoreOwner,
+    StoreRuntimeConfig, ALL_CFS, BATCH_LOOP_ONLY_CFS, CF_SPECS, FINALIZE_WRITTEN_CFS,
 };
 pub use store::{
     APPEND_CFS, CF_ADDR_BALANCE, CF_ADDR_FIBER_CHANNELS, CF_ADDR_PREFIX_STATS,
