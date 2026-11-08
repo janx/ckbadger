@@ -254,6 +254,11 @@ impl BulkBuildEngine {
         let mut cumulative_sealed_rows: usize = 0;
         let mut _flush_send_count: usize = 0;
         let mut last_bottleneck: Option<String> = None;
+        // The owners' breakdown from the most recent walk, which finalize
+        // reuses: the last batch always walks (`owner_memory_walk_due`) and
+        // nothing changes the owners after it. Before the first batch the
+        // owners are empty, so this walk costs nothing.
+        let mut owner_memory_at_last_walk = runtime.memory_breakdown_bytes();
 
         let interrupted_stage = 'bulk_loop: loop {
             if indexer.is_shutdown_requested() {
@@ -690,8 +695,8 @@ impl BulkBuildEngine {
             }
 
             // Memory summary on every batch that walked the owner maps.
-            if let Some(owner_memory) = owner_memory.as_ref() {
-                let total_mb = checked_memory_map_total(owner_memory)? / (1024 * 1024);
+            if let Some(owner_memory) = owner_memory {
+                let total_mb = checked_memory_map_total(&owner_memory)? / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
                 let interner_slots = runtime.interner.slot_len();
@@ -707,6 +712,7 @@ impl BulkBuildEngine {
                     batch_count,
                     "Bulk build memory snapshot"
                 );
+                owner_memory_at_last_walk = owner_memory;
             }
         };
 
@@ -747,9 +753,10 @@ impl BulkBuildEngine {
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
-        // A fresh owner walk at the end of the batch loop (OWNER_MEMORY_WALK_EVERY_BATCHES).
+        // The last batch's owner walk (OWNER_MEMORY_WALK_EVERY_BATCHES): the
+        // owners have not changed since, so finalize walks them no second time.
         let before_finalize_memory = retained_memory_breakdown(
-            &runtime.memory_breakdown_bytes(),
+            &owner_memory_at_last_walk,
             buffer.retained_block_bytes()?,
             flush_channel.reserved_bytes()?,
             None,
@@ -3808,9 +3815,10 @@ fn checked_retained_memory_total(
 /// Batches between exact walks of the bulk reducers' owner maps for the memory
 /// breakdown (`BulkBuildRuntimeState::memory_breakdown_bytes`). The walk also
 /// runs on the first batch, on the last batch (the one that reaches the
-/// prefetch's handoff block), before finalize, and inside a memory-guard
-/// failure message. A batch's perf sample carries the owner fields only when
-/// that batch walked; otherwise they are absent, never carried forward.
+/// prefetch's handoff block; finalize reuses that walk, since nothing changes
+/// the owners after it), and inside a memory-guard failure message. A batch's
+/// perf sample carries the owner fields only when that batch walked;
+/// otherwise they are absent, never carried forward.
 ///
 /// Why not every batch: the walk visits every entry of the script, token, DAO,
 /// fiber, object and activity-stats maps, with a `bincode::serialized_size`
