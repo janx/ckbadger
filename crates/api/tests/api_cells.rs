@@ -2785,3 +2785,47 @@ async fn address_transactions_page_reads_entries_and_headers_once_per_page() {
     assert_eq!(store.multi_gets(ckbadger_store::CF_TX_INDEX), 1);
     assert_eq!(store.multi_gets(ckbadger_store::CF_BLOCK_HEADERS), 1);
 }
+
+/// D-4b: the cell page's current spend requirements call a type script
+/// built-in exactly when it is the consensus Type ID script
+/// (`keys::is_type_id_script`): the Type ID code hash referenced by `type`.
+/// The same code hash referenced by `data` is an ordinary data reference the
+/// chain resolves by data hash, so it is not built-in.
+#[tokio::test]
+async fn spend_requirements_call_only_the_consensus_type_id_script_builtin() {
+    use ckb_types::core::ScriptHashType;
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &[0x31; 20],
+    );
+    for (hash_type, expected) in [
+        (ScriptHashType::Type, "builtin"),
+        (ScriptHashType::Data, "not_found"),
+    ] {
+        let type_script = fixture_script(
+            ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH,
+            hash_type,
+            &[0x4b; 32],
+        );
+        let (app, tx_hash, _chain) = one_output_cell_app(
+            lock.clone(),
+            Some(type_script),
+            b"state".to_vec(),
+            200_000_000_000,
+            |_| {},
+        )
+        .await;
+        let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+        assert_eq!(status, StatusCode::OK, "got {json}");
+        let requirements = json["currentSpendRequirements"].as_array().unwrap();
+        let type_requirement = requirements
+            .iter()
+            .find(|requirement| requirement["kind"] == "type")
+            .unwrap_or_else(|| panic!("no type requirement: {json}"));
+        assert_eq!(
+            type_requirement["resolution"], expected,
+            "{hash_type:?}: {type_requirement}"
+        );
+    }
+}

@@ -1060,7 +1060,7 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         // The type-id reference is the derived hash of the cell's TYPE_ID script.
         let reference = crate::utils::address::compute_script_hash(
-            &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[0x13; 32],
         );
@@ -1086,12 +1086,7 @@ mod tests {
                 lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some(
-                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                ),
+                type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x13; 32]),
                 udt_amount: None,

@@ -2873,6 +2873,9 @@ enum DecoderCellCase {
     WrongDataHash,
     NoLocalReader,
     MissingRawTransaction,
+    /// The decoder cell carries the Type ID code hash referenced by `data`:
+    /// not the consensus Type ID script.
+    NearMissHashType,
 }
 
 async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
@@ -2900,6 +2903,9 @@ async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
     let description = serde_json::json!({"dob":{"ver":0,"decoder":{"type":"type_id","hash":hex::encode(args)},"pattern":pattern}}).to_string();
     let mut payload = cell(&args, 10_000_000_000_000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
+    if matches!(case, DecoderCellCase::NearMissHashType) {
+        payload.type_hash_type = Some(0);
+    }
     payload.data_size = raw.len() as i32;
     payload.data_hash = Some(if matches!(case, DecoderCellCase::WrongDataHash) {
         [0x99; 32]
@@ -3064,6 +3070,9 @@ async fn type_id_decoder_rejects_corrupt_current_proof_and_missing_raw_source() 
             DecoderCellCase::MissingRawTransaction,
             "transaction missing in CKB store",
         ),
+        // D-4b: a near miss is refused before the decoder's own Type ID
+        // check: its type script hash is not the requested reference.
+        (DecoderCellCase::NearMissHashType, "disagrees"),
     ] {
         let app = type_id_decoder_fixture(case).await;
         let (status, json) = get_json(
