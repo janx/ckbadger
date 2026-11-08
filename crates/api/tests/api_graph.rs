@@ -510,3 +510,37 @@ async fn test_proposal_graph_fails_when_node_cannot_report_consensus() {
     let message = json["message"].as_str().unwrap();
     assert!(message.contains("get_consensus"), "{message}");
 }
+
+/// Fix round, finding 8: a transaction the index holds but the node store
+/// does not is a broken invariant. The transaction graph answers an internal
+/// error naming it, as every other node store caller does; before, it drew
+/// the transaction with no inputs and no outputs.
+#[tokio::test]
+async fn tx_graph_fails_when_the_node_lacks_an_indexed_transaction() {
+    let tx_hash = [0x77; 32];
+    let store = test_store();
+    insert_committed_transaction(&store, &tx_hash);
+    let chain = seed_ckb_chain(&[]);
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/graph/transaction/0x{}", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "transaction 0x{} is indexed but not in the node DB",
+            hex::encode(tx_hash)
+        )),
+        "{message}"
+    );
+}
