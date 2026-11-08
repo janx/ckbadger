@@ -14,7 +14,7 @@ use super::{BulkReducer, ReducerContext};
 use crate::parser::{ParsedUdtCell, UdtParser};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
-    CellFacts, CellProtocolFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
+    CellFacts, CellLocator, CellProtocolFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
 };
 use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
@@ -827,11 +827,7 @@ impl TokenCellView {
             cell.udt_amount,
             ctx,
             tx,
-            format!(
-                "output outpoint=0x{}:{}",
-                hex::encode(cell.outpoint.tx_hash),
-                cell.outpoint.index
-            ),
+            CellLocator::output(&cell.outpoint),
         )
     }
 
@@ -850,11 +846,7 @@ impl TokenCellView {
             input.udt_amount,
             ctx,
             tx,
-            format!(
-                "input outpoint=0x{}:{}",
-                hex::encode(input.outpoint.tx_hash),
-                input.outpoint.index
-            ),
+            CellLocator::input(&input.outpoint),
         )
     }
 
@@ -869,7 +861,7 @@ impl TokenCellView {
         udt_amount: Option<u128>,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
-        location: String,
+        location: CellLocator<'_>,
     ) -> Result<Option<Self>> {
         let standard = match semantic_tag {
             CellSemanticTag::Sudt => "sudt",

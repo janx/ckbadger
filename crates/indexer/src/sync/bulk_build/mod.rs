@@ -5809,14 +5809,7 @@ fn parsed_udt_cell_from_output(
         cell.lock_script_hash_id,
         cell.udt_amount,
         interner,
-        &format!(
-            "output outpoint=0x{}:{} block={} tx=0x{} tx_index={}",
-            hex::encode(cell.outpoint.tx_hash),
-            cell.outpoint.index,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        ),
+        TransferCellLocator::new(facts::CellLocator::output(&cell.outpoint), tx),
     )
 }
 
@@ -5834,15 +5827,44 @@ fn parsed_udt_cell_from_input(
         input.lock_script_hash_id,
         input.udt_amount,
         interner,
-        &format!(
-            "input outpoint=0x{}:{} block={} tx=0x{} tx_index={}",
-            hex::encode(input.outpoint.tx_hash),
-            input.outpoint.index,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        ),
+        TransferCellLocator::new(facts::CellLocator::input(&input.outpoint), tx),
     )
+}
+
+/// Names a token-transfer cell in an error message: the cell, then its
+/// transaction (`<side> outpoint=0x…:… block=… tx=0x… tx_index=…`). Built for
+/// every UDT-candidate cell as a few copied words; formatted only when a
+/// [`parsed_udt_cell_from_parts`] arm fails.
+#[derive(Debug, Clone, Copy)]
+struct TransferCellLocator<'a> {
+    cell: facts::CellLocator<'a>,
+    block_number: i64,
+    tx_hash: &'a [u8; 32],
+    tx_index: i32,
+}
+
+impl<'a> TransferCellLocator<'a> {
+    fn new(cell: facts::CellLocator<'a>, tx: &'a facts::ResolvedTxFacts<'_>) -> Self {
+        Self {
+            cell,
+            block_number: tx.block_number,
+            tx_hash: &tx.tx_hash,
+            tx_index: tx.tx_index,
+        }
+    }
+}
+
+impl std::fmt::Display for TransferCellLocator<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} block={} tx=0x{} tx_index={}",
+            self.cell,
+            self.block_number,
+            hex::encode(self.tx_hash),
+            self.tx_index
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5855,7 +5877,7 @@ fn parsed_udt_cell_from_parts(
     lock_script_hash_id: crate::sync::types::InternId,
     udt_amount: Option<u128>,
     interner: &interner::FrozenIdentityView,
-    context: &str,
+    context: impl std::fmt::Display,
 ) -> Result<Option<ParsedUdtCell>> {
     let Some(standard) = udt_standard_for_semantic_tag(semantic_tag) else {
         return Ok(None);

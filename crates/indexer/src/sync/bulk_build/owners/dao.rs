@@ -17,8 +17,8 @@ use super::{BulkReducer, ReducerContext};
 use crate::db::writer::dao::calculate_dao_compensation_from_ar;
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
-    BlockFacts, CellFacts, CellSemanticTag, DaoCellState, OutPointKey, ResolvedInputFacts,
-    ResolvedTxFacts,
+    BlockFacts, CellFacts, CellLocator, CellSemanticTag, DaoCellState, OutPointKey,
+    ResolvedInputFacts, ResolvedTxFacts,
 };
 use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
@@ -1249,7 +1249,7 @@ impl DaoCellView {
             cell.dao_state,
             ctx,
             tx,
-            format!("output outpoint={}", format_outpoint(&cell.outpoint)),
+            CellLocator::output(&cell.outpoint),
         )
     }
 
@@ -1267,7 +1267,7 @@ impl DaoCellView {
             input.dao_state,
             ctx,
             tx,
-            format!("input outpoint={}", format_outpoint(&input.outpoint)),
+            CellLocator::input(&input.outpoint),
         )
     }
 
@@ -1281,7 +1281,7 @@ impl DaoCellView {
         dao_state: Option<DaoCellState>,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
-        location: String,
+        location: CellLocator<'_>,
     ) -> Result<Option<Self>> {
         if !matches!(semantic_tag, CellSemanticTag::Dao) {
             return Ok(None);

@@ -202,6 +202,56 @@ impl OutPointKey {
     }
 }
 
+/// Which side of a resolved transaction a cell is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CellSide {
+    Input,
+    Output,
+}
+
+/// Names one input or output cell of a transaction in an error message:
+/// `input outpoint=0x<tx_hash>:<index>` / `output outpoint=0x<tx_hash>:<index>`.
+///
+/// The bulk reducers take one per cell they inspect; it is two words, and the
+/// hex is written only when an error message is formatted, so the success path
+/// builds no string.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CellLocator<'a> {
+    side: CellSide,
+    outpoint: &'a OutPointKey,
+}
+
+impl<'a> CellLocator<'a> {
+    pub(crate) const fn input(outpoint: &'a OutPointKey) -> Self {
+        Self {
+            side: CellSide::Input,
+            outpoint,
+        }
+    }
+
+    pub(crate) const fn output(outpoint: &'a OutPointKey) -> Self {
+        Self {
+            side: CellSide::Output,
+            outpoint,
+        }
+    }
+}
+
+impl std::fmt::Display for CellLocator<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let side = match self.side {
+            CellSide::Input => "input",
+            CellSide::Output => "output",
+        };
+        write!(
+            formatter,
+            "{side} outpoint=0x{}:{}",
+            hex::encode(self.outpoint.tx_hash),
+            self.outpoint.index
+        )
+    }
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CellSemanticTag {
