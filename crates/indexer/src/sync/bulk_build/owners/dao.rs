@@ -388,17 +388,6 @@ impl BulkReducer for DaoOwner {
             .iter()
             .map(|cell| DaoCellView::from_output(cell, ctx, tx))
             .collect::<Result<Vec<_>>>()?;
-        let candidate_withdraw_to_outputs = tx
-            .cells
-            .iter()
-            .filter(|cell| !matches!(cell.semantic_tag, CellSemanticTag::Dao))
-            .map(|cell| {
-                Ok((
-                    checked_outpoint_index_i16(cell.outpoint, tx, "withdraw-to output index")?,
-                    ctx.resolve_identity(cell.lock_script_hash_id).to_vec(),
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
         for (input_index, input) in tx.resolved_inputs.iter().enumerate() {
             let Some(input_view) = DaoCellView::from_input(input, ctx, tx)? else {
                 continue;
@@ -643,10 +632,8 @@ impl BulkReducer for DaoOwner {
                         deposit_ar,
                         request_ar,
                     )?;
-                    let withdraw_to_output_index = infer_withdraw_to_output_index_from_outputs(
-                        &candidate_withdraw_to_outputs,
-                        &entry.lock_script_hash,
-                    );
+                    let withdraw_to_output_index =
+                        infer_withdraw_to_output_index(tx, ctx, &entry.lock_script_hash)?;
 
                     entry.status = 2;
                     entry.withdraw_block = Some(tx.block_number);
@@ -1305,31 +1292,44 @@ impl DaoCellView {
     }
 }
 
-fn infer_withdraw_to_output_index_from_outputs(
-    candidate_outputs: &[(i16, Vec<u8>)],
+/// The output a phase-2 completion pays the deposit to. The candidates are the
+/// transaction's non-DAO outputs: the one carrying the deposit's lock, else the
+/// only candidate, else none (two carrying the lock, or several without it).
+///
+/// Called only for a completion, and walks the outputs in place: no per-output
+/// work or allocation for the transactions that complete no withdrawal.
+fn infer_withdraw_to_output_index(
+    tx: &ResolvedTxFacts<'_>,
+    ctx: &ReducerContext<'_>,
     lock_script_hash: &[u8],
-) -> Option<i16> {
-    if candidate_outputs.is_empty() {
-        return None;
-    }
-
-    let mut same_lock = candidate_outputs
+) -> Result<Option<i16>> {
+    let mut candidates = 0usize;
+    let mut only_candidate = None;
+    let mut same_lock = 0usize;
+    let mut first_same_lock = None;
+    for cell in tx
+        .cells
         .iter()
-        .filter_map(|(output_index, output_lock_hash)| {
-            (output_lock_hash.as_slice() == lock_script_hash).then_some(*output_index)
-        });
-    if let Some(first) = same_lock.next() {
-        if same_lock.next().is_none() {
-            return Some(first);
+        .filter(|cell| !matches!(cell.semantic_tag, CellSemanticTag::Dao))
+    {
+        let output_index =
+            checked_outpoint_index_i16(cell.outpoint, tx, "withdraw-to output index")?;
+        candidates += 1;
+        if candidates == 1 {
+            only_candidate = Some(output_index);
         }
-        return None;
+        if ctx.resolve_identity(cell.lock_script_hash_id) == lock_script_hash {
+            same_lock += 1;
+            if same_lock == 1 {
+                first_same_lock = Some(output_index);
+            }
+        }
     }
-
-    if candidate_outputs.len() == 1 {
-        return Some(candidate_outputs[0].0);
-    }
-
-    None
+    Ok(match (same_lock, candidates) {
+        (1, _) => first_same_lock,
+        (0, 1) => only_candidate,
+        _ => None,
+    })
 }
 
 fn extract_ar_from_dao_bytes(dao: &[u8]) -> Option<u64> {
