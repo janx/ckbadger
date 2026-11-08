@@ -505,12 +505,15 @@ fn attach_multisig_witness(
             output_index
         ))
     })?;
-    let view = reader.get_transaction(&hash).ok_or_else(|| {
-        ApiError::internal(format!(
-            "missing committed upgrade tx 0x{} from node store",
-            hex::encode(consuming_tx)
-        ))
-    })?;
+    let view = reader
+        .get_transaction(&hash)
+        .map_err(ApiError::node_store)?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing committed upgrade tx 0x{} from node store",
+                hex::encode(consuming_tx)
+            ))
+        })?;
     let tx = ckb_store_reader::convert_transaction_view(&view);
     let mut first_group_input = None;
     let mut target_seen = false;

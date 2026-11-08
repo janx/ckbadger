@@ -660,7 +660,7 @@ impl ObjectOwner {
             agg.activities_count = checked_next_i64(
                 agg.activities_count,
                 *delta,
-                &format!("{} activities_count", label),
+                format_args!("{label} activities_count"),
                 collection_id,
                 0,
             )?;
@@ -2480,7 +2480,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     -1,
-                    &format!("{} holders_count remove", label),
+                    format_args!("{label} holders_count remove"),
                     old_owner,
                     0,
                 )?;
@@ -2495,7 +2495,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     1,
-                    &format!("{} holders_count add", label),
+                    format_args!("{label} holders_count add"),
                     new_owner,
                     0,
                 )?;
@@ -2535,7 +2535,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     -1,
-                    &format!("{standard} holders_count remove"),
+                    format_args!("{standard} holders_count remove"),
                     old_owner,
                     0,
                 )?;
@@ -2550,7 +2550,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     1,
-                    &format!("{standard} holders_count add"),
+                    format_args!("{standard} holders_count add"),
                     new_owner,
                     0,
                 )?;
@@ -2963,10 +2963,12 @@ fn classify_nft_collection_from_protocol(
     }
 }
 
+/// `label` is formatted only when the arithmetic fails, so callers pass a
+/// `&'static str` or `format_args!` (never a `format!` built per call).
 fn checked_next_i64(
     current: i64,
     delta: i64,
-    label: &str,
+    label: impl std::fmt::Display,
     key: &[u8],
     block_number: i64,
 ) -> Result<i64> {
@@ -3365,6 +3367,122 @@ mod tests {
     use crate::sync::bulk_build::unique_temp_test_dir;
     use crate::sync::types::InternId;
     use crate::sync::TEST_CELLBASE_WITNESS;
+
+    /// Identity holder / activity counters that leave their range name the
+    /// standard and counter, key, operands and block exactly as below. The
+    /// label is formatted only when the arithmetic fails.
+    #[test]
+    fn identity_counter_errors_name_standard_and_counter() {
+        let old_owner = [0x0a; 32];
+        let new_owner = [0x0b; 20];
+
+        // apply_identity_owner_transition (`.bit Cell`): the last holder leaves
+        // a collection whose holder count is already zero.
+        let mut owner_counts = BTreeMap::from([(old_owner.to_vec(), 1)]);
+        let mut agg = IdentityCollectionAggregate::default();
+        let remove_error = ObjectOwner::apply_identity_owner_transition(
+            &mut owner_counts,
+            Some(&old_owner),
+            None,
+            &mut agg,
+            ".bit Cell",
+        )
+        .expect_err("holder count must underflow");
+        assert_eq!(
+            remove_error.to_string(),
+            format!(
+                ".bit Cell holders_count remove underflow: key=0x{}, current=0, delta=-1, block=0",
+                "0a".repeat(32)
+            )
+        );
+        let mut owner_counts = BTreeMap::new();
+        let mut agg = IdentityCollectionAggregate {
+            holders_count: i64::MAX,
+            ..IdentityCollectionAggregate::default()
+        };
+        let add_error = ObjectOwner::apply_identity_owner_transition(
+            &mut owner_counts,
+            None,
+            Some(&new_owner),
+            &mut agg,
+            ".bit Cell",
+        )
+        .expect_err("holder count must overflow");
+        assert_eq!(
+            add_error.to_string(),
+            format!(
+                ".bit Cell holders_count add overflow: key=0x{}, current={}, delta=1, block=0",
+                "0b".repeat(20),
+                i64::MAX
+            )
+        );
+
+        // apply_identity_owner_count_transition (did:ckb, dotcell).
+        for standard in ["did:ckb", "dotcell"] {
+            let mut owner_counts = BTreeMap::from([(old_owner.to_vec(), 1)]);
+            let mut agg = IdentityCollectionAggregate::default();
+            let remove_error = ObjectOwner::apply_identity_owner_count_transition(
+                &mut owner_counts,
+                standard,
+                Some(&old_owner),
+                None,
+                &mut agg,
+            )
+            .expect_err("holder count must underflow");
+            assert_eq!(
+                remove_error.to_string(),
+                format!(
+                    "{standard} holders_count remove underflow: key=0x{}, current=0, delta=-1, block=0",
+                    "0a".repeat(32)
+                )
+            );
+            let mut owner_counts = BTreeMap::new();
+            let mut agg = IdentityCollectionAggregate {
+                holders_count: i64::MAX,
+                ..IdentityCollectionAggregate::default()
+            };
+            let add_error = ObjectOwner::apply_identity_owner_count_transition(
+                &mut owner_counts,
+                standard,
+                None,
+                Some(&new_owner),
+                &mut agg,
+            )
+            .expect_err("holder count must overflow");
+            assert_eq!(
+                add_error.to_string(),
+                format!(
+                    "{standard} holders_count add overflow: key=0x{}, current={}, delta=1, block=0",
+                    "0b".repeat(20),
+                    i64::MAX
+                )
+            );
+        }
+
+        // apply_identity_activity_count_deltas: one batch's did:ckb delta
+        // overflows the collection's activity count.
+        let mut owner = ObjectOwner {
+            did_agg: Some(IdentityCollectionAggregate {
+                activities_count: i64::MAX,
+                ..IdentityCollectionAggregate::default()
+            }),
+            ..ObjectOwner::default()
+        };
+        let activity_error = owner
+            .apply_identity_activity_count_deltas(&FxHashMap::from_iter([(
+                DID_CKB_SENTINEL_COLLECTION.to_vec(),
+                1,
+            )]))
+            .expect_err("activity count must overflow");
+        assert_eq!(
+            activity_error.to_string(),
+            format!(
+                "did:ckb activities_count overflow: key=0x{}, current={}, delta=1, block=0",
+                hex::encode(DID_CKB_SENTINEL_COLLECTION),
+                i64::MAX
+            )
+        );
+    }
 
     /// Review m9: bulk build and live sync must classify the SAME cell into the
     /// same object collection, for all four object sub-protocols.

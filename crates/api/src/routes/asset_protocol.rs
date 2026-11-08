@@ -403,7 +403,7 @@ pub(crate) fn raw_transaction(
     })?;
     let hash: [u8; 32] = version.tx_hash.as_slice().try_into()?;
     let (tx, block) = reader
-        .get_transaction_with_block_number(&hash)
+        .get_transaction_with_block_number(&hash)?
         .ok_or_else(|| anyhow::anyhow!("protocol transaction missing in CKB store: {context}"))?;
     anyhow::ensure!(
         block as i128 == version.response.block_number as i128,
@@ -495,8 +495,11 @@ pub(crate) fn current_type_id_binary(
     state: &crate::AppState,
     args: &[u8; 32],
 ) -> Result<Option<Vec<u8>>> {
-    let code = hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)?;
-    let reference = crate::utils::address::compute_script_hash(&code, 1, args);
+    let reference = crate::utils::address::compute_script_hash(
+        &ckbadger_store::keys::TYPE_ID_CODE_HASH,
+        1,
+        args,
+    );
     let Some(version) = super::asset_history::canonical_live_type_version(state, &reference)?
     else {
         return Ok(None);
@@ -505,10 +508,10 @@ pub(crate) fn current_type_id_binary(
         version
             .cell
             .type_code_hash
-            .as_ref()
-            .map(|hash| hash.as_slice())
-            == Some(code.as_slice())
-            && version.cell.type_hash_type == Some(1)
+            .zip(version.cell.type_hash_type)
+            .is_some_and(|(code_hash, hash_type)| {
+                ckbadger_store::keys::is_type_id_script(&code_hash, hash_type)
+            })
             && version.cell.type_args.as_deref() == Some(args.as_slice()),
         "native Type ID script differs from requested decoder: args=0x{} outpoint={}:{}",
         hex::encode(args),

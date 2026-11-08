@@ -416,13 +416,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         append_only_store.apply_normal_compaction_options(false);
     }
 
-    if let Some(ref dir) = config.cycles_request_dir {
-        spawn_cycles_worker(
-            store.clone(),
-            config.ckb_rpc_url.clone(),
-            std::path::PathBuf::from(dir),
-        );
-    }
+    start_cycles_worker(&store, &config, startup_decision);
 
     // Long-running health monitor: per-minute sampling, hourly CSV row,
     // debounced WARN on sustained DB write degradation or recurring slow
@@ -859,6 +853,38 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         }
     }
     run_result.map_err(|error| annotate_rebuild_required(error, &store_location))
+}
+
+/// Starts the cycles worker unless this process is a bulk build; returns its
+/// task, or `None` when it was not started.
+///
+/// The worker writes `tx_index`, `tx_group_cycles` and `block_headers`. While a
+/// bulk build owns the chain stores nothing but the bulk engine writes them:
+/// bulk finalize flushes these batch-loop-only CFs when its drain ends and
+/// fails if one is written afterwards. A bulk-build process owns the stores
+/// for its whole life, since the startup decision is taken once and the
+/// process exits at the handoff (`BULK_SYNC.md` rule 10), so it does not start
+/// the worker at all. Requests the API queues meanwhile stay in the request
+/// directory, and the near-tip process the supervisor starts next serves them.
+pub(crate) fn start_cycles_worker(
+    store: &Arc<CkbadgerStore>,
+    config: &Config,
+    decision: StartupSyncDecision,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let dir = config.cycles_request_dir.as_ref()?;
+    if decision.is_bulk_build() {
+        info!(
+            request_dir = %dir,
+            "Cycles worker not started: a bulk build owns the chain stores; queued requests \
+             are served by the near-tip process after the handoff"
+        );
+        return None;
+    }
+    Some(spawn_cycles_worker(
+        Arc::clone(store),
+        config.ckb_rpc_url.clone(),
+        std::path::PathBuf::from(dir),
+    ))
 }
 
 /// Both chain stores, opened with the memtable the startup decision selected.
@@ -1387,6 +1413,89 @@ mod tests {
             }"#,
         )
         .expect("test config must deserialize")
+    }
+
+    /// Review finding 1: while a bulk build owns the chain stores nothing but
+    /// the bulk engine writes them. A bulk-build process therefore runs no
+    /// cycles worker: a request queued during the bulk build is neither
+    /// computed nor written and stays queued; the near-tip process started
+    /// after the handoff serves it. (The request is a genesis transaction,
+    /// which the worker serves from the store alone, without the node.)
+    #[tokio::test]
+    async fn bulk_build_process_leaves_cycles_requests_queued_for_the_process_after_the_handoff() {
+        use ckbadger_store::{StoreBatch, TxIndexEntry};
+
+        let store_dir = tempfile::tempdir().expect("store dir");
+        let request_dir = tempfile::tempdir().expect("request dir");
+        let store = Arc::new(CkbadgerStore::open_domain(store_dir.path()).expect("open store"));
+        let tx_hash = [0x68; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&tx_hash, 0, 1);
+        batch.put_tx_index(
+            0,
+            1,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase: false,
+                timestamp: 0,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 200,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().expect("seed a genesis transaction");
+        let request = request_dir
+            .path()
+            .join(format!("tx_0x{}", hex::encode(tx_hash)));
+        std::fs::write(&request, b"").expect("queue a cycles request");
+        let mut config = testnet_config();
+        config.ckb_rpc_url = "http://127.0.0.1:1".to_string();
+        config.cycles_request_dir = Some(request_dir.path().to_string_lossy().to_string());
+
+        let bulk = decide_startup_sync(10_000, 0, &None, 1_000).expect("bulk decision");
+        assert!(bulk.is_bulk_build());
+        assert!(start_cycles_worker(&store, &config, bulk).is_none());
+        // Five worker polls' worth of time: nothing may serve the request.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(
+            request.exists(),
+            "the request must stay queued during the bulk build"
+        );
+        assert_eq!(
+            store
+                .get_tx_index(0, 1)
+                .expect("read tx")
+                .expect("tx")
+                .cycles,
+            None,
+            "nothing may write tx_index during the bulk build"
+        );
+
+        let near_tip = decide_startup_sync(10_000, 9_990, &Some(vec![0x01; 32]), 1_000)
+            .expect("near-tip decision");
+        assert!(!near_tip.is_bulk_build());
+        let worker = start_cycles_worker(&store, &config, near_tip).expect("worker started");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while request.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the queued request was never served"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        worker.abort();
+        assert_eq!(
+            store
+                .get_tx_index(0, 1)
+                .expect("read tx")
+                .expect("tx")
+                .cycles,
+            Some(0),
+            "the near-tip process serves the request queued during the bulk build"
+        );
     }
 
     #[test]

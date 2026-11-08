@@ -518,12 +518,15 @@ fn load_node_body(
     if let Some(cached) = mem_cache.get::<NodeBody>(&key) {
         return Ok(cached);
     }
-    let block = ckb.get_block(hash).ok_or_else(|| {
-        ApiError::internal(format!(
-            "C1: block {number} {} is indexed but not in the node DB",
-            hex(hash)
-        ))
-    })?;
+    let block = ckb
+        .get_block(hash)
+        .map_err(ApiError::node_store)?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "C1: block {number} {} is indexed but not in the node DB",
+                hex(hash)
+            ))
+        })?;
     if block.number() as i64 != number {
         return Err(ApiError::internal(format!(
             "C1: block {} is at height {} in the node DB but at {number} in the store",
@@ -971,12 +974,15 @@ fn reward_cell_lacks_capacity(
     target_hash: &[u8; 32],
     total: u64,
 ) -> Result<bool, String> {
-    let block = ckb.get_block(target_hash).ok_or_else(|| {
-        format!(
-            "its target block {target} {} is not in the node DB",
-            hex(target_hash)
-        )
-    })?;
+    let block = ckb
+        .get_block(target_hash)
+        .map_err(|e| format!("its target block {target}: CKB node store read failed: {e:#}"))?
+        .ok_or_else(|| {
+            format!(
+                "its target block {target} {} is not in the node DB",
+                hex(target_hash)
+            )
+        })?;
     let witness = block
         .transactions()
         .first()

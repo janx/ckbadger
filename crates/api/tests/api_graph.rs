@@ -510,3 +510,88 @@ async fn test_proposal_graph_fails_when_node_cannot_report_consensus() {
     let message = json["message"].as_str().unwrap();
     assert!(message.contains("get_consensus"), "{message}");
 }
+
+/// Fix round, finding 8: a transaction the index holds but the node store
+/// does not is a broken invariant. The transaction graph answers an internal
+/// error naming it, as every other node store caller does; before, it drew
+/// the transaction with no inputs and no outputs.
+#[tokio::test]
+async fn tx_graph_fails_when_the_node_lacks_an_indexed_transaction() {
+    let tx_hash = [0x77; 32];
+    let store = test_store();
+    insert_committed_transaction(&store, &tx_hash);
+    let chain = seed_ckb_chain(&[]);
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/graph/transaction/0x{}", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "transaction 0x{} is indexed but not in the node DB",
+            hex::encode(tx_hash)
+        )),
+        "{message}"
+    );
+}
+
+/// Fix round, finding 11: a window block whose node number-index row cannot
+/// be read fails the proposals graph. Before, the reader answered "no such
+/// block", the scan skipped block 443, and the proposal it commits showed as
+/// never committed.
+#[tokio::test]
+async fn proposal_graph_fails_on_an_unreadable_window_block_index_row() {
+    let txs = committed_transactions();
+    let tx_a = &txs[1];
+    let specs = vec![
+        FixtureBlock {
+            number: 440,
+            proposals: vec![tx_a.proposal_short_id()],
+            uncles: vec![],
+            transactions: vec![],
+        },
+        FixtureBlock {
+            number: 443,
+            proposals: vec![],
+            uncles: vec![],
+            transactions: vec![tx_a.clone()],
+        },
+    ];
+    let (store, chain) = seed_proposal_fixture(&specs);
+    {
+        let mut options = Options::default();
+        options.create_missing_column_families(true);
+        let descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+            .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+            .collect();
+        let db = DB::open_cf_descriptors(&options, &chain.path, descriptors).unwrap();
+        let index = db.cf_handle("0").unwrap();
+        db.put_cf(&index, 443u64.to_le_bytes(), [1, 2, 3]).unwrap();
+        db.flush_cf(&index).unwrap();
+    }
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+
+    let (status, json) = get_json(&app, "/graph/proposals/440").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("CKB block hash index row for number 443 has 3 bytes"),
+        "{message}"
+    );
+}

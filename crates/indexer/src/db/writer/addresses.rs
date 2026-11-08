@@ -13,6 +13,10 @@ use crate::sync::types::{EntityDailyChanges, ScriptDailyKey};
 
 use super::BatchWriter;
 
+// The four `checked_next_script*` helpers: a stored usage metric the delta
+// takes below zero is rebuild-required (the stored aggregate no longer
+// matches the chain, D-4c); an overflow stays a plain error, as in finding 13.
+
 fn checked_next_script_metric_i64(
     code_hash: &[u8],
     script_kind: &str,
@@ -31,7 +35,7 @@ fn checked_next_script_metric_i64(
         )
     })?;
     if next < 0 {
-        bail!(
+        return Err(super::aggregate_underflow(format!(
             "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
             script_kind,
             metric,
@@ -39,7 +43,7 @@ fn checked_next_script_metric_i64(
             current,
             delta,
             next
-        );
+        )));
     }
     Ok(next)
 }
@@ -62,7 +66,7 @@ fn checked_next_script_metric_i128(
         )
     })?;
     if next < 0 {
-        bail!(
+        return Err(super::aggregate_underflow(format!(
             "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
             script_kind,
             metric,
@@ -70,7 +74,7 @@ fn checked_next_script_metric_i128(
             current,
             delta,
             next
-        );
+        )));
     }
     Ok(next)
 }
@@ -93,7 +97,7 @@ fn checked_next_script_reference_metric_i64(
         )
     })?;
     if next < 0 {
-        bail!(
+        return Err(super::aggregate_underflow(format!(
             "script reference {} underflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, next={}",
             metric,
             hex::encode(reference_hash),
@@ -101,7 +105,7 @@ fn checked_next_script_reference_metric_i64(
             current,
             delta,
             next
-        );
+        )));
     }
     Ok(next)
 }
@@ -124,7 +128,7 @@ fn checked_next_script_reference_metric_i128(
         )
     })?;
     if next < 0 {
-        bail!(
+        return Err(super::aggregate_underflow(format!(
             "script reference {} underflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, next={}",
             metric,
             hex::encode(reference_hash),
@@ -132,7 +136,7 @@ fn checked_next_script_reference_metric_i128(
             current,
             delta,
             next
-        );
+        )));
     }
     Ok(next)
 }
@@ -757,13 +761,15 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(lock_hashes.len());
         for (res, lock_hash) in results.into_iter().zip(lock_hashes.iter()) {
             let existing: Option<AddressBalance> = match res {
+                // An undecodable row is rebuild-required (D-4c, finding
+                // 12's sibling); a failed read below stays plain.
                 Ok(Some(value)) => Some(
                     ckbadger_store::decode_address_balance(lock_hash, &value).map_err(|e| {
-                        anyhow::anyhow!(
+                        super::corrupt_stored_row(format!(
                             "failed to deserialize address balance: lock_hash=0x{}, error={:#}",
                             hex::encode(lock_hash),
                             e
-                        )
+                        ))
                     })?,
                 ),
                 Ok(None) => None,
@@ -831,12 +837,12 @@ impl BatchWriter {
                         )
                             })?;
                     if next_balance < 0 {
-                        bail!(
+                        return Err(super::aggregate_underflow(format!(
                             "address balance underflow: lock_hash=0x{}, balance={}, delta={}",
                             hex::encode(lock_hash),
                             bal.balance,
                             delta.balance_delta
-                        );
+                        )));
                     }
                     let next_used = bal.used_capacity.checked_add(delta.used_delta).ok_or_else(|| {
                         anyhow::anyhow!(
@@ -847,12 +853,12 @@ impl BatchWriter {
                         )
                     })?;
                     if next_used < 0 {
-                        bail!(
+                        return Err(super::aggregate_underflow(format!(
                             "address used capacity underflow: lock_hash=0x{}, used_capacity={}, delta={}",
                             hex::encode(lock_hash),
                             bal.used_capacity,
                             delta.used_delta
-                        );
+                        )));
                     }
                     let next_live_cells = bal.live_cells_count.checked_add(delta.live_delta).ok_or_else(|| {
                         anyhow::anyhow!(
@@ -863,12 +869,12 @@ impl BatchWriter {
                         )
                     })?;
                     if next_live_cells < 0 {
-                        bail!(
+                        return Err(super::aggregate_underflow(format!(
                             "address live_cells_count underflow: lock_hash=0x{}, live_cells_count={}, delta={}",
                             hex::encode(lock_hash),
                             bal.live_cells_count,
                             delta.live_delta
-                        );
+                        )));
                     }
                     let next_total_cells = bal.total_cells_count.checked_add(delta.total_delta as i64).ok_or_else(|| {
                         anyhow::anyhow!(
@@ -879,12 +885,12 @@ impl BatchWriter {
                         )
                     })?;
                     if next_total_cells < 0 {
-                        bail!(
+                        return Err(super::aggregate_underflow(format!(
                             "address total_cells_count underflow: lock_hash=0x{}, total_cells_count={}, delta={}",
                             hex::encode(lock_hash),
                             bal.total_cells_count,
                             delta.total_delta
-                        );
+                        )));
                     }
                     let next_txs_count =
                         bal.txs_count.checked_add(delta.tx_delta).ok_or_else(|| {
@@ -896,12 +902,12 @@ impl BatchWriter {
                         )
                         })?;
                     if next_txs_count < 0 {
-                        bail!(
+                        return Err(super::aggregate_underflow(format!(
                             "address txs_count underflow: lock_hash=0x{}, txs_count={}, delta={}",
                             hex::encode(lock_hash),
                             bal.txs_count,
                             delta.tx_delta
-                        );
+                        )));
                     }
                     let next_cellbase_txs_count = bal
                         .cellbase_txs_count
@@ -915,13 +921,13 @@ impl BatchWriter {
                             )
                         })?;
                     if next_cellbase_txs_count < 0 || next_cellbase_txs_count > next_txs_count {
-                        bail!(
+                        return Err(super::aggregate_out_of_range(format!(
                             "address cellbase_txs_count outside 0..=txs_count: lock_hash=0x{}, cellbase_txs_count={}, delta={}, next_txs_count={}",
                             hex::encode(lock_hash),
                             bal.cellbase_txs_count,
                             delta.cellbase_tx_delta,
                             next_txs_count
-                        );
+                        )));
                     }
                     bal.balance = next_balance;
                     bal.used_capacity = next_used;
@@ -942,7 +948,7 @@ impl BatchWriter {
                         || delta.cellbase_tx_delta < 0
                         || delta.cellbase_tx_delta > delta.tx_delta
                     {
-                        bail!(
+                        return Err(super::aggregate_underflow(format!(
                             "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, used_delta={}, live_delta={}, total_delta={}, tx_delta={}, cellbase_tx_delta={}",
                             hex::encode(lock_hash),
                             delta.balance_delta,
@@ -951,7 +957,7 @@ impl BatchWriter {
                             delta.total_delta,
                             delta.tx_delta,
                             delta.cellbase_tx_delta
-                        );
+                        )));
                     }
                     AddressBalance {
                         balance: delta.balance_delta,
@@ -1062,7 +1068,7 @@ impl BatchWriter {
                     || *used_delta < 0
                     || *owned_knowledge_delta < 0)
             {
-                bail!(
+                return Err(super::aggregate_underflow(format!(
                     "script delta underflow for unseen code_hash: code_hash=0x{}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, owned_capacity_delta={}, used_delta={}, owned_knowledge_delta={}",
                     hex::encode(code_hash),
                     is_type,
@@ -1072,7 +1078,7 @@ impl BatchWriter {
                     owned_cap_delta,
                     used_delta,
                     owned_knowledge_delta
-                );
+                )));
             }
 
             let info = match updated_map.entry(code_hash) {
@@ -1138,20 +1144,20 @@ impl BatchWriter {
                 )?;
 
                 if next_type_used_capacity_sum > next_type_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script type used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
                         hex::encode(code_hash),
                         next_type_used_capacity_sum,
                         next_type_capacity_sum
-                    );
+                    )));
                 }
                 if next_type_owned_knowledge_sum > next_type_owned_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script type owned knowledge exceeds owned capacity: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
                         hex::encode(code_hash),
                         next_type_owned_knowledge_sum,
                         next_type_owned_capacity_sum
-                    );
+                    )));
                 }
 
                 info.type_cells_count = next_type_cells_count;
@@ -1205,20 +1211,20 @@ impl BatchWriter {
                 )?;
 
                 if next_lock_used_capacity_sum > next_lock_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script lock used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
                         hex::encode(code_hash),
                         next_lock_used_capacity_sum,
                         next_lock_capacity_sum
-                    );
+                    )));
                 }
                 if next_lock_owned_knowledge_sum > next_lock_owned_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script lock owned knowledge exceeds owned capacity: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
                         hex::encode(code_hash),
                         next_lock_owned_knowledge_sum,
                         next_lock_owned_capacity_sum
-                    );
+                    )));
                 }
 
                 info.lock_cells_count = next_lock_cells_count;
@@ -1265,14 +1271,16 @@ impl BatchWriter {
             references.iter().zip(encoded_keys.iter()).zip(results)
         {
             let existing: Option<ScriptReferenceInfo> = match res {
+                // An undecodable row is rebuild-required (D-4c, finding
+                // 12's sibling); a failed read below stays plain.
                 Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
+                    super::corrupt_stored_row(format!(
                         "failed to deserialize script reference info: key=0x{}, hash_type={}, reference_hash=0x{}, error={}",
                         hex::encode(key),
                         hash_type,
                         hex::encode(reference_hash),
                         e
-                    )
+                    ))
                 })?),
                 Ok(None) => None,
                 Err(e) => {
@@ -1349,7 +1357,7 @@ impl BatchWriter {
                     || *used_delta < 0
                     || *owned_knowledge_delta < 0)
             {
-                bail!(
+                return Err(super::aggregate_underflow(format!(
                     "script reference delta underflow for unseen reference: reference_hash=0x{}, hash_type={}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, owned_capacity_delta={}, used_delta={}, owned_knowledge_delta={}",
                     hex::encode(reference_hash),
                     hash_type,
@@ -1360,7 +1368,7 @@ impl BatchWriter {
                     owned_cap_delta,
                     used_delta,
                     owned_knowledge_delta
-                );
+                )));
             }
 
             let info = updated_map.entry(key).or_insert_with(|| {
@@ -1416,22 +1424,22 @@ impl BatchWriter {
                 )?;
 
                 if next_used_capacity_sum > next_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script reference type used capacity exceeds total: reference_hash=0x{}, hash_type={}, type_used_capacity_sum={}, type_capacity_sum={}",
                         hex::encode(reference_hash),
                         hash_type,
                         next_used_capacity_sum,
                         next_capacity_sum
-                    );
+                    )));
                 }
                 if next_owned_knowledge_sum > next_owned_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script reference type owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, type_owned_knowledge_sum={}, type_owned_capacity_sum={}",
                         hex::encode(reference_hash),
                         hash_type,
                         next_owned_knowledge_sum,
                         next_owned_capacity_sum
-                    );
+                    )));
                 }
 
                 info.type_cells_count = next_cells_count;
@@ -1485,22 +1493,22 @@ impl BatchWriter {
                 )?;
 
                 if next_used_capacity_sum > next_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script reference lock used capacity exceeds total: reference_hash=0x{}, hash_type={}, lock_used_capacity_sum={}, lock_capacity_sum={}",
                         hex::encode(reference_hash),
                         hash_type,
                         next_used_capacity_sum,
                         next_capacity_sum
-                    );
+                    )));
                 }
                 if next_owned_knowledge_sum > next_owned_capacity_sum {
-                    bail!(
+                    return Err(super::aggregate_out_of_range(format!(
                         "script reference lock owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, lock_owned_knowledge_sum={}, lock_owned_capacity_sum={}",
                         hex::encode(reference_hash),
                         hash_type,
                         next_owned_knowledge_sum,
                         next_owned_capacity_sum
-                    );
+                    )));
                 }
 
                 info.lock_cells_count = next_cells_count;
@@ -1621,8 +1629,11 @@ impl BatchWriter {
                             .store
                             .get_script_reference_version_hash(1, &reference)?,
                     };
+                    // A stored binding and a stored input cell that
+                    // contradict each other are a row set no sync leaves:
+                    // rebuild-required (D-4c ruling).
                     if current.is_some() && cell.data_hash.is_none() {
-                        bail!("active type-id input lacks data hash: reference=0x{} block={} tx=0x{} input=0x{}:{}", hex::encode(reference), tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index);
+                        return Err(super::corrupt_stored_row(format!("active type-id input lacks data hash: reference=0x{} block={} tx=0x{} input=0x{}:{}", hex::encode(reference), tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index)));
                     }
                     if current.is_some()
                         && current.as_deref() == cell.data_hash.as_ref().map(|hash| hash.as_slice())
@@ -2043,6 +2054,8 @@ mod tests {
         assert!(err
             .to_string()
             .contains("script lock owned_capacity_sum underflow"));
+        // D-4c: the stored aggregate cannot explain the delta.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     #[test]
@@ -2076,6 +2089,8 @@ mod tests {
         assert!(err
             .to_string()
             .contains("script type owned knowledge exceeds owned capacity"));
+        // D-4c: an aggregate outside the range the chain can produce.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     /// Ruling 6: the label overlay's read of the stored row propagates its
@@ -2790,7 +2805,7 @@ mod tests {
         let writer = BatchWriter::new(store.clone(), append.clone());
         let binary = vec![0x42; 32];
         let registered = vec![0x52; 32];
-        let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
+        let type_id = ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec();
 
         store
             .put_script_version(
@@ -2974,7 +2989,7 @@ mod tests {
         crate::db::writer::journal_test_support::journaled_headers(&store, 100..=100);
         let binary = vec![0x42; 32];
         let registered = vec![0x52; 32];
-        let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
+        let type_id = ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec();
 
         store
             .put_script_version(
@@ -3130,7 +3145,7 @@ mod tests {
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
-            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[0x33; 32],
         );
@@ -3176,7 +3191,7 @@ mod tests {
             lock_hash_type: 1,
             lock_args: vec![],
             lock_script_hash: vec![0x22; 32],
-            type_code_hash: Some(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec()),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 32]),
             type_script_hash: Some(reference.clone()),
@@ -3572,7 +3587,7 @@ mod tests {
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
-            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[0x33; 32],
         );
@@ -3617,12 +3632,7 @@ mod tests {
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 32]),
             data_size: 10,
@@ -4224,7 +4234,7 @@ mod tests {
         // The type-id reference is the derived hash of the code cell's own
         // type script (TYPE_ID, `type`, empty args).
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
-            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            &ckbadger_store::keys::TYPE_ID_CODE_HASH,
             1,
             &[],
         );
@@ -4262,12 +4272,7 @@ mod tests {
                 lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some(
-                    hex::decode(crate::parser::script::TYPE_ID_CODE_HASH)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                ),
+                type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 31_560,
@@ -4358,6 +4363,13 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize address balance"));
+        // D-4c: the batch prefetch types an undecodable row as
+        // rebuild-required, naming the lock.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        assert!(
+            err.to_string().contains(&hex::encode(&lock_hash)),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -4378,5 +4390,354 @@ mod tests {
         assert!(err
             .to_string()
             .contains("script delta underflow for unseen code_hash"));
+        // D-4c: no stored row can explain a negative delta.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+    }
+
+    fn assert_rebuild_required(err: &anyhow::Error, what: &str) {
+        assert!(
+            crate::lifecycle::is_rebuild_required(err),
+            "{what}: {err:#}"
+        );
+        assert!(err.to_string().contains(what), "{what}: {err:#}");
+    }
+
+    fn assert_plain(err: &anyhow::Error, what: &str) {
+        assert!(
+            !crate::lifecycle::is_rebuild_required(err),
+            "{what}: {err:#}"
+        );
+        assert!(err.to_string().contains(what), "{what}: {err:#}");
+    }
+
+    /// D-4c: a script / script reference metric going below zero is
+    /// rebuild-required; an overflow stays a plain error (as in finding 13).
+    #[test]
+    fn script_metric_underflows_are_rebuild_required() {
+        let hash = [0x5c; 32];
+        assert_rebuild_required(
+            &checked_next_script_metric_i64(&hash, "lock", "cells_count", 0, -1).unwrap_err(),
+            "script lock cells_count underflow",
+        );
+        assert_rebuild_required(
+            &checked_next_script_metric_i128(&hash, "type", "capacity_sum", 0, -1).unwrap_err(),
+            "script type capacity_sum underflow",
+        );
+        assert_rebuild_required(
+            &checked_next_script_reference_metric_i64(&hash, 1, "lock cells_count", 0, -1)
+                .unwrap_err(),
+            "script reference lock cells_count underflow",
+        );
+        assert_rebuild_required(
+            &checked_next_script_reference_metric_i128(&hash, 0, "type capacity_sum", 0, -1)
+                .unwrap_err(),
+            "script reference type capacity_sum underflow",
+        );
+        assert_plain(
+            &checked_next_script_metric_i64(&hash, "lock", "cells_count", i64::MAX, 1).unwrap_err(),
+            "overflow",
+        );
+        assert_plain(
+            &checked_next_script_reference_metric_i128(&hash, 0, "lock capacity_sum", i128::MAX, 1)
+                .unwrap_err(),
+            "overflow",
+        );
+    }
+
+    fn address_delta(
+        balance: i128,
+        used: i128,
+        live: i32,
+        total: i32,
+        txs: i64,
+        cellbase: i64,
+    ) -> crate::sync::types::AddressBalanceDelta {
+        crate::sync::types::AddressBalanceDelta {
+            balance_delta: balance,
+            live_delta: live,
+            total_delta: total,
+            tx_delta: txs,
+            cellbase_tx_delta: cellbase,
+            used_delta: used,
+            first_seen_block: 9,
+            first_seen_tx_idx: 1,
+            last_activity_block: 9,
+            last_activity_tx_idx: 1,
+        }
+    }
+
+    /// D-4c: an address delta the stored balance row cannot explain (any
+    /// field going below zero, cellbase transactions outside 0..=txs, a
+    /// negative delta for an address without a row) is rebuild-required; an
+    /// overflow stays a plain error.
+    #[test]
+    fn address_balance_underflows_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let lock = vec![0x4a; 32];
+        let row = AddressBalance {
+            balance: 100,
+            used_capacity: 61,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count: 1,
+            cellbase_txs_count: 0,
+            ..Default::default()
+        };
+        let apply = |existing: Option<AddressBalance>,
+                     delta: crate::sync::types::AddressBalanceDelta| {
+            let existing = HashMap::from([(lock.clone(), existing)]);
+            let changes = HashMap::from([(lock.clone(), delta)]);
+            let mut batch = StoreBatch::new(&store);
+            writer
+                .apply_address_balance_deltas(&existing, &changes, &mut batch)
+                .unwrap_err()
+        };
+        for (delta, what) in [
+            (
+                address_delta(-101, 0, 0, 0, 0, 0),
+                "address balance underflow",
+            ),
+            (
+                address_delta(0, -62, 0, 0, 0, 0),
+                "address used capacity underflow",
+            ),
+            (
+                address_delta(0, 0, -2, 0, 0, 0),
+                "address live_cells_count underflow",
+            ),
+            (
+                address_delta(0, 0, 0, -2, 0, 0),
+                "address total_cells_count underflow",
+            ),
+            (
+                address_delta(0, 0, 0, 0, -2, 0),
+                "address txs_count underflow",
+            ),
+            (
+                address_delta(0, 0, 0, 0, 0, -1),
+                "address cellbase_txs_count outside 0..=txs_count",
+            ),
+            (
+                address_delta(0, 0, 0, 0, 0, 2),
+                "address cellbase_txs_count outside 0..=txs_count",
+            ),
+        ] {
+            assert_rebuild_required(&apply(Some(row.clone()), delta), what);
+        }
+        assert_rebuild_required(
+            &apply(None, address_delta(-1, 0, 0, 0, 0, 0)),
+            "address delta underflow for unseen address",
+        );
+        let full = AddressBalance {
+            balance: i128::MAX,
+            ..row.clone()
+        };
+        assert_plain(
+            &apply(Some(full), address_delta(1, 0, 0, 0, 0, 0)),
+            "address balance overflow",
+        );
+    }
+
+    /// D-4c: a script usage aggregate outside the range the chain can
+    /// produce (used capacity above capacity, owned knowledge above owned
+    /// capacity) is rebuild-required, for lock and type usage alike.
+    #[test]
+    fn script_usage_out_of_range_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let code_hash = vec![0x5d; 32];
+        let row = ScriptInfo {
+            code_hash: code_hash.clone(),
+            lock_capacity_sum: 100,
+            lock_owned_capacity_sum: 100,
+            type_capacity_sum: 100,
+            type_owned_capacity_sum: 100,
+            ..Default::default()
+        };
+        let existing = HashMap::from([(code_hash.clone(), Some(row))]);
+        for (is_type, delta, what) in [
+            (
+                false,
+                (0, 0, 0, 0, 101, 0),
+                "script lock used capacity exceeds total",
+            ),
+            (
+                false,
+                (0, 0, 0, 0, 0, 101),
+                "script lock owned knowledge exceeds owned capacity",
+            ),
+            (
+                true,
+                (0, 0, 0, 0, 101, 0),
+                "script type used capacity exceeds total",
+            ),
+        ] {
+            let changes = HashMap::from([((code_hash.clone(), is_type), delta)]);
+            let mut batch = StoreBatch::new(&store);
+            let err = writer
+                .apply_script_usage_deltas(&existing, &changes, &mut batch)
+                .unwrap_err();
+            assert_rebuild_required(&err, what);
+        }
+    }
+
+    /// D-4c: a script reference usage delta its stored row cannot explain (a
+    /// negative delta for an unseen reference, an aggregate outside its
+    /// range) is rebuild-required.
+    #[test]
+    fn script_reference_usage_underflows_are_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let reference = vec![0x5e; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
+            lock_capacity_sum: 100,
+            lock_owned_capacity_sum: 100,
+            type_capacity_sum: 100,
+            type_owned_capacity_sum: 100,
+            ..Default::default()
+        };
+        let apply = |existing: Option<ScriptReferenceInfo>,
+                     is_type: bool,
+                     delta: (i64, i64, i128, i128, i128, i128)| {
+            let existing = HashMap::from([((reference.clone(), 1u8), existing)]);
+            let changes = HashMap::from([((reference.clone(), 1u8, is_type), delta)]);
+            let mut batch = StoreBatch::new(&store);
+            writer
+                .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
+                .unwrap_err()
+        };
+        assert_rebuild_required(
+            &apply(None, false, (0, -1, 0, 0, 0, 0)),
+            "script reference delta underflow for unseen reference",
+        );
+        for (is_type, delta, what) in [
+            (
+                false,
+                (0, 0, 0, 0, 101, 0),
+                "script reference lock used capacity exceeds total",
+            ),
+            (
+                false,
+                (0, 0, 0, 0, 0, 101),
+                "script reference lock owned knowledge exceeds owned capacity",
+            ),
+            (
+                true,
+                (0, 0, 0, 0, 101, 0),
+                "script reference type used capacity exceeds total",
+            ),
+            (
+                true,
+                (0, 0, 0, 0, 0, 101),
+                "script reference type owned knowledge exceeds owned capacity",
+            ),
+        ] {
+            assert_rebuild_required(&apply(Some(row.clone()), is_type, delta), what);
+        }
+    }
+
+    /// D-4c: the batch prefetch types an undecodable `script_reference_info`
+    /// row as rebuild-required, naming the reference.
+    #[test]
+    fn a_corrupt_script_reference_info_row_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let reference = vec![0x5f; 32];
+        store
+            .put_cf(
+                store.cf_script_reference_info(),
+                &keys::encode_script_reference_key(1, &reference),
+                &[0xFF, 0x00],
+            )
+            .unwrap();
+        let err = writer
+            .read_script_reference_info(&[(reference.clone(), 1)])
+            .unwrap_err();
+        assert_rebuild_required(&err, "failed to deserialize script reference info");
+        assert!(
+            err.to_string().contains(&hex::encode(&reference)),
+            "{err:#}"
+        );
+    }
+
+    /// Coordinator ruling on D-4c (`addresses.rs:1625` at fd9a5e09): a stored
+    /// Type ID binding and a stored Type ID input cell without a data hash
+    /// contradict each other, a row set no sync leaves: rebuild-required (a
+    /// retry cannot repair stored state).
+    #[test]
+    fn an_active_type_id_input_without_data_hash_is_rebuild_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let args = [0x61; 32];
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(
+            &keys::TYPE_ID_CODE_HASH,
+            1,
+            &args,
+        );
+        let mut seed = StoreBatch::new(&store);
+        seed.put_script_reference_to_version(1, &reference, &[0x62; 32]);
+        seed.commit().unwrap();
+        let input = ckbadger_store::LiveCellInfo {
+            capacity: 10000,
+            lock_code_hash: [0x12; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_code_hash: Some(keys::TYPE_ID_CODE_HASH),
+            type_hash_type: Some(1),
+            type_args: Some(args.to_vec()),
+            data_size: 0,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let inputs = HashMap::from([(
+            (vec![0x63; 32], 0i16),
+            ckbadger_store::PositionedCellInfo::new(input, 30),
+        )]);
+        let txs = vec![crate::sync::types::TxData {
+            hash: [0x64; 32],
+            block_number: 31,
+            tx_index: 1,
+            inputs_count: 1,
+            outputs_count: 0,
+            is_cellbase: false,
+            inputs: vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: [0x63; 32],
+                previous_output_index: 0,
+                since: 0,
+            }],
+            cells: vec![],
+            witnesses: vec![],
+            total_input_capacity: 10000,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            semantic_tags: 0,
+        }];
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .materialize_script_versions_and_families_with_chain(
+                &[],
+                &txs,
+                &HashMap::new(),
+                &inputs,
+                &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
+                &mut batch,
+            )
+            .unwrap_err();
+        assert_rebuild_required(&err, "active type-id input lacks data hash");
+        assert!(
+            err.to_string().contains(&hex::encode(&reference)),
+            "{err:#}"
+        );
     }
 }

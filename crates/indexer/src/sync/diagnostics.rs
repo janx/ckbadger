@@ -515,8 +515,10 @@ pub(crate) struct BulkBuildPerfStats {
     last_build_us: AtomicU64,
     last_flush_wait_us: AtomicU64,
     last_prefetch_recv_us: AtomicU64,
-    // In-memory state
+    // In-memory state. The owner total is published only from a batch that
+    // walked the owner maps; on the others the snapshot reports it absent.
     owner_memory_bytes: AtomicU64,
+    owner_memory_fresh: AtomicBool,
     live_cell_count: AtomicU64,
     // Per-batch volume
     cells_created: AtomicU64,
@@ -582,7 +584,7 @@ impl BulkBuildPerfStats {
         flush_ms: f64,
         fetch_ms: f64,
         build_ms: f64,
-        owner_memory_bytes: u64,
+        owner_memory_bytes: Option<u64>,
         live_cell_count: u64,
         cells_created: u64,
         cells_consumed: u64,
@@ -625,8 +627,12 @@ impl BulkBuildPerfStats {
             .store(ms_to_us(fetch_ms), Ordering::Relaxed);
         self.last_build_us
             .store(ms_to_us(build_ms), Ordering::Relaxed);
-        self.owner_memory_bytes
-            .store(owner_memory_bytes, Ordering::Relaxed);
+        if let Some(owner_memory_bytes) = owner_memory_bytes {
+            self.owner_memory_bytes
+                .store(owner_memory_bytes, Ordering::Relaxed);
+        }
+        self.owner_memory_fresh
+            .store(owner_memory_bytes.is_some(), Ordering::Relaxed);
         self.live_cell_count
             .store(live_cell_count, Ordering::Relaxed);
         self.cells_created.store(cells_created, Ordering::Relaxed);
@@ -791,7 +797,10 @@ impl BulkBuildPerfStats {
             disk_avg_queue_depth,
             disk_write_mb_s,
             disk_write_iops,
-            owner_memory_bytes: Some(self.owner_memory_bytes.load(Ordering::Relaxed)),
+            owner_memory_bytes: self
+                .owner_memory_fresh
+                .load(Ordering::Relaxed)
+                .then(|| self.owner_memory_bytes.load(Ordering::Relaxed)),
             live_cell_count: Some(self.live_cell_count.load(Ordering::Relaxed)),
             cells_created: Some(self.cells_created.load(Ordering::Relaxed)),
             cells_consumed: Some(self.cells_consumed.load(Ordering::Relaxed)),
@@ -1342,39 +1351,39 @@ mod tests {
     fn test_bulk_build_perf_snapshot_returns_data_after_record() {
         let perf = BulkBuildPerfStats::default();
         perf.record_batch(
-            45.2,          // facts_ms
-            35.8,          // resolve_ms
-            28.1,          // reduce_ms
-            18.5,          // history_ms
-            8.3,           // address_reduce_ms
-            5.1,           // activity_stats_ms
-            52.0,          // flush_ms
-            120.5,         // fetch_ms
-            141.0,         // build_ms
-            1_800_000_000, // owner_memory_bytes
-            12_345_678,    // live_cell_count
-            5_000,         // cells_created
-            3_000,         // cells_consumed
-            45_230,        // cumulative_history_rows
-            12_890,        // cumulative_sealed_rows
-            8_500,         // batch_block_count
-            1,             // batch_count
-            4.7,           // tx_density
-            0.042,         // ms_per_block_ema
-            1380.0,        // controllable_ms
-            1500.0,        // target_iteration_ms
-            0.0,           // facts_par_iter_ms
-            0.0,           // facts_merge_ms
-            0.0,           // facts_serial_equivalent_ms
-            0,             // facts_intern_slow_path_count
-            0,             // facts_intern_total_count
-            0,             // facts_cell_count
-            0.0,           // flush_wait_ms
-            0.0,           // prefetch_recv_ms
-            2,             // prefetch_channel_pending
-            4,             // prefetch_channel_capacity
-            1,             // flush_channel_pending
-            4,             // flush_channel_capacity
+            45.2,                // facts_ms
+            35.8,                // resolve_ms
+            28.1,                // reduce_ms
+            18.5,                // history_ms
+            8.3,                 // address_reduce_ms
+            5.1,                 // activity_stats_ms
+            52.0,                // flush_ms
+            120.5,               // fetch_ms
+            141.0,               // build_ms
+            Some(1_800_000_000), // owner_memory_bytes
+            12_345_678,          // live_cell_count
+            5_000,               // cells_created
+            3_000,               // cells_consumed
+            45_230,              // cumulative_history_rows
+            12_890,              // cumulative_sealed_rows
+            8_500,               // batch_block_count
+            1,                   // batch_count
+            4.7,                 // tx_density
+            0.042,               // ms_per_block_ema
+            1380.0,              // controllable_ms
+            1500.0,              // target_iteration_ms
+            0.0,                 // facts_par_iter_ms
+            0.0,                 // facts_merge_ms
+            0.0,                 // facts_serial_equivalent_ms
+            0,                   // facts_intern_slow_path_count
+            0,                   // facts_intern_total_count
+            0,                   // facts_cell_count
+            0.0,                 // flush_wait_ms
+            0.0,                 // prefetch_recv_ms
+            2,                   // prefetch_channel_pending
+            4,                   // prefetch_channel_capacity
+            1,                   // flush_channel_pending
+            4,                   // flush_channel_capacity
         );
 
         let snap = perf.snapshot().expect("should have data after record");
@@ -1396,6 +1405,54 @@ mod tests {
         assert_eq!(snap.flush_channel_capacity, Some(4));
     }
 
+    /// D-9: the live owner-memory gauge is either this batch's walk or absent;
+    /// a batch without a walk does not carry the previous value forward.
+    #[test]
+    fn owner_memory_gauge_is_absent_after_a_batch_without_a_walk() {
+        let perf = BulkBuildPerfStats::default();
+        let record = |owner_memory_bytes: Option<u64>, batch_count: u64| {
+            perf.record_batch(
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                owner_memory_bytes,
+                10,
+                1,
+                1,
+                1,
+                1,
+                1,
+                batch_count,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0,
+                1,
+                0,
+                1,
+            );
+            perf.snapshot().expect("recorded").owner_memory_bytes
+        };
+        assert_eq!(record(Some(7_000), 1), Some(7_000));
+        assert_eq!(record(None, 2), None);
+        assert_eq!(record(Some(9_000), 3), Some(9_000));
+    }
+
     #[test]
     fn test_snapshot_includes_facts_breakdown() {
         let perf = BulkBuildPerfStats::default();
@@ -1409,7 +1466,7 @@ mod tests {
             52.0,
             120.5,
             141.0,
-            1_800_000_000,
+            Some(1_800_000_000),
             12_345_678,
             5_000,
             3_000,
@@ -1450,19 +1507,39 @@ mod tests {
         assert!(stats.snapshot().is_none());
 
         stats.record_batch(
-            10.0, 5.0, 8.0, 3.0, 2.0,
+            10.0,
+            5.0,
+            8.0,
+            3.0,
+            2.0,
             1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
-            50.0, 200.0, 3000.0, // flush, fetch, build
-            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
-            1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_count, batch_count
-            2.5, 0.8, 3100.0,
+            50.0,
+            200.0,
+            3000.0, // flush, fetch, build
+            Some(1000),
+            500,
+            100,
+            80, // owner_mem, live_cells, created, consumed
+            1000,
+            500, // cumulative_history, cumulative_sealed
+            5000,
+            1, // batch_block_count, batch_count
+            2.5,
+            0.8,
+            3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
-            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
-            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
-            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
-            2, 4, // prefetch_channel_pending, prefetch_channel_capacity
-            3, 4, // flush_channel_pending, flush_channel_capacity
+            8.0,
+            2.0,
+            40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5,
+            100,
+            200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0,
+            3.5, // flush_wait_ms, prefetch_recv_ms
+            2,
+            4, // prefetch_channel_pending, prefetch_channel_capacity
+            3,
+            4, // flush_channel_pending, flush_channel_capacity
         );
 
         let snap = stats
@@ -1488,19 +1565,39 @@ mod tests {
     fn bulk_build_progress_snapshot_includes_disk_pressure_fields() {
         let stats = BulkBuildPerfStats::default();
         stats.record_batch(
-            10.0, 5.0, 8.0, 3.0, 2.0,
+            10.0,
+            5.0,
+            8.0,
+            3.0,
+            2.0,
             1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
-            50.0, 200.0, 3000.0, // flush, fetch, build
-            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
-            1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_count, batch_count
-            2.5, 0.8, 3100.0,
+            50.0,
+            200.0,
+            3000.0, // flush, fetch, build
+            Some(1000),
+            500,
+            100,
+            80, // owner_mem, live_cells, created, consumed
+            1000,
+            500, // cumulative_history, cumulative_sealed
+            5000,
+            1, // batch_block_count, batch_count
+            2.5,
+            0.8,
+            3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
-            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
-            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
-            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
-            2, 4, // prefetch_channel_pending, prefetch_channel_capacity
-            3, 4, // flush_channel_pending, flush_channel_capacity
+            8.0,
+            2.0,
+            40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5,
+            100,
+            200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0,
+            3.5, // flush_wait_ms, prefetch_recv_ms
+            2,
+            4, // prefetch_channel_pending, prefetch_channel_capacity
+            3,
+            4, // flush_channel_pending, flush_channel_capacity
         );
 
         let before = stats
@@ -1537,19 +1634,39 @@ mod tests {
     fn bulk_build_progress_snapshot_threads_unavailable_disk_state() {
         let stats = BulkBuildPerfStats::default();
         stats.record_batch(
-            10.0, 5.0, 8.0, 3.0, 2.0,
+            10.0,
+            5.0,
+            8.0,
+            3.0,
+            2.0,
             1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
-            50.0, 200.0, 3000.0, // flush, fetch, build
-            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
-            1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_count, batch_count
-            2.5, 0.8, 3100.0,
+            50.0,
+            200.0,
+            3000.0, // flush, fetch, build
+            Some(1000),
+            500,
+            100,
+            80, // owner_mem, live_cells, created, consumed
+            1000,
+            500, // cumulative_history, cumulative_sealed
+            5000,
+            1, // batch_block_count, batch_count
+            2.5,
+            0.8,
+            3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
-            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
-            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
-            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
-            2, 4, // prefetch_channel_pending, prefetch_channel_capacity
-            3, 4, // flush_channel_pending, flush_channel_capacity
+            8.0,
+            2.0,
+            40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5,
+            100,
+            200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0,
+            3.5, // flush_wait_ms, prefetch_recv_ms
+            2,
+            4, // prefetch_channel_pending, prefetch_channel_capacity
+            3,
+            4, // flush_channel_pending, flush_channel_capacity
         );
 
         stats.record_disk_telemetry(Some("unavailable"), None, None, None, None, None);
@@ -1569,19 +1686,39 @@ mod tests {
     fn bulk_build_progress_snapshot_keeps_absent_disk_telemetry_absent() {
         let stats = BulkBuildPerfStats::default();
         stats.record_batch(
-            10.0, 5.0, 8.0, 3.0, 2.0,
+            10.0,
+            5.0,
+            8.0,
+            3.0,
+            2.0,
             1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
-            50.0, 200.0, 3000.0, // flush, fetch, build
-            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
-            1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_count, batch_count
-            2.5, 0.8, 3100.0,
+            50.0,
+            200.0,
+            3000.0, // flush, fetch, build
+            Some(1000),
+            500,
+            100,
+            80, // owner_mem, live_cells, created, consumed
+            1000,
+            500, // cumulative_history, cumulative_sealed
+            5000,
+            1, // batch_block_count, batch_count
+            2.5,
+            0.8,
+            3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
-            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
-            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
-            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
-            2, 4, // prefetch_channel_pending, prefetch_channel_capacity
-            3, 4, // flush_channel_pending, flush_channel_capacity
+            8.0,
+            2.0,
+            40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5,
+            100,
+            200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0,
+            3.5, // flush_wait_ms, prefetch_recv_ms
+            2,
+            4, // prefetch_channel_pending, prefetch_channel_capacity
+            3,
+            4, // flush_channel_pending, flush_channel_capacity
         );
 
         stats.record_disk_telemetry(None, None, None, None, None, None);

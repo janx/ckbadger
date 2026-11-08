@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use chrono::NaiveDate;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::{CkbadgerStore, DailyHodlWave, HodlTrackerCursor};
@@ -49,25 +49,29 @@ impl HodlWaveTracker {
     pub fn from_rows(rows: Vec<(NaiveDate, i128)>, cursor: HodlTrackerCursor) -> Result<Self> {
         let last_snapshot_date = NaiveDate::parse_from_str(&cursor.last_snapshot_date, "%Y%m%d")
             .map_err(|e| {
-                anyhow!(
+                super::corrupt_stored_row(format!(
                     "corrupt hodl cursor last_snapshot_date '{}': {e}",
                     cursor.last_snapshot_date
-                )
+                ))
             })?;
         let mut capacity_by_creation_date = HashMap::with_capacity(rows.len());
         for (day, capacity) in rows {
             if capacity <= 0 {
-                bail!("hodl_capacity_by_date row {day} holds non-positive capacity {capacity}");
+                return Err(super::corrupt_stored_row(format!(
+                    "hodl_capacity_by_date row {day} holds non-positive capacity {capacity}"
+                )));
             }
             if capacity_by_creation_date.insert(day, capacity).is_some() {
-                bail!("hodl_capacity_by_date row {day} appears twice");
+                return Err(super::corrupt_stored_row(format!(
+                    "hodl_capacity_by_date row {day} appears twice"
+                )));
             }
         }
         if cursor.holder_count < 0 {
-            bail!(
+            return Err(super::corrupt_stored_row(format!(
                 "invalid hodl cursor: negative holder_count={}",
                 cursor.holder_count
-            );
+            )));
         }
         Ok(Self {
             capacity_by_creation_date,
@@ -84,10 +88,10 @@ impl HodlWaveTracker {
         match store.get_hodl_cursor()? {
             Some(cursor) => Self::from_rows(rows, cursor),
             None if rows.is_empty() => Ok(Self::new()),
-            None => bail!(
-                "hodl_capacity_by_date holds {} rows but there is no hodl_cursor. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            None => Err(super::corrupt_stored_row(format!(
+                "hodl_capacity_by_date holds {} rows but there is no hodl_cursor",
                 rows.len()
-            ),
+            ))),
         }
     }
 
@@ -178,32 +182,33 @@ impl HodlWaveTracker {
             );
         }
 
+        // The per-day capacities are stored aggregates: a consume they cannot
+        // explain (no capacity on the day, less than the cell) is
+        // rebuild-required (D-4c). The subtraction of a positive capacity can
+        // only overflow below `i128::MIN`, an underflow too.
         let current = self
             .capacity_by_creation_date
             .get(&creation_date)
             .copied()
             .ok_or_else(|| {
-                anyhow!(
+                super::aggregate_underflow(format!(
                     "missing live capacity bucket for consumed cell: creation_date={}",
                     creation_date
-                )
+                ))
             })?;
 
         let next = current.checked_sub(capacity as i128).ok_or_else(|| {
-            anyhow!(
+            super::aggregate_underflow(format!(
                 "capacity subtraction overflow: current={}, capacity={}",
-                current,
-                capacity
-            )
+                current, capacity
+            ))
         })?;
 
         if next < 0 {
-            bail!(
+            return Err(super::aggregate_underflow(format!(
                 "live capacity underflow on consume: creation_date={}, current={}, capacity={}",
-                creation_date,
-                current,
-                capacity
-            );
+                creation_date, current, capacity
+            )));
         }
 
         if next == 0 {
@@ -226,12 +231,10 @@ impl HodlWaveTracker {
                 .ok_or_else(|| anyhow::anyhow!("holder_count overflow"))?;
         } else if old_live_cells > 0 && new_live_cells == 0 {
             if self.holder_count <= 0 {
-                bail!(
+                return Err(super::aggregate_underflow(format!(
                     "holder_count underflow: holder_count={}, old_live_cells={}, new_live_cells={}",
-                    self.holder_count,
-                    old_live_cells,
-                    new_live_cells
-                );
+                    self.holder_count, old_live_cells, new_live_cells
+                )));
             }
             self.holder_count -= 1;
         }
@@ -483,6 +486,81 @@ mod tests {
         );
     }
 
+    fn assert_rebuild_required(err: &anyhow::Error, what: &str) {
+        assert!(
+            crate::lifecycle::is_rebuild_required(err),
+            "{what}: {err:#}"
+        );
+        assert!(err.to_string().contains(what), "{what}: {err:#}");
+    }
+
+    fn cursor(holder_count: i64, last_snapshot_date: &str) -> HodlTrackerCursor {
+        HodlTrackerCursor {
+            holder_count,
+            last_snapshot_date: last_snapshot_date.to_string(),
+            last_processed_block: 1,
+        }
+    }
+
+    /// D-4c: stored tracker rows the tracker cannot hold (an undecodable
+    /// cursor date, a non-positive day, a day listed twice, a negative holder
+    /// count) are corruption the chain cannot repair: rebuild-required.
+    #[test]
+    fn corrupt_stored_rows_are_rebuild_required() {
+        let day = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let err = HodlWaveTracker::from_rows(Vec::new(), cursor(0, "2024-13-01")).unwrap_err();
+        assert_rebuild_required(&err, "corrupt hodl cursor last_snapshot_date");
+        let err = HodlWaveTracker::from_rows(vec![(day, 0)], cursor(0, "20240115")).unwrap_err();
+        assert_rebuild_required(&err, "non-positive capacity");
+        let err = HodlWaveTracker::from_rows(vec![(day, 1), (day, 2)], cursor(0, "20240115"))
+            .unwrap_err();
+        assert_rebuild_required(&err, "appears twice");
+        let err = HodlWaveTracker::from_rows(Vec::new(), cursor(-1, "20240115")).unwrap_err();
+        assert_rebuild_required(&err, "negative holder_count");
+    }
+
+    /// D-4c: a consume or holder transition the stored totals cannot explain
+    /// (no capacity on the creation day, less capacity than the cell, a total
+    /// so negative the subtraction overflows, no holder left) is
+    /// rebuild-required.
+    #[test]
+    fn consume_and_holder_underflows_are_rebuild_required() {
+        let day = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let mut tracker = HodlWaveTracker::new();
+        let err = tracker.cell_consumed(day, 10_00000000).unwrap_err();
+        assert_rebuild_required(&err, "missing live capacity bucket");
+        tracker.cell_created(day, 100_00000000);
+        let err = tracker.cell_consumed(day, 150_00000000).unwrap_err();
+        assert_rebuild_required(&err, "live capacity underflow on consume");
+        tracker.capacity_by_creation_date.insert(day, i128::MIN);
+        let err = tracker.cell_consumed(day, 1).unwrap_err();
+        assert_rebuild_required(&err, "capacity subtraction overflow");
+        let err = HodlWaveTracker::new()
+            .update_holder_count(3, 0)
+            .unwrap_err();
+        assert_rebuild_required(&err, "holder_count underflow");
+    }
+
+    /// D-4c: the caller's invariants stay plain errors: they are not stored
+    /// state (blocks out of order, a non-positive consumed capacity, a cursor
+    /// before any block, an overflow).
+    #[test]
+    fn caller_invariants_stay_plain_errors() {
+        let day = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let mut tracker = HodlWaveTracker::new();
+        tracker.record_block(7).unwrap();
+        let err = tracker.record_block(7).unwrap_err();
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let err = tracker.cell_consumed(day, 0).unwrap_err();
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        let err = HodlWaveTracker::new().cursor().unwrap_err();
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+        tracker.holder_count = i64::MAX;
+        let err = tracker.update_holder_count(0, 1).unwrap_err();
+        assert!(err.to_string().contains("overflow"), "{err:#}");
+        assert!(!crate::lifecycle::is_rebuild_required(&err), "{err:#}");
+    }
+
     #[test]
     fn rows_without_a_cursor_fail_to_load() {
         let dir = tempfile::tempdir().unwrap();
@@ -494,5 +572,13 @@ mod tests {
         batch.commit().unwrap();
         let err = HodlWaveTracker::load(&store).unwrap_err();
         assert!(err.to_string().contains("no hodl_cursor"), "{err}");
+        // Fix round, finding 7: the remedy is said once, by the error type.
+        assert_eq!(
+            err.to_string(),
+            "hodl_capacity_by_date holds 1 rows but there is no hodl_cursor; \
+             delete RocksDB and re-sync from genesis"
+        );
+        // D-4c: rows without their cursor are not a state any sync leaves.
+        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 }

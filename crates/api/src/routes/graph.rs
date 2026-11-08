@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::response::{ok, ApiError, ApiResult};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::routes::proposal_window::{block_proposal_zone, resolve_committed_txs, ZoneProposal};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{parse_hash32, parse_output_index, validate_block_number};
@@ -56,22 +56,39 @@ pub struct GraphResponse {
     pub links: Vec<GraphLink>,
 }
 
+/// The node's copy of a transaction the index holds. Both graph handlers ask
+/// only after the index found the transaction, so a hash that is not 32 bytes
+/// or a transaction the node does not store is a broken invariant (an internal
+/// error, as for every other node store caller), never an empty graph.
+fn indexed_node_transaction(
+    ckb_store: &ckb_store_reader::CkbChainReader,
+    tx_hash: &[u8],
+) -> Result<ckb_types::core::TransactionView, ApiRouteError> {
+    let hash: [u8; 32] = tx_hash.try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "indexed transaction hash 0x{} has {} bytes, expected 32",
+            hex::encode(tx_hash),
+            tx_hash.len()
+        ))
+    })?;
+    ckb_store
+        .get_transaction(&hash)
+        .map_err(ApiError::node_store)?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "transaction 0x{} is indexed but not in the node DB",
+                hex::encode(hash)
+            ))
+        })
+}
+
 /// Get the inputs for a transaction by reading the raw CKB block data.
 /// Returns Vec<(prev_tx_hash, prev_output_index)> for non-cellbase transactions.
 fn get_tx_inputs_from_ckb_store(
     ckb_store: &ckb_store_reader::CkbChainReader,
     tx_hash: &[u8],
-) -> Vec<(Vec<u8>, i16)> {
-    if tx_hash.len() != 32 {
-        return Vec::new();
-    }
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(tx_hash);
-
-    let tx_view = match ckb_store.get_transaction(&hash) {
-        Some(tv) => tv,
-        None => return Vec::new(),
-    };
+) -> Result<Vec<(Vec<u8>, i16)>, ApiRouteError> {
+    let tx_view = indexed_node_transaction(ckb_store, tx_hash)?;
 
     let inputs = tx_view.inputs();
     let mut result = Vec::with_capacity(inputs.len());
@@ -86,7 +103,7 @@ fn get_tx_inputs_from_ckb_store(
         }
         result.push((prev_tx_hash.to_vec(), prev_index as i16));
     }
-    result
+    Ok(result)
 }
 
 /// Get the outputs for a transaction by reading the raw CKB block data.
@@ -94,17 +111,8 @@ fn get_tx_inputs_from_ckb_store(
 fn get_tx_outputs_from_ckb_store(
     ckb_store: &ckb_store_reader::CkbChainReader,
     tx_hash: &[u8],
-) -> Vec<(i16, i64)> {
-    if tx_hash.len() != 32 {
-        return Vec::new();
-    }
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(tx_hash);
-
-    let tx_view = match ckb_store.get_transaction(&hash) {
-        Some(tv) => tv,
-        None => return Vec::new(),
-    };
+) -> Result<Vec<(i16, i64)>, ApiRouteError> {
+    let tx_view = indexed_node_transaction(ckb_store, tx_hash)?;
 
     let outputs = tx_view.outputs();
     let mut result = Vec::with_capacity(outputs.len());
@@ -113,7 +121,7 @@ fn get_tx_outputs_from_ckb_store(
         let capacity: u64 = output.capacity().unpack();
         result.push((i as i16, capacity as i64));
     }
-    result
+    Ok(result)
 }
 
 fn append_consumed_by_relation(
@@ -265,7 +273,7 @@ async fn get_cell_graph(
     // Get inputs of the creating transaction (depth > 1)
     if depth > 1 {
         if let Some(ref ckb_store) = state.ckb_store {
-            let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes);
+            let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes)?;
 
             if !inputs.is_empty() {
                 let store = state.store.clone();
@@ -385,7 +393,7 @@ async fn get_tx_graph(
     // Get inputs (unless cellbase)
     if !tx_entry.is_cellbase {
         if let Some(ref ckb_store) = state.ckb_store {
-            let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes);
+            let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes)?;
 
             if !inputs.is_empty() {
                 // Batch lookup cells
@@ -441,7 +449,7 @@ async fn get_tx_graph(
 
     // Get outputs from CKB store (most accurate) or from ckbadger-store cells
     if let Some(ref ckb_store) = state.ckb_store {
-        let outputs = get_tx_outputs_from_ckb_store(ckb_store, &hash_bytes);
+        let outputs = get_tx_outputs_from_ckb_store(ckb_store, &hash_bytes)?;
 
         if !outputs.is_empty() {
             // Batch check which outputs are live
@@ -615,7 +623,10 @@ async fn get_proposal_graph(
 
     // Get the block's full proposal zone (own + embedded uncles') from CKB store
     let proposals: Vec<ZoneProposal> = if let Some(ref ckb_store) = state.ckb_store {
-        if let Some(block_view) = ckb_store.get_block_by_number(block_number as u64) {
+        if let Some(block_view) = ckb_store
+            .get_block_by_number(block_number as u64)
+            .map_err(ApiError::node_store)?
+        {
             block_proposal_zone(&block_view)
         } else {
             Vec::new()
@@ -650,7 +661,8 @@ async fn get_proposal_graph(
     // short id is the first 10 bytes of the tx hash.
     let short_ids: Vec<Vec<u8>> = proposals.iter().map(|p| p.short_id.clone()).collect();
     let commitments: Vec<Option<(Vec<u8>, i64)>> = match state.ckb_store {
-        Some(ref ckb_store) => resolve_committed_txs(ckb_store, window, block_number, &short_ids),
+        Some(ref ckb_store) => resolve_committed_txs(ckb_store, window, block_number, &short_ids)
+            .map_err(ApiError::node_store)?,
         // Without the reader `proposals` is already empty; keep the shape.
         None => vec![None; short_ids.len()],
     };

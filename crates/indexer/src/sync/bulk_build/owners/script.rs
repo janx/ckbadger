@@ -188,15 +188,15 @@ impl ScriptOwner {
             return Ok(());
         }
 
+        // The kind is formatted only if the arithmetic below fails.
         let kind = if is_type { "type" } else { "lock" };
-        let kind_context = format!("{kind}(hash_type={hash_type})");
         let entry = self
             .daily_deltas
             .entry((code_hash.to_vec(), hash_type, is_type, date_yyyymmdd))
             .or_default();
         entry.owned_capacity_delta = checked_signed_i128(
             code_hash,
-            &kind_context,
+            format_args!("{kind}(hash_type={hash_type})"),
             "daily owned_capacity_delta",
             entry.owned_capacity_delta,
             owned_capacity_delta,
@@ -204,7 +204,7 @@ impl ScriptOwner {
         )?;
         entry.owned_knowledge_delta = checked_signed_i128(
             code_hash,
-            &kind_context,
+            format_args!("{kind}(hash_type={hash_type})"),
             "daily owned_knowledge_delta",
             entry.owned_knowledge_delta,
             owned_knowledge_delta,
@@ -1339,7 +1339,7 @@ fn checked_next_i128(
 
 fn checked_signed_i128(
     code_hash: &[u8],
-    script_kind: &str,
+    script_kind: impl std::fmt::Display,
     metric: &str,
     current: i128,
     delta: i128,
@@ -1421,6 +1421,62 @@ mod tests {
     use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts};
     use crate::sync::types::InternId;
     use ckbadger_store::{ScriptFamilyInfo, ScriptReferenceInfo, ScriptVersionInfo};
+
+    /// A daily script delta that overflows names the script kind with its
+    /// hash_type, the metric, code hash, operands, block, tx and tx_index
+    /// exactly as below, for both kinds and both metrics. The kind is
+    /// formatted only when the arithmetic fails.
+    #[test]
+    fn script_daily_delta_overflow_names_kind_hash_type_and_tx() {
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xcd; 32],
+            block_number: 777,
+            block_hash: [0x01; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 5,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: Vec::new().into(),
+        };
+        let code_hash = [0x5c; 32];
+        for (is_type, kind) in [(false, "lock"), (true, "type")] {
+            let mut capacity_owner = ScriptOwner::default();
+            capacity_owner
+                .record_daily_delta(&code_hash, 2, is_type, 20240102, i128::MAX, 0, &tx)
+                .expect("first capacity delta fits");
+            let capacity_error = capacity_owner
+                .record_daily_delta(&code_hash, 2, is_type, 20240102, 1, 0, &tx)
+                .expect_err("capacity delta must overflow");
+            assert_eq!(
+                capacity_error.to_string(),
+                format!(
+                    "script {kind}(hash_type=2) daily owned_capacity_delta overflow: code_hash=0x{}, current={}, delta=1, block=777, tx=0x{}, tx_index=5",
+                    "5c".repeat(32),
+                    i128::MAX,
+                    "cd".repeat(32)
+                )
+            );
+
+            let mut knowledge_owner = ScriptOwner::default();
+            knowledge_owner
+                .record_daily_delta(&code_hash, 4, is_type, 20240102, 0, i128::MIN, &tx)
+                .expect("first knowledge delta fits");
+            let knowledge_error = knowledge_owner
+                .record_daily_delta(&code_hash, 4, is_type, 20240102, 0, -1, &tx)
+                .expect_err("knowledge delta must overflow");
+            assert_eq!(
+                knowledge_error.to_string(),
+                format!(
+                    "script {kind}(hash_type=4) daily owned_knowledge_delta overflow: code_hash=0x{}, current={}, delta=-1, block=777, tx=0x{}, tx_index=5",
+                    "5c".repeat(32),
+                    i128::MIN,
+                    "cd".repeat(32)
+                )
+            );
+        }
+    }
 
     #[test]
     fn script_owner_reduces_lock_and_type_live_usage() {
@@ -2140,7 +2196,7 @@ mod tests {
         let lock_args_id = interner.intern_bytes(vec![0x03; 20]);
         let type_script_hash_id = interner.intern_bytes(registered.clone());
         let type_code_hash_id =
-            interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+            interner.intern_bytes(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec());
         let type_args_id = interner.intern_bytes(vec![0x05; 32]);
         let frozen = interner.snapshot_for_reads();
         let ctx = ReducerContext::new(&frozen);
@@ -2272,7 +2328,7 @@ mod tests {
             let lock_args_id = interner.intern_bytes(vec![0x03; 20]);
             let type_script_hash_id = interner.intern_bytes(reference_hash.clone());
             let type_code_hash_id = interner.intern_bytes(if native_type_id {
-                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()
+                ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec()
             } else {
                 vec![0x04; 32]
             });
@@ -2472,7 +2528,7 @@ mod tests {
         interner.intern_bytes(vec![0x02; 32]);
         interner.intern_bytes(vec![0x03; 20]);
         let reference_hash_id = interner.intern_bytes(reference_hash.clone());
-        interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+        interner.intern_bytes(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec());
         interner.intern_bytes(vec![0x05; 20]);
         interner.intern_bytes(vec![0x06; 32]);
         interner.intern_bytes(vec![0x07; 20]);
@@ -2820,7 +2876,7 @@ mod tests {
         interner.intern_bytes(vec![0x12; 32]);
         interner.intern_bytes(vec![0x13; 20]);
         let reference_hash_id = interner.intern_bytes(reference_hash.clone());
-        interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+        interner.intern_bytes(ckbadger_store::keys::TYPE_ID_CODE_HASH.to_vec());
         interner.intern_bytes(vec![0x15; 20]);
         interner.intern_bytes(vec![0x16; 32]);
         interner.intern_bytes(vec![0x17; 20]);

@@ -16,7 +16,6 @@ use ckb_store_reader::CkbChainReader;
 use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::convert::Infallible;
 
 use crate::consensus::ProposalWindow;
 
@@ -109,15 +108,16 @@ pub(crate) type Commitment = Option<(Vec<u8>, i64)>;
 /// Semantics are [`resolve_committed_txs_with`]'s. A missing window block (a
 /// tip-adjacent window extending past the chain head) is skipped: proposals
 /// unresolved within the blocks that exist stay `None`, which is honest
-/// not-yet-committed data, not a fallback.
+/// not-yet-committed data, not a fallback. A window block the node stores but
+/// that cannot be read aborts the scan with the reader's error.
 pub(crate) fn resolve_committed_txs(
     ckb_store: &CkbChainReader,
     window: ProposalWindow,
     proposer_block: i64,
     short_ids: &[Vec<u8>],
-) -> Vec<Commitment> {
-    let block_tx_hashes = |number: i64| -> Result<Option<Vec<[u8; 32]>>, Infallible> {
-        Ok(ckb_store.get_block_by_number(number as u64).map(|block| {
+) -> anyhow::Result<Vec<Commitment>> {
+    let block_tx_hashes = |number: i64| -> anyhow::Result<Option<Vec<[u8; 32]>>> {
+        Ok(ckb_store.get_block_by_number(number as u64)?.map(|block| {
             block
                 .transactions()
                 .iter()
@@ -125,10 +125,7 @@ pub(crate) fn resolve_committed_txs(
                 .collect()
         }))
     };
-    match resolve_committed_txs_with(window, proposer_block, short_ids, block_tx_hashes) {
-        Ok(resolved) => resolved,
-        Err(never) => match never {},
-    }
+    resolve_committed_txs_with(window, proposer_block, short_ids, block_tx_hashes)
 }
 
 /// The one commitment rule, over any source of block transaction hashes.
@@ -214,6 +211,7 @@ mod tests {
     use super::*;
     use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, UncleBlockView};
     use ckb_types::packed::ProposalShortId;
+    use std::convert::Infallible;
 
     fn id(byte: u8) -> ProposalShortId {
         ProposalShortId::new([byte; 10])

@@ -2792,11 +2792,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     set_script_fixture_block_tx_count(&store, 30, 2);
     set_script_fixture_block_tx_count(&store, 40, 2);
     // The type-id reference is the derived hash of the code cells' TYPE_ID script.
-    let reference = compute_script_hash(
-        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
-        1,
-        &[0x13; 32],
-    );
+    let reference = compute_script_hash(&ckbadger_store::keys::TYPE_ID_CODE_HASH, 1, &[0x13; 32]);
     let binary = [0x41; 32];
     let history = ScriptVersionInfo {
         version_hash: binary.to_vec(),
@@ -2853,12 +2849,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
                 lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some(
-                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                ),
+                type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x13; 32]),
                 udt_amount: None,
@@ -3003,12 +2994,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
@@ -3135,12 +3121,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
@@ -4400,11 +4381,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
     set_script_fixture_block_tx_count(&store, 10, 2);
     set_script_fixture_block_tx_count(&store, 11, 2);
     // The type-id reference is the derived hash of the code cells' TYPE_ID script.
-    let reference = compute_script_hash(
-        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
-        1,
-        &[0x13; 32],
-    );
+    let reference = compute_script_hash(&ckbadger_store::keys::TYPE_ID_CODE_HASH, 1, &[0x13; 32]);
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
     let anchors = [vec![0x61; 32], vec![0x71; 32]];
     let families = ["First", "Second"];
@@ -4476,12 +4453,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                     lock_code_hash: [0x12; 32],
                     lock_hash_type: 1,
                     lock_args: vec![],
-                    type_code_hash: Some(
-                        hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                    ),
+                    type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
                     type_hash_type: Some(1),
                     type_args: Some(vec![0x13; 32]),
                     data_size: 32,
@@ -4901,11 +4873,7 @@ async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound
 async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_code() {
     let store = test_store();
     // The type-id reference is the derived hash of the code cell's TYPE_ID script.
-    let reference = compute_script_hash(
-        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
-        1,
-        &[0x13; 32],
-    );
+    let reference = compute_script_hash(&ckbadger_store::keys::TYPE_ID_CODE_HASH, 1, &[0x13; 32]);
     let mapped_binary = vec![0x41; 32];
     let actual_binary = [0x42; 32];
     let mut batch = StoreBatch::new(store.as_ref());
@@ -4950,12 +4918,7 @@ async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_cod
             lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some(
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
+            type_code_hash: Some(ckbadger_store::keys::TYPE_ID_CODE_HASH),
             type_hash_type: Some(1),
             type_args: Some(vec![0x13; 32]),
             data_size: 32,
@@ -5018,4 +4981,200 @@ async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_cod
     )
     .unwrap();
     assert!(body.contains("has no live code cell"), "{body}");
+}
+
+/// A chain whose tx `user` carries one `dep_type = dep_group` cell dep on
+/// output `dep_index` of `deployment`, whose output 0 holds `dep_cell_data`.
+/// Returns the router over it and the hex of the user tx hash and the
+/// deployment tx hash.
+async fn dep_group_lookup_fixture(
+    dep_cell_data: Vec<u8>,
+    dep_index: u32,
+) -> (axum::Router, String, String) {
+    dep_group_lookup_fixture_with_live_row(dep_cell_data, dep_index, None).await
+}
+
+/// [`dep_group_lookup_fixture`], plus an optional raw `COLUMN_CELL_DATA` row
+/// (`"12"`) stored for the dep cell, as the node keeps one for a live cell.
+async fn dep_group_lookup_fixture_with_live_row(
+    dep_cell_data: Vec<u8>,
+    dep_index: u32,
+    live_cell_data_row: Option<Vec<u8>>,
+) -> (axum::Router, String, String) {
+    use ckb_types::{bytes::Bytes, core, packed, prelude::*};
+    let deployment = core::TransactionBuilder::default()
+        .output(packed::CellOutput::new_builder().build())
+        .output_data(Bytes::from(dep_cell_data).pack())
+        .build();
+    let user = core::TransactionBuilder::default()
+        .cell_dep(
+            packed::CellDep::new_builder()
+                .out_point(packed::OutPoint::new(deployment.hash(), dep_index))
+                .dep_type(core::DepType::DepGroup.into())
+                .build(),
+        )
+        .output(packed::CellOutput::new_builder().build())
+        .output_data(Bytes::new().pack())
+        .build();
+    let user_hash = format!("0x{}", hex::encode(user.hash().as_slice()));
+    let deployment_hash = format!("0x{}", hex::encode(deployment.hash().as_slice()));
+    let deployment_tx_hash: [u8; 32] = deployment.hash().unpack();
+    let chain = seed_ckb_chain(&[core::BlockBuilder::default()
+        .number(1u64.pack())
+        .epoch(core::EpochNumberWithFraction::new(0, 1, 1800).pack())
+        .transaction(deployment)
+        .transaction(user)
+        .build()]);
+    if let Some(row) = live_cell_data_row {
+        let mut options = Options::default();
+        options.create_missing_column_families(true);
+        let descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+            .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+            .collect();
+        let db = DB::open_cf_descriptors(&options, &chain.path, descriptors).unwrap();
+        let cf = db.cf_handle("12").unwrap();
+        // The node's own key for a live cell's data row.
+        let key =
+            packed::OutPoint::new(packed::Byte32::new(deployment_tx_hash), dep_index).to_cell_key();
+        db.put_cf(&cf, key, row).unwrap();
+        db.flush_cf(&cf).unwrap();
+    }
+    let store = test_store();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    (app, user_hash, deployment_hash)
+}
+
+async fn post_script_lookup_in_tx(
+    app: &axum::Router,
+    code_hash: &str,
+    tx_hash: &str,
+) -> (StatusCode, serde_json::Value) {
+    let body = serde_json::json!({ "codeHashes": [code_hash], "txHash": tx_hash }).to_string();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// D-4a: the node accepted the transaction, so its `dep_group` cell dep
+/// resolved by the consensus rule; a dep cell whose data is not a dep group is
+/// a broken invariant, not an empty member list. The per-tx lookup fails
+/// naming the tx and the dep out point instead of resolving as if the dep were
+/// absent.
+#[tokio::test]
+async fn script_lookup_fails_on_a_dep_group_dep_whose_cell_is_not_a_dep_group() {
+    let (app, user_hash, deployment_hash) =
+        dep_group_lookup_fixture(b"not an OutPointVec".to_vec(), 0).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains(&user_hash), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:0")),
+        "{message}"
+    );
+    assert!(message.contains("dep_group"), "{message}");
+}
+
+/// D-4a: a well-formed dep group still resolves as before; a member the store
+/// has not indexed is skipped (the node may be ahead of the store), so the
+/// lookup answers 200.
+#[tokio::test]
+async fn script_lookup_expands_a_well_formed_dep_group_dep() {
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0x5a; 32]);
+    data.extend_from_slice(&3u32.to_le_bytes());
+    let (app, user_hash, _) = dep_group_lookup_fixture(data, 0).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+}
+
+/// D-4a: an on-chain `dep_group` dep whose cell the node has no data for is a
+/// broken invariant too (`CkbChainReader::get_cell_data` answers `None` for a
+/// cell the node does not store), not an empty member list.
+#[tokio::test]
+async fn script_lookup_fails_on_a_dep_group_dep_without_cell_data() {
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0x5a; 32]);
+    data.extend_from_slice(&3u32.to_le_bytes());
+    let (app, user_hash, deployment_hash) = dep_group_lookup_fixture(data, 7).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains(&user_hash), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:7")),
+        "{message}"
+    );
+    assert!(message.contains("no data"), "{message}");
+}
+
+/// D-2b: a dep group dep whose live cell data row is stored but does not
+/// decode is a node store error naming the row, the tx and the dep. Before,
+/// the reader returned the row's raw bytes as the cell's data.
+#[tokio::test]
+async fn script_lookup_fails_on_a_dep_group_dep_with_an_undecodable_cell_data_row() {
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0x5a; 32]);
+    data.extend_from_slice(&3u32.to_le_bytes());
+    let (app, user_hash, deployment_hash) =
+        dep_group_lookup_fixture_with_live_row(data, 0, Some(vec![5, 5, 5])).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("undecodable CKB cell data row"),
+        "{message}"
+    );
+    assert!(message.contains(&user_hash), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:0")),
+        "{message}"
+    );
+}
+
+/// Fix round, finding 3: an empty dep group (a valid `OutPointVec` with no
+/// members, which consensus does not resolve) fails both API rules that
+/// expand a declared `dep_group` cell dep: the per-tx script lookup and the
+/// tx page's resolved cell deps. Before, the cell deps page decoded it with a
+/// bare `OutPointVec` read and answered an empty dependency.
+#[tokio::test]
+async fn an_empty_dep_group_fails_both_dep_group_expansions() {
+    let (app, user_hash, deployment_hash) =
+        dep_group_lookup_fixture(0u32.to_le_bytes().to_vec(), 0).await;
+
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("dep group has no members"), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:0")),
+        "{message}"
+    );
+
+    let (status, json) = get_json(&app, &format!("/transactions/{user_hash}/cell-deps")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("dep group has no members"), "{message}");
+    assert!(
+        message.contains(&format!("malformed dep group {deployment_hash}:0")),
+        "{message}"
+    );
 }

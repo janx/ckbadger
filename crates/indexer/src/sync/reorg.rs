@@ -416,7 +416,7 @@ impl Indexer {
             .expect("ckb_store must exist for chain block hash reads");
         store.refresh()?;
         store
-            .get_block_hash(number)
+            .get_block_hash(number)?
             .map(|h| h.to_vec())
             .ok_or_else(|| anyhow::anyhow!("Block {} not found in CKB RocksDB", number))
     }
@@ -429,8 +429,8 @@ impl Indexer {
             .expect("ckb_store must exist for chain tip reads");
         store.refresh()?;
         store
-            .tip_number()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get chain tip from CKB RocksDB"))
+            .tip_number()?
+            .ok_or_else(|| anyhow::anyhow!("CKB RocksDB has no chain tip"))
     }
 
     // === check_and_handle_reorg, find_fork_point ===

@@ -14,7 +14,7 @@ use super::{BulkReducer, ReducerContext};
 use crate::parser::{ParsedUdtCell, UdtParser};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
-    CellFacts, CellProtocolFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
+    CellFacts, CellLocator, CellProtocolFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
 };
 use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
@@ -827,11 +827,7 @@ impl TokenCellView {
             cell.udt_amount,
             ctx,
             tx,
-            format!(
-                "output outpoint=0x{}:{}",
-                hex::encode(cell.outpoint.tx_hash),
-                cell.outpoint.index
-            ),
+            CellLocator::output(&cell.outpoint),
         )
     }
 
@@ -850,11 +846,7 @@ impl TokenCellView {
             input.udt_amount,
             ctx,
             tx,
-            format!(
-                "input outpoint=0x{}:{}",
-                hex::encode(input.outpoint.tx_hash),
-                input.outpoint.index
-            ),
+            CellLocator::input(&input.outpoint),
         )
     }
 
@@ -869,7 +861,7 @@ impl TokenCellView {
         udt_amount: Option<u128>,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
-        location: String,
+        location: CellLocator<'_>,
     ) -> Result<Option<Self>> {
         let standard = match semantic_tag {
             CellSemanticTag::Sudt => "sudt",
@@ -1310,6 +1302,138 @@ mod tests {
     use super::*;
     use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts};
     use crate::sync::types::InternId;
+
+    /// `TokenCellView` names the failing cell's block, tx, tx_index and side +
+    /// outpoint exactly as below, for every arm on both sides. The location is
+    /// formatted only when an arm fails.
+    #[test]
+    fn token_cell_view_errors_name_block_tx_and_outpoint() {
+        let interner = IdentityInterner::default();
+        let type_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let code_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let args_id = interner.intern_bytes(vec![0xcc; 20]);
+        let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let prefix = |field: &str| format!("missing {field} for UDT cell:");
+        type Parts = (
+            Option<InternId>,
+            Option<InternId>,
+            Option<i16>,
+            Option<InternId>,
+        );
+        let cases: [(Parts, String); 5] = [
+            (
+                (None, Some(code_hash_id), Some(1), Some(args_id)),
+                prefix("type_script_hash_id"),
+            ),
+            (
+                (Some(type_hash_id), None, Some(1), Some(args_id)),
+                prefix("type_code_hash_id"),
+            ),
+            (
+                (Some(type_hash_id), Some(code_hash_id), None, Some(args_id)),
+                prefix("type_hash_type"),
+            ),
+            (
+                (Some(type_hash_id), Some(code_hash_id), Some(1), None),
+                prefix("type_args_id"),
+            ),
+            (
+                (
+                    Some(type_hash_id),
+                    Some(code_hash_id),
+                    Some(300),
+                    Some(args_id),
+                ),
+                format!(
+                    "UDT cell type_hash_type out of u8 range: type_hash=0x{}, hash_type=300,",
+                    "aa".repeat(32)
+                ),
+            ),
+        ];
+
+        for ((type_hash, type_code, hash_type, type_args), head) in cases {
+            let output = CellFacts {
+                outpoint: OutPointKey::new([0xab; 32], 7),
+                created_at_block: 500,
+                created_by_block_dao_ar: 1,
+                capacity: 142_00000000,
+                lock_script_hash_id: lock_id,
+                lock_code_hash_id: lock_id,
+                lock_hash_type: 1,
+                lock_args_id: args_id,
+                type_script_hash_id: type_hash,
+                type_code_hash_id: type_code,
+                type_hash_type: hash_type,
+                type_args_id: type_args,
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: Some(1000),
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            };
+            let input = ResolvedInputFacts {
+                outpoint: OutPointKey::new([0xef; 32], 3),
+                created_at_block: 400,
+                created_by_block_dao_ar: 1,
+                capacity: 142_00000000,
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data_hash: None,
+                udt_amount: Some(1000),
+                lock_script_hash_id: lock_id,
+                lock_code_hash_id: lock_id,
+                lock_hash_type: 1,
+                lock_args_id: args_id,
+                type_script_hash_id: type_hash,
+                type_code_hash_id: type_code,
+                type_hash_type: hash_type,
+                type_args_id: type_args,
+                semantic_tag: CellSemanticTag::Xudt,
+                dao_state: None,
+                dao_compensation_ars: None,
+                protocol_facts: None,
+            };
+            let tx = ResolvedTxFacts {
+                tx_hash: [0xcd; 32],
+                block_number: 500,
+                block_hash: [0x01; 32],
+                timestamp_ms: 1_700_000_000_000,
+                chain_time_ms: 1_700_000_000_000,
+                block_dao_ar: 1,
+                tx_index: 4,
+                dotbit_action: None,
+                resolved_inputs: vec![input.clone()],
+                cells: vec![output.clone()].into(),
+            };
+
+            let output_error =
+                TokenCellView::from_output(&output, &ctx, &tx).expect_err("output arm must fail");
+            assert_eq!(
+                output_error.to_string(),
+                format!(
+                    "{head} block=500, tx=0x{}, tx_index=4, output outpoint=0x{}:7",
+                    "cd".repeat(32),
+                    "ab".repeat(32)
+                )
+            );
+            let input_error =
+                TokenCellView::from_input(&input, &ctx, &tx).expect_err("input arm must fail");
+            assert_eq!(
+                input_error.to_string(),
+                format!(
+                    "{head} block=500, tx=0x{}, tx_index=4, input outpoint=0x{}:3",
+                    "cd".repeat(32),
+                    "ef".repeat(32)
+                )
+            );
+        }
+    }
 
     #[test]
     fn token_owner_reduces_live_balances_and_removes_empty_holder() {

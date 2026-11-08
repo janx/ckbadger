@@ -460,7 +460,7 @@ fn node_cell(
 ) -> anyhow::Result<(packed::CellOutput, ckb_types::bytes::Bytes)> {
     let hash: [u8; 32] = outpoint.tx_hash().unpack();
     let index: u32 = outpoint.index().unpack();
-    let tx = reader.get_transaction(&hash).ok_or_else(|| {
+    let tx = reader.get_transaction(&hash)?.ok_or_else(|| {
         anyhow::anyhow!(
             "dependency/input transaction 0x{} missing from CKB RocksDB",
             hex::encode(hash)
@@ -542,8 +542,14 @@ pub fn resolved_dependencies(
                 ckb_types::core::DepType::Code => vec![outpoint.clone()],
                 ckb_types::core::DepType::DepGroup => {
                     let (_, data) = node_cell(reader, &outpoint)?;
-                    packed::OutPointVec::from_slice(&data)
-                        .map_err(|e| anyhow::anyhow!("malformed dep group: {e}"))?
+                    crate::utils::script_resolution::dep_group_members(&data)
+                        .map_err(|e| {
+                            let index: u32 = outpoint.index().unpack();
+                            anyhow::anyhow!(
+                                "malformed dep group 0x{}:{index}: {e}",
+                                hex::encode(outpoint.tx_hash().as_slice())
+                            )
+                        })?
                         .into_iter()
                         .collect()
                 }

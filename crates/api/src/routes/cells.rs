@@ -273,69 +273,39 @@ fn cell_protocol_script(info: &ckbadger_store::LiveCellInfo) -> CellProtocolScri
     }
 }
 
-pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
-    let full_size = data_size as usize;
+/// The most members a cell may hold and still be shown as a dep group on the
+/// cell page. A display rule, not consensus: a cell page asks of arbitrary
+/// data (no `dep_type` exists for a cell on its own) whether it looks like a
+/// dep group, and a structurally valid `OutPointVec` with thousands of members
+/// is far more likely some other payload than a deployment's dep group.
+const DEP_GROUP_DISPLAY_MAX_MEMBERS: usize = 256;
 
-    // OutPointVec format: 4 bytes count + N * 36 bytes OutPoints
-    if full_size < 40 || (full_size - 4) % 36 != 0 {
-        return DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        };
-    }
-
-    if data.len() < 4 {
-        return DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        };
-    }
-
-    let count = match data[0..4].try_into().ok().map(u32::from_le_bytes) {
-        Some(c) => c as usize,
-        None => {
-            return DepGroupParseResult {
-                is_dep_group: false,
-                items: None,
-            }
-        }
+/// Whether a cell's data reads as a dep group on the cell page: its structure
+/// decodes by the consensus dep group rule
+/// ([`crate::utils::script_resolution::dep_group_members`]) and it has at most
+/// [`DEP_GROUP_DISPLAY_MAX_MEMBERS`] members. `data` is the cell's whole data.
+pub(crate) fn parse_dep_group(data: &[u8]) -> DepGroupParseResult {
+    let not_a_dep_group = DepGroupParseResult {
+        is_dep_group: false,
+        items: None,
     };
-
-    let expected_size = 4 + count * 36;
-    if count == 0 || count > 256 || expected_size != full_size {
-        return DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        };
+    let Ok(members) = crate::utils::script_resolution::dep_group_members(data) else {
+        return not_a_dep_group;
+    };
+    if members.len() > DEP_GROUP_DISPLAY_MAX_MEMBERS {
+        return not_a_dep_group;
     }
-
-    // At this point we know it's a valid dep group format
-    let mut items = Vec::with_capacity(count);
-    for i in 0..count {
-        let offset = 4 + i * 36;
-        if offset + 36 > data.len() {
-            break;
-        }
-        let tx_hash = format!("0x{}", hex::encode(&data[offset..offset + 32]));
-        if let Some(index) = data[offset + 32..offset + 36]
-            .try_into()
-            .ok()
-            .map(u32::from_le_bytes)
-        {
-            items.push(DepGroupItem {
-                tx_hash,
-                output_index: index,
-            });
-        }
-    }
-
+    use ckb_types::prelude::Unpack;
+    let items = members
+        .into_iter()
+        .map(|out_point| DepGroupItem {
+            tx_hash: format!("0x{}", hex::encode(out_point.tx_hash().as_slice())),
+            output_index: out_point.index().unpack(),
+        })
+        .collect();
     DepGroupParseResult {
         is_dep_group: true,
-        items: if items.len() == count {
-            Some(items)
-        } else {
-            None // Data truncated, can't return complete list
-        },
+        items: Some(items),
     }
 }
 
@@ -1229,13 +1199,12 @@ fn maybe_parse_dotcell_decode(
     }))
 }
 
-fn maybe_parse_dep_group_decode(data: &[u8], data_size: i32) -> Option<CellDeterministicDecode> {
-    let parsed = parse_dep_group(data, data_size);
-    if !parsed.is_dep_group || data.len() < 4 {
-        return None;
-    }
+fn maybe_parse_dep_group_decode(data: &[u8]) -> Option<CellDeterministicDecode> {
+    let items = parse_dep_group(data).items?;
 
-    let count = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    // The byte map of the decoded `OutPointVec`: a 4-byte count, then 36
+    // bytes per member (32-byte tx hash, 4-byte index).
+    let count = items.len();
     let mut segments = Vec::new();
     segments.push(CellDataSegment {
         label: "count".to_string(),
@@ -1245,36 +1214,29 @@ fn maybe_parse_dep_group_decode(data: &[u8], data_size: i32) -> Option<CellDeter
         human_value: count.to_string(),
     });
 
-    for idx in 0..count {
+    for (idx, item) in items.iter().enumerate() {
         let base = 4 + idx * 36;
-        if base + 36 > data.len() {
-            break;
-        }
-
         segments.push(CellDataSegment {
             label: format!("outpoint[{}].tx_hash", idx),
             start: base as i32,
             end: (base + 32) as i32,
             meaning: "Referenced transaction hash".to_string(),
-            human_value: format!("0x{}", hex::encode(&data[base..base + 32])),
+            human_value: item.tx_hash.clone(),
         });
-
-        let output_index = u32::from_le_bytes(data[base + 32..base + 36].try_into().ok()?);
         segments.push(CellDataSegment {
             label: format!("outpoint[{}].output_index", idx),
             start: (base + 32) as i32,
             end: (base + 36) as i32,
             meaning: "Referenced output index (u32 LE)".to_string(),
-            human_value: output_index.to_string(),
+            human_value: item.output_index.to_string(),
         });
     }
 
-    let parsed_count = (segments.len().saturating_sub(1)) / 2;
     Some(CellDeterministicDecode {
         kind: "dep_group_out_point_vec".to_string(),
         summary: format!(
             "Dep group OutPointVec with {} item(s); decoded {} item(s) from available bytes",
-            count, parsed_count
+            count, count
         ),
         segments,
     })
@@ -1704,7 +1666,6 @@ fn build_lock_script_hint_guess(
 fn analyze_cell_data(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
-    data_size: i32,
 ) -> anyhow::Result<CellDataAnalysis> {
     // The fallible decoders come first: each either decodes its protocol's
     // cell, says it is not one, or reports the broken invariant.
@@ -1722,7 +1683,7 @@ fn analyze_cell_data(
             .or_else(|| maybe_parse_udt_decode(info, data))
             .or_else(|| {
                 if info.type_code_hash.is_none() {
-                    maybe_parse_dep_group_decode(data, data_size)
+                    maybe_parse_dep_group_decode(data)
                 } else {
                     None
                 }
@@ -2439,9 +2400,10 @@ fn current_spend_requirements(
                     "cell {outpoint} {kind} reference has invalid hash_type {hash_type}"
                 ))
             })?;
-            let built_in_type_id = kind == "type"
-                && hash_type == 1
-                && hex::encode(hash) == ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH;
+            // The consensus Type ID script runs built in: the one rule,
+            // `keys::is_type_id_script`.
+            let built_in_type_id =
+                kind == "type" && ckbadger_store::keys::is_type_id_script(hash, hash_type);
             let (resolution, hashes) = if built_in_type_id {
                 ("builtin", Vec::new())
             } else {
@@ -2611,11 +2573,7 @@ fn code_cell_upgrade_cohort(
         let Some(type_script) = output.type_().to_opt() else {
             continue;
         };
-        if type_script.code_hash().as_slice()
-            != hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
-                .expect("constant hex")
-            || type_script.hash_type().as_slice() != [1]
-        {
+        if !is_type_id_type_script(&type_script) {
             continue;
         }
         // Code by the one rule the cell page uses: the ELF magic. Whether the
@@ -2655,6 +2613,13 @@ fn code_cell_upgrade_cohort(
         });
     }
     Ok(upgrades)
+}
+
+/// Whether a node-format script is the consensus Type ID script, by the one
+/// rule (`keys::is_type_id_script`).
+fn is_type_id_type_script(script: &ckb_types::packed::Script) -> bool {
+    let hash_type: u8 = script.hash_type().into();
+    ckbadger_store::keys::is_type_id_script(script.code_hash().as_slice(), i16::from(hash_type))
 }
 
 /// The version hashes of a Type ID upgrade: the previous cell's data hash as
@@ -3847,11 +3812,16 @@ async fn get_cell(
 
     let node_tx = if let Some(reader) = state.ckb_store.as_ref() {
         let hash: [u8; 32] = hash_bytes.as_slice().try_into().expect("validated hash");
-        Some(reader.get_transaction(&hash).ok_or_else(|| {
-            ApiError::internal(format!(
-                "cell transaction for {outpoint} missing from CKB RocksDB"
-            ))
-        })?)
+        Some(
+            reader
+                .get_transaction(&hash)
+                .map_err(ApiError::node_store)?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "cell transaction for {outpoint} missing from CKB RocksDB"
+                    ))
+                })?,
+        )
     } else {
         None
     };
@@ -3896,13 +3866,14 @@ async fn get_cell(
         Vec::new()
     });
 
-    let dep_group_result = cell_data
-        .as_ref()
-        .map(|d| parse_dep_group(d, info.data_size))
-        .unwrap_or(DepGroupParseResult {
-            is_dep_group: false,
-            items: None,
-        });
+    let dep_group_result =
+        cell_data
+            .as_ref()
+            .map(|d| parse_dep_group(d))
+            .unwrap_or(DepGroupParseResult {
+                is_dep_group: false,
+                items: None,
+            });
 
     // Compute data_hash from cell data for code_cell lookup
     let data_hash = cell_data.as_ref().map(|d| {
@@ -3992,7 +3963,7 @@ async fn get_cell(
 
     let mut data_analysis = cell_data
         .as_ref()
-        .map(|d| analyze_cell_data(&info, d, info.data_size))
+        .map(|d| analyze_cell_data(&info, d))
         .transpose()
         .map_err(|e| {
             ApiError::internal(format!(
@@ -4142,11 +4113,14 @@ async fn get_cell(
                     "cell {outpoint} has invalid consuming tx hash {tx_hash}"
                 ))
             })?;
-        let tx = reader.get_transaction(&spent_hash).ok_or_else(|| {
-            ApiError::internal(format!(
-                "spending transaction {tx_hash} for cell {outpoint} missing from CKB RocksDB"
-            ))
-        })?;
+        let tx = reader
+            .get_transaction(&spent_hash)
+            .map_err(ApiError::node_store)?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "spending transaction {tx_hash} for cell {outpoint} missing from CKB RocksDB"
+                ))
+            })?;
         let matches: Vec<usize> = tx
             .inputs()
             .into_iter()
@@ -4972,6 +4946,41 @@ mod tests {
         ckbadger_store::PositionedCellInfo::new(cell, 100)
     }
 
+    /// D-4b: the Type ID upgrade cohort follows only the consensus Type ID
+    /// script (`keys::is_type_id_script`): the Type ID code hash referenced by
+    /// `type`; the same code hash referenced by `data` or `data1`, or another
+    /// code hash by `type`, is not one.
+    #[test]
+    fn upgrade_cohort_recognises_only_the_consensus_type_id_script() {
+        use ckb_types::{core::ScriptHashType, packed, prelude::*};
+        let script = |code_hash: [u8; 32], hash_type: ScriptHashType| {
+            packed::Script::new_builder()
+                .code_hash(packed::Byte32::new(code_hash))
+                .hash_type(hash_type.into())
+                .args(ckb_types::bytes::Bytes::from(vec![0x4b; 32]).pack())
+                .build()
+        };
+        let type_id = ckbadger_store::keys::TYPE_ID_CODE_HASH;
+        assert!(is_type_id_type_script(&script(
+            type_id,
+            ScriptHashType::Type
+        )));
+        assert!(!is_type_id_type_script(&script(
+            type_id,
+            ScriptHashType::Data
+        )));
+        assert!(!is_type_id_type_script(&script(
+            type_id,
+            ScriptHashType::Data1
+        )));
+        let mut other = type_id;
+        other[0] = 1;
+        assert!(!is_type_id_type_script(&script(
+            other,
+            ScriptHashType::Type
+        )));
+    }
+
     #[test]
     fn test_parse_dep_group_valid() {
         // 2 outpoints: count(4) + 2 * 36 = 76 bytes
@@ -4984,7 +4993,7 @@ mod tests {
         data.extend_from_slice(&[2u8; 32]);
         data.extend_from_slice(&1u32.to_le_bytes());
 
-        let result = parse_dep_group(&data, 76);
+        let result = parse_dep_group(&data);
         assert!(result.is_dep_group);
         assert!(result.items.is_some());
         let items = result.items.unwrap();
@@ -4996,15 +5005,37 @@ mod tests {
     #[test]
     fn test_parse_dep_group_invalid_size() {
         let data = vec![0u8; 10];
-        let result = parse_dep_group(&data, 10);
+        let result = parse_dep_group(&data);
         assert!(!result.is_dep_group);
+    }
+
+    /// The cell page's dep group display rule: a structurally valid dep group
+    /// is shown as one up to `DEP_GROUP_DISPLAY_MAX_MEMBERS` members.
+    #[test]
+    fn dep_group_display_rule_caps_the_member_count() {
+        let group = |members: usize| {
+            let mut data = (members as u32).to_le_bytes().to_vec();
+            for member in 0..members {
+                data.extend_from_slice(&[(member % 251) as u8; 32]);
+                data.extend_from_slice(&(member as u32).to_le_bytes());
+            }
+            data
+        };
+        let at_cap = group(DEP_GROUP_DISPLAY_MAX_MEMBERS);
+        let parsed = parse_dep_group(&at_cap);
+        assert!(parsed.is_dep_group);
+        assert_eq!(parsed.items.unwrap().len(), DEP_GROUP_DISPLAY_MAX_MEMBERS);
+        let over_cap = group(DEP_GROUP_DISPLAY_MAX_MEMBERS + 1);
+        let parsed = parse_dep_group(&over_cap);
+        assert!(!parsed.is_dep_group);
+        assert!(parsed.items.is_none());
     }
 
     #[test]
     fn test_parse_dep_group_zero_count() {
         let mut data = Vec::new();
         data.extend_from_slice(&0u32.to_le_bytes());
-        let result = parse_dep_group(&data, 4);
+        let result = parse_dep_group(&data);
         assert!(!result.is_dep_group);
     }
 
@@ -5243,7 +5274,7 @@ mod tests {
             data_size: 16,
             ..make_payload()
         });
-        let analysis = analyze_cell_data(&info, &300_000_000u128.to_le_bytes(), 16).unwrap();
+        let analysis = analyze_cell_data(&info, &300_000_000u128.to_le_bytes()).unwrap();
         assert_eq!(analysis.deterministic.unwrap().kind, "udt_amount");
         assert!(analysis.heuristic_guesses.is_empty());
     }
@@ -5264,7 +5295,7 @@ mod tests {
         let mut data = vec![0u8; 16];
         data[0] = 0x2a;
 
-        let analysis = analyze_cell_data(&info, &data, 16).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("deterministic decode");
         assert_eq!(deterministic.kind, "udt_amount");
         assert_eq!(deterministic.segments.len(), 1);
@@ -5296,7 +5327,7 @@ mod tests {
         let mut data = vec![0u8; 16];
         data[0] = 0x2a;
 
-        let analysis = analyze_cell_data(&info, &data, 16).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis
             .deterministic
             .expect("testnet sUDT must classify as UDT via the registry");
@@ -5323,8 +5354,7 @@ mod tests {
         let cluster_id = vec![0xAA; 32];
         let data = make_spore_data("image/png", &[1, 2, 3, 4], Some(cluster_id.as_slice()));
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("spore decode");
         assert_eq!(deterministic.kind, "spore_cell");
         assert!(deterministic
@@ -5380,8 +5410,7 @@ mod tests {
         let info = positioned(info);
         let data = make_cluster_data("Genesis Collection", "Primary cluster");
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("spore cluster decode");
         assert_eq!(deterministic.kind, "spore_cluster_cell");
         assert!(deterministic
@@ -5415,8 +5444,7 @@ mod tests {
         data.extend_from_slice(&(info_blob.len() as u16).to_be_bytes());
         data.extend_from_slice(info_blob);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft issuer decode");
         assert_eq!(deterministic.kind, "mnft_issuer_cell");
         assert!(deterministic
@@ -5454,8 +5482,7 @@ mod tests {
         data.extend_from_slice(&make_mnft_vartext("Main collection"));
         data.extend_from_slice(&make_mnft_vartext("renderer:v1"));
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft class decode");
         assert_eq!(deterministic.kind, "mnft_class_cell");
         assert!(deterministic
@@ -5490,8 +5517,7 @@ mod tests {
         let data = hex::decode("000000001400000014c0000a466972737420537465700004646573630000")
             .expect("valid hex");
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft class decode");
         assert_eq!(deterministic.kind, "mnft_class_cell");
         assert!(deterministic
@@ -5526,8 +5552,7 @@ mod tests {
         data.push(0x81); // configure
         data.push(0x04); // state
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft token decode");
         assert_eq!(deterministic.kind, "mnft_token_cell");
         assert!(deterministic
@@ -5568,8 +5593,7 @@ mod tests {
         data.push(0x00); // configure
         data.push(0x00); // state
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis
             .deterministic
             .expect("testnet mNFT token must classify via the registry");
@@ -5594,8 +5618,7 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 8];
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao deposit decode");
         assert_eq!(deterministic.kind, "dao_deposit_cell");
         // The DAO data is one 8-byte field — the deposit block number a
@@ -5629,8 +5652,7 @@ mod tests {
         let block_number = 987654u64;
         let data = block_number.to_le_bytes().to_vec();
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao withdraw decode");
         assert_eq!(deterministic.kind, "dao_withdraw_request_cell");
         // Regression (mainnet 0xc0aee100…3f83ee:0): `dao_state` [0..8) and
@@ -5666,7 +5688,7 @@ mod tests {
             ..make_payload()
         });
         let data = hex::decode("39bd3e0100000000").unwrap();
-        let decode = analyze_cell_data(&info, &data, 8)
+        let decode = analyze_cell_data(&info, &data)
             .expect("cell data analysis")
             .deterministic
             .expect("dao withdraw decode");
@@ -5686,7 +5708,7 @@ mod tests {
         data.extend_from_slice(&[0xAB; 32]);
         data.extend_from_slice(&3u32.to_le_bytes());
 
-        let analysis = analyze_cell_data(&info, &data, 40).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dep group decode");
         assert_eq!(deterministic.kind, "dep_group_out_point_vec");
         assert_eq!(deterministic.segments[0].label, "count");
@@ -5706,8 +5728,7 @@ mod tests {
         let info = make_info();
         let data = b"\x89PNG\r\n\x1a\nhello".to_vec();
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis
             .heuristic_guesses
@@ -5720,8 +5741,7 @@ mod tests {
         let info = make_info();
         let data = b"\0asm\x01\0\0\0".to_vec();
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -5733,8 +5753,7 @@ mod tests {
         let info = make_info();
         let data = vec![0x50, 0x4B, 0x03, 0x04, 0x14, 0x00];
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -5746,8 +5765,7 @@ mod tests {
         let info = make_info();
         let data = vec![0x1F, 0x8B, 0x08, 0x00];
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -5768,8 +5786,7 @@ mod tests {
         let info = positioned(info);
         let data = make_spore_data("text/plain", b"hello spore text", None);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("spore decode");
         let content_segment = deterministic
             .segments
@@ -5789,8 +5806,7 @@ mod tests {
         data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
         data.extend_from_slice(&[0x55, 0x66, 0x77, 0x88]);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.mime_type.as_deref() == Some("application/x-molecule-table")
                 && g.human_value
@@ -5804,8 +5820,7 @@ mod tests {
         let info = make_info();
         let data = br#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#.to_vec();
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -5817,8 +5832,7 @@ mod tests {
         let info = make_info();
         let data = b"ipfs://bafybeigdyrztm".to_vec();
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -5830,16 +5844,14 @@ mod tests {
         let info = make_info();
 
         let u32_data = 12345u32.to_le_bytes().to_vec();
-        let u32_analysis =
-            analyze_cell_data(&info, &u32_data, u32_data.len() as i32).expect("cell data analysis");
+        let u32_analysis = analyze_cell_data(&info, &u32_data).expect("cell data analysis");
         assert!(u32_analysis
             .heuristic_guesses
             .iter()
             .any(|g| g.kind == "numeric_pattern" && g.human_value.as_deref() == Some("12345")));
 
         let u64_data = 0u64.to_le_bytes().to_vec();
-        let u64_analysis =
-            analyze_cell_data(&info, &u64_data, u64_data.len() as i32).expect("cell data analysis");
+        let u64_analysis = analyze_cell_data(&info, &u64_data).expect("cell data analysis");
         assert!(u64_analysis
             .heuristic_guesses
             .iter()
@@ -5864,8 +5876,7 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 4];
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.kind == "script_hint"
@@ -5890,8 +5901,7 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 20];
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.kind == "script_hint"
@@ -5931,8 +5941,7 @@ mod tests {
         let (info, data) = dotbit_account_cell(b"casinox.bit");
         assert_eq!(data.len(), 91);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let decode = analysis.deterministic.expect("dotbit decode");
         assert_eq!(decode.kind, "dotbit_account");
         let account = decode
@@ -5955,7 +5964,7 @@ mod tests {
     fn test_analyze_cell_data_dotbit_non_utf8_tail_is_an_error() {
         let (info, data) = dotbit_account_cell(&[0xff, 0xfe]);
 
-        let err = analyze_cell_data(&info, &data, data.len() as i32)
+        let err = analyze_cell_data(&info, &data)
             .expect_err("an AccountCell whose name is not UTF-8 is corrupt data, not a payload");
         let text = format!("{err:#}");
         assert!(text.contains("dotbit account name is not UTF-8"), "{text}");
@@ -5975,8 +5984,7 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 8];
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.kind == "script_hint"
@@ -5999,7 +6007,7 @@ mod tests {
         data.extend_from_slice(&[0xAB; 32]);
         data.extend_from_slice(&3u32.to_le_bytes());
 
-        let analysis = analyze_cell_data(&info, &data, 40).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
     }
 
@@ -6084,8 +6092,7 @@ mod tests {
         let data = hex_bytes(DOTCELL_SUPPORT_DATA);
         let info = dotcell_name_info(&data);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let decode = analysis.deterministic.expect("dotcell name decode");
         assert_eq!(decode.kind, "dotcell_name");
         assert!(
@@ -6158,8 +6165,7 @@ mod tests {
         data.extend_from_slice(b"shop.support");
         let info = dotcell_name_info(&data);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let decode = analysis.deterministic.expect("dotcell sub-name decode");
         assert_eq!(decode.kind, "dotcell_name");
         let label = dotcell_segment(&decode, "label");
@@ -6181,8 +6187,7 @@ mod tests {
         let data = hex_bytes(DOTCELL_RING_ROOT_DATA);
         let info = dotcell_name_info(&data);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let decode = analysis.deterministic.expect("dotcell ring root decode");
         assert_eq!(decode.kind, "dotcell_ring_root");
         assert!(decode.summary.contains("ring root"), "{}", decode.summary);
@@ -6201,8 +6206,7 @@ mod tests {
         data[78..98].copy_from_slice(&[0xab; 20]);
         let info = dotcell_name_info(&data);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         let decode = analysis.deterministic.expect("dotcell name decode");
         let manager = dotcell_segment(&decode, "manager_hash20");
         assert!(
@@ -6223,7 +6227,7 @@ mod tests {
         data.truncate(97);
         let info = dotcell_name_info(&data);
 
-        let err = analyze_cell_data(&info, &data, data.len() as i32)
+        let err = analyze_cell_data(&info, &data)
             .expect_err("an Account-typed cell whose data does not decode is an invariant break");
         let text = format!("{err:#}");
         assert!(text.contains("dotcell"), "{text}");
@@ -6235,8 +6239,7 @@ mod tests {
         let data = hex_bytes(DOTCELL_SUPPORT_DATA);
         let info = dotcell_name_info(&data);
 
-        let analysis =
-            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&info, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_some());
         assert!(analysis.heuristic_guesses.is_empty());
         assert!(
@@ -6259,8 +6262,7 @@ mod tests {
             ..make_payload()
         });
         let data = vec![0x01, 0x9f, 0x24];
-        let analysis =
-            analyze_cell_data(&price, &data, data.len() as i32).expect("cell data analysis");
+        let analysis = analyze_cell_data(&price, &data).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert_eq!(analysis.heuristic_guesses[0].kind, "script_hint");
         assert!(
@@ -6275,7 +6277,7 @@ mod tests {
             lock_args: vec![0x11; 40],
             ..make_payload()
         });
-        let analysis = analyze_cell_data(&sale, &[], 0).expect("cell data analysis");
+        let analysis = analyze_cell_data(&sale, &[]).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert_eq!(analysis.heuristic_guesses[0].kind, "script_hint");
         assert!(

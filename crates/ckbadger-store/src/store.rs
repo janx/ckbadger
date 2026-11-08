@@ -1102,6 +1102,10 @@ enum CfSelect {
     Tier(BufferTier),
     BulkHot,
     Compaction(CfCompaction),
+    /// Domain CFs bulk finalize phases 2-11 may write.
+    FinalizeWritten,
+    /// Domain CFs only the bulk batch loop writes.
+    BatchLoopOnly,
 }
 
 impl CfSpec {
@@ -1112,7 +1116,22 @@ impl CfSpec {
             CfSelect::Tier(tier) => self.buffer_tier as u8 == tier as u8,
             CfSelect::BulkHot => self.bulk_hot_memtable,
             CfSelect::Compaction(compaction) => self.compaction as u8 == compaction as u8,
+            CfSelect::FinalizeWritten => self.is_finalize_written(),
+            CfSelect::BatchLoopOnly => {
+                matches!(self.store, CfStore::Domain) && !self.is_finalize_written()
+            }
         }
+    }
+
+    /// Whether bulk finalize phases 2-11 may write this CF: a domain CF of
+    /// one of the two write policies the bounded finalize materializer
+    /// accepts. [`FINALIZE_WRITTEN_CFS`] is the projection of this predicate.
+    pub const fn is_finalize_written(&self) -> bool {
+        matches!(self.store, CfStore::Domain)
+            && matches!(
+                self.write_policy,
+                CfWritePolicy::SealedAggregate | CfWritePolicy::FinalSnapshot
+            )
     }
 }
 
@@ -1157,6 +1176,10 @@ const HIGH_CF_NAMES: [&str; cf_count(CfSelect::Tier(BufferTier::High))] =
 const BULK_HOT_CF_NAMES: [&str; cf_count(CfSelect::BulkHot)] = cf_names(CfSelect::BulkHot);
 const UNIVERSAL_CF_NAMES: [&str; cf_count(CfSelect::Compaction(CfCompaction::Universal))] =
     cf_names(CfSelect::Compaction(CfCompaction::Universal));
+const FINALIZE_WRITTEN_CF_NAMES: [&str; cf_count(CfSelect::FinalizeWritten)] =
+    cf_names(CfSelect::FinalizeWritten);
+const BATCH_LOOP_ONLY_CF_NAMES: [&str; cf_count(CfSelect::BatchLoopOnly)] =
+    cf_names(CfSelect::BatchLoopOnly);
 
 pub fn is_append_only_cf_name(cf_name: &str) -> bool {
     APPEND_CFS.contains(&cf_name)
@@ -1187,6 +1210,19 @@ pub const ALL_CFS: &[&str] = &ALL_CF_NAMES;
 
 /// Column families of the domain mutable store.
 pub const DOMAIN_CFS: &[&str] = &DOMAIN_CF_NAMES;
+
+/// Domain CFs bulk finalize phases 2-11 may write, in [`DOMAIN_CFS`] order:
+/// the `SealedAggregate` and `FinalSnapshot` write policies, the only two the
+/// bounded finalize materializer accepts. Finalize phase 12 flushes exactly
+/// these.
+pub const FINALIZE_WRITTEN_CFS: &[&str] = &FINALIZE_WRITTEN_CF_NAMES;
+
+/// Every other domain CF ([`DOMAIN_CFS`] minus [`FINALIZE_WRITTEN_CFS`]):
+/// Class A history and bulk-disabled CFs, which only the bulk batch loop
+/// writes. They hold their final bulk state once the flush channel has
+/// committed its last batch, so finalize flushes them from then on, beside
+/// phases 2-11.
+pub const BATCH_LOOP_ONLY_CFS: &[&str] = &BATCH_LOOP_ONLY_CF_NAMES;
 
 /// Column families of the append-only store (immutable, hash-keyed cell payloads).
 pub const APPEND_CFS: &[&str] = &APPEND_CF_NAMES;
@@ -3358,6 +3394,93 @@ impl CkbadgerStore {
         Ok(())
     }
 
+    /// One waiting flush of exactly `cfs`. With `atomic_flush` RocksDB
+    /// switches every listed CF's memtable in one write-thread pass and
+    /// flushes them as one job (`DBImpl::Flush(options, column_families)`):
+    /// serially on one flush thread, installed together. Each name must be a
+    /// CF this store opens, and the list must not be empty (RocksDB reads an
+    /// empty list as "every CF"); otherwise nothing is flushed.
+    ///
+    /// Bulk finalize flushes its two domain sets with it:
+    /// [`BATCH_LOOP_ONLY_CFS`] once the drain has committed its last batch,
+    /// [`FINALIZE_WRITTEN_CFS`] in phase 12.
+    pub fn flush_column_families(&self, cfs: &[&str]) -> anyhow::Result<()> {
+        if cfs.is_empty() {
+            anyhow::bail!("flush_column_families needs at least one column family");
+        }
+        let started = std::time::Instant::now();
+        let handles = cfs
+            .iter()
+            .map(|&name| self.opened_cf(name))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.db
+            .flush_cfs_opt(&handles, &rocksdb::FlushOptions::default())
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "flush_column_families failed on {} CFs [{}]: {}",
+                    cfs.len(),
+                    cfs.join(","),
+                    e
+                )
+            })?;
+        let elapsed_ms = started.elapsed().as_millis();
+        info!(
+            elapsed_ms,
+            cfs = cfs.len(),
+            "Flushed column family memtables to SST"
+        );
+        Ok(())
+    }
+
+    /// Whether one CF this store opens holds unflushed rows, from RocksDB's
+    /// per-CF properties (read only).
+    pub fn cf_flush_state(&self, cf_name: &str) -> anyhow::Result<CfFlushState> {
+        let cf = self.opened_cf(cf_name)?;
+        let read = |property: &str| {
+            required_flush_property(
+                self.db
+                    .property_int_value_cf(cf, property)
+                    .map_err(Into::into),
+                format_args!("CF {cf_name} {property}"),
+            )
+        };
+        Ok(CfFlushState {
+            active_entries: read("rocksdb.num-entries-active-mem-table")?,
+            unflushed_immutables: read("rocksdb.num-immutable-mem-table")?,
+        })
+    }
+
+    /// Bytes of the live SST files of one CF this store opens (read only).
+    pub fn cf_live_sst_bytes(&self, cf_name: &str) -> anyhow::Result<u64> {
+        let cf = self.opened_cf(cf_name)?;
+        let property = "rocksdb.live-sst-files-size";
+        required_flush_property(
+            self.db
+                .property_int_value_cf(cf, property)
+                .map_err(Into::into),
+            format_args!("CF {cf_name} {property}"),
+        )
+    }
+
+    /// The handle of `name`, or an error naming it when this store does not
+    /// open that CF.
+    fn opened_cf(&self, name: &str) -> anyhow::Result<&ColumnFamily> {
+        if !Self::cf_allowed(self.store_class, name) {
+            anyhow::bail!(
+                "column family '{}' is not a {:?} store column family",
+                name,
+                self.store_class
+            );
+        }
+        self.db.cf_handle(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "column family '{}' is not open in this {:?} store",
+                name,
+                self.store_class
+            )
+        })
+    }
+
     /// Disable auto-compactions on all column families.
     /// Call during bulk sync to avoid compaction competing with writes.
     pub fn disable_auto_compactions(&self) {
@@ -3702,7 +3825,7 @@ impl CkbadgerStore {
                     self.db
                         .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
                         .map_err(Into::into),
-                    &format!("CF {cf_name} rocksdb.mem-table-flush-pending"),
+                    format_args!("CF {cf_name} rocksdb.mem-table-flush-pending"),
                 )?;
                 mem_table_flush_pending =
                     mem_table_flush_pending
@@ -3714,7 +3837,7 @@ impl CkbadgerStore {
                     self.db
                         .property_int_value_cf(cf, "rocksdb.cur-size-active-mem-table")
                         .map_err(Into::into),
-                    &format!("CF {cf_name} rocksdb.cur-size-active-mem-table"),
+                    format_args!("CF {cf_name} rocksdb.cur-size-active-mem-table"),
                 )?;
                 active_memtable_bytes =
                     active_memtable_bytes.checked_add(active).ok_or_else(|| {
@@ -3732,7 +3855,11 @@ impl CkbadgerStore {
     }
 }
 
-fn required_flush_property(value: anyhow::Result<Option<u64>>, name: &str) -> anyhow::Result<u64> {
+/// `name` is formatted only when the property is missing or unreadable.
+fn required_flush_property(
+    value: anyhow::Result<Option<u64>>,
+    name: impl std::fmt::Display,
+) -> anyhow::Result<u64> {
     match value {
         Ok(Some(value)) => Ok(value),
         Ok(None) => anyhow::bail!("RocksDB flush property unavailable: {name}"),
@@ -3757,6 +3884,15 @@ fn required_compaction_property(
             path.display()
         ),
     }
+}
+
+/// Whether one column family holds unflushed rows ([`CkbadgerStore::cf_flush_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CfFlushState {
+    /// Entries (puts and deletes) in the active memtable.
+    pub active_entries: u64,
+    /// Immutable memtables not flushed yet.
+    pub unflushed_immutables: u64,
 }
 
 /// Lightweight snapshot of write-side flush activity, sampled by the
@@ -5010,6 +5146,77 @@ mod tests {
         assert_eq!(val.as_deref(), Some(b"nowal-value".as_slice()));
     }
 
+    /// `flush_column_families` is one waiting flush of exactly the listed
+    /// CFs: their no-WAL rows reach SSTs, any other CF keeps its memtable,
+    /// and `cf_flush_state` / `cf_live_sst_bytes` report both.
+    #[test]
+    fn flush_column_families_flushes_only_the_listed_cfs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = WriteBatch::default();
+        batch.put_cf(store.cf(CF_TX_HASH_MAP), b"tx", b"a");
+        batch.put_cf(store.cf(CF_BLOCK_HASH_INDEX), b"block", b"b");
+        batch.put_cf(store.cf(CF_ADDR_BALANCE), b"addr", b"c");
+        store.write_batch_no_wal(batch).unwrap();
+        let unflushed = CfFlushState {
+            active_entries: 1,
+            unflushed_immutables: 0,
+        };
+        assert_eq!(store.cf_flush_state(CF_TX_HASH_MAP).unwrap(), unflushed);
+        assert_eq!(store.cf_live_sst_bytes(CF_TX_HASH_MAP).unwrap(), 0);
+
+        store
+            .flush_column_families(&[CF_TX_HASH_MAP, CF_BLOCK_HASH_INDEX])
+            .unwrap();
+
+        for flushed in [CF_TX_HASH_MAP, CF_BLOCK_HASH_INDEX] {
+            let state = store.cf_flush_state(flushed).unwrap();
+            assert_eq!(
+                (state.active_entries, state.unflushed_immutables),
+                (0, 0),
+                "{flushed}"
+            );
+            assert!(store.cf_live_sst_bytes(flushed).unwrap() > 0, "{flushed}");
+        }
+        assert_eq!(store.cf_flush_state(CF_ADDR_BALANCE).unwrap(), unflushed);
+        assert_eq!(store.cf_live_sst_bytes(CF_ADDR_BALANCE).unwrap(), 0);
+        assert_eq!(
+            store
+                .get_cf(store.cf(CF_TX_HASH_MAP), b"tx")
+                .unwrap()
+                .as_deref(),
+            Some(b"a".as_slice())
+        );
+    }
+
+    /// A CF name this store does not open is an error naming it, for every
+    /// helper, and so is an empty list; nothing is flushed.
+    #[test]
+    fn flush_column_families_rejects_a_cf_outside_the_store() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.put_cf(store.cf(CF_TX_HASH_MAP), b"tx", b"a").unwrap();
+        for foreign in [CF_CELLS, CF_NET_NODES, "no_such_cf"] {
+            let error = store
+                .flush_column_families(&[CF_TX_HASH_MAP, foreign])
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(foreign), "{error}");
+            let error = store.cf_flush_state(foreign).unwrap_err().to_string();
+            assert!(error.contains(foreign), "{error}");
+            let error = store.cf_live_sst_bytes(foreign).unwrap_err().to_string();
+            assert!(error.contains(foreign), "{error}");
+        }
+        // RocksDB reads an empty list as "every CF".
+        let error = store.flush_column_families(&[]).unwrap_err().to_string();
+        assert!(error.contains("at least one column family"), "{error}");
+        assert_eq!(
+            store.cf_flush_state(CF_TX_HASH_MAP).unwrap().active_entries,
+            1,
+            "a refused flush must not switch any CF"
+        );
+    }
+
     #[test]
     fn test_flush_all_memtables_on_empty_store() {
         let dir = TempDir::new().unwrap();
@@ -5588,6 +5795,77 @@ mod tests {
             assert_eq!(cf_spec(spec.name), Some(spec));
         }
         assert_eq!(cf_spec("no_such_cf"), None);
+    }
+
+    /// Bulk finalize's two flush sets split the domain store (D-3).
+    /// `FINALIZE_WRITTEN_CFS` is every domain CF finalize phases 2-11 may
+    /// write: the two write policies the bounded finalize materializer
+    /// accepts. `BATCH_LOOP_ONLY_CFS` is every other domain CF; only the
+    /// batch loop writes those, so finalize flushes them as soon as the
+    /// flush channel has committed its last batch.
+    #[test]
+    fn batch_loop_only_cfs_are_the_domain_cfs_outside_finalize_written_cfs() {
+        let finalize_policies: Vec<&str> = DOMAIN_CFS
+            .iter()
+            .copied()
+            .filter(|name| {
+                matches!(
+                    cf_write_policy(name),
+                    CfWritePolicy::SealedAggregate | CfWritePolicy::FinalSnapshot
+                )
+            })
+            .collect();
+        assert_eq!(FINALIZE_WRITTEN_CFS, finalize_policies.as_slice());
+
+        let domain_minus_finalize: Vec<&str> = DOMAIN_CFS
+            .iter()
+            .copied()
+            .filter(|name| !FINALIZE_WRITTEN_CFS.contains(name))
+            .collect();
+        assert_eq!(BATCH_LOOP_ONLY_CFS, domain_minus_finalize.as_slice());
+        assert_eq!(
+            FINALIZE_WRITTEN_CFS.len() + BATCH_LOOP_ONLY_CFS.len(),
+            DOMAIN_CFS.len()
+        );
+        assert_eq!(
+            (FINALIZE_WRITTEN_CFS.len(), BATCH_LOOP_ONLY_CFS.len()),
+            (52, 22)
+        );
+        for name in BATCH_LOOP_ONLY_CFS {
+            assert!(
+                matches!(
+                    cf_write_policy(name),
+                    CfWritePolicy::AppendOnly | CfWritePolicy::BulkDisabled
+                ),
+                "{name}"
+            );
+        }
+        for name in APPEND_CFS.iter().chain(NETWORK_CFS) {
+            assert!(!FINALIZE_WRITTEN_CFS.contains(name), "{name}");
+            assert!(!BATCH_LOOP_ONLY_CFS.contains(name), "{name}");
+        }
+        // `CfSpec::is_finalize_written` is the predicate the bounded
+        // finalize sink checks per row; the list is its projection.
+        for spec in CF_SPECS {
+            assert_eq!(
+                spec.is_finalize_written(),
+                FINALIZE_WRITTEN_CFS.contains(&spec.name),
+                "{}",
+                spec.name
+            );
+        }
+        // Lane 0 §7.1 classed this history feed with the finalize-written
+        // CFs; its policy (Class A) keeps it out of finalize.
+        assert!(BATCH_LOOP_ONLY_CFS.contains(&CF_OBJECT_COLLECTION_ACTIVITIES));
+        // Phase 11's tracker rows and cursors, written outside the
+        // materializer, and the progress records in `sync_meta`.
+        for name in [
+            CF_HODL_CAPACITY_BY_DATE,
+            CF_CELL_DIST_COHORT_BY_MONTH,
+            CF_SYNC_META,
+        ] {
+            assert!(FINALIZE_WRITTEN_CFS.contains(&name), "{name}");
+        }
     }
 
     /// C-5: `docs/STORE_SCHEMA.md`'s "Column Families" table is the reference

@@ -573,10 +573,10 @@ async fn load_decoder_binary(
                 return Ok(Arc::try_unwrap(binary).unwrap_or_else(|arc| (*arc).clone()));
             }
 
-            let type_id_code_hash =
-                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).expect("valid hex constant");
+            // The consensus Type ID script for this type id: the one byte
+            // constant (`keys::TYPE_ID_CODE_HASH`), referenced by type.
             let type_script_hash = crate::parser::script::ScriptParser::compute_script_hash_raw(
-                &type_id_code_hash,
+                &ckbadger_store::keys::TYPE_ID_CODE_HASH,
                 1,
                 type_id_hash,
             );

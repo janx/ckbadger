@@ -197,7 +197,7 @@ fn canonical_raw_tx(state: &AppState, hash: &[u8], expected_block: i64) -> Resul
     })?;
     let id: [u8; 32] = hash.try_into()?;
     let (tx, node_block) = reader
-        .get_transaction_with_block_number(&id)
+        .get_transaction_with_block_number(&id)?
         .ok_or_else(|| {
             anyhow!(
                 "Fiber transaction 0x{} missing from local CKB store",

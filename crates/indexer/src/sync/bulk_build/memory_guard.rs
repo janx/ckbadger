@@ -10,6 +10,11 @@ const GIB: u64 = 1024 * 1024 * 1024;
 const MIN_SAFE_BATCH_INPUT_BYTES: u64 = 1_000_000;
 const BUILD_TRANSIENT_MULTIPLIER: u64 = 4;
 
+/// The retained-component breakdown for a guard failure message. It walks the
+/// owner maps (`BulkBuildRuntimeState::memory_breakdown_bytes`), so the guard
+/// asks for it only when it is about to fail, never on a passing check.
+pub(crate) type RetainedComponents<'a> = &'a dyn Fn() -> Result<HashMap<String, u64>>;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BulkMemoryGuard {
     limit_bytes: u64,
@@ -41,7 +46,7 @@ impl BulkMemoryGuard {
         self,
         phase: &str,
         block_number: u64,
-        retained_component_bytes: &HashMap<String, u64>,
+        retained_components: RetainedComponents<'_>,
         store_memory: &ChainStoreMemorySnapshot,
     ) -> Result<ProcessMemorySnapshot> {
         let snapshot = read_process_memory_snapshot()?;
@@ -49,7 +54,7 @@ impl BulkMemoryGuard {
             snapshot,
             phase,
             block_number,
-            retained_component_bytes,
+            retained_components,
             store_memory,
         )?;
         Ok(snapshot)
@@ -60,14 +65,14 @@ impl BulkMemoryGuard {
         snapshot: ProcessMemorySnapshot,
         configured_max_batch_bytes: u64,
         block_number: u64,
-        retained_component_bytes: &HashMap<String, u64>,
+        retained_components: RetainedComponents<'_>,
         store_memory: &ChainStoreMemorySnapshot,
     ) -> Result<u64> {
         self.check_snapshot(
             snapshot,
             "before_batch",
             block_number,
-            retained_component_bytes,
+            retained_components,
             store_memory,
         )?;
         let committed = snapshot.committed_bytes()?;
@@ -84,7 +89,7 @@ impl BulkMemoryGuard {
                 BUILD_TRANSIENT_MULTIPLIER,
                 format_process_memory(snapshot),
                 format_store_memory(store_memory),
-                format_retained_components(retained_component_bytes)
+                format_retained_components(retained_components)
             );
         }
         Ok(configured_max_batch_bytes.min(safe_input))
@@ -95,7 +100,7 @@ impl BulkMemoryGuard {
         snapshot: ProcessMemorySnapshot,
         phase: &str,
         block_number: u64,
-        retained_component_bytes: &HashMap<String, u64>,
+        retained_components: RetainedComponents<'_>,
         store_memory: &ChainStoreMemorySnapshot,
     ) -> Result<()> {
         let committed = snapshot.committed_bytes()?;
@@ -108,7 +113,7 @@ impl BulkMemoryGuard {
                 self.limit_bytes,
                 format_process_memory(snapshot),
                 format_store_memory(store_memory),
-                format_retained_components(retained_component_bytes)
+                format_retained_components(retained_components)
             );
         }
         Ok(())
@@ -150,7 +155,13 @@ fn format_store_memory(snapshot: &ChainStoreMemorySnapshot) -> String {
     )
 }
 
-fn format_retained_components(retained_component_bytes: &HashMap<String, u64>) -> String {
+/// Computed here, inside a failure message only. A breakdown that cannot be
+/// computed names its own error instead; the budget failure stands either way.
+fn format_retained_components(retained_components: RetainedComponents<'_>) -> String {
+    let retained_component_bytes = match retained_components() {
+        Ok(bytes) => bytes,
+        Err(error) => return format!("unavailable({error:#})"),
+    };
     let mut entries = retained_component_bytes.iter().collect::<Vec<_>>();
     entries.sort_by(|a, b| a.0.cmp(b.0));
     entries
@@ -211,7 +222,7 @@ mod tests {
                 snapshot(committed, 0),
                 2 * GIB,
                 100,
-                &HashMap::new(),
+                &|| Ok(HashMap::new()),
                 &store_memory(),
             )
             .unwrap();
@@ -227,7 +238,7 @@ mod tests {
                 snapshot(7 * GIB, 2 * GIB),
                 "after_batch",
                 42,
-                &owners,
+                &|| Ok(owners.clone()),
                 &store_memory(),
             )
             .unwrap_err()
@@ -241,6 +252,61 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("live_cells:123"), "{error}");
+    }
+
+    /// D-9: the retained-component breakdown (an O(state) walk of the owner
+    /// maps) is computed only to write a guard failure message; a passing
+    /// checkpoint or batch-size check never asks for it. A breakdown that
+    /// cannot be computed still leaves the budget error, naming why.
+    #[test]
+    fn retained_components_are_computed_only_for_a_failure_message() {
+        let guard = BulkMemoryGuard::new(Some(8), 32 * GIB).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let provider = || {
+            calls.set(calls.get() + 1);
+            Ok(HashMap::from([("owner.object".to_string(), 7)]))
+        };
+
+        guard
+            .check_snapshot(
+                snapshot(GIB, 0),
+                "before_batch",
+                1,
+                &provider,
+                &store_memory(),
+            )
+            .unwrap();
+        guard
+            .safe_batch_input_bytes(snapshot(GIB, 0), 2 * GIB, 1, &provider, &store_memory())
+            .unwrap();
+        assert_eq!(calls.get(), 0);
+
+        let error = guard
+            .check_snapshot(
+                snapshot(9 * GIB, 0),
+                "after_batch_build",
+                2,
+                &provider,
+                &store_memory(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(calls.get(), 1);
+        assert!(error.contains("owner.object:7"), "{error}");
+
+        let failing = || Err(anyhow!("owner accounting overflow"));
+        let error = guard
+            .check_snapshot(
+                snapshot(9 * GIB, 0),
+                "after_batch_build",
+                3,
+                &failing,
+                &store_memory(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("memory budget exceeded"), "{error}");
+        assert!(error.contains("owner accounting overflow"), "{error}");
     }
 
     #[test]
@@ -262,7 +328,7 @@ mod tests {
                 process,
                 2 * GIB,
                 19_204_202,
-                &HashMap::from([("pipeline.flush_reserved".to_string(), 19)]),
+                &|| Ok(HashMap::from([("pipeline.flush_reserved".to_string(), 19)])),
                 &store_memory(),
             )
             .unwrap_err()

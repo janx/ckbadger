@@ -1302,7 +1302,7 @@ fn walk_recorded_branch(
         .map_err(|_| anyhow::anyhow!("invalid {label} tip hash at block {tip_number}"))?;
     let mut branch = Vec::new();
     for expected_number in ((fork_point + 1)..=tip_number).rev() {
-        let block = reader.get_block(&hash).ok_or_else(|| {
+        let block = reader.get_block(&hash)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "CKB RocksDB is missing {label} block {expected_number} 0x{}",
                 hex::encode(hash)
@@ -1543,7 +1543,7 @@ fn enrich_branch_fate(
             .as_slice()
             .try_into()
             .map_err(|_| anyhow::anyhow!("old block has invalid hash length: {}", block.hash))?;
-        let historical = reader.get_block(&hash).ok_or_else(|| {
+        let historical = reader.get_block(&hash)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "CKB RocksDB lost historical old branch block {}",
                 block.hash
@@ -1600,7 +1600,7 @@ fn enrich_branch_fate(
                 .as_slice()
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("invalid canonical hash at block {number}"))?;
-            let canonical = reader.get_block(&canonical_hash).ok_or_else(|| {
+            let canonical = reader.get_block(&canonical_hash)?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "CKB RocksDB missing canonical uncle-bearing block {number} 0x{}",
                     hex::encode(canonical_hash)
