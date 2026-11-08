@@ -5019,3 +5019,119 @@ async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_cod
     .unwrap();
     assert!(body.contains("has no live code cell"), "{body}");
 }
+
+/// A chain whose tx `user` carries one `dep_type = dep_group` cell dep on
+/// output `dep_index` of `deployment`, whose output 0 holds `dep_cell_data`.
+/// Returns the router over it and the hex of the user tx hash and the
+/// deployment tx hash.
+async fn dep_group_lookup_fixture(
+    dep_cell_data: Vec<u8>,
+    dep_index: u32,
+) -> (axum::Router, String, String) {
+    use ckb_types::{bytes::Bytes, core, packed, prelude::*};
+    let deployment = core::TransactionBuilder::default()
+        .output(packed::CellOutput::new_builder().build())
+        .output_data(Bytes::from(dep_cell_data).pack())
+        .build();
+    let user = core::TransactionBuilder::default()
+        .cell_dep(
+            packed::CellDep::new_builder()
+                .out_point(packed::OutPoint::new(deployment.hash(), dep_index))
+                .dep_type(core::DepType::DepGroup.into())
+                .build(),
+        )
+        .output(packed::CellOutput::new_builder().build())
+        .output_data(Bytes::new().pack())
+        .build();
+    let user_hash = format!("0x{}", hex::encode(user.hash().as_slice()));
+    let deployment_hash = format!("0x{}", hex::encode(deployment.hash().as_slice()));
+    let chain = seed_ckb_chain(&[core::BlockBuilder::default()
+        .number(1u64.pack())
+        .epoch(core::EpochNumberWithFraction::new(0, 1, 1800).pack())
+        .transaction(deployment)
+        .transaction(user)
+        .build()]);
+    let store = test_store();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    (app, user_hash, deployment_hash)
+}
+
+async fn post_script_lookup_in_tx(
+    app: &axum::Router,
+    code_hash: &str,
+    tx_hash: &str,
+) -> (StatusCode, serde_json::Value) {
+    let body = serde_json::json!({ "codeHashes": [code_hash], "txHash": tx_hash }).to_string();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// D-4a: the node accepted the transaction, so its `dep_group` cell dep
+/// resolved by the consensus rule; a dep cell whose data is not a dep group is
+/// a broken invariant, not an empty member list. The per-tx lookup fails
+/// naming the tx and the dep out point instead of resolving as if the dep were
+/// absent.
+#[tokio::test]
+async fn script_lookup_fails_on_a_dep_group_dep_whose_cell_is_not_a_dep_group() {
+    let (app, user_hash, deployment_hash) =
+        dep_group_lookup_fixture(b"not an OutPointVec".to_vec(), 0).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains(&user_hash), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:0")),
+        "{message}"
+    );
+    assert!(message.contains("dep_group"), "{message}");
+}
+
+/// D-4a: a well-formed dep group still resolves as before; a member the store
+/// has not indexed is skipped (the node may be ahead of the store), so the
+/// lookup answers 200.
+#[tokio::test]
+async fn script_lookup_expands_a_well_formed_dep_group_dep() {
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0x5a; 32]);
+    data.extend_from_slice(&3u32.to_le_bytes());
+    let (app, user_hash, _) = dep_group_lookup_fixture(data, 0).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+}
+
+/// D-4a: an on-chain `dep_group` dep whose cell the node has no data for is a
+/// broken invariant too (`CkbChainReader::get_cell_data` answers `None` both
+/// for an absent cell and for a failed read), not an empty member list.
+#[tokio::test]
+async fn script_lookup_fails_on_a_dep_group_dep_without_cell_data() {
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0x5a; 32]);
+    data.extend_from_slice(&3u32.to_le_bytes());
+    let (app, user_hash, deployment_hash) = dep_group_lookup_fixture(data, 7).await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let (status, json) = post_script_lookup_in_tx(&app, &code_hash, &user_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains(&user_hash), "{message}");
+    assert!(
+        message.contains(&format!("{deployment_hash}:7")),
+        "{message}"
+    );
+    assert!(message.contains("no data"), "{message}");
+}
