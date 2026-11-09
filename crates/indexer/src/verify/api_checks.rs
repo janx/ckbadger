@@ -155,11 +155,15 @@ struct CursorPageWithTotal<T> {
     total: Option<i64>,
 }
 
+/// One row of an address activity feed. Page one leads with the address's
+/// tx-pool rows, which have no chain position yet (`blockNumber: null`) and
+/// carry `poolStatus` instead; every committed row has its block.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AddressActivityRecord {
     tx_hash: String,
-    block_number: i64,
+    block_number: Option<i64>,
+    pool_status: Option<String>,
     item_deltas: Vec<serde_json::Value>,
 }
 
@@ -734,6 +738,39 @@ fn load_address_snapshot(
     let snapshot = fetch_address_count_snapshot(ctx, holder_lock_hash)?;
     cache.insert(holder_key, snapshot.clone());
     Ok(snapshot)
+}
+
+/// The block of a committed activity row, or `None` for a tx-pool row (not
+/// chain data: it has no transfer rows until it commits). The feed's contract
+/// is that a pool row is told apart by `poolStatus` alone and appears only in
+/// page one's leading segment, so any other shape is an API bug, not a row
+/// to skip.
+fn committed_activity_block(
+    activity: &AddressActivityRecord,
+    lock_script_hash: &str,
+    on_cursor_page: bool,
+) -> anyhow::Result<Option<i64>> {
+    match (activity.block_number, activity.pool_status.as_deref()) {
+        (Some(block_number), None) => Ok(Some(block_number)),
+        (None, Some(_)) if on_cursor_page => anyhow::bail!(
+            "tx-pool activity row on a cursor page of address {}: tx_hash={} (pool rows are \
+             a page-one-only segment)",
+            lock_script_hash,
+            activity.tx_hash
+        ),
+        (None, Some(_)) => Ok(None),
+        (None, None) => anyhow::bail!(
+            "activity row of address {} has neither blockNumber nor poolStatus: tx_hash={}",
+            lock_script_hash,
+            activity.tx_hash
+        ),
+        (Some(block_number), Some(status)) => anyhow::bail!(
+            "tx-pool activity row of address {} carries a block number: tx_hash={} \
+             poolStatus={status} blockNumber={block_number}",
+            lock_script_hash,
+            activity.tx_hash
+        ),
+    }
 }
 
 fn extract_activity_token_deltas(
@@ -3313,6 +3350,7 @@ impl Check for TokenActivityTransferBidirectional {
         }
 
         let mut candidates = Vec::<TokenActivitySample>::new();
+        let mut pool_rows_skipped = 0u64;
         for addr in top_addresses.iter().take(TOKEN_ACTIVITY_ADDRESS_LIMIT) {
             let mut cursor: Option<String> = None;
             let lock_key = normalize_hex_key(&addr.lock_script_hash);
@@ -3328,14 +3366,21 @@ impl Check for TokenActivityTransferBidirectional {
                         addr.lock_script_hash, TOKEN_ACTIVITY_PAGE_LIMIT
                     ),
                 };
+                let on_cursor_page = cursor.is_some();
                 let page: CursorPage<AddressActivityRecord> = api_get(ctx, &path)?;
 
                 for activity in &page.data {
+                    let Some(block_number) =
+                        committed_activity_block(activity, &addr.lock_script_hash, on_cursor_page)?
+                    else {
+                        pool_rows_skipped += 1;
+                        continue;
+                    };
                     for (token_type_hash, delta) in extract_activity_token_deltas(activity)? {
                         candidates.push(TokenActivitySample {
                             lock_hash: lock_key.clone(),
                             tx_hash: normalize_hex_key(&activity.tx_hash),
-                            block_number: activity.block_number,
+                            block_number,
                             token_type_hash,
                             delta,
                         });
@@ -3356,7 +3401,10 @@ impl Check for TokenActivityTransferBidirectional {
         if candidates.is_empty() {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no token activity entries found in sampled addresses".to_string(),
+                format!(
+                    "no committed token activity entries found in sampled addresses \
+                     ({pool_rows_skipped} tx-pool rows skipped)"
+                ),
             ));
         }
 
@@ -3467,7 +3515,10 @@ impl Check for TokenActivityTransferBidirectional {
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 checked,
-                format!("{} sampled token activity entries", checked),
+                format!(
+                    "{checked} sampled token activity entries ({pool_rows_skipped} tx-pool rows \
+                     skipped: not chain data)"
+                ),
             ))
         } else {
             Ok(CheckResult::fail(checked, findings))
@@ -8911,7 +8962,8 @@ mod tests {
     fn test_extract_activity_token_deltas_skips_non_token_changes() {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
-            block_number: 123,
+            block_number: Some(123),
+            pool_status: None,
             item_deltas: vec![
                 serde_json::json!({
                     "kind": "token",
@@ -8945,7 +8997,8 @@ mod tests {
     fn test_extract_activity_token_deltas_requires_delta_field() {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
-            block_number: 123,
+            block_number: Some(123),
+            pool_status: None,
             item_deltas: vec![serde_json::json!({
                 "kind": "token",
                 "typeScriptHash": "0xAABB"
@@ -8963,7 +9016,8 @@ mod tests {
     fn test_extract_activity_token_deltas_skips_missing_type_script_hash() {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
-            block_number: 123,
+            block_number: Some(123),
+            pool_status: None,
             item_deltas: vec![serde_json::json!({
                 "kind": "token",
                 "delta": "10"
@@ -9063,7 +9117,8 @@ mod tests {
         let big = "222044604925031325468940491728862838784";
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
-            block_number: 4_743_232,
+            block_number: Some(4_743_232),
+            pool_status: None,
             item_deltas: vec![
                 serde_json::json!({ "kind": "token", "typeScriptHash": "0xDD", "delta": big }),
                 serde_json::json!({ "kind": "token", "typeScriptHash": "0xEE", "delta": format!("-{}", big) }),
@@ -10241,5 +10296,139 @@ mod tests {
             "{rendered:#?}"
         );
         assert_eq!(findings.len(), 3, "{rendered:#?}");
+    }
+
+    fn activity_row(block_number: Option<i64>, pool_status: Option<&str>) -> AddressActivityRecord {
+        AddressActivityRecord {
+            tx_hash: "0xfeed".to_string(),
+            block_number,
+            pool_status: pool_status.map(str::to_string),
+            item_deltas: vec![],
+        }
+    }
+
+    #[test]
+    fn committed_activity_block_tells_pool_rows_from_committed_rows() {
+        let lock = "0xaa";
+        assert_eq!(
+            committed_activity_block(&activity_row(Some(500), None), lock, false).unwrap(),
+            Some(500)
+        );
+        assert_eq!(
+            committed_activity_block(&activity_row(Some(500), None), lock, true).unwrap(),
+            Some(500)
+        );
+        assert_eq!(
+            committed_activity_block(&activity_row(None, Some("pending")), lock, false).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn committed_activity_block_rejects_rows_outside_the_feed_contract() {
+        let lock = "0xaa";
+        let on_cursor_page =
+            committed_activity_block(&activity_row(None, Some("pending")), lock, true)
+                .unwrap_err()
+                .to_string();
+        assert!(
+            on_cursor_page.contains("cursor page")
+                && on_cursor_page.contains("0xfeed")
+                && on_cursor_page.contains(lock),
+            "{on_cursor_page}"
+        );
+        let neither = committed_activity_block(&activity_row(None, None), lock, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            neither.contains("neither blockNumber nor poolStatus") && neither.contains("0xfeed"),
+            "{neither}"
+        );
+        let both = committed_activity_block(&activity_row(Some(7), Some("proposed")), lock, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            both.contains("carries a block number")
+                && both.contains("proposed")
+                && both.contains("blockNumber=7"),
+            "{both}"
+        );
+    }
+
+    /// Page one of an address activity feed leads with the address's tx-pool
+    /// rows: no chain position yet (`blockNumber: null`), only `poolStatus`.
+    /// They are not chain data and have no transfer rows, so S19 skips them
+    /// and verifies the committed rows behind them.
+    #[test]
+    fn token_activity_check_skips_tx_pool_rows_on_page_one() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let lock = format!("0x{}", "aa".repeat(32));
+        let other = format!("0x{}", "bb".repeat(32));
+        let token = format!("0x{}", "cc".repeat(32));
+        let pool_tx = format!("0x{}", "11".repeat(32));
+        let committed_tx = format!("0x{}", "22".repeat(32));
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/top"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                    "lockScriptHash": lock, "balance": "1",
+                    "liveCellsCount": 1, "transactionsCount": 2
+                }])))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{lock}/activities")))
+                .and(query_param("filter", "token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "txHash": pool_tx, "blockNumber": null, "txIndex": null,
+                            "timestamp": null, "poolStatus": "pending",
+                            "timeAddedToPool": "2026-11-09T05:36:40.000+00:00",
+                            "itemDeltas": [{
+                                "kind": "token", "typeScriptHash": token, "delta": "5"
+                            }]
+                        },
+                        {
+                            "txHash": committed_tx, "blockNumber": 500, "txIndex": 1,
+                            "timestamp": "1700000000000",
+                            "itemDeltas": [{
+                                "kind": "token", "typeScriptHash": token, "delta": "-10"
+                            }]
+                        }
+                    ],
+                    "limit": 100, "hasMore": false, "nextCursor": null,
+                    "pool": { "enabled": true, "healthy": true, "count": 1 }
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{token}/transfers")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{
+                        "txHash": committed_tx, "blockNumber": 500,
+                        "fromLockHash": lock, "toLockHash": other, "amount": "10"
+                    }],
+                    "limit": 100, "hasMore": false, "nextCursor": null
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = TokenActivityTransferBidirectional
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(result.passed(), "findings: {:?}", result.findings);
+        assert_eq!(result.items_checked, 1, "{:?}", result.detail);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("1 tx-pool row"),
+            "{:?}",
+            result.detail
+        );
     }
 }
