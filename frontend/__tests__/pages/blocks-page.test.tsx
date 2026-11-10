@@ -8,6 +8,26 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { render } from '../utils/test-utils';
 import BlocksPage from '@/app/blocks/page';
 import { api } from '@/lib/api';
+import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+
+// Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
+// function: the phone describe's restoreAllMocks would reset one).
+const drawn = vi.hoisted(() => ({ ms: 0, hashes: [] as string[] }));
+vi.mock('@/lib/talisman/compound', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/talisman/compound')>();
+  return {
+    ...actual,
+    compound: (...args: Parameters<typeof actual.compound>) => {
+      const started = performance.now();
+      try {
+        return actual.compound(...args);
+      } finally {
+        drawn.ms += performance.now() - started;
+        drawn.hashes.push(args[0]);
+      }
+    },
+  };
+});
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -275,7 +295,10 @@ describe('BlocksPage · Blocks v3 board', () => {
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const [first] = Array.from(table.querySelectorAll('tbody tr'));
     const [blockCell, , contentsCell] = Array.from(first.querySelectorAll('td'));
-    expect(blockCell.firstElementChild!.firstElementChild).toHaveClass('whitespace-nowrap');
+    // Rubbing × Song print, phase 3: the row seal leads the cell, the height and hash beside it.
+    const [seal, identity] = Array.from(blockCell.firstElementChild!.children);
+    expect(seal).toHaveAttribute('data-hash-seal', 'row');
+    expect(identity.firstElementChild).toHaveClass('whitespace-nowrap');
     expect(blockCell).toHaveTextContent(/^#20,828,894 0x/);
     expect(contentsCell.querySelector('[data-contents-line]')).toHaveClass('whitespace-nowrap');
   });
@@ -296,6 +319,68 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(hash).not.toHaveClass('text-body');
     expect(contentsCell.firstElementChild).toHaveClass('flex');
     expect(contentsCell.querySelector('[data-contents-line]')).toBeInTheDocument();
+  });
+
+  // Rubbing × Song print, phase 3: each row leads with its block's row seal (28 px, the fold of the
+  // block page's seal), before the height; the height stays the row's link, the seal is an image.
+  it('leads every row with its block’s row seal, before the height link', async () => {
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    expect(rows).toHaveLength(page.data.length);
+    rows.forEach((tr, i) => {
+      const cell = tr.querySelector('td')!;
+      const seal = expectOneRowSeal(tr, page.data[i].hash);
+      expect(cell).toContainElement(seal);
+      // one 18 px line keeps the row's height: the seal overhangs it
+      expect(seal).toHaveClass('-my-[5px]');
+      const height = within(cell).getByRole('link', {
+        name: `#${page.data[i].number.toLocaleString('en-US')}`,
+      });
+      expect(height).toHaveAttribute('href', `/mainnet/blocks/${page.data[i].number}`);
+      expectBefore(seal, height);
+    });
+  });
+
+  // The seal's 27 px come out of other columns' slack, so each table keeps the minimum width it
+  // switches form at: the full table 1,230 px (Reward gave 22), the 608 px table (Size · cycles
+  // gave 19, Height took 2 px of room so its number never breaks).
+  it('budgets the seal in the Block column and keeps the table at 1,230 px', async () => {
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
+    const cols = Array.from(table.querySelectorAll('col')).map(
+      (c) => (c as HTMLElement).style.width
+    );
+    expect(cols).toEqual(['222px', '70px', '170px', '160px', '118px', '112px', '182px', '196px']);
+  });
+
+  // 50 rows, 50 seals: each drawn once (HashSeal memoises per hash), the time printed for the
+  // record (phase 3 placement, step D).
+  it('draws fifty row seals once each in one render', async () => {
+    const fifty = Array.from({ length: 50 }, (_, i) =>
+      row(20_828_894 - i, {
+        size: 641 + i,
+        overheadSize: 641,
+        userTransactionsSize: i,
+        cycles: String(i * 1000),
+        transactionSizes: [355],
+        proposalsCount: 0,
+      })
+    );
+    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: fifty, hasMore: false });
+    drawn.ms = 0;
+    drawn.hashes = [];
+    const started = performance.now();
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const elapsed = performance.now() - started;
+    expect(table.querySelectorAll('tbody [data-hash-seal="row"]')).toHaveLength(50);
+    expect([...drawn.hashes].sort()).toEqual(fifty.map((b) => b.hash).sort());
+    console.info(
+      `[seal timing] blocks list, 50 rows: rendered in ${elapsed.toFixed(0)} ms, ` +
+        `${drawn.ms.toFixed(1)} ms of it drawing the 50 row seals`
+    );
   });
 
   it('reads the footnote figures in bright ink', async () => {
@@ -330,6 +415,40 @@ describe('BlocksPage · Blocks v3 board', () => {
       ]);
       // A reward not yet paid says where it will be.
       expect(phoneLines(cards[1])[2].left).toMatch(/· reward pays at #20,828,904$/);
+    });
+
+    // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own
+    // column, before the height; the height is still the row's link.
+    it('leads each phone row with its block’s row seal, before the height', async () => {
+      atContainerWidth(358);
+      render(<BlocksPage />);
+      const cards = await screen.findAllByTestId('block-row-mobile');
+      cards.forEach((card, i) => {
+        const seal = expectOneRowSeal(card, page.data[i].hash);
+        expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
+        expect(card.firstElementChild).toContainElement(seal);
+        expect(seal).not.toHaveClass('-my-[5px]');
+        expectBefore(seal, within(card).getByRole('link', { name: /^#20,828,89/ }));
+      });
+    });
+
+    it('leads each row of the 608 px table with its block’s row seal, beside the height and hash', async () => {
+      atContainerWidth(608);
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      Array.from(table.querySelectorAll('tbody tr')).forEach((tr, i) => {
+        const seal = expectOneRowSeal(tr, page.data[i].hash);
+        expect(tr.querySelector('td')).toContainElement(seal);
+        // two lines (height, hash) hold the stone; no overhang
+        expect(seal).not.toHaveClass('-my-[5px]');
+        expectBefore(seal, within(tr as HTMLElement).getAllByRole('link')[0]);
+      });
+      expect(Number.parseFloat(table.style.minWidth)).toBe(608);
+      const [height, , , , , resources] = Array.from(table.querySelectorAll('col')).map(
+        (c) => (c as HTMLElement).style
+      );
+      expect(height.width).toBe('131px');
+      expect(resources.minWidth).toBe('101px');
     });
 
     it('draws the six-column table of board L1 in the 608 px band, without the reward', async () => {

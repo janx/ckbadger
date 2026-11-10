@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   addressProducerCells,
@@ -196,6 +197,19 @@ describe('Address v3', () => {
     resolve(addressFixture);
     await loaded();
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
+  });
+
+  // Rubbing × Song print, phase 3: an address is its lock script, so its page seal (112 px, 80 on
+  // a phone, −4°) is pressed from the lock script hash the address read already carries.
+  it('presses the lock script’s seal beside the address, from the hash the address read carries', async () => {
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    expect(addressFixture.lockScriptHash).toBe(addressHash);
+    const seal = expectOnePageSeal(container, addressHash, 'object');
+    const head = seal.closest('[data-sealed-head]')!;
+    expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expectBefore(seal, screen.getByRole('heading', { level: 1 }));
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
   });
 
   it('keeps an invalid address 400 as a read error', async () => {

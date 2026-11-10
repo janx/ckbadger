@@ -5,6 +5,7 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -22,10 +23,10 @@ const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
 };
 const scriptCall: Transaction = {
   ...base,
-  hash: `0x00de304b${'00'.repeat(26)}25cbbc`,
+  hash: `0x00de304b${'00'.repeat(25)}25cbbc`,
   isCellbase: false,
   activity: {
-    txHash: `0x00de304b${'00'.repeat(26)}25cbbc`,
+    txHash: `0x00de304b${'00'.repeat(25)}25cbbc`,
     blockNumber: 20829775,
     txIndex: 1,
     timestamp: '2026-10-25T00:00:00Z',
@@ -53,14 +54,14 @@ const scriptCall: Transaction = {
 };
 const transfer: Transaction = {
   ...base,
-  hash: `0xcfaebc55${'00'.repeat(26)}e6dd61`,
+  hash: `0xcfaebc55${'00'.repeat(25)}e6dd61`,
   isCellbase: false,
   value: '76729874184',
   activity: { ...feedSamples.eightParties, typeCalls: [], protocolActions: [] },
 };
 const cellbase: Transaction = {
   ...base,
-  hash: `0xc89d2d25${'00'.repeat(26)}9a2cd7`,
+  hash: `0xc89d2d25${'00'.repeat(25)}9a2cd7`,
   index: 0,
   isCellbase: true,
   inputsCount: 1,
@@ -221,6 +222,55 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     }
     expect(base).toHaveClass('opacity-[.55]');
     expect(call).not.toHaveClass('opacity-[.55]');
+  });
+});
+
+// Rubbing × Song print, phase 3: every row leads with its transaction's row seal (28 px, the fold
+// of the transaction page's seal), before the hash; the hash stays the row's link.
+describe('TransactionListTable row seals', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const txs = [scriptCall, transfer, cellbase];
+
+  it('leads every table row with its row seal, overhanging the hash line, before the hash link', () => {
+    render(<TransactionListTable transactions={txs} />);
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(3);
+    rows.forEach((tr, i) => {
+      const seal = expectOneRowSeal(tr, txs[i].hash);
+      expect(tr.querySelector('td')).toContainElement(seal);
+      expect(seal).toHaveClass('-my-[5px]');
+      expectBefore(seal, within(tr).getByTitle(txs[i].hash).closest('a')!);
+    });
+    // a cellbase row is set back, its seal with it
+    expect(rows[2]).toHaveClass('opacity-[.55]');
+  });
+
+  it('leads every phone row with its row seal in its own column', () => {
+    atContainerWidth(358);
+    render(<TransactionListTable transactions={txs} />);
+    const cards = screen.getAllByTestId('transaction-row-mobile');
+    expect(cards).toHaveLength(3);
+    cards.forEach((card, i) => {
+      const seal = expectOneRowSeal(card, txs[i].hash);
+      expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
+      expect(card.firstElementChild).toContainElement(seal);
+      expectBefore(seal, within(card).getByTitle(txs[i].hash));
+    });
+  });
+
+  // The seal's 27 px come out of the Value and Fee columns' slack: the table still fits the
+  // widest container (1,232 px at 1280 and up) and the 1,248 px reference.
+  it('budgets the seal in the Transaction column and keeps the table inside 1,232 px', () => {
+    render(<TransactionListTable transactions={txs} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const widths = Array.from(table.querySelectorAll('col')).map(
+      (c) => (c as HTMLElement).style.width
+    );
+    expect(widths.slice(0, 5)).toEqual(['192px', '175px', '220px', '160px', '96px']);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
   });
 });
 

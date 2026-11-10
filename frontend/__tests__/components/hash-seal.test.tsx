@@ -54,9 +54,15 @@ describe('HashSeal', () => {
     }
   });
 
+  // The seal red is the cinnabar `mark` (UI grade, the prompt square's red), not `rouge`, which is
+  // cinnabar for text.
   it('paints with the palette: the seal red, the ground', () => {
     const { container } = render(<HashSeal hash={HASH} variant="row" size={28} />);
-    expect(container.querySelector('svg > rect')).toHaveAttribute('fill', 'var(--c-rouge)');
+    expect(container.querySelector('svg > rect')).toHaveAttribute('fill', 'var(--c-mark)');
+    expect(container.innerHTML).not.toContain('--c-rouge');
+    const framed = render(<HashSeal hash={HASH} variant="page" size={150} />);
+    expect(framed.container.querySelector('svg > rect')).toHaveAttribute('stroke', 'var(--c-mark)');
+    framed.unmount();
     expect(container.querySelector('svg > g')).toHaveAttribute('fill', 'var(--c-base-bg)');
     const page = render(<HashSeal hash={HASH} variant="page" size={150} ink="var(--c-gold)" />);
     expect(page.container.querySelector('svg > rect')).toHaveAttribute('stroke', 'var(--c-gold)');
@@ -114,7 +120,7 @@ describe('HashSeal', () => {
   for (const [variant, size] of VARIANTS)
     it(`pins the ${variant} seal of one hash to the design reference`, async () => {
       const markup = compound(HASH, RECIPES[variant], size, {
-        ink: 'var(--c-rouge)',
+        ink: 'var(--c-mark)',
         ground: 'var(--c-base-bg)',
       }).svg;
       await expect(markup).toMatchFileSnapshot(`../fixtures/hash-seal/${variant}.svg`);

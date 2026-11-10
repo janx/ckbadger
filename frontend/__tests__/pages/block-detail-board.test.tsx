@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { api, type GlobalActivity, type Transaction } from '@/lib/api';
@@ -230,6 +231,20 @@ describe('Block board · first tier', () => {
     expect(summary).toHaveTextContent(
       /^4 transactions, mined by .+ on 2026-10-25 at 08:55:37 UTC\+8\. The miner earns 684\.32120795 CKB for this block, paid 11 blocks later\.$/
     );
+  });
+
+  // Rubbing × Song print, phase 3: the block's talisman (the 150 px page seal, 96 on a phone, −4°)
+  // pressed beside its height and hash, as a collector's stamp; never inside the content.
+  it('presses the block’s seal beside its height and hash, outside the content', async () => {
+    const { container } = render(<BlockDetailPage />);
+    const title = await screen.findByRole('heading', { level: 1 });
+    const seal = expectOnePageSeal(container, block.hash, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    expect(head).toContainElement(title);
+    expect(head).toHaveTextContent(`Block${block.hash}`);
+    expectBefore(seal, title);
+    expect(head).not.toContainElement(screen.getByTestId('block-summary'));
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
   });
 
   it('says which pool mined the block when pools.toml names it (R-12)', async () => {

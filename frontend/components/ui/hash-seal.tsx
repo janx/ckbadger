@@ -19,7 +19,10 @@ export interface HashSealProps {
   size: number;
   /** Degrees. */
   tilt?: number;
-  /** The seal's red: frame and strokes, or the white-text stone. A `color()` reference. */
+  /**
+   * The seal's red: frame and strokes, or the white-text stone. A `color()` reference; the
+   * palette's `mark` by default.
+   */
   ink?: string;
   /** The ground the white-text strokes are cut in. A `color()` reference. */
   ground?: string;
@@ -38,8 +41,8 @@ export function HashSeal({
   variant,
   size,
   tilt,
-  // switches to color('mark') when the palette's seal red lands (rubbing × Song, Phase 1)
-  ink = color('rouge'),
+  // the cinnabar mark (UI grade, both themes): the prompt square's red, never the text red `rouge`
+  ink = color('mark'),
   ground = color('base-bg'),
   className,
 }: HashSealProps) {

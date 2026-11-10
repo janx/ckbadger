@@ -6,6 +6,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
+import { SealedHead } from '@/components/ui/page-seal';
 import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -1193,15 +1194,21 @@ export default function TransactionDetailPage() {
         data-tier="1"
         className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-[auto_auto_1fr] lg:gap-x-14"
       >
-        <header className="flex min-w-0 flex-col gap-2 lg:col-start-1">
+        <header className="min-w-0 lg:col-start-1">
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
-          <span className="text-text-dim text-small">Transaction</span>
-          <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
-          {summary}
-          <div className="text-small flex min-w-0 items-center gap-0.5">
-            <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
-            <CopyHash hash={tx.hash} />
-          </div>
+          {/* The one corner (Transaction board): the transaction's seal pressed beside its
+              identity, never in the cells and flows below. */}
+          <SealedHead hash={tx.hash} scale="record">
+            <div className="flex min-w-0 flex-col gap-2">
+              <span className="text-text-dim text-small">Transaction</span>
+              <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
+              {summary}
+              <div className="text-small flex min-w-0 items-center gap-0.5">
+                <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
+                <CopyHash hash={tx.hash} />
+              </div>
+            </div>
+          </SealedHead>
         </header>
         <aside
           aria-label="Transaction facts"

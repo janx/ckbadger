@@ -387,6 +387,9 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           </>
         }
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
+        // The out point's 32-byte part is its transaction's hash (the index is not a hash): a cell
+        // carries the seal of the transaction that made it, the seal on that transaction's page.
+        seal={{ hash: cell.txHash, scale: 'object' }}
         status={
           <span className="flex flex-wrap items-center gap-3">
             <span
