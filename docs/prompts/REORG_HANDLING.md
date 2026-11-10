@@ -88,12 +88,16 @@ When a batch's inputs stay unresolved, the parser classifies the attempt against
 read through the writer's own source (`Repository::get_sync_tip`), with
 `classify_unresolved_inputs` (`crates/indexer/src/sync/diagnostics.rs`):
 
-| Cause                | Condition                                                    | Retry budget                              |
-| -------------------- | ------------------------------------------------------------ | ----------------------------------------- |
-| `WriterBehind`       | `start_block > db_tip + 1`: an earlier batch is in flight    | counts                                    |
-| `OrphanedTip`        | `start_block == db_tip + 1`, first parent != stored tip hash | frozen; requests a writer reorg check     |
-| `MissingInputs`      | `start_block == db_tip + 1`, first parent == stored tip hash | counts; fails fast when spent (real hole) |
-| `WriterPastBatch`    | `start_block <= db_tip`: the writer already holds the start  | counts (a reset normally discards it)     |
+| Cause             | Condition                                                    | Retry budget                              |
+| ----------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `WriterBehind`    | `start_block > db_tip + 1`: an earlier batch is in flight    | counts                                    |
+| `OrphanedTip`     | `start_block == db_tip + 1`, first parent != stored tip hash | frozen; requests a writer reorg check     |
+| `MissingInputs`   | `start_block == db_tip + 1`, first parent == stored tip hash | counts; fails fast when spent (real hole) |
+| `WriterPastBatch` | `start_block <= db_tip`: the writer already holds the start  | counts (a reset normally discards it)     |
+
+There is no rollback-in-progress cause: a rollback is one atomic write (see
+[`rollback_to_block(target)`](#rollback_to_blocktarget)), so the parser reads either the tip before
+it or the fork point after it, never a store in between.
 
 While the budget is frozen the parser warns at most once per 120 s and never probes the node over
 RPC; counting causes warn on the first attempt and every 10th, and only `MissingInputs` probes the
@@ -105,8 +109,12 @@ hash) in `reorg_check_request` and keeps retrying. The writer takes the request 
 nothing) and acts only if that epoch is still current. A request from an earlier epoch is dropped,
 so a reset is never followed by a check for a batch it already discarded. The pick-up bound does
 not hold while a deep fork is unresolved: the writer then stays in its pause loop and never reaches
-the idle branch, and the parser waits with its budget frozen. Like the stale-fork check, this check
-bypasses the lag gate, because a parent mismatch is direct evidence:
+the idle branch, and the parser waits with its budget frozen. Nor does it hold while a background
+derivation has work pending (`docs/STORE_SCHEMA.md` → Derived Aggregates): the writer then folds one
+derive chunk per loop iteration and goes straight back for the next while no parsed batch is
+waiting, so it reaches the idle branch, and takes the request, once the derivation is complete; the
+parser waits with its budget frozen until then. Like the stale-fork check, this check bypasses the
+lag gate, because a parent mismatch is direct evidence:
 
 - **Reorg handled**: the same post-reorg sequence as the other two checks, pipeline reset, drain.
 - **Deep fork**: pipeline reset, sync paused (see Deep Fork below).
@@ -120,7 +128,8 @@ No divergence is a race that the reset settles. The stale-fork check and this on
 results in one streak per store tip, ended by a handled divergence or a written batch. Ten in a row
 on the same tip mean the node's block at `db_tip + 1` does not extend its own block at `db_tip`, or
 the batch's parent hash is read wrongly, so the pipeline stops with the tip, the batch's start block
-and parent hash, the count and the epoch instead of resetting forever.
+and parent hash, the count and the epoch instead of resetting forever, and files the same text as a
+`pipeline_no_divergence_loop` incident report.
 
 ### Deep Fork (depth > 36)
 
