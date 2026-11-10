@@ -240,6 +240,32 @@ describe('the rubbing / Song print finish', () => {
     expect(MATERIALS.light['well-inset']).toBe(hexAlpha(PALETTE.light['text-bright'], 0.08));
   });
 
+  // Phase 4: the newest block's seal is pressed behind the 404 verse in the cinnabar mark at
+  // `seal-press`; the verse's three inks, the dim facts and the links stay text-grade on a stroke.
+  it('presses the 404 seal faint: every ink of the verse and its facts is text-grade on a stroke', () => {
+    for (const theme of THEMES) {
+      const press = Number(MATERIALS[theme]['seal-press']);
+      expect(press, theme).toBeGreaterThan(0);
+      expect(press, theme).toBeLessThanOrEqual(0.2);
+      const ground = hexToRgb(PALETTE[theme]['base-bg']);
+      const ink = hexToRgb(PALETTE[theme].mark);
+      const channel = (k: 'r' | 'g' | 'b') =>
+        Math.round(ground[k] * (1 - press) + ink[k] * press)
+          .toString(16)
+          .padStart(2, '0');
+      const stroke = `#${channel('r')}${channel('g')}${channel('b')}`;
+      for (const key of ['text-bright', 'text', 'text-dim', 'jade'] as const)
+        expect(
+          contrastRatio(PALETTE[theme][key], stroke),
+          `${theme} ${key}`
+        ).toBeGreaterThanOrEqual(4.5);
+    }
+    // paper takes the same red more strongly: the day press is the fainter
+    expect(Number(MATERIALS.light['seal-press'])).toBeLessThan(
+      Number(MATERIALS.dark['seal-press'])
+    );
+  });
+
   it('softens the vignette and the grain to about half their midnight strength', () => {
     // midnight: a 35 % vignette and 3 % grain by night, 6 % and 5 % by day
     expect(rgbaAlpha(MATERIALS.dark.vignette)).toBeLessThanOrEqual(0.35 / 2 + 0.01);

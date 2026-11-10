@@ -122,6 +122,32 @@ describe('CkbytesSection', () => {
     expect(free).toHaveTextContent('41,499,405,173.07133425 CKB');
   });
 
+  // Rubbing × Song print, phase 4: the Main board's supply note, in the voice, under the legend.
+  it('comments on the allocation in the voice: the three parts, then the block they add up at', async () => {
+    render(<CkbytesSection />);
+    await screen.findByTestId('ckbytes-circulating');
+    const comment = document.querySelector('.comment') as HTMLElement;
+    expect(comment).not.toBeNull();
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]'), (l) => l.textContent)
+    ).toEqual([
+      'common knowledge is what live cells occupy.',
+      'the rest is free, or in the dao.',
+      // the served allocation's own block, never a figure the response does not carry
+      'at #20,820,045 they add up to every ckbyte in circulation.',
+    ]);
+    // it sits with the allocation it describes, after the legend
+    const legend = document.querySelector('[data-legend="Nervos DAO"]')!.parentElement!;
+    expect(legend.nextElementSibling).toBe(comment);
+  });
+
+  it('says nothing when the allocation fails: no comment on a figure that is not there', async () => {
+    serveAllocation({ ...ckbytesAllocation, free: '4149940517307133424' });
+    render(<CkbytesSection />);
+    await screen.findByTestId('ckbytes-allocation-error');
+    expect(document.querySelector('.comment')).toBeNull();
+  });
+
   it('fails fast when the served parts do not add up to the circulation', async () => {
     serveAllocation({ ...ckbytesAllocation, free: '4149940517307133424' });
     render(<CkbytesSection />);

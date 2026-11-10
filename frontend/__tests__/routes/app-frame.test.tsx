@@ -146,7 +146,7 @@ describe('the header is part of the frame (visual finish V6)', () => {
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: 'all that is was worked for. this was not.',
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
       })
     ).toBeInTheDocument();
     expect(screen.getAllByRole('banner')).toHaveLength(1);
@@ -158,7 +158,10 @@ describe('the header is part of the frame (visual finish V6)', () => {
     expect(
       await screen.findByRole(
         'heading',
-        { level: 1, name: 'all that is was worked for. this was not.' },
+        {
+          level: 1,
+          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        },
         LAZY
       )
     ).toBeInTheDocument();
@@ -217,11 +220,11 @@ describe('the page arrives (visual finish V7)', () => {
     expect(document.querySelector('.min-h-\\[60vh\\]')!.parentElement).toHaveClass('arrive');
   });
 
-  it('lets the not-found night fill what the header leaves: a flex column down to the shell', async () => {
+  it('lets the not-found page fill what the header leaves: a flex column down to the shell', async () => {
     mount('/mainnet/no-such-page');
     await screen.findByRole('heading', {
       level: 1,
-      name: 'all that is was worked for. this was not.',
+      name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
     });
     const shell = screen.getByRole('main').parentElement!;
     expect(shell).toHaveClass('flex-1');

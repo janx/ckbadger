@@ -1,47 +1,68 @@
 import { MemoryRouter } from 'react-router-dom';
 import { render as bareRender } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
+import { http, HttpResponse } from 'msw';
+import { QueryClientProvider } from '@tanstack/react-query';
+import {
+  createTestQueryClient,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@/__tests__/utils/test-utils';
+import { server } from '@/__tests__/msw/server';
 import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ErrorPageShell } from '@/components/error-page-shell';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
-const HASH = '0xbbb655aefa778c0856e702030e9f8e9f6171daa392c90b3d9abe3d69c74b386b';
-const ROUTE = ['all that is', 'was worked for.', 'this was not.'] as const;
+const API = '/api/:network/v1';
+/** The tip's block (`/statistics/network` says #1,000,000) as MSW's `/blocks/:id` serves it. */
+const TIP_HASH = '0xabc123def456789012345678901234567890123456789012345678901234abcd';
+const VERSE = [
+  'no page at this path.',
+  'the chain was not asked; nothing on it is lost.',
+  "honey badger don't care.",
+] as const;
+const VERSE_NAME = VERSE.join(' ');
 
 describe('ErrorPageShell', () => {
-  it('is the sign over the night: the thought as the h1 in the mono, the eyebrow and the path, no card', () => {
+  it('is the verse in the voice: the h1 as three comment lines, the eyebrow and the path, no card', () => {
     const path = '/tx/' + 'a'.repeat(128);
     render(
-      <ErrorPageShell status="Not found · 404" path={path} sign={ROUTE} contextSafe>
-        <span>no page at this path.</span>
+      <ErrorPageShell status="Not found · 404" path={path} verse={VERSE} contextSafe>
+        <span>the ways on</span>
       </ErrorPageShell>
     );
-    const sign = screen.getByRole('heading', {
-      level: 1,
-      name: 'all that is was worked for. this was not.',
-    });
-    expect(sign).toHaveClass('sign');
-    expect(sign).not.toHaveAttribute('style');
-    const tubes = sign.querySelectorAll('[data-tube]');
-    expect(tubes).toHaveLength(3);
-    expect(tubes[2]).toHaveClass('off');
-    expect(screen.getByText('Not found · 404')).toHaveClass('eyebrow');
+    const verse = screen.getByRole('heading', { level: 1, name: VERSE_NAME });
+    expect(verse).toHaveClass('comment', 'comment-lg');
+    expect(verse).not.toHaveAttribute('style');
+    expect(Array.from(verse.querySelectorAll('[data-comment-line]'), (l) => l.textContent)).toEqual(
+      [...VERSE]
+    );
+    // the sign's tubes are gone
+    expect(document.querySelector('[data-tube], [data-sign], .sign')).toBeNull();
+    const eyebrow = screen.getByText('Not found · 404');
+    expect(eyebrow).toHaveClass('eyebrow');
+    // the eyebrow line is a prompt: the cinnabar square before it
+    expect(eyebrow.previousElementSibling).toHaveClass('section-mark');
     expect(screen.getByText(path)).toHaveClass('break-all');
-    expect(screen.getByText('no page at this path.').parentElement).toHaveClass('error-facts');
+    expect(screen.getByText('the ways on').parentElement).toHaveClass('error-facts');
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
     expect(screen.queryByRole('contentinfo')).toBeNull();
-    // provider-safe: the static CSS night, no canvas, no realtime feed
-    expect(screen.getByTestId('css-night')).toBeInTheDocument();
-    expect(document.querySelector('canvas')).toBeNull();
-    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'static');
+    // provider-safe: no query client, so no tip to read and no seal; no canvas, no night
+    expect(screen.queryByTestId('error-seal')).toBeNull();
+    expect(document.querySelector('[data-hash-seal]')).toBeNull();
+    expect(document.querySelector('canvas, .error-night')).toBeNull();
+    // a whole screen ends on the empty prompt, as the frame's pages do
+    expect(screen.getAllByTestId('prompt-end')).toHaveLength(1);
   });
 
   it('the eyebrow says what it means while the pointer is on it', () => {
     render(
-      <ErrorPageShell status="Not found · 404" path="/nowhere" sign={ROUTE} contextSafe>
+      <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE} contextSafe>
         <span>facts</span>
       </ErrorPageShell>
     );
@@ -52,20 +73,77 @@ describe('ErrorPageShell', () => {
     expect(eyebrow).toHaveTextContent('Not found · 404');
   });
 
-  it('with providers it mounts the night; without WebGL2 (jsdom) the CSS night shows the page’s hash as 256 squares', () => {
+  it('with providers it presses the newest block’s seal behind the verse: the brush talisman of the tip’s hash', async () => {
     render(
-      <MemoryRouter initialEntries={[`/mainnet/tx/${HASH}`]}>
-        <ErrorPageShell status="Not found · 404" path={`/tx/${HASH}`} sign={ROUTE} hash={HASH}>
+      <MemoryRouter initialEntries={['/mainnet/nowhere']}>
+        <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
           <span>facts</span>
         </ErrorPageShell>
       </MemoryRouter>
     );
-    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'failed');
-    expect(document.querySelector('canvas')).toHaveClass('hidden');
-    const squares = screen.getByTestId('css-night').querySelectorAll('.error-night-bits i');
-    expect(squares).toHaveLength(256);
-    expect(squares[0]).toHaveClass('one');
-    expect(squares[1]).toHaveClass('zero');
+    const seal = await screen.findByTestId('error-seal');
+    // the drawing is a lazy chunk: the talisman generator is not in the entry
+    await waitFor(() => expect(seal.querySelector('[data-hash-seal] svg')).not.toBeNull());
+    // decoration behind the text: hidden from the reader, who has the caption
+    expect(seal).toHaveAttribute('aria-hidden', 'true');
+    expect(seal).toHaveClass('error-seal');
+    const drawn = seal.querySelector('[data-hash-seal="brush"]')!;
+    expect(drawn).not.toBeNull();
+    const svg = drawn.querySelector('svg')!;
+    expect(svg).toHaveAttribute('aria-label', `Hash seal ${TIP_HASH.slice(0, 10)}`);
+    // in the cinnabar mark, pressed a little askew; faint is the CSS's (--m-seal-press)
+    expect(drawn.innerHTML).toContain('var(--c-mark)');
+    expect(drawn.innerHTML).not.toContain('var(--c-rouge)');
+    expect(svg.getAttribute('style')).toContain('rotate(-3deg)');
+    // the seal sits in main, behind the verse, the first screen's height (globals.css)
+    expect(screen.getByRole('main')).toContainElement(seal);
+    expect(screen.getByRole('main')).toHaveClass('isolate');
+    // the caption names the block, as a link, and its hash
+    const caption = document.querySelector('[data-seal-caption]') as HTMLElement;
+    expect(caption).toHaveTextContent(
+      'behind: the seal of the newest block, #1,000,000 · 0xabc123de...1234abcd'
+    );
+    expect(within(caption).getByRole('link', { name: '#1,000,000' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/1000000'
+    );
+    // no WebGL, no CSS night, no 256 squares
+    expect(document.querySelector('canvas, .error-night, .error-night-bits')).toBeNull();
+  });
+
+  it('presses no seal when the tip’s block cannot be read: the verse stands alone, no hash made up', async () => {
+    server.use(
+      http.get(`${API}/blocks/:id`, () =>
+        HttpResponse.json({ error: 'not_found', message: 'no block' }, { status: 404 })
+      )
+    );
+    const client = createTestQueryClient();
+    bareRender(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/mainnet/nowhere']}>
+          <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
+            <span>facts</span>
+          </ErrorPageShell>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    // the vitals named the tip, and reading its block failed (a 404 is the API's definite answer)
+    await waitFor(() => expect(client.getQueryState(['block', 1000000])?.status).toBe('error'));
+    expect(screen.queryByTestId('error-seal')).toBeNull();
+    expect(document.querySelector('[data-hash-seal], [data-seal-caption]')).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: VERSE_NAME })).toBeInTheDocument();
+  });
+
+  it('presses no seal before the vitals name a tip', () => {
+    server.use(http.get(`${API}/statistics/network`, () => new Promise<never>(() => {})));
+    render(
+      <MemoryRouter initialEntries={['/mainnet/nowhere']}>
+        <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
+          <span>facts</span>
+        </ErrorPageShell>
+      </MemoryRouter>
+    );
+    expect(screen.queryByTestId('error-seal')).toBeNull();
   });
 
   it('the crash page: the thought of the failed transition, the error in red, one footer, and no claim about the chain', () => {
@@ -75,12 +153,21 @@ describe('ErrorPageShell', () => {
         <CrashPage message="TypeError: missing channel output" standalone />
       </MemoryRouter>
     );
-    expect(
-      screen.getByRole('heading', { name: 'the chain keeps what succeeded. this did not.' })
-    ).toHaveClass('sign-brownout');
+    // its own words, in the voice; the 404's meme is not quoted here
+    const verse = screen.getByRole('heading', {
+      level: 1,
+      name: 'the chain keeps what succeeded. this did not.',
+    });
+    expect(verse).toHaveClass('comment', 'comment-lg');
+    expect(screen.queryByText(/honey badger/)).toBeNull();
     expect(screen.getByText('Error · not a 404')).toHaveClass('eyebrow');
     expect(screen.getByRole('alert')).toHaveTextContent('✗ TypeError: missing channel output');
     expect(screen.getAllByText('/mainnet/fiber/channels/0x01')).toHaveLength(2);
+    // the facts wrap between words; only the route, one long token, breaks anywhere
+    const route = screen.getAllByText('/mainnet/fiber/channels/0x01')[1];
+    expect(route).toHaveClass('break-all');
+    expect(route.parentElement).not.toHaveClass('break-all');
+    expect(route.parentElement).toHaveClass('[overflow-wrap:anywhere]');
     expect(
       screen.getByText(
         'the chain was not checked in this view — this says nothing about what it holds'
@@ -98,7 +185,7 @@ describe('ErrorPageShell', () => {
       '/mainnet/fiber/channels'
     );
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
-    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'failed');
+    expect(document.querySelector('canvas, .error-night')).toBeNull();
   });
 
   // Visual finish V6: in the frame (the default) the frame draws the header and the footer; the
@@ -147,8 +234,15 @@ describe('ErrorPageShell', () => {
         '/mainnet'
       );
       expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
-      expect(document.querySelector('canvas')).toBeNull();
-      expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'static');
+      expect(document.querySelector('canvas, .error-night')).toBeNull();
+      // above every provider: no tip to read, so the verse stands without a seal
+      expect(document.querySelector('[data-hash-seal]')).toBeNull();
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: 'the chain keeps what succeeded. this did not.',
+        })
+      ).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'CKBadger home' })).toHaveAttribute('href', '/');
     } finally {
       consoleError.mockRestore();

@@ -90,7 +90,9 @@ describe('redesign routes', () => {
     }
     const route = render(<RouteErrorBoundary />);
     expect(
-      screen.getByRole('heading', { name: 'all that is was worked for. this was not.' })
+      screen.getByRole('heading', {
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     route.unmount();
@@ -103,7 +105,9 @@ describe('redesign routes', () => {
     );
     render(<RouteErrorBoundary />);
     expect(
-      screen.getByRole('heading', { name: 'all that is was worked for. this was not.' })
+      screen.getByRole('heading', {
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.queryByText(/the chain keeps/)).toBeNull();
   });
@@ -112,7 +116,9 @@ describe('redesign routes', () => {
     routeError.current = { status: 404, statusText: 'Not Found', data: null, internal: true };
     const notFound = render(<RouteErrorBoundary />);
     expect(
-      screen.getByRole('heading', { name: 'all that is was worked for. this was not.' })
+      screen.getByRole('heading', {
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     notFound.unmount();

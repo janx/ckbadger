@@ -267,7 +267,10 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   );
   render(<Page identityId="unknown" />);
   expect(
-    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+    await screen.findByRole('heading', {
+      level: 1,
+      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+    })
   ).toBeInTheDocument();
   expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();
 });

@@ -44,6 +44,7 @@ import { cn, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
+import { Comment } from '@/components/ui/comment';
 
 /** Both change charts show the last 30 complete days. */
 const CHANGE_DAYS = 30;
@@ -138,6 +139,19 @@ export function allocationOf(a: CkbytesAllocation): AllocationView {
     );
   }
   return v;
+}
+
+/**
+ * The supply comment (the Main board's note, in the voice): what the three parts are, then what
+ * the chain holds at the block the allocation was read at. The last sentence is true by
+ * construction: `allocationOf` has just checked, to the shannon, that the parts add up.
+ */
+export function supplyComment(view: AllocationView): string[] {
+  return [
+    'common knowledge is what live cells occupy.',
+    'the rest is free, or in the dao.',
+    `at ${formatBlockNumber(view.blockNumber)} they add up to every ckbyte in circulation.`,
+  ];
 }
 
 /** Free CKB is plain CKB held: the neutral slate of a CKB mark. */
@@ -290,6 +304,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
           {...legend('dao')}
         />
       </div>
+      <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
     </div>
   );
 }

@@ -159,7 +159,10 @@ it('reports missing identity and unavailable raw evidence without inventing a do
   );
   const { unmount } = render(<Page identityId={evidence.itemId} />);
   expect(
-    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+    await screen.findByRole('heading', {
+      level: 1,
+      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+    })
   ).toBeInTheDocument();
   expect(
     screen.getByText(`/assets/identities/bit-cell/items/${evidence.itemId}`)
