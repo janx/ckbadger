@@ -679,8 +679,10 @@ truth for bulk-sync behavior, constraints, and failure handling.
 
 ### DOB Background Worker
 
-After sync catches up to the chain tip (bulk sync completes), the indexer spawns a background DOB
-decode worker that processes Spore NFTs with DOB0/DOB1 content types:
+Only a near-tip (pipeline) process runs the background DOB decode worker: a bulk-build process
+never starts it, and the near-tip process the supervisor starts after the bulk handoff runs it once
+sync is within `bulk_sync_threshold` of the tip. It processes Spore NFTs with DOB0/DOB1 content
+types:
 
 1. Worker scans `spore_data` CF for undecoded DOB spores (those with no `dob_decoded` entry yet)
 2. Fetches decoder binaries from CKB RPC (cached to filesystem via `dob-decoder` crate)

@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use futures::stream::{self, StreamExt};
@@ -22,16 +23,112 @@ use ckbadger_store::types::{
 };
 use ckbadger_store::CkbadgerStore;
 
+use crate::config::Config;
 use crate::media_store::{sniff_media_type, MediaBlobStore};
 
 use crate::parser::media_source::{extract_uri_sources, parse_dna_hex_from_content, resolve_tier};
 use crate::parser::spore::SporeParser;
 use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
 use crate::sync::dob_decode_error::DobDecodeError;
+use crate::sync::{StartupSyncDecision, SyncProgress};
 
 const BATCH_SIZE: usize = 500;
 const MAX_MEDIA_SOURCES: usize = 24;
 const DECODE_CONCURRENCY: usize = 8;
+
+/// The worker's row in the background task mirror (`sync_meta` →
+/// `background_tasks`).
+const DOB_DECODE_TASK: &str = "dob_decode";
+
+/// Starts the DOB decode worker unless this process is a bulk build; returns
+/// its task, or `None` when it was not started.
+///
+/// The worker's outcomes reach the store only through a live batch: they wait
+/// in the in-memory [`DobOutcomeQueue`], which only a non-bulk batch drains
+/// (`write_parsed_batch`, B-5h). A bulk-build process never writes a live
+/// batch — the startup decision is taken once and the process exits at the
+/// handoff (`BULK_SYNC.md` rule 10) — so there the worker, which wakes once
+/// the bulk engine is within `bulk_sync_threshold` of the tip, would decode
+/// (node RPC and CKB-VM, [`DECODE_CONCURRENCY`] at a time) alongside bulk
+/// finalize, and its outcomes would be dropped with the queue at exit for the
+/// next process to decode again. A bulk-build process therefore does not
+/// start it; its task row stays `Waiting` and names the process that decodes.
+/// The near-tip process the supervisor starts after the handoff starts the
+/// worker, which waits until sync is within `bulk_sync_threshold` of the tip
+/// and then decodes every undecoded DOB spore in one pass.
+pub(crate) fn start_dob_decode_worker(
+    store: &Arc<CkbadgerStore>,
+    append_only_store: &Arc<CkbadgerStore>,
+    config: &Config,
+    decision: StartupSyncDecision,
+    progress: Arc<SyncProgress>,
+    shutdown: Arc<AtomicBool>,
+    outcomes: DobOutcomeQueue,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if decision.is_bulk_build() {
+        info!(
+            "DOB decode worker not started: a bulk-build process applies no decode outcome and \
+             exits at the handoff; the near-tip process started after the handoff decodes"
+        );
+        let _ = store.update_background_task(DOB_DECODE_TASK, |entry| {
+            entry.state = ckbadger_common::BackgroundTaskState::Waiting;
+            entry.message =
+                Some("Runs in the near-tip process started after the bulk handoff".to_string());
+        });
+        return None;
+    }
+
+    let _ = store.update_background_task(DOB_DECODE_TASK, |entry| {
+        entry.state = ckbadger_common::BackgroundTaskState::Waiting;
+        entry.message = Some("Waiting for sync to catch up".to_string());
+    });
+
+    let store = Arc::clone(store);
+    let append_only_store = Arc::clone(append_only_store);
+    let rpc_url = config.ckb_rpc_url.clone();
+    let threshold = config.bulk_sync_threshold;
+    let cache_path = config.decoder_cache_path.clone();
+    let dob_decode_dir = PathBuf::from(&config.dob_decode_dir);
+    Some(tokio::spawn(async move {
+        // Wait until sync is within threshold of chain tip.
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                info!("DOB decode worker cancelled before start (shutdown)");
+                return;
+            }
+            if progress.blocks_remaining() <= threshold {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+
+        let decoder_cache = match DecoderBinaryCache::new(std::path::Path::new(&cache_path)) {
+            Ok(cache) => Arc::new(cache),
+            Err(e) => {
+                warn!(error = %e, "Failed to initialize DOB decoder cache, skipping DOB decode worker");
+                return;
+            }
+        };
+
+        let worker = DobDecodeWorker::new(
+            Arc::clone(&store),
+            append_only_store,
+            decoder_cache,
+            dob_decode_dir,
+            rpc_url,
+            shutdown,
+            outcomes,
+        );
+
+        if let Err(e) = worker.run().await {
+            warn!(error = %e, "DOB decode worker failed");
+            let _ = store.update_background_task(DOB_DECODE_TASK, |entry| {
+                entry.state = ckbadger_common::BackgroundTaskState::Failed;
+                entry.error = Some(e.to_string());
+            });
+        }
+    }))
+}
 
 /// One DOB decode result. The worker decodes outside any block; the result
 /// reaches the store only through a live batch, which applies it with the
@@ -174,13 +271,14 @@ impl DobDecodeWorker {
 
         let start = std::time::Instant::now();
 
-        self.store.update_background_task("dob_decode", |entry| {
-            entry.state = ckbadger_common::BackgroundTaskState::Running;
-            entry.started_at = Some(chrono::Utc::now().timestamp());
-            entry.progress_current = Some(0);
-            entry.progress_total = None;
-            entry.message = Some("Starting DOB decode".to_string());
-        })?;
+        self.store
+            .update_background_task(DOB_DECODE_TASK, |entry| {
+                entry.state = ckbadger_common::BackgroundTaskState::Running;
+                entry.started_at = Some(chrono::Utc::now().timestamp());
+                entry.progress_current = Some(0);
+                entry.progress_total = None;
+                entry.message = Some("Starting DOB decode".to_string());
+            })?;
 
         let mut cursor: Option<Vec<u8>> = None;
         let mut total_decoded: u64 = 0;
@@ -196,7 +294,7 @@ impl DobDecodeWorker {
                     total_skipped, "DOB decode worker shutting down"
                 );
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                let _ = self.store.update_background_task("dob_decode", |entry| {
+                let _ = self.store.update_background_task(DOB_DECODE_TASK, |entry| {
                     entry.state = ckbadger_common::BackgroundTaskState::Completed;
                     entry.progress_current = Some(total_decoded + total_skipped);
                     entry.elapsed_ms = Some(elapsed_ms);
@@ -321,7 +419,7 @@ impl DobDecodeWorker {
             } else {
                 0.0
             };
-            let _ = self.store.update_background_task("dob_decode", |entry| {
+            let _ = self.store.update_background_task(DOB_DECODE_TASK, |entry| {
                 entry.progress_current = Some(processed);
                 entry.elapsed_ms = Some(elapsed_ms);
                 entry.rate = Some(rate);
@@ -343,7 +441,7 @@ impl DobDecodeWorker {
         }
 
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        let _ = self.store.update_background_task("dob_decode", |entry| {
+        let _ = self.store.update_background_task(DOB_DECODE_TASK, |entry| {
             entry.state = ckbadger_common::BackgroundTaskState::Completed;
             entry.progress_current = Some(total_decoded + total_skipped);
             entry.elapsed_ms = Some(elapsed_ms);
@@ -2227,5 +2325,158 @@ mod tests {
         );
         // ... and the spore must remain listed so it retries on the next run.
         assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
+    }
+
+    /// An indexer config whose decoder cache and decoded-media directory live
+    /// under `dir`, and whose node is unreachable.
+    fn worker_config(dir: &std::path::Path) -> Config {
+        let mut config: Config = serde_json::from_value(json!({
+            "domain_data_path": dir.join("domain"),
+            "append_only_data_path": dir.join("append-only"),
+            "build_version": "test",
+            "ckb_rpc_url": "http://127.0.0.1:1",
+            "ckb_db_path": dir.join("ckb-db"),
+            "network": "testnet"
+        }))
+        .expect("test config must deserialize");
+        config.decoder_cache_path = dir.join("decoder-cache").to_string_lossy().to_string();
+        config.dob_decode_dir = dir.join("dob-decode").to_string_lossy().to_string();
+        config
+    }
+
+    /// A live dob/0 spore whose cluster does not exist: the worker decides it
+    /// from the store alone (a deterministic `ClusterNotFound` failure),
+    /// without the node.
+    fn seed_dob_spore_without_cluster(store: &CkbadgerStore) {
+        use ckbadger_store::types::{ObjectEntry, ObjectStandard};
+
+        let spore = ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: Some(vec![0x99; 32]),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x33; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 1,
+            created_at_tx: vec![0x44; 32],
+            extra: ObjectExtra::Spore {
+                content_type: "dob/0".to_string(),
+                content_length: 3,
+                media_profile: SporeMediaProfile {
+                    tier: CompositionTier::DecodePending,
+                    sources: vec![],
+                    issues: vec![],
+                },
+            },
+        };
+        store.put_spore_direct(&[0x22; 32], &spore).unwrap();
+        assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
+    }
+
+    fn dob_decode_task(store: &CkbadgerStore) -> ckbadger_common::BackgroundTaskEntry {
+        store
+            .get_background_tasks()
+            .unwrap()
+            .tasks
+            .into_iter()
+            .find(|task| task.name == DOB_DECODE_TASK)
+            .expect("the dob_decode task row")
+    }
+
+    /// Review finding 6: only a live batch applies DOB decode outcomes (the
+    /// queue lives in memory), and a bulk-build process runs none: it exits at
+    /// the handoff (`BULK_SYNC.md` rule 10). So a bulk-build process runs no
+    /// DOB decode worker, not even once the bulk engine is within the
+    /// threshold of the tip, where the worker used to wake up and decode
+    /// during finalize for nothing. Its task row stays `Waiting` and names
+    /// the process that decodes.
+    #[tokio::test]
+    async fn bulk_build_process_starts_no_dob_decode_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        seed_dob_spore_without_cluster(&store);
+        let config = worker_config(dir.path());
+        let outcomes = DobOutcomeQueue::default();
+
+        let bulk = crate::sync::decide_startup_sync(10_000, 0, &None, config.bulk_sync_threshold)
+            .expect("bulk decision");
+        assert!(bulk.is_bulk_build());
+        // The bulk engine at its handoff: within the threshold of the tip.
+        let at_handoff = Arc::new(SyncProgress::new(9_990, 10_000));
+        assert!(at_handoff.blocks_remaining() <= config.bulk_sync_threshold);
+        let started = start_dob_decode_worker(
+            &store,
+            &store,
+            &config,
+            bulk,
+            at_handoff,
+            Arc::new(AtomicBool::new(false)),
+            outcomes.clone(),
+        );
+
+        assert!(
+            started.is_none(),
+            "a bulk-build process must not start the DOB decode worker"
+        );
+        assert!(
+            outcomes.is_empty(),
+            "nothing is decoded during the bulk build"
+        );
+        assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
+        let task = dob_decode_task(&store);
+        assert_eq!(task.state, ckbadger_common::BackgroundTaskState::Waiting);
+        let message = task.message.expect("the waiting row says why");
+        assert!(
+            message.contains("near-tip process") && message.contains("bulk handoff"),
+            "{message}"
+        );
+    }
+
+    /// The near-tip process — the one the supervisor starts after the bulk
+    /// handoff — starts the worker, which decodes the spores the bulk build
+    /// left undecoded and hands the outcomes to the live writer.
+    #[tokio::test]
+    async fn near_tip_process_starts_the_dob_decode_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        seed_dob_spore_without_cluster(&store);
+        let config = worker_config(dir.path());
+        let outcomes = DobOutcomeQueue::default();
+
+        let near_tip = crate::sync::decide_startup_sync(
+            10_000,
+            9_990,
+            &Some(vec![0x01; 32]),
+            config.bulk_sync_threshold,
+        )
+        .expect("near-tip decision");
+        assert!(!near_tip.is_bulk_build());
+        let worker = start_dob_decode_worker(
+            &store,
+            &store,
+            &config,
+            near_tip,
+            Arc::new(SyncProgress::new(9_990, 10_000)),
+            Arc::new(AtomicBool::new(false)),
+            outcomes.clone(),
+        )
+        .expect("worker started");
+        // A hang guard, not a latency bound.
+        tokio::time::timeout(Duration::from_secs(60), worker)
+            .await
+            .expect("the worker finished its pass")
+            .expect("the worker task did not panic");
+
+        let pending = outcomes.pending();
+        assert_eq!(pending.len(), 1, "one outcome waits for the live writer");
+        assert!(matches!(
+            &pending[0],
+            DobOutcome::Failed { spore_id, .. } if spore_id.as_slice() == [0x22; 32]
+        ));
+        assert_eq!(
+            dob_decode_task(&store).state,
+            ckbadger_common::BackgroundTaskState::Completed
+        );
     }
 }

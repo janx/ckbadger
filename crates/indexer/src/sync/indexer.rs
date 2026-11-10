@@ -25,12 +25,10 @@ use crate::runtime_diag::{
     aggregate_chain_store_memory, generate_incident_id, read_cgroup_memory_snapshot, FlightRecorder,
 };
 
-use ckbadger_dob_decoder::cache::DecoderBinaryCache;
-
 use super::adaptive::*;
 use super::bulk_build::BulkBuildEngine;
 use super::diagnostics::*;
-use super::dob_decode_worker::DobDecodeWorker;
+use super::dob_decode_worker::start_dob_decode_worker;
 use super::helpers::*;
 use super::shutdown::ShutdownSignal;
 use super::sync_mode::*;
@@ -1342,70 +1340,16 @@ impl Indexer {
             }
         });
 
-        // Spawn DOB decode worker as a fire-and-forget background task.
-        // It waits until sync catches up to near-tip, then processes all
-        // undecoded DOB spores in a single pass.
-        {
-            let dob_store = Arc::clone(self.writer.store());
-            let dob_append_only = Arc::clone(&self.append_only_store);
-            let dob_rpc_url = self.config.ckb_rpc_url.clone();
-            let dob_shutdown = self.shutdown.flag();
-            let dob_progress = Arc::clone(&self.progress);
-            let dob_threshold = self.config.bulk_sync_threshold;
-            let dob_cache_path = self.config.decoder_cache_path.clone();
-            let dob_decode_dir = PathBuf::from(&self.config.dob_decode_dir);
-            let dob_outcomes = self.dob_outcomes.clone();
-
-            // Initialize DOB task as Waiting before spawning the worker.
-            let _ = dob_store.update_background_task("dob_decode", |entry| {
-                entry.state = ckbadger_common::BackgroundTaskState::Waiting;
-                entry.message = Some("Waiting for sync to catch up".to_string());
-            });
-
-            let dob_store_for_err = Arc::clone(&dob_store);
-
-            tokio::spawn(async move {
-                // Wait until sync is within threshold of chain tip.
-                loop {
-                    if dob_shutdown.load(Ordering::Relaxed) {
-                        info!("DOB decode worker cancelled before start (shutdown)");
-                        return;
-                    }
-                    if dob_progress.blocks_remaining() <= dob_threshold {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
-
-                let decoder_cache = match DecoderBinaryCache::new(std::path::Path::new(
-                    &dob_cache_path,
-                )) {
-                    Ok(cache) => Arc::new(cache),
-                    Err(e) => {
-                        warn!(error = %e, "Failed to initialize DOB decoder cache, skipping DOB decode worker");
-                        return;
-                    }
-                };
-
-                let worker = DobDecodeWorker::new(
-                    dob_store,
-                    dob_append_only,
-                    decoder_cache,
-                    dob_decode_dir,
-                    dob_rpc_url,
-                    dob_shutdown,
-                    dob_outcomes,
-                );
-
-                if let Err(e) = worker.run().await {
-                    warn!(error = %e, "DOB decode worker failed");
-                    let _ = dob_store_for_err.update_background_task("dob_decode", |entry| {
-                        entry.state = ckbadger_common::BackgroundTaskState::Failed;
-                        entry.error = Some(e.to_string());
-                    });
-                }
-            });
-        }
+        // A near-tip process only: a bulk build applies no decode outcome.
+        start_dob_decode_worker(
+            self.writer.store(),
+            &self.append_only_store,
+            &self.config,
+            decision,
+            Arc::clone(&self.progress),
+            self.shutdown.flag(),
+            self.dob_outcomes.clone(),
+        );
 
         match sync_path {
             SyncPath::BulkBuild => BulkBuildEngine::run(self).await,
