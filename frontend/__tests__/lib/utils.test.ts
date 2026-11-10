@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   truncateHash,
   formatUtc8Date,
@@ -134,6 +134,34 @@ describe('formatTimeAgo', () => {
   it('handles string timestamps', () => {
     const timestamp = new Date(Date.now() - 60 * 1000).toISOString();
     expect(formatTimeAgo(timestamp)).toBe('1m ago');
+  });
+
+  // Review 45fd finding 3 (ruling D4): the same rule as the facts rail's two-unit age.
+  describe('a time ahead of this device', () => {
+    const NOW = Date.parse('2026-11-10T08:00:00Z');
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('reads up to 15 s ahead as 0s ago, never a negative age', () => {
+      expect(formatTimeAgo(new Date(NOW + 3000))).toBe('0s ago');
+      expect(formatTimeAgo(String(NOW + 15_000))).toBe('0s ago');
+    });
+
+    it('says the device clock is behind when the time is further ahead', () => {
+      expect(formatTimeAgo(NOW + 16_000)).toBe("this device's clock is behind");
+      expect(formatTimeAgo(new Date(NOW + 10 * 60 * 1000).toISOString())).toBe(
+        "this device's clock is behind"
+      );
+    });
+
+    it('refuses a timestamp it cannot read', () => {
+      expect(() => formatTimeAgo('yesterday-ish')).toThrow('Invalid timestamp "yesterday-ish"');
+    });
   });
 });
 

@@ -3,6 +3,7 @@ import { extendTailwindMerge } from 'tailwind-merge';
 import { formatScaledInteger } from '@/lib/exact-integer';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { TYPE_STEPS } from '@/lib/type-scale';
+import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
 
 // tailwind-merge reads an unknown `text-<word>` as a colour; the scale's steps are sizes, so
 // `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last.
@@ -24,13 +25,11 @@ export function formatUtc8Date(timestamp: string | number): string {
   return utc8Iso(timestampMs(timestamp, 'block timestamp')).slice(0, 10);
 }
 
+/** A feed row's relative age in one unit ("5m ago"), by the same rule as `formatAgeTwoUnits`. */
 export function formatTimeAgo(timestamp: string | number | Date): string {
-  const date =
-    typeof timestamp === 'string' && /^\d+$/.test(timestamp)
-      ? new Date(Number(timestamp))
-      : new Date(timestamp);
-  const now = new Date();
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  const age = ageSeconds(timestamp);
+  if (age.kind === 'clock-behind') return CLOCK_BEHIND;
+  const { seconds } = age;
 
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;

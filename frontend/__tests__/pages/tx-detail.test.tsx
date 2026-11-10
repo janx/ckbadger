@@ -395,6 +395,21 @@ describe('TransactionDetailPage', () => {
     expect(time.textContent).not.toMatch(/Z/);
   });
 
+  // Review 45fd finding 3 (ruling D4): the node's clock 2 s ahead of this browser's is two
+  // clocks, not a broken page.
+  it('renders a pool transaction whose pendingSince is 2 s after this device’s now', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-03-12T11:59:58Z'));
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
+    render(<TransactionDetailPage />);
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
+      'Waiting in the pool'
+    );
+    const row = screen.getByText('Pending since').parentElement!;
+    expect(row).toHaveTextContent('2026-03-12 20:00:00 UTC+8');
+    expect(row).toHaveTextContent(/0s ago$/);
+  });
+
   it.each([null, 1000])('shows deep-fork replay pause with scalar cycles %s', async (cycles) => {
     vi.mocked(useCyclesCalculation).mockReturnValue({
       cycles,
