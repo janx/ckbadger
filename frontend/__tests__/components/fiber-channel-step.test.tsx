@@ -80,10 +80,10 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
     // wins), the box's dashed edge in the quiet slate; no bracket-hex class
     const tx = within(step).getByRole('link', { name: /^0x/ });
     expect(tx).toHaveClass('text-[color:var(--ink)]', 'hover:underline');
-    expect(tx.style.getPropertyValue('--ink')).toBe('#6aa9c4');
+    expect(tx.style.getPropertyValue('--ink')).toBe('var(--c-board-link)');
     expect(tx.style.color).toBe('');
     expect(screen.getByText('→ step 3, after 6 epochs').parentElement).toHaveStyle({
-      borderColor: '#4b5266',
+      borderColor: 'var(--c-ink-quiet)',
     });
     expect(container.innerHTML).not.toMatch(/(text|bg|border)-\[#/);
   });

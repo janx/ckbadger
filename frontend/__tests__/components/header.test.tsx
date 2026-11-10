@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '../utils/test-utils';
 import { Header } from '@/components/layout/header';
+import { resetThemeForTests } from '@/lib/theme';
 
 const usePathnameMock = vi.fn(() => '/');
 const searchBarMock = vi.fn(({ variant }: { variant?: 'default' | 'compact' | 'home' }) => (
@@ -389,5 +390,43 @@ describe('Header', () => {
     render(<Header />);
 
     expect(screen.queryByTestId('network-switcher')).not.toBeInTheDocument();
+  });
+});
+
+describe('Header · the theme control', () => {
+  beforeEach(() => {
+    usePathnameMock.mockReset();
+    localStorage.clear();
+    resetThemeForTests();
+  });
+  afterEach(() => {
+    localStorage.clear();
+    resetThemeForTests();
+    document.documentElement.setAttribute('data-theme', 'dark');
+  });
+
+  it('carries the theme menu on the desktop row, right after the search', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+    const banner = screen.getByRole('banner');
+    const switcher = within(banner).getByTestId('theme-switcher');
+    expect(switcher).toHaveClass('hidden', 'md:block');
+    expect(within(switcher).getByRole('button', { name: 'Theme: Dark' })).toHaveAttribute(
+      'aria-haspopup',
+      'menu'
+    );
+    expect(screen.getByTestId('search-bar').parentElement?.nextElementSibling).toBe(switcher);
+  });
+
+  it('offers the same choice as a row of the phone menu, which closes on a choice', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+    expect(screen.queryByTestId('theme-segments')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle menu' }));
+    const segments = screen.getByTestId('theme-segments');
+    fireEvent.click(within(segments).getByRole('radio', { name: /^Light/ }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(localStorage.getItem('ckbadger.theme')).toBe('light');
+    expect(screen.queryByTestId('theme-segments')).toBeNull();
   });
 });

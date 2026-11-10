@@ -142,7 +142,7 @@ describe('Network board (F2 charts)', () => {
     expect(by('1220aaaa').querySelector('[data-dot="reachable"]')).not.toBeNull();
     expect(by('1220bbbb').querySelector('[data-dot="verified-before"]')).toHaveAttribute(
       'fill',
-      '#0c0e15'
+      'var(--c-base-bg)'
     );
     expect(by(map.points[0].peerId).querySelector('[data-ring]')).not.toBeNull();
     expect(svg.querySelectorAll('[data-ring]')).toHaveLength(1);
@@ -314,13 +314,13 @@ describe('Network board (F2 charts)', () => {
     expect(screen.queryByText('/ckb/2')).toBeNull();
     const fills = [...document.querySelectorAll('[data-version-bar]')];
     expect(fills).toHaveLength(2);
-    expect(fills[0]).toHaveStyle({ backgroundColor: '#2edba3' });
+    expect(fills[0]).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
   });
 
   it('draws verified as a line over the reachable area, with its first and last day on the axis (CH-58, R14)', async () => {
     render(wrap(<NetworkTrends />));
     const svg = await screen.findByRole('img', { name: 'Verified and reachable peers, peers' });
-    expect(svg.querySelectorAll('path[fill="#dee2ec"]')).toHaveLength(0);
+    expect(svg.querySelectorAll('path[fill="var(--c-text-bright)"]')).toHaveLength(0);
     // visual finish V13: the reachable area is a jade gradient (light, not paint); verified,
     // the bare line, has none
     const areas = [...svg.querySelectorAll('path[fill^="url(#"]')];
@@ -328,7 +328,7 @@ describe('Network board (F2 charts)', () => {
     const gradient = svg.querySelector(
       `linearGradient[id="${areas[0].getAttribute('fill')!.slice(5, -1)}"]`
     )!;
-    expect(gradient.querySelector('stop')).toHaveAttribute('stop-color', '#2edba3');
+    expect(gradient.querySelector('stop')).toHaveAttribute('stop-color', 'var(--c-jade)');
     const ticks = [...svg.querySelectorAll('[data-x-tick]')].map((n) => n.textContent);
     expect(ticks).toEqual(['07-01', '07-03']);
     // The daily share tables are developer evidence, not part of "Over time".

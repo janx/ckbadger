@@ -154,12 +154,11 @@ describe('AlignedBar display and class tones (table-rows R2)', () => {
     );
     const colour = (key: string) =>
       (container.querySelector(`[data-segment="${key}"]`) as HTMLElement).style.backgroundColor;
-    const rgb = (hex: string) =>
-      `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
-    expect(colour('tokens')).toBe(rgb(CLASS_COLORS.tokens));
-    expect(colour('objects')).toBe(rgb(CLASS_COLORS.objects));
-    expect(colour('identities')).toBe(rgb(CLASS_COLORS.identities));
-    expect(colour('dao')).toBe(rgb(CLASS_COLORS.dao));
-    expect(colour('data')).toBe(rgb(DATA_COLOR));
+    // the class colours are theme references, kept as written by jsdom (a var() is not parsed)
+    expect(colour('tokens')).toBe(CLASS_COLORS.tokens);
+    expect(colour('objects')).toBe(CLASS_COLORS.objects);
+    expect(colour('identities')).toBe(CLASS_COLORS.identities);
+    expect(colour('dao')).toBe(CLASS_COLORS.dao);
+    expect(colour('data')).toBe(DATA_COLOR);
   });
 });

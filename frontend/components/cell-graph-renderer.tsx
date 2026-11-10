@@ -5,6 +5,8 @@ import type { GraphNode, GraphLink } from '@/lib/api';
 import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import { isFocusedCellNode, type FocusCellTarget } from '@/components/cell-graph-utils';
 import dynamic from '@/lib/dynamic-client';
+import { useThemePalette } from '@/hooks/useThemePalette';
+import { hexAlpha, type Palette } from '@/lib/palette';
 
 type ForceNode = NodeObject;
 type ForceLink = LinkObject;
@@ -27,20 +29,30 @@ export interface CellGraphProps {
   height?: number;
 }
 
-const NODE_COLORS = {
-  cell: {
-    live: '#34d399',
-    dead: '#fb7185',
-  } as Record<string, string>,
-  transaction: '#60a5fa',
-};
-
-const LINK_COLORS: Record<string, string> = {
-  creates: '#6ee7b7',
-  output: '#6ee7b7',
-  consumed_by: '#fda4af',
-  input: '#fda4af',
-};
+/**
+ * The graph's inks in the current theme, as the canvas needs them (concrete hex from the
+ * palette, useThemePalette): a live cell jade, a consumed one rouge, a transaction aqua; the
+ * edges that create in the dim jade, the edges that consume in the dim rouge; a focused cell
+ * ringed in gold.
+ */
+function graphInks(palette: Palette) {
+  return {
+    cell: { live: palette.jade, dead: palette.rouge } as Record<string, string>,
+    transaction: palette.aqua,
+    links: {
+      creates: palette['jade-dim'],
+      output: palette['jade-dim'],
+      consumed_by: palette['rouge-dim'],
+      input: palette['rouge-dim'],
+    } as Record<string, string>,
+    linkFallback: palette['text-dim'],
+    nodeEdge: hexAlpha(palette['text-bright'], 0.2),
+    focusRing: palette.gold,
+    focusLabel: palette['gold-bright'],
+    label: palette.text,
+    background: palette['base-surface'],
+  };
+}
 
 export function CellGraphRenderer({
   nodes,
@@ -53,6 +65,8 @@ export function CellGraphRenderer({
   const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(width ?? null);
+  const { palette } = useThemePalette();
+  const inks = useMemo(() => graphInks(palette), [palette]);
 
   const graphData = useMemo(
     () => ({
@@ -110,18 +124,24 @@ export function CellGraphRenderer({
     };
   }, [graphData, height, nodes.length, resolvedWidth]);
 
-  const getNodeColor = useCallback((node: ForceNode) => {
-    if (node.nodeType === 'transaction') {
-      return NODE_COLORS.transaction;
-    }
-    const status = (node.data as GraphNode['data'])?.status || 'dead';
-    return NODE_COLORS.cell[status];
-  }, []);
+  const getNodeColor = useCallback(
+    (node: ForceNode) => {
+      if (node.nodeType === 'transaction') {
+        return inks.transaction;
+      }
+      const status = (node.data as GraphNode['data'])?.status || 'dead';
+      return inks.cell[status];
+    },
+    [inks]
+  );
 
-  const getLinkColor = useCallback((link: ForceLink) => {
-    const linkType = link.linkType as string;
-    return LINK_COLORS[linkType] || '#6b7280';
-  }, []);
+  const getLinkColor = useCallback(
+    (link: ForceLink) => {
+      const linkType = link.linkType as string;
+      return inks.links[linkType] || inks.linkFallback;
+    },
+    [inks]
+  );
 
   const drawNode = useCallback(
     (node: ForceNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -147,14 +167,14 @@ export function CellGraphRenderer({
       ctx.fillStyle = getNodeColor(node);
       ctx.fill();
 
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.strokeStyle = inks.nodeEdge;
       ctx.lineWidth = 1 / globalScale;
       ctx.stroke();
 
       if (isFocused) {
         ctx.beginPath();
         ctx.arc(x, y, nodeSize + 2.5 / globalScale, 0, 2 * Math.PI, false);
-        ctx.strokeStyle = '#fcd34d';
+        ctx.strokeStyle = inks.focusRing;
         ctx.lineWidth = 1.4 / globalScale;
         ctx.stroke();
       }
@@ -163,11 +183,11 @@ export function CellGraphRenderer({
         ctx.font = `${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillStyle = isFocused ? '#fde68a' : '#d1d5db';
+        ctx.fillStyle = isFocused ? inks.focusLabel : inks.label;
         ctx.fillText(label, x, y + nodeSize + 2);
       }
     },
-    [focusCell, getNodeColor]
+    [focusCell, getNodeColor, inks]
   );
 
   const handleNodeClick = useCallback(
@@ -214,7 +234,7 @@ export function CellGraphRenderer({
         graphData={graphData}
         width={resolvedWidth}
         height={height}
-        backgroundColor="#0b1020"
+        backgroundColor={inks.background}
         nodeCanvasObject={drawNode}
         nodePointerAreaPaint={nodePointerAreaPaint}
         linkColor={getLinkColor}

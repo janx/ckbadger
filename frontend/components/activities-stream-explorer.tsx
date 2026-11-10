@@ -62,7 +62,7 @@ const STREAM_KEYFRAMES = `
   to { transform: translateY(0); opacity: 1; }
 }
 @keyframes activity-stream-row-glow {
-  from { background-color: rgba(46, 219, 163, 0.10); }
+  from { background-color: rgb(var(--rgb-jade) / 0.1); }
   to { background-color: transparent; }
 }
 `;
@@ -518,7 +518,7 @@ export function ActivitiesStreamExplorer({
           className={cn(
             'sticky z-30',
             BELOW_STICKY_HEADER,
-            hasPending && 'shadow-[0_10px_24px_rgba(0,0,0,0.28)]'
+            hasPending && 'shadow-[var(--m-raised-shadow)]'
           )}
         >
           {hasPending && (

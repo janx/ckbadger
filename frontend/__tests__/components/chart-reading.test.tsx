@@ -8,7 +8,7 @@ const points = [
   { label: '6.75', values: { primary: '2.3642' } },
   { label: '20', values: { primary: '1.59' } },
 ];
-const series = [{ key: 'primary', label: 'Nominal APC', color: '#2edba3' }];
+const series = [{ key: 'primary', label: 'Nominal APC', color: 'var(--c-jade)' }];
 const caption = (container: HTMLElement) => container.querySelector('figcaption')!.textContent;
 
 describe('Chart main reading (CH-03)', () => {

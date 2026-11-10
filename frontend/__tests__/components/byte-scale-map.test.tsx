@@ -15,7 +15,7 @@ const segments: ScaleSegment[] = [
     end: 16,
     label: '16',
     short: '16',
-    color: '#4b5266',
+    color: 'var(--c-ink-quiet)',
     quiet: true,
     title: 'header',
   },
@@ -25,7 +25,7 @@ const segments: ScaleSegment[] = [
     end: 31,
     label: 'name 15',
     short: '15',
-    color: '#7aa7d6',
+    color: 'var(--c-cell-lock)',
     title: 'name',
     target: 'n',
   },
@@ -35,7 +35,7 @@ const segments: ScaleSegment[] = [
     end: 13890,
     label: 'description 13,859',
     short: '13,859',
-    color: '#5f9fb2',
+    color: 'var(--c-data-framing)',
     title: 'description',
     target: 'd',
   },
@@ -44,7 +44,7 @@ const segments: ScaleSegment[] = [
     start: 13890,
     end: 13890,
     label: '',
-    color: '#343c50',
+    color: 'var(--c-text-ghost)',
     title: 'mutantId',
     target: 'm',
   },
@@ -135,13 +135,13 @@ describe('ByteScaleMap with many parts', () => {
   it('narrows the gaps to 1 px so a 72-gene ruler stays to scale in a 358 px phone column', () => {
     stubChartWidth(358);
     const many: ScaleSegment[] = [
-      { key: 'name', start: 0, end: 40, label: 'name 40', color: '#68ccf0', title: 'name' },
+      { key: 'name', start: 0, end: 40, label: 'name 40', color: 'var(--c-aqua)', title: 'name' },
       ...Array.from({ length: 71 }, (_, i) => ({
         key: `g${i}`,
         start: 40 + i,
         end: 41 + i,
         label: '',
-        color: '#a98cf5',
+        color: 'var(--c-object)',
         title: `g${i}`,
       })),
     ];

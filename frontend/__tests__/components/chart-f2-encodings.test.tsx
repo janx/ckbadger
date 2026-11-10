@@ -11,7 +11,7 @@ const daily = ['2024-01-01', '2024-06-01', '2025-01-01', '2025-06-01'].map((labe
   label,
   values: { primary: ['1', '2.5', '3', '2'][i], real: ['0.5', '1', '1.5', '1'][i] },
 }));
-const series = [{ key: 'primary', label: 'Rate', color: '#2edba3' }];
+const series = [{ key: 'primary', label: 'Rate', color: 'var(--c-jade)' }];
 const text = (container: HTMLElement) =>
   [...container.querySelectorAll('svg text')].map((node) => node.textContent);
 
@@ -28,7 +28,7 @@ describe('shared Chart encodings for the charts boards', () => {
         subtitle="share"
         data={shares}
         series={[
-          { key: 'a', label: 'A', color: '#2edba3' },
+          { key: 'a', label: 'A', color: 'var(--c-jade)' },
           { key: 'b', label: 'B', color: '#21a77f' },
         ]}
         unit="%"
@@ -79,9 +79,9 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('3 3');
     // The plot starts below the key: every grid line and the marker's name are under it.
     const keyY = Number(key.querySelector('text')!.getAttribute('y'));
-    const gridYs = [...container.querySelectorAll('svg line[stroke="#1a1f30"]')].map((n) =>
-      Number(n.getAttribute('y1'))
-    );
+    const gridYs = [
+      ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
+    ].map((n) => Number(n.getAttribute('y1')));
     expect(Math.min(...gridYs) - keyY).toBeGreaterThanOrEqual(10);
     const marker = [...container.querySelectorAll('svg text')].find(
       (n) => n.textContent === 'Meepo'
@@ -144,17 +144,23 @@ describe('shared Chart encodings for the charts boards', () => {
         subtitle="daily"
         data={daily}
         series={[
-          { key: 'primary', label: 'Reachable', color: '#2edba3' },
-          { key: 'real', label: 'Verified', color: '#dee2ec', dashed: true, lineOnly: true },
+          { key: 'primary', label: 'Reachable', color: 'var(--c-jade)' },
+          {
+            key: 'real',
+            label: 'Verified',
+            color: 'var(--c-text-bright)',
+            dashed: true,
+            lineOnly: true,
+          },
         ]}
         unit="peers"
         kind="area"
         formatValue={(v) => v}
       />
     );
-    const filled = [...container.querySelectorAll('path[fill="#dee2ec"]')];
+    const filled = [...container.querySelectorAll('path[fill="var(--c-text-bright)"]')];
     expect(filled).toHaveLength(0);
-    const dashed = container.querySelector('path[stroke="#dee2ec"]')!;
+    const dashed = container.querySelector('path[stroke="var(--c-text-bright)"]')!;
     expect(dashed.getAttribute('stroke-dasharray')).toBe('4 3');
     // visual finish V13: the filled series is a jade light (a gradient), the bare one has none
     const areas = [...container.querySelectorAll('path[fill^="url(#"]')];
@@ -162,8 +168,8 @@ describe('shared Chart encodings for the charts boards', () => {
     const id = areas[0].getAttribute('fill')!.slice(5, -1);
     const stops = container.querySelectorAll(`linearGradient[id="${id}"] stop`);
     expect([...stops].map((stop) => stop.getAttribute('stop-color'))).toEqual([
-      '#2edba3',
-      '#2edba3',
+      'var(--c-jade)',
+      'var(--c-jade)',
     ]);
   });
 
@@ -184,7 +190,7 @@ describe('shared Chart encodings for the charts boards', () => {
         formatValue={(v) => v}
       />
     );
-    const widths = [...container.querySelectorAll('rect[fill="#2edba3"]')].map((r) =>
+    const widths = [...container.querySelectorAll('rect[fill="var(--c-jade)"]')].map((r) =>
       Number(r.getAttribute('width'))
     );
     expect(widths).toHaveLength(3);
@@ -298,7 +304,7 @@ describe('shared Chart encodings for the charts boards', () => {
           title="Transactions per week"
           subtitle="weekly"
           data={weeks}
-          series={[{ key: 'count', label: 'Transactions', color: '#2edba3' }]}
+          series={[{ key: 'count', label: 'Transactions', color: 'var(--c-jade)' }]}
           unit="transactions"
           kind="bars"
           plotLeft={100}
@@ -440,8 +446,8 @@ describe('in-plot values over a filled chart', () => {
     values: { occupied: String(100 + i * 50), free: '20' },
   }));
   const stacked = [
-    { key: 'occupied', label: 'Occupied', color: '#2edba3' },
-    { key: 'free', label: 'Free', color: '#3a4258' },
+    { key: 'occupied', label: 'Occupied', color: 'var(--c-jade)' },
+    { key: 'free', label: 'Free', color: 'var(--c-slate-ckb)' },
   ];
   const order = (insideYTicks: boolean | 'over') => {
     const { container, unmount } = render(
@@ -513,15 +519,15 @@ describe('chart material (visual finish V13)', () => {
       stop.getAttribute('stop-opacity'),
     ]);
     expect(stops).toEqual([
-      ['0', '#2edba3', '0.22'],
-      ['1', '#2edba3', '0'],
+      ['0', 'var(--c-jade)', '0.22'],
+      ['1', 'var(--c-jade)', '0'],
     ]);
   });
 
   it('gives every chart and every filled series its own gradient', () => {
     const two = [
-      { key: 'primary', label: 'Rate', color: '#2edba3' },
-      { key: 'real', label: 'Real', color: '#68ccf0' },
+      { key: 'primary', label: 'Rate', color: 'var(--c-jade)' },
+      { key: 'real', label: 'Real', color: 'var(--c-aqua)' },
     ];
     const { container } = render(
       <>
@@ -557,7 +563,7 @@ describe('chart material (visual finish V13)', () => {
       .querySelectorAll('path[fill^="url(#"]')[1];
     expect(gradientOf(container, second).querySelector('stop')).toHaveAttribute(
       'stop-color',
-      '#68ccf0'
+      'var(--c-aqua)'
     );
   });
 
@@ -568,8 +574,8 @@ describe('chart material (visual finish V13)', () => {
         subtitle="occupied and free"
         data={daily}
         series={[
-          { key: 'primary', label: 'Occupied', color: '#2edba3' },
-          { key: 'real', label: 'Free', color: '#3a4258' },
+          { key: 'primary', label: 'Occupied', color: 'var(--c-jade)' },
+          { key: 'real', label: 'Free', color: 'var(--c-slate-ckb)' },
         ]}
         unit="CKB"
         kind="stacked"
@@ -578,8 +584,8 @@ describe('chart material (visual finish V13)', () => {
     );
     const areas = [...container.querySelectorAll('path[fill-opacity]')];
     expect(areas.map((a) => [a.getAttribute('fill'), a.getAttribute('fill-opacity')])).toEqual([
-      ['#2edba3', '0.6'],
-      ['#3a4258', '0.6'],
+      ['var(--c-jade)', '0.6'],
+      ['var(--c-slate-ckb)', '0.6'],
     ]);
     expect(container.querySelector('linearGradient')).toBeNull();
   });
@@ -600,7 +606,9 @@ describe('chart material (visual finish V13)', () => {
           formatValue={(v) => v}
         />
       );
-      const grid = [...container.querySelectorAll('svg line[stroke="#1a1f30"]')];
+      const grid = [
+        ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
+      ];
       expect(grid.length).toBeGreaterThan(1);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
       expect(container.querySelector('[data-reference-line="target 4 %"] line')).toHaveAttribute(

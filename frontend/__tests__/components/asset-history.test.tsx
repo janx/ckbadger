@@ -86,8 +86,8 @@ describe('Asset history', () => {
         ...screen.getByLabelText('History readout').querySelectorAll<HTMLElement>('[aria-hidden]'),
       ];
       expect(swatches.map((s) => s.style.backgroundColor)).toEqual([
-        'rgb(46, 219, 163)',
-        'rgb(58, 66, 88)',
+        'var(--c-jade)',
+        'var(--c-slate-ckb)',
       ]);
     } finally {
       vi.restoreAllMocks();
@@ -160,7 +160,7 @@ describe('Asset history', () => {
         for (const plot of screen.getAllByRole('img')) {
           const ticks = [...plot.querySelectorAll('[data-role="y-tick"]')];
           expect(ticks.length).toBeGreaterThan(0);
-          for (const tick of ticks) expect(tick).toHaveAttribute('fill', '#343c50');
+          for (const tick of ticks) expect(tick).toHaveAttribute('fill', 'var(--c-text-ghost)');
           // no axis column: no value is written right-aligned left of the plot
           expect(
             [...plot.querySelectorAll('text[text-anchor="end"]')].filter(

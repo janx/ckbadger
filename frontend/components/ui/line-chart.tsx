@@ -703,7 +703,7 @@ export function LineChart({
                   )
                 )}
                 fill="transparent"
-                stroke="#ffffff"
+                stroke="var(--c-text-bright)"
                 strokeWidth={1}
               />
             )}

@@ -41,7 +41,7 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(dropped[0]).toHaveAttribute('stroke-dasharray', '3 3');
     const links = svg.querySelectorAll('[data-uncle-link]');
     expect(links).toHaveLength(2);
-    expect(links[0]).toHaveAttribute('stroke', '#2edba3');
+    expect(links[0]).toHaveAttribute('stroke', 'var(--c-jade)');
     expect(Array.from(svg.querySelectorAll('[data-tip-mark]')).map((m) => m.textContent)).toEqual([
       '1',
       '2',

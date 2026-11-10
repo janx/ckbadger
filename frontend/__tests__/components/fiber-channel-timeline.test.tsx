@@ -29,7 +29,7 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
     expect(xs).toHaveLength(3);
     expect(xs[0]).toBeLessThan(xs[1]);
     expect(xs[1]).toBeLessThan(xs[2]);
-    expect(svg.querySelector('[data-segment="open"]')).toHaveAttribute('stroke', '#2edba3');
+    expect(svg.querySelector('[data-segment="open"]')).toHaveAttribute('stroke', 'var(--c-jade)');
     expect(svg.querySelector('[data-segment="wait"]')).toHaveAttribute('stroke-dasharray', '3 3');
   });
 

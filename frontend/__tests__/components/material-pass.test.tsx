@@ -43,8 +43,9 @@ const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
 describe('the rules in globals.css', () => {
   it('move 1: the night sky — the ground gradient, the pools from the tint variables, the grain', () => {
     const sky = css.match(/\.ambient-glow\s*\{([^}]*)\}/)!;
-    expect(sky[1]).toContain(
-      'background: linear-gradient(180deg, #0b0d17 0%, #08090e 55%, #09090d 100%)'
+    // the three stops are the theme's (night at night, paper by day); prettier wraps the gradient
+    expect(sky[1]).toMatch(
+      /background: linear-gradient\(\s*180deg,\s*var\(--c-sky-top\) 0%,\s*var\(--c-sky-mid\) 55%,\s*var\(--c-sky-bottom\) 100%\s*\)/
     );
     expect(sky[1]).toContain('z-index: -1');
     const pools = css.match(/\.ambient-glow::before\s*\{([^}]*)\}/)!;
@@ -53,7 +54,7 @@ describe('the rules in globals.css', () => {
     expect(pools[1]).toContain('var(--pool-3) 0%, transparent 70%');
     // jade by default (the approved .10 / .07 / .07), on :root
     expect(css).toMatch(
-      /--pool-1: rgba\(46, 219, 163, 0\.1\);\s*--pool-2: rgba\(104, 204, 240, 0\.07\);\s*--pool-3: rgba\(242, 197, 92, 0\.07\);/
+      /--pool-1: rgb\(var\(--rgb-jade\) \/ 0\.1\);\s*--pool-2: rgb\(var\(--rgb-aqua\) \/ 0\.07\);\s*--pool-3: rgb\(var\(--rgb-gold\) \/ 0\.07\);/
     );
     // the class hues, from the class colour tokens already declared: no new colour token
     expect(css).toMatch(
@@ -70,10 +71,11 @@ describe('the rules in globals.css', () => {
     );
     const grain = css.match(/\.crt-grain\s*\{([^}]*)\}/)!;
     expect(grain[1]).toContain("background-image: url('/noise.png')");
-    // visual finish V3: a 128 px high-frequency tile at 3 %, drawn at its own size
-    expect(grain[1]).toContain('opacity: 0.03;');
+    // visual finish V3: a 128 px high-frequency tile at 3 %, drawn at its own size — the opacity
+    // and the blend are the theme's (screen at 3 % on the night, multiply at 5 % on paper)
+    expect(grain[1]).toContain('opacity: var(--m-grain-opacity);');
     expect(grain[1]).toContain('background-size: 128px 128px');
-    expect(grain[1]).toContain('mix-blend-mode: screen');
+    expect(grain[1]).toContain('mix-blend-mode: var(--m-grain-blend)');
     expect(grain[1]).toContain('pointer-events: none');
     // under the scanlines (9999), over the content
     expect(grain[1]).toContain('z-index: 9997');
@@ -86,7 +88,7 @@ describe('the rules in globals.css', () => {
     expect(vignette[1]).toContain('z-index: -1');
     expect(vignette[1]).not.toContain('z-index: 9998');
     expect(vignette[1]).toContain(
-      'background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%)'
+      'background: radial-gradient(ellipse at center, transparent 45%, var(--m-vignette) 100%)'
     );
     expect(vignette[1]).toContain('position: fixed');
     expect(vignette[1]).toContain('inset: 0');
@@ -108,7 +110,7 @@ describe('the rules in globals.css', () => {
   it('move 1 (visual finish V2): the scanlines, 1 px in 3 at 6 %', () => {
     const scan = css.match(/\.crt-scanlines\s*\{([^}]*)\}/)!;
     expect(scan[1]).toMatch(
-      /background: repeating-linear-gradient\(\s*0deg,\s*transparent 0px,\s*transparent 2px,\s*rgba\(10, 14, 28, 0\.06\) 2px,\s*rgba\(10, 14, 28, 0\.06\) 3px\s*\);/
+      /background: repeating-linear-gradient\(\s*0deg,\s*transparent 0px,\s*transparent 2px,\s*var\(--m-scanline-ink\) 2px,\s*var\(--m-scanline-ink\) 3px\s*\);/
     );
     expect(scan[1]).not.toContain('rgba(0, 0, 0, 0.09)');
     expect(scan[1]).toContain('z-index: 9999');
@@ -120,7 +122,7 @@ describe('the rules in globals.css', () => {
     // visual finish V4, the bezel: a 3 % white sheen over the top 56 px of the 72 % glass, a lit
     // top edge, a dark bottom edge, and a 1 px dark line just outside the border — no drop shadow
     expect(glass[1]).toMatch(
-      /background:\s*linear-gradient\(180deg, rgba\(255, 255, 255, 0\.03\), transparent 56px\),\s*rgba\(16, 19, 28, 0\.72\);/
+      /background:\s*linear-gradient\(180deg, var\(--m-glass-sheen\), transparent 56px\),\s*var\(--m-glass-fill\);/
     );
     // exactly these three, split at the commas outside the colours' parentheses
     const shadows = glass[1]
@@ -128,22 +130,23 @@ describe('the rules in globals.css', () => {
       .split(/,(?![^(]*\))/)
       .map((v) => v.trim());
     expect(shadows).toEqual([
-      'inset 0 1px 0 rgba(255, 255, 255, 0.1)',
-      'inset 0 -1px 0 rgba(0, 0, 0, 0.55)',
-      '0 0 0 1px rgba(0, 0, 0, 0.45)',
+      'inset 0 1px 0 var(--m-glass-top-edge)',
+      'inset 0 -1px 0 var(--m-glass-bottom-edge)',
+      '0 0 0 1px var(--m-glass-ring)',
     ]);
     // no backdrop-filter: nothing behind a frame has detail to blur (see the comment)
     expect(glass[1]).not.toContain('backdrop-filter');
     const well = css.match(/\.well\s*\{([^}]*)\}/)!;
-    expect(well[1]).toContain('background: #0a0c12');
-    expect(well[1]).toContain('border: 1px solid #1a1f30');
+    expect(well[1]).toContain('background: var(--c-well-bg)');
+    expect(well[1]).toContain('border: 1px solid var(--c-base-border-subtle)');
     expect(well[1]).toContain('border-radius: var(--well-radius, 3px)');
-    // visual finish V4: the well keeps its inset and gains a 4 % lower lip
+    // visual finish V4: the well keeps its inset and gains a 4 % lower lip (both materials of
+    // the theme: lib/palette.ts well-inset, well-lip)
     expect(well[1]).toMatch(
-      /box-shadow:\s*inset 0 1px 3px rgba\(0, 0, 0, 0\.65\),\s*0 1px 0 rgba\(255, 255, 255, 0\.04\);/
+      /box-shadow:\s*inset 0 1px 3px var\(--m-well-inset\),\s*0 1px 0 var\(--m-well-lip\);/
     );
     const ground = css.match(/\.tier2-ground\s*\{([^}]*)\}/)!;
-    expect(ground[1]).toContain('background: rgba(6, 7, 11, 0.9)');
+    expect(ground[1]).toContain('background: var(--m-tier2-ground)');
     expect(ground[1]).toMatch(
       /margin-left: -1rem;\s*margin-right: -1rem;\s*padding-left: 1rem;\s*padding-right: 1rem;/
     );
@@ -188,10 +191,10 @@ describe('the rules in globals.css', () => {
 
   it('move 4: the flare keyframes — only `from` is written, so the end state is the element’s own', () => {
     const flare = css.match(/@keyframes phosphor-flare\s*\{([\s\S]*?)\n\}/)!;
-    expect(flare[1]).toMatch(/from\s*\{\s*color: #e9fff6;/);
-    expect(flare[1]).toContain('0 0 2px rgba(233, 255, 246, 0.9)');
-    expect(flare[1]).toContain('0 0 10px rgba(46, 219, 163, 0.55)');
-    expect(flare[1]).toContain('0 0 28px rgba(46, 219, 163, 0.3)');
+    expect(flare[1]).toMatch(/from\s*\{\s*color: var\(--c-neon-white\);/);
+    expect(flare[1]).toContain('0 0 2px rgb(var(--rgb-neon-white) / calc(0.9 * var(--m-glow)))');
+    expect(flare[1]).toContain('0 0 10px rgb(var(--rgb-jade) / calc(0.55 * var(--m-glow)))');
+    expect(flare[1]).toContain('0 0 28px rgb(var(--rgb-jade) / calc(0.3 * var(--m-glow)))');
     expect(flare[1]).not.toMatch(/\bto\b|100%/);
     expect(css).toMatch(/\.phosphor-flare\s*\{\s*animation: phosphor-flare 1\.2s ease-out;\s*\}/);
     expect(css).toMatch(
@@ -230,7 +233,7 @@ describe('the rules in globals.css', () => {
       /\.small-caps\s*\{\s*font-variant: small-caps;\s*letter-spacing: 0\.04em;\s*\}/
     );
     expect(css).toMatch(
-      /\.this-address\s*\{\s*border-bottom: 1px solid rgba\(46, 219, 163, 0\.6\);\s*\}/
+      /\.this-address\s*\{\s*border-bottom: 1px solid rgb\(var\(--rgb-jade\) \/ 0\.6\);\s*\}/
     );
   });
 

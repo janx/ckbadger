@@ -45,13 +45,13 @@ const DIMMED = 0.35;
 
 const C = {
   // the row-rule ink: every chart's grid is 1 px solid #1a1f30 (visual finish V13 b)
-  grid: '#1a1f30',
-  base: '#343c50',
-  tick: '#7c849c',
-  reference: '#a0a8be',
-  data: '#2edba3',
-  down: '#e8555a',
-  background: '#0c0e15',
+  grid: 'var(--c-base-border-subtle)',
+  base: 'var(--c-text-ghost)',
+  tick: 'var(--c-text-dim)',
+  reference: 'var(--c-text)',
+  data: 'var(--c-jade)',
+  down: 'var(--c-rouge)',
+  background: 'var(--c-base-bg)',
 } as const;
 
 // ---------------------------------------------------------------------------

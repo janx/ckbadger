@@ -418,7 +418,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
                 end: part.end,
                 label: count(n),
                 short: count(n),
-                color: '#4b5266',
+                color: 'var(--c-ink-quiet)',
                 quiet: true,
                 title: `${span(part.start, n)} · no gene reads ${n === 1 ? 'it' : 'them'}`,
               };
@@ -624,7 +624,7 @@ function PatternReading({
         : GENE_COLORS.cycle[ink.size % GENE_COLORS.cycle.length]
     );
   });
-  const inkOf = (key: string) => ink.get(key) ?? '#7c849c';
+  const inkOf = (key: string) => ink.get(key) ?? 'var(--c-text-dim)';
   const rows = geneRows(genes);
   const found = (row: GeneRow) =>
     genetics
@@ -839,7 +839,7 @@ function PatternReading({
                   end: part.end,
                   label: count(n),
                   short: count(n),
-                  color: '#4b5266',
+                  color: 'var(--c-ink-quiet)',
                   quiet: true,
                   title: `${span} · no gene reads ${n === 1 ? 'it' : 'them'}`,
                 };

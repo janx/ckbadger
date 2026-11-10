@@ -226,6 +226,8 @@ ckbadger verify --list-checks             # List all checks
 
 **Prettier**: semi, singleQuote, tabWidth 2, printWidth 100, trailingComma es5. **Imports**: Always `@/` path alias (not relative). **Components**: `'use client'` for interactivity, named exports, Props interface. **Data Fetching**: TanStack Query v5.
 
+**Colour / themes**: two themes (dark = midnight, the default; light = ink on paper) from one palette, `frontend/lib/palette.ts`, emitted as CSS variables by `tailwind.config.ts` and switched by `data-theme` on `<html>` (`lib/theme.ts`, header `ThemeSwitcher`). Page code writes no hex: Tailwind classes, `lib/design-tokens.ts` constants, or `color()` / `alpha()` / `glowAlpha()` / `material()` / `fade()` from the palette; a canvas or shader reads concrete values through `useThemePalette()`. A glow is a `--m-glow`-scaled alpha so it goes out by day. A new colour goes into both themes; `__tests__/lib/palette.test.ts` pins contrast (≥ 4.5:1 text-grade) and `__tests__/lib/theme-tokens-gate.test.ts` refuses hex outside the palette. See `frontend/docs/ui-color-guidelines.md`.
+
 ## Key Workflows
 
 ### Adding API Endpoint
@@ -339,19 +341,20 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 
 ## Gotchas
 
-| Issue                     | Solution                                                          |
-| ------------------------- | ----------------------------------------------------------------- |
-| Hex parsing               | Use `parse_hex_to_bytes()`, `parse_capacity()` in `rpc/client.rs` |
-| Script hashing            | `ckb-hash::new_blake2b()` with CKB personalization                |
-| WebSocket Text (Axum 0.8) | Needs `Utf8Bytes` - use `.into()` from String                     |
-| react-force-graph-2d      | Use `frontend/lib/dynamic-client.tsx` for client-only graph loads |
-| API casing                | Backend `camelCase` via serde, frontend types match               |
-| Daily charts              | Exclude incomplete current day                                    |
-| Vite SPA deep links       | Rust frontend server must fall back to `index.html` for non-files |
-| Vitest globals            | Add `vitest/globals` to tsconfig types                            |
-| MSW handlers              | Must start server in setup.ts `beforeAll`                         |
-| RocksDB secondary mode    | Read-only, no write locks, no snapshots — pin a read view         |
-| Spore molecule `Bytes`    | Size field = content length (NOT total size including header)     |
+| Issue                     | Solution                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| Hex parsing               | Use `parse_hex_to_bytes()`, `parse_capacity()` in `rpc/client.rs`              |
+| Script hashing            | `ckb-hash::new_blake2b()` with CKB personalization                             |
+| WebSocket Text (Axum 0.8) | Needs `Utf8Bytes` - use `.into()` from String                                  |
+| react-force-graph-2d      | Use `frontend/lib/dynamic-client.tsx` for client-only graph loads              |
+| API casing                | Backend `camelCase` via serde, frontend types match                            |
+| Daily charts              | Exclude incomplete current day                                                 |
+| Vite SPA deep links       | Rust frontend server must fall back to `index.html` for non-files              |
+| Vitest globals            | Add `vitest/globals` to tsconfig types                                         |
+| MSW handlers              | Must start server in setup.ts `beforeAll`                                      |
+| RocksDB secondary mode    | Read-only, no write locks, no snapshots — pin a read view                      |
+| Spore molecule `Bytes`    | Size field = content length (NOT total size including header)                  |
+| Theme colours             | Never hex in page code; `lib/palette.ts` keys via `color()` / Tailwind classes |
 
 ## File Locations
 
@@ -373,6 +376,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | TUI              | `crates/tui/src/`                                                                                                                                                                        |
 | Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                                                       |
 | Frontend API     | `frontend/lib/api.ts`                                                                                                                                                                    |
+| Theme / palette  | `frontend/lib/palette.ts` (both themes, one source), `frontend/lib/theme.ts` (preference store), `frontend/components/layout/theme-switcher.tsx`                                         |
 | LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                                                              |
 | UI components    | `frontend/components/ui/`                                                                                                                                                                |
 | Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                                                           |

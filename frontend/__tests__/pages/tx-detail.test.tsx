@@ -1120,7 +1120,7 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
     expect(document.querySelector('path[data-continuity-kind="file"]')).toHaveAttribute(
       'stroke',
-      '#a0a8be'
+      'var(--c-text)'
     );
     expect(document.querySelector('[data-group-row="type:run:0xtypescript"]')).toHaveAttribute(
       'data-lit',

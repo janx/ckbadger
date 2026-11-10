@@ -102,9 +102,9 @@ function CodeClassPip({ replaceable }: { replaceable: boolean }) {
         cx="5"
         cy="5"
         r="3.8"
-        fill={replaceable ? '#0c0e15' : '#a0a8be'}
+        fill={replaceable ? 'var(--c-base-bg)' : 'var(--c-text)'}
         fillOpacity={replaceable ? 1 : 0.55}
-        stroke={replaceable ? '#dee2ec' : '#a0a8be'}
+        stroke={replaceable ? 'var(--c-text-bright)' : 'var(--c-text)'}
       />
     </svg>
   );

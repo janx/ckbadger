@@ -1,9 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useRealtimeData, useRealtimeStore, type Block } from '@/hooks/useRealtimeStore';
+import { useTheme } from '@/hooks/useTheme';
 import type { Grid } from '@/lib/night/bits';
+import { nightColors } from '@/lib/night/colors';
 import { createNight, type Night, type NightState } from '@/lib/night/night';
+import { PALETTE } from '@/lib/palette';
 
 export interface NightLayout {
   grid: Grid;
@@ -30,13 +33,16 @@ const RESIZE_SETTLE_MS = 200;
 
 /**
  * Mounts the night on a canvas, pours the page's hash first (or the tip's, when the feed already
- * knows it) and every new block's after; honours reduced motion; rebuilds on a width change.
+ * knows it) and every new block's after; honours reduced motion; rebuilds on a width change and
+ * on a theme change (the night is drawn in the theme's colours: light on night, ink on paper).
  */
 export function useNight(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   hash: string | null
 ): UseNight {
   const { latestBlock } = useRealtimeData(true);
+  const { resolved } = useTheme();
+  const colors = useMemo(() => nightColors(PALETTE[resolved], resolved === 'light'), [resolved]);
   const [state, setState] = useState<NightViewState>('idle');
   const [layout, setLayout] = useState<NightLayout>(() =>
     nightLayout(typeof window === 'undefined' ? 1280 : window.innerWidth)
@@ -73,6 +79,7 @@ export function useNight(
     const night = createNight(canvas, {
       hash: first,
       grid: layout.grid,
+      colors,
       half: layout.half,
       still,
       onState: setState,
@@ -83,7 +90,7 @@ export function useNight(
       nightRef.current = null;
       setState('idle');
     };
-  }, [canvasRef, hash, layout, sizeKey]);
+  }, [canvasRef, colors, hash, layout, sizeKey]);
 
   useEffect(() => {
     const next = latestBlock?.hash;

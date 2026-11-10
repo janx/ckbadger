@@ -193,18 +193,25 @@ function Legend({
   const rows: [React.ReactNode, string][] = [
     [<circle key="g" cx="7" cy="0" r={DOT_R} fill={DATA_COLOR} />, `reachable now · ${reachable}`],
     [
-      <circle key="g" cx="7" cy="0" r="3.3" fill="#0c0e15" stroke="#dee2ec" />,
+      <circle
+        key="g"
+        cx="7"
+        cy="0"
+        r="3.3"
+        fill="var(--c-base-bg)"
+        stroke="var(--c-text-bright)"
+      />,
       `verified before, not now · ${before}`,
     ],
     [
       <g key="g">
-        <circle cx="7" cy="0" r="6" fill="none" stroke="#dee2ec" strokeWidth="1.2" />
+        <circle cx="7" cy="0" r="6" fill="none" stroke="var(--c-text-bright)" strokeWidth="1.2" />
         <circle cx="7" cy="0" r={DOT_R} fill={DATA_COLOR} />
       </g>,
       `this node's ${ringed} session peers`,
     ],
     [
-      <circle key="g" cx="7" cy="0" r="1.8" fill="#4b5266" />,
+      <circle key="g" cx="7" cy="0" r="1.8" fill="var(--c-ink-quiet)" />,
       `heard of, never verified · ${neverVerified}`,
     ],
   ];
@@ -220,7 +227,7 @@ function Legend({
       {rows.map(([glyph, words], i) => (
         <g key={words} transform={`translate(0 ${i * ROW + ROW / 2})`}>
           {glyph}
-          <text x="22" y="4" fontSize="12" fill="#a0a8be">
+          <text x="22" y="4" fontSize="12" fill="var(--c-text)">
             {words}
           </text>
         </g>
@@ -377,7 +384,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       x2={(width * k) / 8}
                       y1={NAME_BAND}
                       y2={height + NAME_BAND}
-                      stroke="#121620"
+                      stroke="var(--c-grid-faint)"
                     />
                   ))}
                   {[1, 2, 3, 4, 5].map((k) => (
@@ -387,10 +394,10 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       x2={width}
                       y1={NAME_BAND + (height * k) / 6}
                       y2={NAME_BAND + (height * k) / 6}
-                      stroke={k === 3 ? '#1a1f30' : '#121620'}
+                      stroke={k === 3 ? 'var(--c-base-border-subtle)' : 'var(--c-grid-faint)'}
                     />
                   ))}
-                  <text data-role="chart-name" x="8" y="14" fontSize="11" fill="#7c849c">
+                  <text data-role="chart-name" x="8" y="14" fontSize="11" fill="var(--c-text-dim)">
                     verified nodes · approximate GeoIP place
                   </text>
                   {countryLabels.map(({ country, count, x, y }) => (
@@ -401,8 +408,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       y={y + NAME_BAND}
                       textAnchor="middle"
                       fontSize="10"
-                      fill="#7c849c"
-                      stroke="#0c0e15"
+                      fill="var(--c-text-dim)"
+                      stroke="var(--c-base-bg)"
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
@@ -430,7 +437,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                             cy={y}
                             r={RING_R}
                             fill="none"
-                            stroke="#dee2ec"
+                            stroke="var(--c-text-bright)"
                             strokeWidth="1.2"
                           />
                         )}
@@ -449,8 +456,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                             cx={x}
                             cy={y}
                             r="3.3"
-                            fill="#0c0e15"
-                            stroke="#dee2ec"
+                            fill="var(--c-base-bg)"
+                            stroke="var(--c-text-bright)"
                             strokeWidth="0.9"
                           />
                         )}
@@ -540,7 +547,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
                 cx={6 + (k % perRow) * ((width - 12) / Math.max(1, perRow - 1))}
                 cy={6 + Math.floor(k / perRow) * 9}
                 r="1.8"
-                fill="#4b5266"
+                fill="var(--c-ink-quiet)"
               />
             ))}
           </svg>

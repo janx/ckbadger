@@ -145,7 +145,7 @@ describe('tier-2 prose: one piece, components/ui/prose.tsx', () => {
     expect(p[1]).toContain('font-size: 14px');
     expect(p[1]).toContain('line-height: 1.7');
     expect(p[1]).toContain('max-width: 64ch');
-    expect(p[1]).toContain('color: #7c849c');
+    expect(p[1]).toContain('color: var(--c-text-dim)');
     expect(css).toMatch(/\.prose-tier2 p \+ p\s*\{\s*margin-top: 14px;\s*\}/);
     expect(css).toMatch(/\.prose-tier2 em\s*\{\s*font-style: italic;\s*\}/);
   });
@@ -217,7 +217,7 @@ describe('no card per chart, no gold capacity, no dead shell', () => {
     // the capacity cell carries no gold (the out point's hex colouring beside it is its own)
     const cell = figure.parentElement as HTMLElement;
     expect(cell).toHaveClass('text-body', 'text-right');
-    expect(cell.innerHTML).not.toMatch(/text-gold|#f2c55c/);
+    expect(cell.innerHTML).not.toMatch(/text-gold|var(--c-gold)/);
     expect(container.querySelector('.text-gold')).toBeNull();
     // the Capacity / TerminalNumber gold figure has no users left here
     expect(existsSync(join(root, 'components/ui/capacity.tsx'))).toBe(false);

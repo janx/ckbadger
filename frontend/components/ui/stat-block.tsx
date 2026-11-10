@@ -1,6 +1,7 @@
 'use client';
 
 import { CSSProperties, ReactNode } from 'react';
+import { color, glowAlpha } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 
 type TrendDirection = 'up' | 'down' | 'neutral';
@@ -45,14 +46,14 @@ const glowColors: Record<
   Exclude<AccentColor, 'default'>,
   { color: string; mid: string; far: string }
 > = {
-  jade: { color: '#2edba3', mid: 'rgba(46, 219, 163, 0.25)', far: 'rgba(46, 219, 163, 0.15)' },
-  aqua: { color: '#68ccf0', mid: 'rgba(104, 204, 240, 0.25)', far: 'rgba(104, 204, 240, 0.15)' },
-  gold: { color: '#f2c55c', mid: 'rgba(242, 197, 92, 0.25)', far: 'rgba(242, 197, 92, 0.15)' },
-  rouge: { color: '#e8555a', mid: 'rgba(232, 85, 90, 0.25)', far: 'rgba(232, 85, 90, 0.15)' },
+  jade: { color: color('jade'), mid: glowAlpha('jade', 0.25), far: glowAlpha('jade', 0.15) },
+  aqua: { color: color('aqua'), mid: glowAlpha('aqua', 0.25), far: glowAlpha('aqua', 0.15) },
+  gold: { color: color('gold'), mid: glowAlpha('gold', 0.25), far: glowAlpha('gold', 0.15) },
+  rouge: { color: color('rouge'), mid: glowAlpha('rouge', 0.25), far: glowAlpha('rouge', 0.15) },
   lavender: {
-    color: '#b8a9e8',
-    mid: 'rgba(184, 169, 232, 0.25)',
-    far: 'rgba(184, 169, 232, 0.15)',
+    color: color('lavender'),
+    mid: glowAlpha('lavender', 0.25),
+    far: glowAlpha('lavender', 0.15),
   },
 };
 

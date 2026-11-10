@@ -36,8 +36,13 @@ export interface ProtocolEvidenceProps {
 }
 
 /** Inks of the fields, in order (the Main board's cluster cell: name, description, …). */
-const FIELD_INKS = ['#7aa7d6', '#5f9fb2', '#a98cf5', '#b5c77a'] as const;
-const EMPTY_INK = '#343c50';
+const FIELD_INKS = [
+  'var(--c-cell-lock)',
+  'var(--c-data-framing)',
+  'var(--c-object)',
+  'var(--c-cell-type)',
+] as const;
+const EMPTY_INK = 'var(--c-text-ghost)';
 /** A field longer than this shows its first FOLDED_BYTES and folds the rest (C5). */
 const WHOLE_LIMIT = 64;
 const FOLDED_BYTES = 32;
@@ -143,7 +148,7 @@ function ProtocolEvidenceView({
         words: header
           ? `No field describes these bytes: a molecule table header, the size of all ${fmt(header.total)} bytes, then where its ${fmt(header.offsets.length)} fields start: ${header.offsets.map(fmt).join(', ')}.`
           : gapWords(own),
-        ink: '#7c849c',
+        ink: 'var(--c-text-dim)',
         dim: 0,
       };
     }
@@ -327,7 +332,11 @@ function FieldDetail({
               {words.map((word, i) => {
                 const dim = row.at === 0 && i * 4 < reading.dim;
                 return (
-                  <span key={i} data-dim={dim} style={{ color: dim ? '#4b5266' : reading.ink }}>
+                  <span
+                    key={i}
+                    data-dim={dim}
+                    style={{ color: dim ? 'var(--c-ink-quiet)' : reading.ink }}
+                  >
                     {word}
                   </span>
                 );

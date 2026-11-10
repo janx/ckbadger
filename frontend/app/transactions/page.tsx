@@ -41,8 +41,8 @@ type TransactionKind =
   | 'object'
   | 'identity';
 const KINDS: { value: TransactionKind; label: string; mark?: AssetClass; color: string }[] = [
-  { value: 'all', label: 'All', color: '#7c849c' },
-  { value: 'ckb', label: 'CKB transfers', color: '#2edba3' },
+  { value: 'all', label: 'All', color: 'var(--c-text-dim)' },
+  { value: 'ckb', label: 'CKB transfers', color: 'var(--c-jade)' },
   { value: 'script', label: 'Script calls', color: CLASS_COLORS.ckb },
   { value: 'cellbase', label: 'Cellbase', color: CLASS_COLORS.other },
   { value: 'dao', label: 'Nervos DAO', mark: 'dao', color: CLASS_COLORS.dao },

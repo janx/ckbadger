@@ -6,7 +6,7 @@ const TOKEN =
   /("(?:\\.|[^"\\])*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b/g;
 
 /** Keys in the lock ink, values in the readable grey, punctuation dim (Main board, tier 2). */
-export const JSON_INKS = { key: '#7aa7d6', value: '#a0a8be' } as const;
+export const JSON_INKS = { key: 'var(--c-cell-lock)', value: 'var(--c-text)' } as const;
 
 /**
  * JSON text as the boards print it in tier 2 (consistency lane E): the exact text, unchanged, with

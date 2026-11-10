@@ -129,7 +129,8 @@ describe('proposal dot states', () => {
 
 describe('materials: well, tile and the predicted NEXT', () => {
   it('sinks a pool well below the surface and lifts a block tile above it with a trace of jade', () => {
-    expect(WELL_FILL).toBe('color-mix(in srgb, black 22%, var(--pipeline-surface))');
+    // the well is the theme's own token (22 % black on the surface at night, a grey tint by day)
+    expect(WELL_FILL).toBe('var(--pipeline-well)');
     expect(TILE_FILL).toBe('color-mix(in srgb, var(--pipeline-jade) 7%, var(--pipeline-elevated))');
   });
 

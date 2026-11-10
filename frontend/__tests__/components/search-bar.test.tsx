@@ -77,11 +77,11 @@ describe('SearchBar', () => {
     const own = {
       compact: [
         'focus:border-jade/50',
-        'focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]',
+        'focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]',
       ],
       default: [
         'focus:border-jade/50',
-        'focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]',
+        'focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]',
       ],
       home: ['focus:border-jade', 'focus:ring-2', 'focus:ring-jade/25'],
     } as const;
@@ -109,7 +109,7 @@ describe('SearchBar', () => {
     expect(input).toHaveClass(
       // the jade-tinted focus border and its soft ring
       'focus:border-jade/50',
-      'focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
+      'focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]'
     );
     expect(input).not.toHaveClass('text-transparent');
     // the prompt glyph is decoration, before the text (the field's padding makes room for it)
@@ -170,15 +170,17 @@ describe('SearchBar', () => {
     fireEvent.change(input, { target: { value: '12' } });
     const dropdown = await screen.findByTestId('search-results-dropdown');
     await waitFor(() => expect(screen.getByText('Block #12')).toBeInTheDocument());
-    expect(dropdown).toHaveStyle({ backgroundColor: '#06090f' });
+    expect(dropdown).toHaveStyle({ backgroundColor: 'var(--c-search-panel)' });
     const row = (label: string) => screen.getByText(label).closest('button') as HTMLElement;
     expect(row('Block #12')).toHaveClass('text-text', 'hover:bg-[color:var(--row-hover)]');
-    expect(row('Block #12').style.getPropertyValue('--row-hover')).toBe('#070e13');
+    expect(row('Block #12').style.getPropertyValue('--row-hover')).toBe('var(--c-search-hover)');
     expect(row('Block #12').style.backgroundColor).toBe('');
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     expect(row('Block #12')).toHaveClass('text-jade');
-    expect(row('Block #12')).toHaveStyle({ backgroundColor: '#091217' });
-    expect(row('Transaction 0xabc').style.getPropertyValue('--row-hover')).toBe('#070e13');
+    expect(row('Block #12')).toHaveStyle({ backgroundColor: 'var(--c-search-selected)' });
+    expect(row('Transaction 0xabc').style.getPropertyValue('--row-hover')).toBe(
+      'var(--c-search-hover)'
+    );
     expect(dropdown.outerHTML).not.toMatch(/(text|bg|border)-\[#/);
   });
 

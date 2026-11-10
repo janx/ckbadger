@@ -3,6 +3,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type PreviewKind } from '@/lib/preview-utils';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
+import { alpha, color, material } from '@/lib/palette';
+
+/** The preview's frame: a well deeper than the page, lit from inside the way glass is. */
+const FRAME_STYLE = { background: color('well-bg'), boxShadow: material('preview-inset') } as const;
 
 export type PreviewPhysicality = 'onchain' | 'onchain-btc' | 'default';
 
@@ -14,8 +18,8 @@ export interface SporePreviewProps {
 const MAX_TILT_DEG = 8;
 
 const GLOW_COLORS: Record<PreviewPhysicality, string> = {
-  onchain: 'rgba(64, 232, 176, 0.12)',
-  'onchain-btc': 'rgba(200, 190, 100, 0.10)',
+  onchain: alpha('tier-pure-ink-lit', 0.12),
+  'onchain-btc': alpha('gold-dim', 0.1),
   default: 'transparent',
 };
 
@@ -44,14 +48,11 @@ export function SporePreview({ preview, physicality = 'default' }: SporePreviewP
 
 function StaticPreview({ preview }: { preview: NonNullable<PreviewKind> }) {
   return (
-    <div
-      className="flex items-center justify-center rounded p-8"
-      style={{
-        background: '#070b10',
-        boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.7), inset 0 0 1px rgba(255,255,255,0.04)',
-      }}
-    >
-      <div className="relative" style={{ filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.5))' }}>
+    <div className="flex items-center justify-center rounded p-8" style={FRAME_STYLE}>
+      <div
+        className="relative"
+        style={{ filter: `drop-shadow(0 4px 12px ${material('preview-cast')})` }}
+      >
         <PreviewContent preview={preview} />
       </div>
     </div>
@@ -96,13 +97,7 @@ function PhysicalPreview({
   const shadowBlur = tilt.active ? 20 : 12;
 
   return (
-    <div
-      className="flex items-center justify-center rounded p-8"
-      style={{
-        background: '#070b10',
-        boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.7), inset 0 0 1px rgba(255,255,255,0.04)',
-      }}
-    >
+    <div className="flex items-center justify-center rounded p-8" style={FRAME_STYLE}>
       {/* Ambient glow — breathes behind the artwork */}
       <div
         className="preview-ambient-glow absolute rounded-full"
@@ -135,14 +130,14 @@ function PhysicalPreview({
             transform: `rotateX(${tilt.rx}deg) rotateY(${tilt.ry}deg)`,
             transition: tilt.active ? 'transform 0.08s ease-out' : 'transform 0.5s ease-out',
             transformStyle: 'preserve-3d',
-            filter: `drop-shadow(${shadowX}px ${shadowY + 4}px ${shadowBlur}px rgba(0,0,0,0.5))`,
+            filter: `drop-shadow(${shadowX}px ${shadowY + 4}px ${shadowBlur}px ${material('preview-cast')})`,
           }}
         >
           {/* Light reflection overlay */}
           <div
             className="pointer-events-none absolute inset-0 z-10 rounded"
             style={{
-              background: `radial-gradient(ellipse at ${lightX}% ${lightY}%, rgba(255,255,255,0.08) 0%, transparent 60%)`,
+              background: `radial-gradient(ellipse at ${lightX}% ${lightY}%, ${material('preview-sheen')} 0%, transparent 60%)`,
               mixBlendMode: 'overlay',
             }}
           />

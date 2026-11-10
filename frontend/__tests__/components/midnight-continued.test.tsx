@@ -31,7 +31,7 @@ describe('the rules in globals.css', () => {
     );
     expect(lit).not.toBeNull();
     expect(lit![1]).toContain('text-shadow');
-    expect(lit![1]).toContain('0 0 14px rgba(46, 219, 163, 0.28)');
+    expect(lit![1]).toContain('0 0 14px rgb(var(--rgb-jade) / calc(0.28 * var(--m-glow)))');
     expect(lit![1]).not.toMatch(/\bcolor:/);
     // the figure's quieter companions (decimals, unit) and a ghost zero are not lit
     expect(css).toMatch(
@@ -41,35 +41,37 @@ describe('the rules in globals.css', () => {
 
   it('move 1c: a hovered link turns jade and glows; SVG links keep their own hover', () => {
     expect(css).toMatch(
-      /\na:hover\s*\{\s*color: #2edba3;\s*text-shadow: 0 0 8px rgba\(46, 219, 163, 0\.45\);\s*\}/
+      /\na:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
     );
     expect(css).toMatch(/svg a:hover\s*\{\s*color: inherit;\s*text-shadow: none;/);
-    expect(css).toMatch(/\.hover-lit:hover\s*\{\s*color: #2edba3;\s*text-shadow: 0 0 8px/);
+    expect(css).toMatch(/\.hover-lit:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px/);
   });
 
   it('move 2: the three tubes', () => {
     expect(css).toMatch(
-      /\.hairline-tube\s*\{\s*height: 1px;\s*background: linear-gradient\(\s*90deg,\s*rgba\(46, 219, 163, 0\.55\),\s*rgba\(46, 219, 163, 0\.14\) 45%,\s*transparent 90%\s*\);/
+      /\.hairline-tube\s*\{\s*height: 1px;\s*background: linear-gradient\(\s*90deg,\s*rgb\(var\(--rgb-jade\) \/ 0\.55\),\s*rgb\(var\(--rgb-jade\) \/ 0\.14\) 45%,\s*transparent 90%\s*\);/
     );
     expect(css).toMatch(/\.hairline-tube-border\s*\{\s*border-image: linear-gradient\(/);
-    expect(css).toMatch(
-      /\.hairline-tube-header\s*\{\s*border-image: linear-gradient\([^)]*rgba\(46, 219, 163, 0\.6\)[^)]*rgba\(46, 219, 163, 0\.18\) 30%[^)]*#1a1f30 70%\s*\)\s*1;/
-    );
+    const header = css.match(/\.hairline-tube-header\s*\{([^}]*)\}/)!;
+    expect(header[1]).toMatch(/border-image: linear-gradient\(\s*90deg,/);
+    expect(header[1]).toContain('rgb(var(--rgb-jade) / 0.6),');
+    expect(header[1]).toContain('rgb(var(--rgb-jade) / 0.18) 30%,');
+    expect(header[1]).toMatch(/var\(--c-base-border-subtle\) 70%\s*\)\s*1;/);
   });
 
   it('move 3: the frame edge at .45', () => {
-    expect(css).toMatch(/var\(--neon-color, rgba\(46, 219, 163, 0\.45\)\)/);
+    expect(css).toMatch(/var\(--neon-color, rgb\(var\(--rgb-jade\) \/ 0\.45\)\)/);
   });
 
   it('move 4: the block cursor and a row-scan a <tr> can carry; reduced motion stills both', () => {
     expect(css).toMatch(
-      /\.cursor\s*\{\s*display: inline-block;\s*width: 7px;\s*height: 14px;\s*background: #2edba3;[^}]*box-shadow: 0 0 6px rgba\(46, 219, 163, 0\.6\);/
+      /\.cursor\s*\{\s*display: inline-block;\s*width: 7px;\s*height: 14px;\s*background: var\(--c-jade\);[^}]*box-shadow: 0 0 6px rgb\(var\(--rgb-jade\) \/ calc\(0\.6 \* var\(--m-glow\)\)\);/
     );
     // the sweep is the row's own background (no positioned pseudo-element: a table row clips
     // nothing), crossing once in 0.5 s
     const scan = css.match(/\.row-scan\s*\{([^}]*)\}/)!;
     expect(scan[1]).toContain('background-image: linear-gradient(');
-    expect(scan[1]).toContain('rgba(46, 219, 163, 0.07) 50%');
+    expect(scan[1]).toContain('rgb(var(--rgb-jade) / 0.07) 50%');
     expect(scan[1]).toContain('background-size: 300% 100%');
     expect(scan[1]).not.toMatch(/\n\s*position:/);
     expect(css).toMatch(
@@ -85,23 +87,23 @@ describe('the rules in globals.css', () => {
   it('move 5: brighter pools, one CRT pair at the combined strength, the chart halo', () => {
     // material pass v2 (move 1): the pools are painted from --pool-1/2/3 (so a page's class hue
     // can replace jade); the approved .10 / .07 / .07 are the variables' :root values
-    expect(css).toContain('--pool-1: rgba(46, 219, 163, 0.1);');
-    expect(css).toContain('--pool-2: rgba(104, 204, 240, 0.07);');
-    expect(css).toContain('--pool-3: rgba(242, 197, 92, 0.07);');
+    expect(css).toContain('--pool-1: rgb(var(--rgb-jade) / 0.1);');
+    expect(css).toContain('--pool-2: rgb(var(--rgb-aqua) / 0.07);');
+    expect(css).toContain('--pool-3: rgb(var(--rgb-gold) / 0.07);');
     expect(css).toContain('var(--pool-1) 0%, transparent 70%');
     // the doubled atmosphere is gone: no body::before / body::after
     expect(css).not.toMatch(/\nbody::after\s*\{/);
     expect(css).not.toMatch(/\nbody::before\s*\{/);
     // visual finish V2 (2026-11-04): 1 px in 3, blue-black at 6 %
     expect(css).toMatch(
-      /\.crt-scanlines\s*\{[^}]*rgba\(10, 14, 28, 0\.06\) 2px,\s*rgba\(10, 14, 28, 0\.06\) 3px/
+      /\.crt-scanlines\s*\{[^}]*var\(--m-scanline-ink\) 2px,\s*var\(--m-scanline-ink\) 3px/
     );
     // visual finish V1 (2026-11-04): the vignette moved under the content, lighter and wider
     expect(css).toMatch(
-      /\.crt-vignette\s*\{[^}]*radial-gradient\(ellipse at center, transparent 45%, rgba\(0, 0, 0, 0\.35\) 100%\)/
+      /\.crt-vignette\s*\{[^}]*radial-gradient\(ellipse at center, transparent 45%, var\(--m-vignette\) 100%\)/
     );
     expect(css).toMatch(
-      /\.chart-line-halo\s*\{\s*filter: drop-shadow\(0 0 2\.5px var\(--halo-color, rgba\(46, 219, 163, 0\.55\)\)\);/
+      /\.chart-line-halo\s*\{\s*filter: drop-shadow\(0 0 2\.5px var\(--halo-color, rgb\(var\(--rgb-jade\) \/ 0\.55\)\)\);/
     );
   });
 });
@@ -146,7 +148,7 @@ describe('move 5 on the chart lines', () => {
     const [first, second] = lines(container);
     expect(first).toHaveClass('chart-line-halo');
     // the default ramp's first shade is jade: the halo's own colour, no override
-    expect(first).toHaveAttribute('stroke', '#2edba3');
+    expect(first).toHaveAttribute('stroke', 'var(--c-jade)');
     expect((first as HTMLElement).style.getPropertyValue('--halo-color')).toBe('');
     expect(second).not.toHaveClass('chart-line-halo');
   });
@@ -157,7 +159,7 @@ describe('move 5 on the chart lines', () => {
         title="Deposited"
         subtitle="Daily"
         data={data}
-        series={[{ key: 'a', label: 'A', color: '#f2c55c' }]}
+        series={[{ key: 'a', label: 'A', color: 'var(--c-gold)' }]}
         unit="CKB"
         formatValue={(v) => v}
       />
@@ -165,7 +167,7 @@ describe('move 5 on the chart lines', () => {
     const [line] = lines(container);
     expect(line).toHaveClass('chart-line-halo');
     expect((line as HTMLElement).style.getPropertyValue('--halo-color')).toBe(
-      'color-mix(in srgb, #f2c55c 55%, transparent)'
+      'color-mix(in srgb, var(--c-gold) 55%, transparent)'
     );
   });
 

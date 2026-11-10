@@ -12,7 +12,7 @@ it('strictly decodes chain hex and validates byte ownership', () => {
 });
 it('keeps class/copper encodings separate and bundles fonts without runtime requests', () => {
   expect(new Set(Object.values(CLASS_COLORS)).size).toBe(6);
-  expect(BITCOIN_COLORS.copper).toBe('#dc8a5a');
+  expect(BITCOIN_COLORS.copper).toBe('var(--c-copper)');
   expect(HUE_RAMP).not.toContain(CLASS_COLORS.dao);
   const html = readFileSync(resolve('index.html'), 'utf8');
   expect(html).not.toMatch(/fonts\.googleapis|fonts\.gstatic/);
@@ -28,6 +28,6 @@ it('paints every scrollbar in the palette, thin inside the page, so a region tha
   // The vitals strip and the pipeline scroll inside themselves below md; with classic (non-overlay)
   // scrollbars that bar is the platform's light one unless the page colours it.
   const css = readFileSync(resolve('app/globals.css'), 'utf8');
-  expect(css).toMatch(/:root\s*\{[^}]*scrollbar-color:\s*#343c50 transparent;/);
+  expect(css).toMatch(/:root\s*\{[^}]*scrollbar-color:\s*var\(--c-text-ghost\) transparent;/);
   expect(css).toMatch(/body \*\s*\{\s*scrollbar-width:\s*thin;\s*\}/);
 });

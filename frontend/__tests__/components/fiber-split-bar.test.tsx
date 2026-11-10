@@ -14,8 +14,8 @@ describe('FiberSplitBar (What moved inside the channel, FF-C3)', () => {
     const left = container.querySelector('[data-split="left"]') as HTMLElement;
     const right = container.querySelector('[data-split="right"]') as HTMLElement;
     expect(parseFloat(left.style.width)).toBeCloseTo((1000.00000569 / 1062.0000092) * 100, 3);
-    expect(left.style.background).toBe('rgba(160, 168, 190, 0.3)');
-    expect(right.style.background).toBe('rgba(46, 219, 163, 0.28)');
+    expect(left.style.background).toBe('rgb(var(--rgb-text) / 0.3)');
+    expect(right.style.background).toBe('rgb(var(--rgb-jade) / 0.28)');
     expect(screen.getByText('ppedrr')).toBeInTheDocument();
     expect(
       Array.from(container.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)

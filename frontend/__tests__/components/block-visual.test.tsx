@@ -43,7 +43,7 @@ describe('block evidence visuals', () => {
     const [overhead, user] = Array.from(
       screen.getByRole('img', { name: /^Size, bytes: 3,205, 883 overhead/ }).children
     ) as HTMLElement[];
-    expect(overhead).toHaveStyle({ backgroundColor: '#3a4258' });
+    expect(overhead).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
     expect(overhead.getAttribute('class')).toBeNull();
     expect(user).toHaveClass('bg-jade');
   });

@@ -61,7 +61,7 @@ export function CapacityUtilization({
   // Bar width only (display geometry); the printed share is the exact string.
   const ratio = (Number(used) / Number(total)) * 100;
 
-  const gold = '#f2c55c';
+  const gold = 'var(--c-gold)';
   const glow = `0 0 8px ${gold}aa, 0 0 2px ${gold}`;
 
   // Hovered segment: full brightness + glow. Non-hovered: nearly invisible.

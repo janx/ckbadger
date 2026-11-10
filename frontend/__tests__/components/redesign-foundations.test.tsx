@@ -145,11 +145,11 @@ describe('exact capacity and cell anatomy', () => {
     );
     expect(container.querySelector('[data-part="occupied"]')).toHaveStyle({
       width: '61%',
-      backgroundColor: '#2edba3',
+      backgroundColor: 'var(--c-jade)',
     });
     expect(container.querySelector('[data-part="DAO free"]')).toHaveStyle({
       width: '10%',
-      backgroundColor: '#f2c55c',
+      backgroundColor: 'var(--c-gold)',
     });
     expect(screen.getByText('61.00%')).toBeInTheDocument();
     expect(container.textContent).toContain('61.00000000 CKB');

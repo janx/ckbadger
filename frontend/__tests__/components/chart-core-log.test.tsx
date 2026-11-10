@@ -7,7 +7,7 @@ const points = [
   { label: '2024-01-01', values: { value: '1.00000001' } },
   { label: '2024-02-01', values: { value: '1000000.00000001' } },
 ];
-const series = [{ key: 'value', label: 'Capacity', color: '#2edba3' }];
+const series = [{ key: 'value', label: 'Capacity', color: 'var(--c-jade)' }];
 
 describe('shared Chart logarithmic geometry', () => {
   beforeEach(() => stubChartWidth(480));

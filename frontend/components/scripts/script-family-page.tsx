@@ -177,11 +177,11 @@ function CellAnatomy({ cell }: { cell: Cell }) {
 }
 
 const ANATOMY_LEGEND = [
-  ['capacity', '#dee2ec'],
-  ['lock', '#7aa7d6'],
-  ['type', '#b5c77a'],
-  ['data', '#6fc3d9'],
-  ['free', '#1a1f30'],
+  ['capacity', 'var(--c-text-bright)'],
+  ['lock', 'var(--c-cell-lock)'],
+  ['type', 'var(--c-cell-type)'],
+  ['data', 'var(--c-cell-data)'],
+  ['free', 'var(--c-base-border-subtle)'],
 ] as const;
 
 type ReferenceRow = NonNullable<ScriptFamilyDetail['references']>[number];

@@ -10,6 +10,7 @@ import { LOGO_NOTCH_CLASS, LOGO_STRIP_NOTCH_CLASS } from '@/components/layout/lo
 import { useStickyHeaderHeight } from '@/components/layout/sticky-header';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 import { NavMenu } from '@/components/layout/nav-menu';
+import { ThemeSegments, ThemeSwitcher } from '@/components/layout/theme-switcher';
 import {
   NAVBAR_LINK_ACTIVE_CLASS,
   NAVBAR_LINK_CLASS,
@@ -187,6 +188,9 @@ export function Header() {
             <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
               <SearchBar variant="compact" />
             </div>
+            {/* The theme: dark (midnight, the default), light, or the system's; the phone menu
+                carries the same choice as a row (ThemeSegments). */}
+            <ThemeSwitcher className="hidden md:block" />
           </div>
         </div>
 
@@ -264,6 +268,10 @@ export function Header() {
                     </Link>
                   )
                 )}
+                <ThemeSegments
+                  className="border-base-border/40 mt-1 border-t"
+                  onChoose={() => setIsMenuOpen(false)}
+                />
               </div>
             </nav>
           </div>
@@ -273,7 +281,7 @@ export function Header() {
       </header>
       <div
         ref={stripRef}
-        className="border-base-border-subtle mb-4 border-b bg-[rgba(10,12,18,0.8)] md:mb-0"
+        className="border-base-border-subtle mb-4 border-b bg-[var(--m-header-strip)] md:mb-0"
       >
         <div className="container mx-auto flex">
           <div

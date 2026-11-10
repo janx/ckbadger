@@ -85,7 +85,7 @@ describe('ChartSmallMultiple', () => {
       series: keys.map((key) => ({
         key,
         label: key === 'others' ? 'Others' : key,
-        color: '#2edba3',
+        color: 'var(--c-jade)',
       })),
       data: [
         {
@@ -195,7 +195,7 @@ describe('ChartSmallMultiple', () => {
       'Other scripts2.00 %',
     ]);
     expect(items[0].querySelector('span[aria-hidden]')).toHaveStyle({
-      backgroundColor: '#f2c55c',
+      backgroundColor: 'var(--c-gold)',
     });
     const readout = screen.getByRole('group', { name: 'Knowledge by kind current readout' });
     expect(readout.parentElement).toHaveTextContent(/^nervos dao/);

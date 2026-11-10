@@ -473,7 +473,12 @@ export function ScriptCapacityEvidenceChart({
   const displaySeries = chart.series.map((series) => ({
     ...series,
     label: series.key === 'used' ? 'Occupied' : series.key === 'unused' ? 'Free' : series.label,
-    color: series.key === 'used' ? '#58a5b5' : series.key === 'unused' ? '#39bba6' : series.color,
+    color:
+      series.key === 'used'
+        ? 'var(--c-data-framing)'
+        : series.key === 'unused'
+          ? 'var(--c-jade-dim)'
+          : series.color,
   }));
   const custodyBands = markers
     .filter((marker) => marker.event === 'deployed')

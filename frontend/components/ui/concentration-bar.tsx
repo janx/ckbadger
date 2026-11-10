@@ -1,6 +1,7 @@
 'use client';
 
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { fade } from '@/lib/palette';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -32,12 +33,7 @@ const LABEL_PAD = 10;
 const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
 
 /** The class colour at `alpha` as a background, so a segment's words keep their full ink. */
-function withAlpha(hex: string, alpha: number): string {
-  if (!/^#[0-9a-f]{6}$/i.test(hex))
-    throw new Error(`ConcentrationBar: colour ${hex} is not #rrggbb`);
-  const channel = (i: number) => parseInt(hex.slice(i, i + 2), 16);
-  return `rgba(${channel(1)}, ${channel(3)}, ${channel(5)}, ${alpha})`;
-}
+const withAlpha = fade;
 
 /** How concentrated a holding is: one class colour, fading by rank (DAO-12; Token, Collection). */
 export function ConcentrationBar({

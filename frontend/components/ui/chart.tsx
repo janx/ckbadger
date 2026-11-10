@@ -148,7 +148,7 @@ export function lineHalo(
       };
 }
 /** The theme's jade, the halo's own colour; `jadeRamp(1)[0]` is the chart default. */
-const JADE = '#2edba3';
+const JADE = 'var(--c-jade)';
 /** hierarchy v3: the band above the data that holds an in-plot name. */
 const PLOT_NAME_BAND = 28;
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
@@ -446,7 +446,7 @@ export function Chart({
         data-role="y-tick"
         x={left + 8}
         y={yTick(v) - 5}
-        fill="#343c50"
+        fill="var(--c-text-ghost)"
         fontSize="11"
       >
         {tickLabel(v, ticks.step)}
@@ -569,18 +569,30 @@ export function Chart({
                   yTick(v) >= top + 12 && (
                     <g key={v}>
                       {/* Visual finish V13: the grid is solid; a dash means a reference. */}
-                      <line x1={left} x2={right} y1={yTick(v)} y2={yTick(v)} stroke="#1a1f30" />
+                      <line
+                        x1={left}
+                        x2={right}
+                        y1={yTick(v)}
+                        y2={yTick(v)}
+                        stroke="var(--c-base-border-subtle)"
+                      />
                       {insideYTicks !== 'over' && insideTickLabel(v)}
                     </g>
                   )
                 ) : (
                   <g key={v}>
-                    <line x1={left} x2={right} y1={yTick(v)} y2={yTick(v)} stroke="#1a1f30" />
+                    <line
+                      x1={left}
+                      x2={right}
+                      y1={yTick(v)}
+                      y2={yTick(v)}
+                      stroke="var(--c-base-border-subtle)"
+                    />
                     <text
                       x={left - 8}
                       y={yTick(v) + 3}
                       textAnchor="end"
-                      fill="#7c849c"
+                      fill="var(--c-text-dim)"
                       fontSize="10"
                     >
                       {tickLabel(v, ticks.step)}
@@ -593,7 +605,7 @@ export function Chart({
                   data-role="chart-name"
                   x={left + 8}
                   y={14 + keyBand}
-                  fill="#7c849c"
+                  fill="var(--c-text-dim)"
                   fontSize="11"
                 >
                   {plotName}
@@ -611,14 +623,14 @@ export function Chart({
                       y={top}
                       width={Math.max(0, gapRight - gapLeft)}
                       height={bottom - top}
-                      fill="#10131c"
+                      fill="var(--c-base-surface)"
                     />
                     {gapRight - gapLeft > 120 && (
                       <text
                         x={(gapLeft + gapRight) / 2}
                         y={(top + bottom) / 2}
                         textAnchor="middle"
-                        fill="#7c849c"
+                        fill="var(--c-text-dim)"
                         fontSize="10"
                       >
                         {gap.label}
@@ -662,7 +674,7 @@ export function Chart({
                           cx={x(activeIndex)}
                           cy={y(upper[activeIndex])}
                           r="4"
-                          fill="#0c0e15"
+                          fill="var(--c-base-bg)"
                           stroke={color(si)}
                           strokeWidth="2"
                         />
@@ -762,7 +774,7 @@ export function Chart({
                         cx={x(activeIndex)}
                         cy={y(upper[activeIndex])}
                         r="4"
-                        fill="#0c0e15"
+                        fill="var(--c-base-bg)"
                         stroke={color(si)}
                         strokeWidth="2"
                       />
@@ -778,9 +790,9 @@ export function Chart({
                   x={right}
                   y={Math.max(13, y(values[data.length - 1][0]) - 8)}
                   textAnchor="end"
-                  fill="#dee2ec"
+                  fill="var(--c-text-bright)"
                   fontSize="13"
-                  stroke="#0c0e15"
+                  stroke="var(--c-base-bg)"
                   strokeWidth="4"
                   paintOrder="stroke"
                 >
@@ -794,7 +806,7 @@ export function Chart({
                     x2={right}
                     y1={y(line.value)}
                     y2={y(line.value)}
-                    stroke="#a0a8be"
+                    stroke="var(--c-text)"
                     strokeOpacity="0.6"
                     strokeDasharray="3 3"
                   />
@@ -807,14 +819,14 @@ export function Chart({
                     x2={swatch + REFERENCE_SWATCH}
                     y1={REFERENCE_KEY_Y - 3}
                     y2={REFERENCE_KEY_Y - 3}
-                    stroke="#a0a8be"
+                    stroke="var(--c-text)"
                     strokeDasharray="3 3"
                   />
                   <text
                     x={textEnd}
                     y={REFERENCE_KEY_Y}
                     textAnchor="end"
-                    fill="#a0a8be"
+                    fill="var(--c-text)"
                     fontSize="10"
                   >
                     {label}
@@ -829,10 +841,16 @@ export function Chart({
                     x2={x(m.index)}
                     y1={top}
                     y2={bottom}
-                    stroke="#7c849c"
+                    stroke="var(--c-text-dim)"
                     strokeDasharray="3 3"
                   />
-                  <text x={x(m.index)} y={top - 6} textAnchor="middle" fill="#7c849c" fontSize="10">
+                  <text
+                    x={x(m.index)}
+                    y={top - 6}
+                    textAnchor="middle"
+                    fill="var(--c-text-dim)"
+                    fontSize="10"
+                  >
                     {m.plotLabel ?? m.label}
                   </text>
                 </g>
@@ -851,7 +869,7 @@ export function Chart({
                   }
                   y1={top}
                   y2={bottom}
-                  stroke="#a0a8be"
+                  stroke="var(--c-text)"
                 />
               )}
               {pointDots &&
@@ -878,10 +896,10 @@ export function Chart({
                         width={boxWidth}
                         height={boxHeight}
                         rx="6"
-                        fill="#10131c"
-                        stroke="#222840"
+                        fill="var(--c-base-surface)"
+                        stroke="var(--c-base-border)"
                       />
-                      <text x={bx + 10} y={by + 16} fill="#7c849c" fontSize="11">
+                      <text x={bx + 10} y={by + 16} fill="var(--c-text-dim)" fontSize="11">
                         {head}
                       </text>
                       {rows.map((row, i) => (
@@ -889,7 +907,7 @@ export function Chart({
                           key={row}
                           x={bx + 10}
                           y={by + 33 + i * 16}
-                          fill="#dee2ec"
+                          fill="var(--c-text-bright)"
                           fontSize="13"
                         >
                           {row}
@@ -906,7 +924,7 @@ export function Chart({
                   x={tick.x}
                   y={axisY + tick.row * X_LABEL_ROW}
                   textAnchor={tick.anchor}
-                  fill="#7c849c"
+                  fill="var(--c-text-dim)"
                   fontSize="10"
                 >
                   {tick.label}
@@ -916,7 +934,7 @@ export function Chart({
                 visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                 x={left}
                 y={axisY}
-                fill="#7c849c"
+                fill="var(--c-text-dim)"
                 fontSize="10"
               >
                 {data[0].label}
@@ -927,7 +945,7 @@ export function Chart({
                   x={right}
                   y={axisY}
                   textAnchor="end"
-                  fill="#7c849c"
+                  fill="var(--c-text-dim)"
                   fontSize="10"
                 >
                   {data[data.length - 1].label}

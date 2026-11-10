@@ -31,30 +31,32 @@ describe('the native details in globals.css', () => {
   const base = baseLayers(css).join('\n');
 
   it('declares a dark colour scheme and a jade accent', () => {
-    expect(base).toMatch(/:root\s*\{\s*color-scheme: dark;\s*accent-color: #2edba3;\s*\}/);
+    expect(base).toMatch(/:root\s*\{\s*color-scheme: dark;\s*accent-color: var\(--c-jade\);\s*\}/);
   });
 
   it('selects text in jade', () => {
     expect(base).toMatch(
-      /::selection\s*\{\s*background: rgba\(46, 219, 163, 0\.28\);\s*color: #e9fff6;\s*\}/
+      /::selection\s*\{\s*background: rgb\(var\(--rgb-jade\) \/ 0\.28\);\s*color: var\(--c-selection-ink\);\s*\}/
     );
   });
 
   it('rings the keyboard focus in jade, 1 px, 2 px off, with a soft glow', () => {
     expect(base).toMatch(
-      /(^|\n)\s*:focus-visible\s*\{\s*outline: 1px solid #2edba3;\s*outline-offset: 2px;\s*box-shadow: 0 0 6px rgba\(46, 219, 163, 0\.45\);\s*\}/
+      /(^|\n)\s*:focus-visible\s*\{\s*outline: 1px solid var\(--c-jade\);\s*outline-offset: 2px;\s*box-shadow: 0 0 6px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
     );
   });
 
   it('draws the caret in jade', () => {
-    expect(base).toMatch(/input,\s*textarea\s*\{\s*caret-color: #2edba3;\s*\}/);
+    expect(base).toMatch(/input,\s*textarea\s*\{\s*caret-color: var\(--c-jade\);\s*\}/);
   });
 
   it('keeps them base styles, so a utility on the element wins', () => {
     // the four rules appear nowhere outside a base layer
     let rest = css;
     for (const body of baseLayers(css)) rest = rest.replace(body, '');
-    expect(rest).not.toMatch(/::selection|(^|\n)\s*:focus-visible\s*\{|caret-color: #2edba3/);
+    expect(rest).not.toMatch(
+      /::selection|(^|\n)\s*:focus-visible\s*\{|caret-color: var\(--c-jade\)/
+    );
     expect(rest).not.toMatch(/color-scheme: dark/);
   });
 });

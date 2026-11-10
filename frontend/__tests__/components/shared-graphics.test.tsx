@@ -147,7 +147,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
   const tree = node({
     align: 'inside',
     note: '1.344 billion CKB a year',
-    color: '#4b5266',
+    color: 'var(--c-ink-quiet)',
     ink: 'bright',
     children: [
       { key: 'm', label: 'to miners', value: BigInt(10), tone: 'ckb' as const, note: '10.00%' },
@@ -177,7 +177,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     // The root's words sit inside it, so row 1 follows 16 px below it, not a label band.
     expect(svg.getAttribute('viewBox')).toBe('0 0 1200 116');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
-    expect(box('total').getAttribute('fill')).toBe('#4b5266');
+    expect(box('total').getAttribute('fill')).toBe('var(--c-ink-quiet)');
     expect(box('c').getAttribute('x')).toBe('120');
     // inside: one line in the box; end: right-aligned under the box; default: left under it
     const label = (key: string) => container.querySelector(`[data-label="${key}"]`)!;
@@ -210,7 +210,7 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     label: 'Secondary issuance since genesis',
     value: BigInt(100),
     tone: 'ckb' as const,
-    color: '#4b5266',
+    color: 'var(--c-ink-quiet)',
     ink: 'bright' as const,
     boxLabel: { name: 'secondary issuance since genesis', share: '100', unit: 'CKB' },
     children: [
@@ -219,7 +219,7 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'to miners',
         value: BigInt(10),
         tone: 'ckb' as const,
-        color: '#a0a8be',
+        color: 'var(--c-text)',
         ink: 'dark' as const,
         boxLabel: { name: 'miners', share: '10.00%' },
       },
@@ -333,7 +333,7 @@ describe('ConcentrationBar (DAO-12)', () => {
     const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
     expect(segments.map((s) => s.style.width)).toEqual(['8.3%', '17.9%', '31.1%', '42.7%']);
     expect(segments.map((s) => s.style.opacity)).toEqual(['1', '0.7', '0.45', '0.22']);
-    for (const s of segments) expect(s.style.backgroundColor).toBe('rgb(242, 197, 92)');
+    for (const s of segments) expect(s.style.backgroundColor).toBe('var(--c-gold)');
     expect(screen.getByText('next 9').parentElement).toHaveTextContent('next 9 17.90%');
   });
   it('refuses groups that do not add up to the total', () => {

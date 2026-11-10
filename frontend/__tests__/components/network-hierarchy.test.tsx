@@ -522,10 +522,10 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     await within(tier1).findByRole('region', { name: 'Where they run' });
     const figure = hero.querySelector('[data-role="reachable"]')!;
     expect(tier1.querySelector('figcaption')).toBeNull();
-    // No inline ink outside the graphics either (a chart key's coloured series names).
-    for (const el of Array.from(tier1.querySelectorAll('[style*="color"]')))
-      if (!el.closest('svg') && !(el as HTMLElement).style.backgroundColor)
-        expect(figure.contains(el)).toBe(true);
+    // No inline ink outside the graphics either (a chart key's coloured series names): an inline
+    // `color` is a data hue; a background (a bar's segment) is not ink.
+    for (const el of Array.from(tier1.querySelectorAll<HTMLElement>('[style]')))
+      if (!el.closest('svg') && el.style.color) expect(figure.contains(el)).toBe(true);
     for (const section of Array.from(tier1.querySelectorAll('section')))
       expect(section.querySelectorAll('[data-hint="tap-or-hover"]').length).toBeLessThanOrEqual(1);
     const prose = Array.from(tier1.querySelectorAll('[data-role="caption"], [data-role="lede"]'));

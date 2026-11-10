@@ -115,7 +115,7 @@ describe('BlockPosition', () => {
     // Visual finish V11: the current block's box is the diagram's current tile, a named ink
     // (BLOCK_POSITION_COLORS.currentTile), not a bracket-hex class
     const current = mobile.getByRole('link', { name: 'Current block #932' }).parentElement!;
-    expect(current).toHaveStyle({ backgroundColor: '#123029' });
+    expect(current).toHaveStyle({ backgroundColor: 'var(--c-tile-current)' });
     expect(current.className).not.toMatch(/\[#/);
     expect(mobile.getAllByText('1 proposed → committed · +2 blocks')).toHaveLength(2);
     expect(mobile.getByRole('link', { name: `Parent ${parent}` })).toHaveAttribute(

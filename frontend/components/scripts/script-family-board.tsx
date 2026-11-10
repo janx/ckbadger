@@ -688,8 +688,8 @@ export function ScriptCustodyFigure({
                         cx="4"
                         cy="4"
                         r="3.4"
-                        fill={kept(i, key) ? '#a0a8be' : '#0c0e15'}
-                        stroke="#a0a8be"
+                        fill={kept(i, key) ? 'var(--c-text)' : 'var(--c-base-bg)'}
+                        stroke="var(--c-text)"
                       />
                     </svg>
                     <span className={kept(i, key) ? 'text-text-bright' : 'text-text-dim'}>

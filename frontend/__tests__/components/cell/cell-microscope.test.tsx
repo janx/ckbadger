@@ -415,7 +415,7 @@ describe('cell microscope inks (V11)', () => {
     expect(offsets.length).toBeGreaterThan(0);
     for (const el of offsets) {
       expect(el).toHaveClass('text-[color:var(--ink)]');
-      expect(el.style.getPropertyValue('--ink')).toBe('#4b5266');
+      expect(el.style.getPropertyValue('--ink')).toBe('var(--c-ink-quiet)');
     }
     expect(screen.getByRole('complementary', { name: 'Field detail' })).toHaveClass(
       'border-base-border-subtle'

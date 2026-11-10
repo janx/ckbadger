@@ -167,7 +167,7 @@ describe('the type scale (R1)', () => {
 describe('the scale gate finds what it must, and only that', () => {
   it('flags arbitrary px sizes in any variant, never colours or scale steps', () => {
     const code = [
-      '<p className="text-[13px] text-[#a0a8be]">',
+      '<p className="text-[13px] text-[var(--c-text)]">',
       '<b className="text-meta sm:text-[30px] md:hover:text-[length:12.5px]">',
       "const T = 'text-[0.14px] text-[1.5rem] text-section text-[0.85em]';",
     ].join('\n');

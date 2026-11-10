@@ -48,9 +48,9 @@ describe('SecondaryIssuancePage', () => {
       ],
       // F2 charts: board order and class colours, miners jade not violet (CH-06).
       series: [
-        { label: 'Burnt', color: '#3a4258' },
-        { label: 'DAO compensation', color: '#f2c55c' },
-        { label: 'Miners', color: '#2edba3' },
+        { label: 'Burnt', color: 'var(--c-slate-ckb)' },
+        { label: 'DAO compensation', color: 'var(--c-gold)' },
+        { label: 'Miners', color: 'var(--c-jade)' },
       ],
     });
     const values = (
