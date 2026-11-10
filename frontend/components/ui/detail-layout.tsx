@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { SealedHead, type PageSealScale } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 import {
@@ -44,6 +45,11 @@ export interface DetailFact {
 interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
   identity?: ReactNode;
+  /**
+   * The object's hash seal (rubbing × Song print, phase 3), pressed beside the title and identity:
+   * the 32-byte hash the page names its object by, at the object's scale (SealedHead).
+   */
+  seal?: { hash: string; scale: PageSealScale };
   status?: ReactNode;
   actions?: ReactNode;
   facts?: readonly DetailFact[];
@@ -66,6 +72,7 @@ export function DetailLayout({
   documentTitle,
   kind = 'entity',
   identity,
+  seal,
   status,
   actions,
   facts,
@@ -76,31 +83,44 @@ export function DetailLayout({
   className,
 }: DetailLayoutProps) {
   useDocumentTitle(documentTitleParts(title, documentTitle));
+  const head = (
+    <>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-3">
+          <h1
+            // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
+            className={cn(
+              'text-text-bright break-words',
+              kind === 'entity' ? 'text-entity' : 'text-index'
+            )}
+          >
+            {title}
+          </h1>
+          {status}
+        </div>
+        {actions}
+      </div>
+      {identity && (
+        <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
+          {identity}
+        </div>
+      )}
+    </>
+  );
   return (
     // `.arrive` (visual finish V7): the content fades in when the data arrives and this mounts.
     <div className={cn('arrive text-body min-w-0 font-mono', className)}>
       {/* An index page's title row closes on a hairline (Midnight, continued, move 2; BlocksAfter):
           h1 and legend, 14 px, the 1 px line, then the list. */}
       <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-3">
-            <h1
-              // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
-              className={cn(
-                'text-text-bright break-words',
-                kind === 'entity' ? 'text-entity' : 'text-index'
-              )}
-            >
-              {title}
-            </h1>
-            {status}
-          </div>
-          {actions}
-        </div>
-        {identity && (
-          <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
-            {identity}
-          </div>
+        {/* The seal is pressed beside the title and identity, never in the content (the facts and
+            the sections run the full width under it). */}
+        {seal ? (
+          <SealedHead hash={seal.hash} scale={seal.scale}>
+            {head}
+          </SealedHead>
+        ) : (
+          head
         )}
         {facts && (
           // One column until md: at 640 a two-column grid wrapped labels into three lines.

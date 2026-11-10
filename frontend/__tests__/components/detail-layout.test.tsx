@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { expectOnePageSeal } from '@/__tests__/utils/seals';
 
 describe('DetailLayout identity', () => {
   it('keeps prose words intact while allowing an unbroken identifier to wrap', () => {
@@ -20,6 +21,43 @@ describe('DetailLayout identity', () => {
 });
 
 // Visual finish V7: an entity page's content fades in when its data arrives and the layout mounts.
+// Rubbing × Song print, phase 3: an object page presses its hash seal beside its title and
+// identity; the facts and the content run under it, never beside the stamp.
+describe('DetailLayout seal', () => {
+  const HASH = `0x${'a1'.repeat(32)}`;
+
+  it('presses the page seal beside the title and identity, not the facts or the content', () => {
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={<span>Block {HASH}</span>}
+        seal={{ hash: HASH, scale: 'record' }}
+        facts={[{ label: 'Epoch', value: '15,271' }]}
+      >
+        <p>content</p>
+      </DetailLayout>
+    );
+    const seal = expectOnePageSeal(container, HASH, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    const header = container.querySelector('header')!;
+    expect(head.parentElement).toBe(header);
+    expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(head).toHaveTextContent(`Block ${HASH}`);
+    expect(head).not.toContainElement(screen.getByText('15,271'));
+    expect(header).toContainElement(screen.getByText('15,271'));
+    expect(header).not.toContainElement(screen.getByText('content'));
+  });
+
+  it('draws no seal when it is given none', () => {
+    const { container } = render(<DetailLayout title="Blocks" kind="index" children="rows" />);
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
+    expect(container.querySelector('[data-sealed-head]')).toBeNull();
+    expect(container.querySelector('header')!.firstElementChild).toContainElement(
+      screen.getByRole('heading', { level: 1 })
+    );
+  });
+});
+
 describe('DetailLayout arrival (visual finish V7)', () => {
   it('carries the arrival fade on its root', () => {
     const { container } = render(<DetailLayout title="Transaction" children="tx" />);
