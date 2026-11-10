@@ -5066,6 +5066,7 @@ pub(in crate::sync) fn build_tx_actions_list_for_bulk(
                             Some(facts::CellProtocolFacts::DotCell(dotcell)) => Some(&dotcell.name),
                             _ => None,
                         },
+                        data_size: input.data_size,
                         data: bulk_input_dotbit_account_id(input)?,
                         is_dao_withdraw_request,
                         dao_compensation,

@@ -4,7 +4,7 @@
 use anyhow::{anyhow, ensure, Context, Result};
 use axum::extract::{Path, State};
 use ckbadger_indexer::{parser::fiber as protocol, rpc::TransactionView};
-use ckbadger_store::types::{CachedBlockHeader, FiberChannel, FiberChannelState};
+use ckbadger_store::types::{CachedBlockHeader, FiberChannel, FiberChannelState, LiveCellInfo};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -219,6 +219,30 @@ fn canonical_raw_tx(state: &AppState, hash: &[u8], expected_block: i64) -> Resul
     ))
 }
 
+/// The funding-lock arbiter (`parser::fiber::parse_funding_cell`) over a
+/// canonical cell: its args when the cell is a channel funding cell.
+fn funding_cell(cell: &LiveCellInfo) -> Result<Option<protocol::FundingLockArgs<'_>>> {
+    if !protocol::is_funding_lock(&cell.lock_code_hash) {
+        return Ok(None);
+    }
+    let data_len = usize::try_from(cell.data_size)
+        .with_context(|| format!("Fiber funding-lock cell data_size {}", cell.data_size))?;
+    Ok(protocol::parse_funding_cell(
+        &cell.lock_args,
+        cell.type_code_hash.is_some(),
+        data_len,
+    ))
+}
+
+/// Whether a canonical cell is a Fiber channel cell, decided by the parser's
+/// arbiters exactly as the indexer decides it: a cell carrying a Fiber lock
+/// code hash whose bytes fit no layout its lock accepts is an ordinary cell.
+fn is_channel_cell(cell: &LiveCellInfo) -> Result<bool> {
+    Ok(funding_cell(cell)?.is_some()
+        || (protocol::is_commitment_lock(&cell.lock_code_hash)
+            && protocol::parse_commitment_lock_args(&cell.lock_args).is_some()))
+}
+
 fn cell_evidence(version: &super::super::asset_history::CanonicalCellVersion) -> FiberCellEvidence {
     FiberCellEvidence {
         tx_hash: version.response.tx_hash.clone(),
@@ -273,9 +297,7 @@ fn stage(
         total_in = total_in
             .checked_add(capacity)
             .ok_or_else(|| anyhow!("Fiber {stage} input capacity overflow"))?;
-        if protocol::is_funding_lock(&previous.cell.lock_code_hash)
-            || protocol::is_commitment_lock(&previous.cell.lock_code_hash)
-        {
+        if is_channel_cell(&previous.cell)? {
             channel_inputs += 1;
             channel_in = channel_in
                 .checked_add(capacity)
@@ -430,13 +452,14 @@ fn commitment_epoch_rule(
             let met = epoch_at_or_after(tip, &ready)?;
             Ok(("firstSettlementDelay".into(), Some(ready), Some(met)))
         }
-        // fiber-scripts commitment-lock main.rs: party-settlement since is
-        // guarded by `is_first_settlement` (args[56] == 0). A subsequent
-        // commitment can still have other HTLC and tx validity conditions.
-        Some(1) => Ok(("subsequentSettlementNoReappliedDelay".into(), None, None)),
-        Some(value) => Err(anyhow!("invalid Fiber settlement flag {value}")),
-        // Historic 36-byte locks do not expose a flag. Their deployed rule
-        // cannot be inferred from the modern 57-byte contract.
+        // fiber-scripts commitment-lock main.rs (v0.6.0 and 0.7.0):
+        // `is_first_settlement = args[56] == 0x00`, so every other flag value
+        // is a later settlement, whose party-settlement since is not checked.
+        // A subsequent commitment can still have other HTLC and tx validity
+        // conditions.
+        Some(_) => Ok(("subsequentSettlementNoReappliedDelay".into(), None, None)),
+        // The daric 36- and 56-byte locks (mainnet v1-v2) carry no flag; their
+        // delay rule is not asserted here.
         None => Ok(("legacyFormatRuleUnverified".into(), None, None)),
     }
 }
@@ -463,9 +486,19 @@ fn build_evidence(
         "Fiber channel 0x{} funding location/capacity mismatch",
         hex::encode(id)
     );
+    // The indexer opens a channel only on a cell the funding-lock arbiter
+    // accepts and stores the pubkey hash it reads; anything else here is the
+    // indexer's own state contradicting the chain.
+    let funding_args = funding_cell(&funding.cell)?.ok_or_else(|| {
+        anyhow!(
+            "Fiber channel 0x{} funding output 0x{}:{} is not a funding cell the arbiter accepts",
+            hex::encode(id),
+            hex::encode(&ch.funding_tx_hash),
+            ch.funding_output_index
+        )
+    })?;
     ensure!(
-        protocol::is_funding_lock(&funding.cell.lock_code_hash)
-            && funding.cell.lock_args == ch.funding_lock_args,
+        funding_args.pubkey_hash.as_slice() == ch.funding_lock_args.as_slice(),
         "Fiber channel 0x{} stored funding lock differs from canonical output",
         hex::encode(id)
     );
@@ -555,15 +588,17 @@ fn build_evidence(
             "Fiber tracked output is not a commitment lock: 0x{}:{output_index}",
             hex::encode(hash)
         );
+        // The indexer tracks only commitments the commitment-lock arbiter
+        // accepts, so one it rejects is the indexer's own state contradicting
+        // the chain.
         let args = &version.cell.lock_args;
-        ensure!(
-            args.len() == 36 || args.len() == 57,
-            "Fiber commitment 0x{}:{output_index} has unsupported args length {}",
-            hex::encode(hash),
-            args.len()
-        );
-        let parsed = protocol::parse_commitment_lock_args(args)
-            .ok_or_else(|| anyhow!("Fiber commitment args invalid"))?;
+        let parsed = protocol::parse_commitment_lock_args(args).ok_or_else(|| {
+            anyhow!(
+                "Fiber tracked commitment 0x{}:{output_index} fits no commitment-lock layout: args_len={}",
+                hex::encode(hash),
+                args.len()
+            )
+        })?;
         ensure!(
             Some(parsed.delay_epoch) == ch.delay_epoch,
             "Fiber commitment 0x{}:{output_index} delay differs from indexed channel",
@@ -581,7 +616,7 @@ fn build_evidence(
             .get_sync_tip_block()?
             .ok_or_else(|| anyhow!("Fiber evidence missing indexed tip"))?;
         let (epoch_lock, ready, met) =
-            commitment_epoch_rule(parsed.settlement_flag, &header, &tip, &delay).with_context(
+            commitment_epoch_rule(parsed.settlement_flag(), &header, &tip, &delay).with_context(
                 || format!("Fiber commitment 0x{}:{output_index}", hex::encode(hash)),
             )?;
         if is_updated_commitment(ch.close_tx_hash.as_deref(), hash) {
@@ -615,18 +650,13 @@ fn build_evidence(
         }
         Some(FiberCommitmentEvidence {
             cell: cell_evidence(&version),
-            pubkey_hash: format_hex(&parsed.pubkey_hash),
+            pubkey_hash: format_hex(parsed.pubkey_hash),
             delay_epoch: parsed.delay_epoch.to_string(),
             delay_epoch_decoded: delay,
             version: parsed.version.to_string(),
-            settlement_hash: parsed.settlement_hash.as_ref().map(|v| format_hex(v)),
-            settlement_flag: parsed.settlement_flag,
-            lock_format: if args.len() == 36 {
-                "legacy36"
-            } else {
-                "full57"
-            }
-            .into(),
+            settlement_hash: parsed.settlement_hash().map(|v| format_hex(v)),
+            settlement_flag: parsed.settlement_flag(),
+            lock_format: parsed.layout.name().into(),
             epoch_lock,
             ready_epoch: ready,
             epoch_lock_met_at_tip: met,
@@ -768,6 +798,13 @@ mod tests {
         let delay = decode_epoch_delay(0xa001_0000_0000_0006).unwrap();
         let (_, ready, met) = commitment_epoch_rule(Some(1), &header, &header, &delay).unwrap();
         assert!(ready.is_none() && met.is_none());
+        // The lock reads any non-zero flag as a later settlement.
+        for flag in [2u8, 0xff] {
+            let (rule, ready, met) =
+                commitment_epoch_rule(Some(flag), &header, &header, &delay).unwrap();
+            assert_eq!(rule, "subsequentSettlementNoReappliedDelay");
+            assert!(ready.is_none() && met.is_none());
+        }
         assert_eq!(
             commitment_epoch_rule(None, &header, &header, &delay)
                 .unwrap()

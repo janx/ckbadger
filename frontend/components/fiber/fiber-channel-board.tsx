@@ -599,7 +599,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                             </span>
                             <span className="text-text-dim">Version · exact u64</span>
                             <span className="text-text-bright break-all">{tracked.version}</span>
-                            {tracked.lockFormat === 'full57' && (
+                            {tracked.settlementHash !== null && (
                               <>
                                 <span className="text-text-dim">Settlement hash / flag</span>
                                 <span className="text-text-bright break-all">
@@ -653,7 +653,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                               ? `first settlement delay ${tracked.epochLockMetAtTip ? 'met' : 'waiting'}: ready at epoch ${tracked.readyEpoch}; indexed tip at ${tracked.tipEpoch}`
                               : tracked.epochLock === 'subsequentSettlementNoReappliedDelay'
                                 ? 'Subsequent settlement cell: original delay is not reapplied; other transaction conditions remain.'
-                                : 'Legacy 36-byte form: the deployed delay rule is not asserted here.'}
+                                : `Legacy ${argsBytes(tracked.lockArgs)}-byte form: the deployed delay rule is not asserted here.`}
                           </span>
                         </>
                       )}

@@ -6,7 +6,10 @@ use std::collections::BTreeSet;
 use anyhow::{bail, Result};
 use ckbadger_store::{keys, types::ProtocolAction};
 
-use crate::parser::fiber::{is_commitment_lock, is_funding_lock, parse_funding_lock_args};
+use crate::parser::fiber::{
+    is_commitment_lock, is_funding_lock, parse_commitment_lock_args, parse_funding_cell,
+    parse_funding_lock_args,
+};
 
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
 
@@ -82,6 +85,7 @@ struct FiberCellSummary {
     participants: BTreeSet<Vec<u8>>,
 }
 
+/// The Fiber lock a code hash names: the batch / transaction prefilter.
 fn classify_lock(code_hash: &[u8]) -> FiberLockType {
     if is_funding_lock(code_hash) {
         FiberLockType::FundingLock
@@ -90,6 +94,41 @@ fn classify_lock(code_hash: &[u8]) -> FiberLockType {
     } else {
         FiberLockType::Other
     }
+}
+
+/// A cell's role in a channel, decided by the parser's arbiters exactly as the
+/// bulk reducer decides it: a Fiber-lock cell whose bytes fit no layout its
+/// lock accepts is `Other`, an ordinary cell. `data_size` is the cell's own
+/// data length (inputs and outputs alike), so a cell classifies the same when
+/// it is created and when it is spent.
+fn classify_cell(
+    lock_code_hash: &[u8],
+    lock_args: &[u8],
+    typed: bool,
+    data_size: i32,
+    tx: &TxView<'_>,
+) -> Result<FiberLockType> {
+    Ok(match classify_lock(lock_code_hash) {
+        FiberLockType::FundingLock => {
+            let data_len = usize::try_from(data_size).map_err(|_| {
+                anyhow::anyhow!(
+                    "fiber funding-lock cell has a negative data_size: block={} tx=0x{} data_size={}",
+                    tx.block_number,
+                    hex::encode(tx.tx_hash),
+                    data_size
+                )
+            })?;
+            if parse_funding_cell(lock_args, typed, data_len).is_some() {
+                FiberLockType::FundingLock
+            } else {
+                FiberLockType::Other
+            }
+        }
+        FiberLockType::CommitmentLock if parse_commitment_lock_args(lock_args).is_some() => {
+            FiberLockType::CommitmentLock
+        }
+        FiberLockType::CommitmentLock | FiberLockType::Other => FiberLockType::Other,
+    })
 }
 
 pub(crate) struct FiberDetector;
@@ -104,7 +143,13 @@ impl FiberDetector {
         let mut summary = FiberCellSummary::default();
 
         for input in &tx.inputs {
-            match classify_lock(input.lock_code_hash) {
+            match classify_cell(
+                input.lock_code_hash,
+                input.lock_args,
+                input.type_code_hash.is_some(),
+                input.data_size,
+                tx,
+            )? {
                 FiberLockType::FundingLock => {
                     summary.has_funding_input = true;
                     summary
@@ -134,7 +179,13 @@ impl FiberDetector {
         }
 
         for (idx, output) in tx.outputs.iter().enumerate() {
-            match classify_lock(output.lock_code_hash) {
+            match classify_cell(
+                output.lock_code_hash,
+                output.lock_args,
+                output.type_code_hash.is_some(),
+                output.data_size,
+                tx,
+            )? {
                 FiberLockType::FundingLock => {
                     summary.has_funding_output = true;
                     summary
@@ -231,12 +282,12 @@ impl FiberDetector {
                         "capacity".to_string(),
                         serde_json::json!(capacity.to_string()),
                     );
-                    // The funding lock args are persisted on the channel row, so
-                    // unparseable args are an invariant violation — matching the
-                    // bulk reducer, which bails on the same condition.
+                    // `summarize_cells` records only funding outputs the
+                    // arbiter accepted, so args it cannot read are a detector
+                    // bug.
                     let parsed = parse_funding_lock_args(args).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "fiber funding output args invalid: tx=0x{} output_index={} args_len={}",
+                            "fiber funding output args the arbiter accepted no longer parse — detector bug: tx=0x{} output_index={} args_len={}",
                             hex::encode(tx_hash),
                             output_index_u32,
                             args.len()
@@ -244,7 +295,7 @@ impl FiberDetector {
                     })?;
                     meta.insert(
                         "fundingLockArgs".to_string(),
-                        serde_json::json!(format!("0x{}", hex::encode(&parsed.pubkey_hash))),
+                        serde_json::json!(format!("0x{}", hex::encode(parsed.pubkey_hash))),
                     );
                     // UDT-funded channels carry the funding output's type
                     // script hash and token amount; CKB-only channels carry
@@ -295,7 +346,7 @@ impl FiberDetector {
                     if let Some(parsed) = parse_funding_lock_args(args) {
                         meta.insert(
                             "fundingLockArgs".to_string(),
-                            serde_json::json!(format!("0x{}", hex::encode(&parsed.pubkey_hash))),
+                            serde_json::json!(format!("0x{}", hex::encode(parsed.pubkey_hash))),
                         );
                     }
                 }
@@ -323,7 +374,7 @@ impl FiberDetector {
                     if let Some(parsed) = parse_funding_lock_args(args) {
                         meta.insert(
                             "fundingLockArgs".to_string(),
-                            serde_json::json!(format!("0x{}", hex::encode(&parsed.pubkey_hash))),
+                            serde_json::json!(format!("0x{}", hex::encode(parsed.pubkey_hash))),
                         );
                     }
                 }
@@ -395,13 +446,14 @@ impl FiberDetector {
     }
 }
 
-/// Resolve the UDT identity of a Fiber funding output.
+/// Resolve the UDT identity of a Fiber funding output the arbiter accepted.
 ///
 /// A funding output with no type script funds a plain-CKB channel (`None`).
 /// One that carries a type script funds a UDT channel: its identity is the
-/// type script hash and the amount held in cell data. Both must be present —
-/// a typed funding cell that cannot yield either is an invariant violation and
-/// fails immediately rather than being reported as a CKB-only channel.
+/// type script hash and the amount held in cell data. The arbiter accepts a
+/// typed funding cell only when its data holds the amount, and a typed cell
+/// always has a type script hash, so failing either here is the indexer's own
+/// data contradicting itself.
 fn parse_funding_udt(
     type_code_hash: Option<&[u8]>,
     type_script_hash: Option<&[u8]>,
@@ -426,7 +478,7 @@ fn parse_funding_udt(
 
     let Some(amount) = crate::parser::fiber::parse_funding_udt_amount(data) else {
         bail!(
-            "fiber funding output carries a type script but its data cannot hold a \
+            "fiber funding output accepted by the arbiter but its data cannot hold a \
              {}-byte little-endian UDT amount: block={} tx=0x{} output_index={} \
              type_script_hash=0x{} data_len={}",
             crate::parser::fiber::FUNDING_UDT_AMOUNT_LEN,
@@ -567,6 +619,7 @@ mod tests {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: self.data.len() as i32,
                 data: &self.data,
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -619,7 +672,7 @@ mod tests {
                 type_args: self.type_args.as_deref(),
                 type_script_hash: self.type_script_hash.as_deref(),
                 data_hash: &[],
-                data_size: 0,
+                data_size: self.data.len() as i32,
                 data: &self.data,
             }
         }
@@ -1766,11 +1819,12 @@ mod tests {
         assert_eq!(meta["participants"], expected_participants);
     }
 
-    /// Bug 1 fail-fast: a funding output that carries a type script whose cell
-    /// data cannot hold the 16-byte LE UDT amount is an invariant violation and
-    /// must fail the whole build, not silently produce a CKB-only channel.
+    /// Review 45fd N1 (plan D9; was `test_channel_open_udt_funding_output_with_short_data_fails`,
+    /// which required the whole build to fail): a funding output that carries
+    /// a type script whose data cannot hold the 16-byte LE UDT amount is not a
+    /// channel funding cell. No channel event; its lock is an ordinary owner.
     #[test]
-    fn test_channel_open_udt_funding_output_with_short_data_fails() {
+    fn test_channel_open_udt_funding_output_with_short_data_is_an_ordinary_cell() {
         let inputs = vec![real_input(
             "0x7f76488c606aadf8f9cae974336c9c81a97829618b7fccb14d4097bf4ca4a3c5",
             2,
@@ -1805,12 +1859,16 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(false))];
-        let error = build_tx_actions_for_block(&[tx], &detectors)
-            .expect_err("short UDT amount data on a typed funding output must fail the build");
-        let message = error.to_string();
+        let actions = build_tx_actions_for_block(&[tx], &detectors)
+            .expect("a typed funding-lock cell with short data must not fail the build");
+        assert_eq!(actions.len(), 1);
         assert!(
-            message.contains("7777777777"),
-            "error should name the tx: {message}"
+            !actions[0]
+                .protocol_actions
+                .iter()
+                .any(|a| a.protocol == "fiber"),
+            "no channel event for a cell that is not a channel cell: {:?}",
+            actions[0].protocol_actions
         );
     }
 

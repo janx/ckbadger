@@ -290,6 +290,7 @@ impl ResolvedPoolTx {
                 // `.cell` is the exception: the classifier reads a consumed
                 // name's previous state from this field, never from the data.
                 dotcell: cell.dotcell.as_ref(),
+                data_size: cell.data.len() as i32,
                 data: &cell.data,
                 // Same two fields live sync fills from its DAO map: the
                 // resolver priced every spent withdraw-request cell, so the

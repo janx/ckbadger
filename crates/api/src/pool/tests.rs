@@ -1360,6 +1360,7 @@ async fn test_interpretation_parity_between_live_sync_and_pool_resolution() {
             bit_cell_identity_id: None,
             dotcell: None,
             // Live sync retains no input cell data.
+            data_size: 0,
             data: &[],
             is_dao_withdraw_request: false,
             dao_compensation: None,
@@ -1475,6 +1476,7 @@ async fn test_dotcell_transfer_reads_the_same_in_the_pool_as_committed() {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: Some(&previous_name),
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -1495,6 +1497,7 @@ async fn test_dotcell_transfer_reads_the_same_in_the_pool_as_committed() {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,

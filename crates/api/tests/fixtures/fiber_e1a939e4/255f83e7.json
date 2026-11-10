@@ -1,0 +1,72 @@
+{
+ "cell_deps": [
+  {
+   "dep_type": "code",
+   "out_point": {
+    "index": "0x0",
+    "tx_hash": "0x4396de69818bd88b7fce64797ccec25d1294912d56846432f29fd192120992ee"
+   }
+  },
+  {
+   "dep_type": "code",
+   "out_point": {
+    "index": "0x0",
+    "tx_hash": "0x95006eee7b4c0c8ad66e0514c88ed0ae43fc8db27793427de86a348ec720b9d6"
+   }
+  },
+  {
+   "dep_type": "dep_group",
+   "out_point": {
+    "index": "0x0",
+    "tx_hash": "0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c"
+   }
+  }
+ ],
+ "hash": "0x255f83e718cd6ab33be6a7a2581a82632853fc2fe89b75283815042d85f37fe9",
+ "header_deps": [],
+ "inputs": [
+  {
+   "previous_output": {
+    "index": "0x0",
+    "tx_hash": "0xed1fbf13dc59cf255e9b6728e45a96dce3aaeacab98d893c7b9ba2437d527abd"
+   },
+   "since": "0x0"
+  },
+  {
+   "previous_output": {
+    "index": "0x0",
+    "tx_hash": "0x00e9735c26998020df1e0a8272f2801c8b446880e329f744f550c10c874e6f6d"
+   },
+   "since": "0x0"
+  }
+ ],
+ "outputs": [
+  {
+   "capacity": "0x2540be237",
+   "lock": {
+    "args": "0x5c494edc86cce3a4d5692364453193e6ed9c695401000000000100a00000000000000002f4bb16e4d4b49bb983db6d5ec191cd860c06712b0101",
+    "code_hash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+    "hash_type": "type"
+   },
+   "type": null
+  },
+  {
+   "capacity": "0x113abe5ecf",
+   "lock": {
+    "args": "0x7f0a30a2da9ee266d6f901daa52605d855c04449",
+    "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hash_type": "type"
+   },
+   "type": null
+  }
+ ],
+ "outputs_data": [
+  "0x",
+  "0x"
+ ],
+ "version": "0x0",
+ "witnesses": [
+  "0x10000000100000001000000010000000010091c9279fe11c53d2ab655c22e7e4594a2396abc500f08296050000000000000000000000567bc35c188dad86db76199b2b6dc83d061fa45100e40b54020000000000000000000000fe00f4ed6110bd9c8a0fdcc25d4e68b4f84814a6c73179d81999a16091ce7ed4d53c5c544218c6949df604e547c2ba0341d87bf82b8458db3b78daadbf3173d3e87f00",
+  "0x550000001000000055000000550000004100000084cb64de760c8a5a88faaf343532452aec9cc44152f17e5acda51770987550b5784f61aacb98a6de57168a06e23c177e5c287a17d2633beb510f6ecef425498b00"
+ ]
+}

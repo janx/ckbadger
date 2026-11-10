@@ -8,7 +8,7 @@ use ckbadger_store::{CF_ADDR_FIBER_CHANNELS, CF_FIBER_CHANNELS, CF_FIBER_CHANNEL
 use super::{BulkReducer, ReducerContext};
 use crate::db::writer::fiber::apply_commitment_enrichment;
 use crate::parser::fiber::{
-    is_commitment_lock, is_funding_lock, parse_commitment_lock_args, parse_funding_lock_args,
+    is_commitment_lock, is_funding_lock, parse_commitment_lock_args, parse_funding_cell,
     parse_funding_udt_amount, CommitmentLockArgs,
 };
 use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts};
@@ -107,7 +107,7 @@ impl FiberOwner {
     fn handle_channel_open(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let funding_lock_args = summary
             .funding_output_pubkey_hash
@@ -188,7 +188,7 @@ impl FiberOwner {
     fn handle_channel_close(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let funding_outpoint = summary.funding_input_outpoint.ok_or_else(|| {
             anyhow!(
@@ -234,7 +234,7 @@ impl FiberOwner {
     fn handle_force_close(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let funding_outpoint = summary.funding_input_outpoint.ok_or_else(|| {
             anyhow!(
@@ -252,7 +252,7 @@ impl FiberOwner {
                 tx.tx_index
             )
         })?;
-        let commitment_parsed = summary.commitment_output_parsed_args.clone().ok_or_else(|| {
+        let commitment_parsed = summary.commitment_output_parsed_args.ok_or_else(|| {
             anyhow!(
                 "fiber force_close missing parsed commitment output args in bulk reducer: block={} tx=0x{} tx_index={}",
                 tx.block_number,
@@ -327,7 +327,7 @@ impl FiberOwner {
     fn handle_settlement(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let commitment_args = summary.commitment_input_args.as_deref().ok_or_else(|| {
             anyhow!(
@@ -381,7 +381,7 @@ impl FiberOwner {
     fn handle_commitment_revocation(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let old_commitment_args =
             summary.commitment_input_args.as_deref().ok_or_else(|| {
@@ -440,7 +440,7 @@ impl FiberOwner {
         }
 
         // Rotate commitment: update channel metadata, swap hash mapping
-        let new_commitment_parsed = summary.commitment_output_parsed_args.clone().ok_or_else(|| {
+        let new_commitment_parsed = summary.commitment_output_parsed_args.ok_or_else(|| {
             anyhow!(
                 "fiber commitment_revocation missing parsed commitment output args in bulk reducer: block={} tx=0x{} tx_index={}",
                 tx.block_number,
@@ -479,7 +479,7 @@ enum FiberEvent {
 }
 
 #[derive(Debug, Default)]
-struct FiberTxSummary {
+struct FiberTxSummary<'a> {
     has_funding_input: bool,
     has_funding_output: bool,
     has_commitment_input: bool,
@@ -491,14 +491,14 @@ struct FiberTxSummary {
     commitment_input_args: Option<Vec<u8>>,
     commitment_output_args: Option<Vec<u8>>,
     commitment_output_index: Option<u32>,
-    commitment_output_parsed_args: Option<CommitmentLockArgs>,
+    commitment_output_parsed_args: Option<CommitmentLockArgs<'a>>,
     /// UDT identity of the funding output, when it carries a type script.
     funding_output_udt: Option<(Vec<u8>, u128)>,
     participants: BTreeSet<Vec<u8>>,
 }
 
-impl FiberTxSummary {
-    fn from_tx(tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<Self> {
+impl<'a> FiberTxSummary<'a> {
+    fn from_tx(tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'a>) -> Result<Self> {
         let mut summary = Self::default();
 
         for input in &tx.resolved_inputs {
@@ -527,36 +527,33 @@ impl FiberTxSummary {
         }
     }
 
+    /// Record one input. Whether it is a channel cell is decided by the
+    /// parser's arbiters alone; a cell they reject is an ordinary cell and its
+    /// lock an ordinary participant. A cell whose lock code hash is not a
+    /// Fiber lock costs exactly the two code-hash checks and the insert.
     fn record_input(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
         input: &ResolvedInputFacts,
-        ctx: &ReducerContext<'_>,
+        ctx: &ReducerContext<'a>,
     ) -> Result<()> {
         let lock_code_hash = ctx.resolve_identity(input.lock_code_hash_id);
         let lock_args = ctx.resolve_identity(input.lock_args_id);
         if is_funding_lock(lock_code_hash) {
-            self.has_funding_input = true;
-            if self.funding_input_outpoint.is_none() {
-                self.funding_input_outpoint = Some(input.outpoint);
+            let data_len = fiber_cell_data_len(input.data_size, tx, &input.outpoint)?;
+            if parse_funding_cell(lock_args, input.type_code_hash_id.is_some(), data_len).is_some()
+            {
+                self.has_funding_input = true;
+                if self.funding_input_outpoint.is_none() {
+                    self.funding_input_outpoint = Some(input.outpoint);
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-
-        if is_commitment_lock(lock_code_hash) {
+        } else if is_commitment_lock(lock_code_hash)
+            && parse_commitment_lock_args(lock_args).is_some()
+        {
             self.has_commitment_input = true;
             if self.commitment_input_args.is_none() {
-                parse_commitment_lock_args(lock_args).ok_or_else(|| {
-                    anyhow!(
-                        "fiber commitment input args invalid in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} args_len={}",
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        tx.tx_index,
-                        hex::encode(input.outpoint.tx_hash),
-                        input.outpoint.index,
-                        lock_args.len()
-                    )
-                })?;
                 self.commitment_input_args = Some(lock_args.to_vec());
             }
             return Ok(());
@@ -567,102 +564,119 @@ impl FiberTxSummary {
         Ok(())
     }
 
+    /// Record one output; classified exactly as [`Self::record_input`].
     fn record_output(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
         cell: &CellFacts,
-        ctx: &ReducerContext<'_>,
+        ctx: &ReducerContext<'a>,
     ) -> Result<()> {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
         let lock_args = ctx.resolve_identity(cell.lock_args_id);
         if is_funding_lock(lock_code_hash) {
-            self.has_funding_output = true;
-            if self.funding_output_pubkey_hash.is_none() {
-                let parsed = parse_funding_lock_args(lock_args).ok_or_else(|| {
-                    anyhow!(
-                        "fiber funding output args invalid in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} args_len={}",
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        tx.tx_index,
-                        hex::encode(cell.outpoint.tx_hash),
-                        cell.outpoint.index,
-                        lock_args.len()
-                    )
-                })?;
-                let capacity = u64::try_from(cell.capacity).map_err(|_| {
-                    anyhow!(
-                        "fiber funding output capacity is negative in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} capacity={}",
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        tx.tx_index,
-                        hex::encode(cell.outpoint.tx_hash),
-                        cell.outpoint.index,
-                        cell.capacity
-                    )
-                })?;
-                // UDT identity of the funding cell: its type script hash plus
-                // the amount held in data. A typed funding cell that cannot
-                // yield either is an invariant violation, never a CKB channel.
-                self.funding_output_udt = match cell.type_code_hash_id {
-                    None => None,
-                    Some(_) => {
-                        let type_script_hash_id = cell.type_script_hash_id.ok_or_else(|| {
-                            anyhow!(
-                                "fiber funding output carries a type script with no type_script_hash in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{}",
-                                tx.block_number,
-                                hex::encode(tx.tx_hash),
-                                tx.tx_index,
-                                hex::encode(cell.outpoint.tx_hash),
-                                cell.outpoint.index
-                            )
-                        })?;
-                        let amount = parse_funding_udt_amount(&cell.data).ok_or_else(|| {
-                            anyhow!(
-                                "fiber funding output carries a type script but its data cannot hold a {}-byte little-endian UDT amount in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} data_len={}",
-                                crate::parser::fiber::FUNDING_UDT_AMOUNT_LEN,
-                                tx.block_number,
-                                hex::encode(tx.tx_hash),
-                                tx.tx_index,
-                                hex::encode(cell.outpoint.tx_hash),
-                                cell.outpoint.index,
-                                cell.data.len()
-                            )
-                        })?;
-                        Some((ctx.resolve_identity(type_script_hash_id).to_vec(), amount))
-                    }
-                };
-                self.funding_output_pubkey_hash = Some(parsed.pubkey_hash);
-                self.funding_output_capacity = Some(capacity);
-                self.funding_output_index = Some(cell.outpoint.index);
+            let data_len = fiber_cell_data_len(cell.data_size, tx, &cell.outpoint)?;
+            let typed = cell.type_code_hash_id.is_some();
+            if let Some(parsed) = parse_funding_cell(lock_args, typed, data_len) {
+                self.has_funding_output = true;
+                if self.funding_output_pubkey_hash.is_none() {
+                    self.record_funding_output(tx, cell, ctx, parsed.pubkey_hash)?;
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-
-        if is_commitment_lock(lock_code_hash) {
-            self.has_commitment_output = true;
-            if self.commitment_output_args.is_none() {
-                let parsed = parse_commitment_lock_args(lock_args).ok_or_else(|| {
-                    anyhow!(
-                        "fiber commitment output args invalid in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} args_len={}",
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        tx.tx_index,
-                        hex::encode(cell.outpoint.tx_hash),
-                        cell.outpoint.index,
-                        lock_args.len()
-                    )
-                })?;
-                self.commitment_output_args = Some(lock_args.to_vec());
-                self.commitment_output_index = Some(cell.outpoint.index);
-                self.commitment_output_parsed_args = Some(parsed);
+        } else if is_commitment_lock(lock_code_hash) {
+            if let Some(parsed) = parse_commitment_lock_args(lock_args) {
+                self.has_commitment_output = true;
+                if self.commitment_output_args.is_none() {
+                    self.commitment_output_args = Some(lock_args.to_vec());
+                    self.commitment_output_index = Some(cell.outpoint.index);
+                    self.commitment_output_parsed_args = Some(parsed);
+                }
+                return Ok(());
             }
-            return Ok(());
         }
 
         self.participants
             .insert(ctx.resolve_identity(cell.lock_script_hash_id).to_vec());
         Ok(())
     }
+
+    /// The first funding output the arbiter accepted: its pubkey hash,
+    /// capacity, index and, when typed, UDT identity. Every error here is the
+    /// indexer's own facts contradicting themselves, never the chain's bytes.
+    fn record_funding_output(
+        &mut self,
+        tx: &ResolvedTxFacts<'_>,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'a>,
+        pubkey_hash: &[u8; 20],
+    ) -> Result<()> {
+        let capacity = u64::try_from(cell.capacity).map_err(|_| {
+            anyhow!(
+                "fiber funding output capacity is negative in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} capacity={}",
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index,
+                hex::encode(cell.outpoint.tx_hash),
+                cell.outpoint.index,
+                cell.capacity
+            )
+        })?;
+        // UDT identity of the funding cell: its type script hash plus the
+        // amount held in data, which the arbiter checked fits.
+        self.funding_output_udt = match cell.type_code_hash_id {
+            None => None,
+            Some(_) => {
+                let type_script_hash_id = cell.type_script_hash_id.ok_or_else(|| {
+                    anyhow!(
+                        "fiber funding output carries a type script with no type_script_hash in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{}",
+                        tx.block_number,
+                        hex::encode(tx.tx_hash),
+                        tx.tx_index,
+                        hex::encode(cell.outpoint.tx_hash),
+                        cell.outpoint.index
+                    )
+                })?;
+                let amount = parse_funding_udt_amount(&cell.data).ok_or_else(|| {
+                    anyhow!(
+                        "fiber funding output accepted by the arbiter (data_size={}) but its data cannot hold a {}-byte UDT amount in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} data_len={}",
+                        cell.data_size,
+                        crate::parser::fiber::FUNDING_UDT_AMOUNT_LEN,
+                        tx.block_number,
+                        hex::encode(tx.tx_hash),
+                        tx.tx_index,
+                        hex::encode(cell.outpoint.tx_hash),
+                        cell.outpoint.index,
+                        cell.data.len()
+                    )
+                })?;
+                Some((ctx.resolve_identity(type_script_hash_id).to_vec(), amount))
+            }
+        };
+        self.funding_output_pubkey_hash = Some(pubkey_hash.to_vec());
+        self.funding_output_capacity = Some(capacity);
+        self.funding_output_index = Some(cell.outpoint.index);
+        Ok(())
+    }
+}
+
+/// A funding-lock cell's data length for the arbiter. A negative stored size
+/// is the indexer's own facts contradicting themselves.
+fn fiber_cell_data_len(
+    data_size: i32,
+    tx: &ResolvedTxFacts<'_>,
+    outpoint: &OutPointKey,
+) -> Result<usize> {
+    usize::try_from(data_size).map_err(|_| {
+        anyhow!(
+            "fiber funding-lock cell has a negative data_size in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} data_size={}",
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index,
+            hex::encode(outpoint.tx_hash),
+            outpoint.index,
+            data_size
+        )
+    })
 }
 
 fn blake2b_hash(data: &[u8]) -> Vec<u8> {
@@ -919,45 +933,6 @@ mod tests {
         assert_eq!(channel.udt_amount, Some(1_000_000_050u128));
     }
 
-    /// Bug 1 fail-fast, bulk path: a typed funding output whose data cannot
-    /// hold the 16-byte LE amount must halt the build with context.
-    #[test]
-    fn bulk_channel_open_udt_funding_short_data_bails() {
-        let b = VectorBuilder::new();
-        let open_tx = [0x51; 32];
-        let inputs = vec![b.input(
-            [0x50; 32],
-            0,
-            100_00000000,
-            SECP_CODE_HASH,
-            "0xd2c9b058568578c884e108e3a82ee111af6a9f4b",
-        )];
-        let cells = vec![b.cell(
-            open_tx,
-            0,
-            36_000_000_000,
-            crate::parser::fiber::FUNDING_LOCK_CODE_HASH_TESTNET,
-            "0x00510ea5249c2b102ab35607ee04418ae47cb83b",
-            Some((USDI_CODE_HASH, USDI_ARGS)),
-            &[0x01, 0x02],
-        )];
-
-        let frozen = b.interner.snapshot_for_reads();
-        let ctx = ReducerContext::new(&frozen);
-        let mut owner = FiberOwner::default();
-        let error = owner
-            .apply_tx(
-                &tx_facts(open_tx, 20565584, 1_774_580_280_000, 1, inputs, cells),
-                &ctx,
-            )
-            .expect_err("short UDT amount data on a typed funding output must bail");
-        let message = error.to_string();
-        assert!(
-            message.contains("5151515151"),
-            "error should name the outpoint: {message}"
-        );
-    }
-
     /// Live/bulk single-path proof for the USDI open vector: the channel row
     /// produced by the live chain (FiberDetector metadata → live writer) must
     /// equal the row produced by the bulk reducer, field for field.
@@ -1078,6 +1053,7 @@ mod tests {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -1098,6 +1074,7 @@ mod tests {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -1359,6 +1336,7 @@ mod tests {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -1463,6 +1441,7 @@ mod tests {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -1511,6 +1490,755 @@ mod tests {
                 .unwrap()
                 .unwrap(),
             channel_id
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Scenario harness: the same transactions through the bulk reducer and
+    // through the live detector → writer, with every Fiber row both write.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// One cell of a scenario, as both sync paths see it.
+    #[derive(Clone)]
+    struct ScenarioCell {
+        tx_hash: [u8; 32],
+        index: u32,
+        capacity: i64,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        /// `(code_hash, args)`, hash type `type`.
+        type_script: Option<(Vec<u8>, Vec<u8>)>,
+        data: Vec<u8>,
+    }
+
+    impl ScenarioCell {
+        fn new(tx_hash: [u8; 32], index: u32, capacity: i64, code: &str, args: Vec<u8>) -> Self {
+            Self {
+                tx_hash,
+                index,
+                capacity,
+                lock_code_hash: hexv(code),
+                lock_args: args,
+                type_script: None,
+                data: Vec::new(),
+            }
+        }
+
+        fn typed(mut self, code: &str, args: &str, data: Vec<u8>) -> Self {
+            self.type_script = Some((hexv(code), hexv(args)));
+            self.data = data;
+            self
+        }
+
+        fn lock_script_hash(&self) -> Vec<u8> {
+            crate::parser::script::ScriptParser::compute_script_hash_raw(
+                &self.lock_code_hash,
+                1,
+                &self.lock_args,
+            )
+        }
+
+        fn type_script_hash(&self) -> Option<Vec<u8>> {
+            self.type_script.as_ref().map(|(code, args)| {
+                crate::parser::script::ScriptParser::compute_script_hash_raw(code, 1, args)
+            })
+        }
+    }
+
+    struct ScenarioTx {
+        hash: [u8; 32],
+        block_number: i64,
+        timestamp_ms: i64,
+        tx_index: i32,
+        inputs: Vec<ScenarioCell>,
+        outputs: Vec<ScenarioCell>,
+    }
+
+    impl ScenarioTx {
+        /// `outputs` given as (capacity, lock code hash, lock args); their
+        /// out points are this transaction's.
+        fn new(
+            hash: [u8; 32],
+            block_number: i64,
+            inputs: Vec<ScenarioCell>,
+            outputs: Vec<ScenarioCell>,
+        ) -> Self {
+            let outputs = outputs
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut cell)| {
+                    cell.tx_hash = hash;
+                    cell.index = index as u32;
+                    cell
+                })
+                .collect();
+            Self {
+                hash,
+                block_number,
+                timestamp_ms: 1_700_000_000_000 + block_number * 1_000,
+                tx_index: 1,
+                inputs,
+                outputs,
+            }
+        }
+
+        fn output(&self, index: usize) -> ScenarioCell {
+            self.outputs[index].clone()
+        }
+    }
+
+    /// An output-to-be: its out point is set by `ScenarioTx::new`.
+    fn out(capacity: i64, code: &str, args: Vec<u8>) -> ScenarioCell {
+        ScenarioCell::new([0; 32], 0, capacity, code, args)
+    }
+
+    /// Every Fiber row of one sync path, decoded where the value is a struct.
+    #[derive(Debug, PartialEq)]
+    struct FiberRows {
+        channels: Vec<(Vec<u8>, FiberChannel)>,
+        by_commitment: Vec<(Vec<u8>, Vec<u8>)>,
+        addr_channel_keys: Vec<Vec<u8>>,
+    }
+
+    impl VectorBuilder {
+        fn scenario_cell_facts(&self, cell: &ScenarioCell) -> CellFacts {
+            let (type_script_hash_id, type_code_hash_id, type_hash_type, type_args_id) =
+                match &cell.type_script {
+                    Some((code, args)) => (
+                        Some(self.id(cell.type_script_hash().unwrap())),
+                        Some(self.id(code.clone())),
+                        Some(1),
+                        Some(self.id(args.clone())),
+                    ),
+                    None => (None, None, None, None),
+                };
+            CellFacts {
+                outpoint: OutPointKey::new(cell.tx_hash, cell.index),
+                created_at_block: 0,
+                created_by_block_dao_ar: 1,
+                capacity: cell.capacity,
+                lock_script_hash_id: self.id(cell.lock_script_hash()),
+                lock_code_hash_id: self.id(cell.lock_code_hash.clone()),
+                lock_hash_type: 1,
+                lock_args_id: self.id(cell.lock_args.clone()),
+                type_script_hash_id,
+                type_code_hash_id,
+                type_hash_type,
+                type_args_id,
+                occupied_capacity: 61_00000000,
+                data_size: cell.data.len() as i32,
+                data: cell.data.clone(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Plain,
+                dao_state: None,
+                protocol_facts: None,
+            }
+        }
+
+        fn scenario_input_facts(&self, cell: &ScenarioCell) -> ResolvedInputFacts {
+            let facts = self.scenario_cell_facts(cell);
+            ResolvedInputFacts {
+                outpoint: facts.outpoint,
+                created_at_block: 0,
+                created_by_block_dao_ar: 1,
+                capacity: facts.capacity,
+                occupied_capacity: facts.occupied_capacity,
+                udt_amount: None,
+                lock_script_hash_id: facts.lock_script_hash_id,
+                lock_code_hash_id: facts.lock_code_hash_id,
+                lock_hash_type: 1,
+                lock_args_id: facts.lock_args_id,
+                type_script_hash_id: facts.type_script_hash_id,
+                type_code_hash_id: facts.type_code_hash_id,
+                type_hash_type: facts.type_hash_type,
+                type_args_id: facts.type_args_id,
+                data_size: facts.data_size,
+                data_hash: None,
+                semantic_tag: CellSemanticTag::Plain,
+                dao_state: None,
+                dao_compensation_ars: None,
+                protocol_facts: None,
+            }
+        }
+    }
+
+    /// The scenario through the bulk reducer, one `apply_tx` per transaction.
+    fn bulk_rows(txs: &[ScenarioTx]) -> Result<FiberRows> {
+        let b = VectorBuilder::new();
+        let facts: Vec<_> = txs
+            .iter()
+            .map(|tx| {
+                (
+                    tx,
+                    tx.inputs
+                        .iter()
+                        .map(|c| b.scenario_input_facts(c))
+                        .collect::<Vec<_>>(),
+                    tx.outputs
+                        .iter()
+                        .map(|c| b.scenario_cell_facts(c))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let frozen = b.interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let mut owner = FiberOwner::default();
+        for (tx, inputs, cells) in facts {
+            owner.apply_tx(
+                &tx_facts(
+                    tx.hash,
+                    tx.block_number,
+                    tx.timestamp_ms,
+                    tx.tx_index,
+                    inputs,
+                    cells,
+                ),
+                &ctx,
+            )?;
+        }
+        let mut addr_channel_keys: Vec<Vec<u8>> = owner
+            .channels
+            .iter()
+            .flat_map(|(id, channel)| {
+                channel
+                    .participants
+                    .iter()
+                    .map(|participant| keys::encode_addr_fiber_channel_key(participant, id))
+            })
+            .collect();
+        addr_channel_keys.sort();
+        Ok(FiberRows {
+            channels: owner.channels.into_iter().collect(),
+            by_commitment: owner.channel_by_commitment.into_iter().collect(),
+            addr_channel_keys,
+        })
+    }
+
+    /// The scenario through the live detector and writer, one committed batch
+    /// per transaction.
+    fn live_rows(txs: &[ScenarioTx]) -> Result<FiberRows> {
+        use crate::db::writer::activities::{
+            build_tx_actions_for_block, InputCellView, OutputCellView, ProtocolDetector, TxView,
+        };
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+
+        struct Owned {
+            lock_hash: Vec<u8>,
+            type_hash: Option<Vec<u8>>,
+        }
+        let owned = |cells: &[ScenarioCell]| -> Vec<Owned> {
+            cells
+                .iter()
+                .map(|c| Owned {
+                    lock_hash: c.lock_script_hash(),
+                    type_hash: c.type_script_hash(),
+                })
+                .collect()
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(
+            crate::db::writer::fiber_detector::FiberDetector::new(true),
+        )];
+        let dir = tempfile::TempDir::new()?;
+        let store = CkbadgerStore::open_domain(dir.path())?;
+        for tx in txs {
+            let input_owned = owned(&tx.inputs);
+            let output_owned = owned(&tx.outputs);
+            let view = TxView {
+                tx_hash: &tx.hash,
+                block_hash: &[0x99; 32],
+                tx_index: tx.tx_index,
+                block_number: tx.block_number,
+                timestamp: tx.timestamp_ms,
+                is_cellbase: false,
+                dotbit_action: None,
+                inputs: tx
+                    .inputs
+                    .iter()
+                    .zip(&input_owned)
+                    .map(|(c, o)| InputCellView {
+                        previous_tx_hash: &c.tx_hash,
+                        previous_output_index: c.index,
+                        lock_script_hash: &o.lock_hash,
+                        lock_code_hash: &c.lock_code_hash,
+                        lock_hash_type: 1,
+                        lock_args: &c.lock_args,
+                        capacity: c.capacity,
+                        occupied_capacity: 61_00000000,
+                        type_code_hash: c.type_script.as_ref().map(|(code, _)| code.as_slice()),
+                        type_hash_type: c.type_script.as_ref().map(|_| 1),
+                        type_script_hash: o.type_hash.as_deref(),
+                        type_args: c.type_script.as_ref().map(|(_, args)| args.as_slice()),
+                        udt_amount: None,
+                        bit_cell_identity_id: None,
+                        dotcell: None,
+                        data_size: c.data.len() as i32,
+                        data: &c.data,
+                        is_dao_withdraw_request: false,
+                        dao_compensation: None,
+                    })
+                    .collect(),
+                outputs: tx
+                    .outputs
+                    .iter()
+                    .zip(&output_owned)
+                    .map(|(c, o)| OutputCellView {
+                        capacity: c.capacity,
+                        lock_code_hash: &c.lock_code_hash,
+                        lock_hash_type: 1,
+                        lock_args: &c.lock_args,
+                        lock_script_hash: &o.lock_hash,
+                        type_code_hash: c.type_script.as_ref().map(|(code, _)| code.as_slice()),
+                        type_hash_type: c.type_script.as_ref().map(|_| 1),
+                        type_args: c.type_script.as_ref().map(|(_, args)| args.as_slice()),
+                        type_script_hash: o.type_hash.as_deref(),
+                        data_hash: &[],
+                        data_size: c.data.len() as i32,
+                        data: &c.data,
+                    })
+                    .collect(),
+            };
+            let tx_actions_list = build_tx_actions_for_block(&[view], &detectors)?;
+            let mut batch = StoreBatch::new(&store);
+            for tx_actions in &tx_actions_list {
+                crate::db::writer::fiber::process_fiber_channel_events(&mut batch, tx_actions)?;
+            }
+            batch.commit()?;
+        }
+        let rows = |cf: &str| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+            store
+                .iterator_cf(store.cf(cf), rocksdb::IteratorMode::Start)
+                .map(|row| {
+                    let (key, value) = row?;
+                    Ok((key.to_vec(), value.to_vec()))
+                })
+                .collect()
+        };
+        Ok(FiberRows {
+            channels: store.list_fiber_channels(10_000, None, None)?,
+            by_commitment: rows(CF_FIBER_CHANNEL_BY_COMMITMENT)?,
+            addr_channel_keys: rows(CF_ADDR_FIBER_CHANNELS)?
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect(),
+        })
+    }
+
+    /// Both paths must succeed and write identical Fiber rows.
+    fn identical_rows(txs: &[ScenarioTx]) -> FiberRows {
+        let bulk = bulk_rows(txs).expect("bulk reducer must index the scenario");
+        let live = live_rows(txs).expect("live detector and writer must index the scenario");
+        assert_eq!(bulk, live, "bulk and live Fiber rows must be identical");
+        bulk
+    }
+
+    const ALICE_ARGS: &str = "0xd2c9b058568578c884e108e3a82ee111af6a9f4b";
+
+    fn alice_cell(tx_hash: [u8; 32], index: u32, capacity: i64) -> ScenarioCell {
+        ScenarioCell::new(tx_hash, index, capacity, SECP_CODE_HASH, hexv(ALICE_ARGS))
+    }
+
+    fn commitment_args(len: usize, features: Option<u8>) -> Vec<u8> {
+        let mut args = vec![0x55; 20];
+        args.extend_from_slice(&0xa000_0100_0000_0001u64.to_le_bytes());
+        args.extend_from_slice(&1u64.to_be_bytes());
+        args.resize(len.max(36), 0x66);
+        args.truncate(len);
+        if let Some(features) = features {
+            args.push(features);
+        }
+        args
+    }
+
+    fn valid_open(hash: [u8; 32], block_number: i64) -> ScenarioTx {
+        ScenarioTx::new(
+            hash,
+            block_number,
+            vec![alice_cell([0x50; 32], 0, 1000_00000000)],
+            vec![
+                out(
+                    500_00000000,
+                    crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET,
+                    vec![0x44; 20],
+                ),
+                out(499_00000000, SECP_CODE_HASH, hexv(ALICE_ARGS)),
+            ],
+        )
+    }
+
+    /// Review 45fd N1 (plan D9): a cell carrying the commitment-lock code hash
+    /// with 10-byte args is an ordinary cell: no channel rows, the build goes
+    /// on, and its lock is an ordinary participant of the transaction.
+    #[test]
+    fn commitment_output_with_10_byte_args_is_an_ordinary_cell() {
+        let tx = ScenarioTx::new(
+            [0x61; 32],
+            100,
+            vec![alice_cell([0x60; 32], 0, 100_00000000)],
+            vec![
+                out(
+                    61_00000000,
+                    crate::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET,
+                    vec![0x0a; 10],
+                ),
+                out(38_00000000, SECP_CODE_HASH, hexv(ALICE_ARGS)),
+            ],
+        );
+        let not_a_commitment = tx.output(0).lock_script_hash();
+        let rows = identical_rows(std::slice::from_ref(&tx));
+        assert!(rows.channels.is_empty() && rows.by_commitment.is_empty());
+
+        let b = VectorBuilder::new();
+        let inputs = tx
+            .inputs
+            .iter()
+            .map(|c| b.scenario_input_facts(c))
+            .collect();
+        let cells = tx
+            .outputs
+            .iter()
+            .map(|c| b.scenario_cell_facts(c))
+            .collect();
+        let frozen = b.interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let facts = tx_facts(tx.hash, tx.block_number, tx.timestamp_ms, 1, inputs, cells);
+        let summary = FiberTxSummary::from_tx(&facts, &ctx).unwrap();
+        assert!(!summary.has_commitment_output);
+        assert!(summary.participants.contains(&not_a_commitment));
+        assert_eq!(summary.classify_event(), None);
+    }
+
+    /// Review 45fd N1 (plan D9): a funding-lock cell with 5-byte args opens no
+    /// channel; its lock is an ordinary participant.
+    #[test]
+    fn funding_output_with_5_byte_args_is_an_ordinary_cell() {
+        let tx = ScenarioTx::new(
+            [0x63; 32],
+            100,
+            vec![alice_cell([0x62; 32], 0, 100_00000000)],
+            vec![
+                out(
+                    61_00000000,
+                    crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET,
+                    vec![0x05; 5],
+                ),
+                out(38_00000000, SECP_CODE_HASH, hexv(ALICE_ARGS)),
+            ],
+        );
+        let not_a_funding = tx.output(0).lock_script_hash();
+        let rows = identical_rows(std::slice::from_ref(&tx));
+        assert!(rows.channels.is_empty());
+
+        let b = VectorBuilder::new();
+        let inputs = tx
+            .inputs
+            .iter()
+            .map(|c| b.scenario_input_facts(c))
+            .collect();
+        let cells = tx
+            .outputs
+            .iter()
+            .map(|c| b.scenario_cell_facts(c))
+            .collect();
+        let frozen = b.interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let facts = tx_facts(tx.hash, tx.block_number, tx.timestamp_ms, 1, inputs, cells);
+        let summary = FiberTxSummary::from_tx(&facts, &ctx).unwrap();
+        assert!(!summary.has_funding_output);
+        assert!(summary.participants.contains(&not_a_funding));
+        assert_eq!(summary.classify_event(), None);
+    }
+
+    /// Review 45fd N1 (plan D9; replaces `bulk_channel_open_udt_funding_short_data_bails`):
+    /// a typed funding-lock cell whose data cannot hold the 16-byte amount is
+    /// an ordinary cell, when created and when spent.
+    #[test]
+    fn typed_funding_output_with_8_byte_data_is_an_ordinary_cell() {
+        let create = ScenarioTx::new(
+            [0x65; 32],
+            100,
+            vec![alice_cell([0x64; 32], 0, 1000_00000000)],
+            vec![
+                out(
+                    360_00000000,
+                    crate::parser::fiber::FUNDING_LOCK_CODE_HASH_TESTNET,
+                    hexv("0x00510ea5249c2b102ab35607ee04418ae47cb83b"),
+                )
+                .typed(USDI_CODE_HASH, USDI_ARGS, vec![0x08; 8]),
+                out(639_00000000, SECP_CODE_HASH, hexv(ALICE_ARGS)),
+            ],
+        );
+        let spend = ScenarioTx::new(
+            [0x66; 32],
+            101,
+            vec![create.output(0)],
+            vec![out(359_00000000, SECP_CODE_HASH, hexv(ALICE_ARGS)).typed(
+                USDI_CODE_HASH,
+                USDI_ARGS,
+                vec![0x08; 8],
+            )],
+        );
+        let rows = identical_rows(&[create, spend]);
+        assert!(rows.channels.is_empty());
+    }
+
+    /// Review 45fd finding 8 + N1 (plan D9): a tracked channel's funding spent
+    /// into a commitment-code-hash output whose args fit no deployed layout has
+    /// no commitment output: it is a plain (cooperative) close, never a force
+    /// close tracking that cell.
+    #[test]
+    fn funding_spent_into_malformed_commitment_output_is_a_cooperative_close() {
+        let open_hash = [0x67; 32];
+        for args in [
+            commitment_args(10, None),
+            commitment_args(40, None),
+            commitment_args(57, Some(0x00)),
+            commitment_args(57, Some(0x01))
+                .into_iter()
+                .chain([0x00])
+                .collect(),
+        ] {
+            let open = valid_open(open_hash, 100);
+            let close = ScenarioTx::new(
+                [0x68; 32],
+                101,
+                vec![open.output(0)],
+                vec![out(
+                    499_99999000,
+                    crate::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET,
+                    args.clone(),
+                )],
+            );
+            let rows = identical_rows(&[open, close]);
+            assert_eq!(rows.channels.len(), 1, "args_len={}", args.len());
+            let (id, channel) = &rows.channels[0];
+            assert_eq!(id, &keys::encode_fiber_channel_id(&open_hash, 0));
+            assert_eq!(
+                channel.state,
+                FiberChannelState::CooperativelyClosed,
+                "args_len={}",
+                args.len()
+            );
+            assert_eq!(channel.close_tx_hash, Some(vec![0x68; 32]));
+            assert_eq!(channel.commitment_tx_hash, None);
+            assert_eq!(channel.delay_epoch, None);
+            assert!(rows.by_commitment.is_empty());
+        }
+    }
+
+    /// The daric 56-byte layout (36-byte head + pending-HTLC hash) is a
+    /// deployed commitment layout: a force close into it is tracked.
+    #[test]
+    fn force_close_into_56_byte_commitment_is_tracked() {
+        let open_hash = [0x69; 32];
+        let open = valid_open(open_hash, 100);
+        let args = commitment_args(56, None);
+        let close = ScenarioTx::new(
+            [0x6a; 32],
+            101,
+            vec![open.output(0)],
+            vec![out(
+                499_99999000,
+                crate::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET,
+                args.clone(),
+            )],
+        );
+        let rows = identical_rows(&[open, close]);
+        let (id, channel) = &rows.channels[0];
+        assert_eq!(channel.state, FiberChannelState::ForceClosed);
+        assert_eq!(channel.commitment_tx_hash, Some(vec![0x6a; 32]));
+        assert_eq!(channel.delay_epoch, Some(0xa000_0100_0000_0001));
+        assert_eq!(rows.by_commitment, vec![(blake2b_hash(&args), id.clone())]);
+    }
+
+    /// A tracked commitment spent into payouts plus a commitment-code-hash
+    /// output whose args fit no layout: that output is an ordinary cell, so
+    /// the spend is the channel's settlement (the old reducer halted on it).
+    #[test]
+    fn settlement_with_an_extra_malformed_commitment_output_is_a_settlement() {
+        let open_hash = [0x6b; 32];
+        let open = valid_open(open_hash, 100);
+        // 36-byte head + settlement hash + first-settlement flag 0x00.
+        let mut tracked = commitment_args(56, None);
+        tracked.push(0x00);
+        let close = ScenarioTx::new(
+            [0x6c; 32],
+            101,
+            vec![open.output(0)],
+            vec![out(
+                499_99999000,
+                crate::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET,
+                tracked.clone(),
+            )],
+        );
+        assert_eq!(tracked.len(), 57);
+        let settle = ScenarioTx::new(
+            [0x6d; 32],
+            102,
+            vec![close.output(0)],
+            vec![
+                out(438_99998000, SECP_CODE_HASH, hexv(ALICE_ARGS)),
+                out(
+                    61_00000000,
+                    crate::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET,
+                    vec![0x0a; 10],
+                ),
+            ],
+        );
+        let rows = identical_rows(&[open, close, settle]);
+        let (_, channel) = &rows.channels[0];
+        assert_eq!(channel.state, FiberChannelState::Settled);
+        assert_eq!(channel.settlement_tx_hash, Some(vec![0x6d; 32]));
+        assert_eq!(channel.commitment_tx_hash, Some(vec![0x6c; 32]));
+    }
+
+    /// Real mainnet channel 0xe1a939e4… on the 0.7.0 commitment lock (58-byte
+    /// v1 args, features byte 0x01), from node `get_transaction` responses
+    /// captured 2026-11-10: open 0xc4693771… (block 20967540) → force close
+    /// 0x263875f6… (20967551) → partial settlements deriving new commitment
+    /// cells 0xed1fbf13… (20967931) and 0x255f83e7… (20967938) → final
+    /// settlement 0x37bcfbd7… (20967943). Both paths must write the row the
+    /// mainnet API serves for this channel.
+    #[test]
+    fn live_and_bulk_rows_identical_for_58_byte_v1_mainnet_vector() {
+        const FUNDING_ARGS: &str = "0x5c494edc86cce3a4d5692364453193e6ed9c6954";
+        const SECP_A: &str = "0x7f0a30a2da9ee266d6f901daa52605d855c04449";
+        const SECP_B: &str = "0xe2d5f53fcb8fde1a17cc8f81bde5ef9a92bcf7fc";
+        const COMMITMENT_FORCE_CLOSE: &str = "0x5c494edc86cce3a4d5692364453193e6ed9c695401000000000100a000000000000000023a019230a18033cd86431f5a8bd0188974a094710001";
+        const COMMITMENT_ED1F: &str = "0x5c494edc86cce3a4d5692364453193e6ed9c695401000000000100a000000000000000023430dc58c3d22031b35419c4ec79e5996f2e24db0101";
+        const COMMITMENT_255F: &str = "0x5c494edc86cce3a4d5692364453193e6ed9c695401000000000100a00000000000000002f4bb16e4d4b49bb983db6d5ec191cd860c06712b0101";
+        let commitment = crate::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET;
+        let open_hash = hex32("0xc46937718fdb92ad66feb99c64b676aa220ea896477d1a3a5dc14ddf17b6bfb9");
+        let close_hash =
+            hex32("0x263875f6184c3de6a09bd1457f4a40c123fb768c576a5fcd1d82dc0c8488a4b6");
+        let ed1f_hash = hex32("0xed1fbf13dc59cf255e9b6728e45a96dce3aaeacab98d893c7b9ba2437d527abd");
+        let c255f_hash =
+            hex32("0x255f83e718cd6ab33be6a7a2581a82632853fc2fe89b75283815042d85f37fe9");
+        let settle_hash =
+            hex32("0x37bcfbd70d84f39b5c8f0bfe0744cb91477f5a75317119b9d00e590459def47f");
+        for args in [COMMITMENT_FORCE_CLOSE, COMMITMENT_ED1F, COMMITMENT_255F] {
+            assert_eq!(hexv(args).len(), 58);
+        }
+
+        let mut open = ScenarioTx::new(
+            open_hash,
+            20967540,
+            vec![
+                ScenarioCell::new(
+                    hex32("0xee1d07e6a6e1e7aa4b1c5e2d2e1a6a12c030f3e2f35e26c9921d03b1741c17b3"),
+                    0,
+                    49_999_999_456,
+                    SECP_CODE_HASH,
+                    hexv(SECP_A),
+                ),
+                ScenarioCell::new(
+                    hex32("0xfd1ff084b679a6dcf71b115c5744d62c2419c5ae9d4cb8a4c54855fad81d362d"),
+                    1,
+                    30_300_001_849,
+                    SECP_CODE_HASH,
+                    hexv(SECP_B),
+                ),
+            ],
+            vec![
+                out(
+                    35_000_000_000,
+                    crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET,
+                    hexv(FUNDING_ARGS),
+                ),
+                out(24_999_998_992, SECP_CODE_HASH, hexv(SECP_A)),
+                out(20_300_001_603, SECP_CODE_HASH, hexv(SECP_B)),
+            ],
+        );
+        open.timestamp_ms = 1_794_219_736_030;
+        let mut close = ScenarioTx::new(
+            close_hash,
+            20967551,
+            vec![open.output(0)],
+            vec![out(
+                34_999_999_543,
+                commitment,
+                hexv(COMMITMENT_FORCE_CLOSE),
+            )],
+        );
+        close.timestamp_ms = 1_794_219_855_039;
+        let ed1f = ScenarioTx::new(
+            ed1f_hash,
+            20967931,
+            vec![
+                close.output(0),
+                ScenarioCell::new(
+                    hex32("0x84a6a8dd2e7cb5d76c7f9061951fadfb336a5de07e1d9f2fa56c34f2dbb39d5f"),
+                    2,
+                    49_999_967_954,
+                    SECP_CODE_HASH,
+                    hexv(SECP_B),
+                ),
+            ],
+            vec![
+                out(33_999_999_543, commitment, hexv(COMMITMENT_ED1F)),
+                out(50_999_967_040, SECP_CODE_HASH, hexv(SECP_B)),
+            ],
+        );
+        let c255f = ScenarioTx::new(
+            c255f_hash,
+            20967938,
+            vec![
+                ed1f.output(0),
+                ScenarioCell::new(
+                    hex32("0x00e9735c26998020df1e0a8272f2801c8b446880e329f744f550c10c874e6f6d"),
+                    0,
+                    49_999_999_456,
+                    SECP_CODE_HASH,
+                    hexv(SECP_A),
+                ),
+            ],
+            vec![
+                out(9_999_999_543, commitment, hexv(COMMITMENT_255F)),
+                out(73_999_998_671, SECP_CODE_HASH, hexv(SECP_A)),
+            ],
+        );
+        let mut settle = ScenarioTx::new(
+            settle_hash,
+            20967943,
+            vec![c255f.output(0), open.output(2)],
+            vec![out(30_300_000_508, SECP_CODE_HASH, hexv(SECP_B))],
+        );
+        settle.timestamp_ms = 1_794_225_002_832;
+
+        let rows = identical_rows(&[open, close, ed1f, c255f, settle]);
+        let channel_id = keys::encode_fiber_channel_id(&open_hash, 0);
+        // The mainnet API's record of this channel (captured 2026-11-10).
+        let expected = FiberChannel {
+            funding_tx_hash: open_hash.to_vec(),
+            funding_output_index: 0,
+            state: FiberChannelState::Settled,
+            capacity: 35_000_000_000,
+            udt_type_hash: None,
+            udt_amount: None,
+            open_block: 20967540,
+            open_timestamp: 1_794_219_736_030,
+            close_tx_hash: Some(close_hash.to_vec()),
+            close_block: Some(20967551),
+            close_timestamp: Some(1_794_219_855_039),
+            commitment_tx_hash: Some(c255f_hash.to_vec()),
+            commitment_output_index: Some(0),
+            delay_epoch: Some(11_529_216_145_580_097_537),
+            settlement_tx_hash: Some(settle_hash.to_vec()),
+            settlement_block: Some(20967943),
+            settlement_timestamp: Some(1_794_225_002_832),
+            participants: vec![
+                hexv("0x9a040b1fa0257fb0abe427dcec79441e4dc277a6eed602a290b75acaa2d059e2"),
+                hexv("0xc281bed43192de71ffdc38397919cfc4623463bb3e75e3a6a10aa96e90d1502a"),
+            ],
+            funding_lock_args: hexv(FUNDING_ARGS),
+        };
+        assert_eq!(rows.channels, vec![(channel_id.clone(), expected)]);
+        assert_eq!(
+            rows.by_commitment,
+            vec![(blake2b_hash(&hexv(COMMITMENT_255F)), channel_id)]
         );
     }
 
@@ -1637,7 +2365,7 @@ mod tests {
             }
         }
 
-        fn open_summary(funding_args: Vec<u8>) -> FiberTxSummary {
+        fn open_summary(funding_args: Vec<u8>) -> FiberTxSummary<'static> {
             FiberTxSummary {
                 funding_output_pubkey_hash: Some(funding_args),
                 funding_output_capacity: Some(500_00000000),

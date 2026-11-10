@@ -3650,7 +3650,8 @@ interface FiberCommitmentEvidence extends FiberCellEvidence {
   version: string;
   settlementHash: string | null;
   settlementFlag: number | null;
-  lockFormat: 'legacy36' | 'full57';
+  /** The commitment-lock args layout: daric 36 / 56 bytes, v0.6.0 57, 0.7.0 58 (features byte). */
+  lockFormat: 'legacy36' | 'legacy56' | 'full57' | 'full58';
   epochLock:
     | 'firstSettlementDelay'
     | 'subsequentSettlementNoReappliedDelay'

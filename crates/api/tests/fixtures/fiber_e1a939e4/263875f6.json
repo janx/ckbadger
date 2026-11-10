@@ -1,0 +1,47 @@
+{
+ "cell_deps": [
+  {
+   "dep_type": "code",
+   "out_point": {
+    "index": "0x1",
+    "tx_hash": "0x95006eee7b4c0c8ad66e0514c88ed0ae43fc8db27793427de86a348ec720b9d6"
+   }
+  },
+  {
+   "dep_type": "code",
+   "out_point": {
+    "index": "0x0",
+    "tx_hash": "0x95006eee7b4c0c8ad66e0514c88ed0ae43fc8db27793427de86a348ec720b9d6"
+   }
+  }
+ ],
+ "hash": "0x263875f6184c3de6a09bd1457f4a40c123fb768c576a5fcd1d82dc0c8488a4b6",
+ "header_deps": [],
+ "inputs": [
+  {
+   "previous_output": {
+    "index": "0x0",
+    "tx_hash": "0xc46937718fdb92ad66feb99c64b676aa220ea896477d1a3a5dc14ddf17b6bfb9"
+   },
+   "since": "0x0"
+  }
+ ],
+ "outputs": [
+  {
+   "capacity": "0x826299c37",
+   "lock": {
+    "args": "0x5c494edc86cce3a4d5692364453193e6ed9c695401000000000100a000000000000000023a019230a18033cd86431f5a8bd0188974a094710001",
+    "code_hash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+    "hash_type": "type"
+   },
+   "type": null
+  }
+ ],
+ "outputs_data": [
+  "0x"
+ ],
+ "version": "0x0",
+ "witnesses": [
+  "0x1000000010000000100000001000000019bf908176653f50709b90cdc0736b6070652d9b960156268a503ea07751e40591defd6ddbb3b678688b63621bd54961ea73030a509b2f9cf2467928c8daa6159e4a3d86b750b8ec3239884bd3dbf1ffff12e8784564d3e2ec426693ccec9368"
+ ]
+}

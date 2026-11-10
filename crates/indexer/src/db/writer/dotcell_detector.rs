@@ -1004,6 +1004,7 @@ mod tests {
                 bit_cell_identity_id: None,
                 // Both sync paths carry this; the input itself has no data.
                 dotcell: self.dotcell.as_ref(),
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,

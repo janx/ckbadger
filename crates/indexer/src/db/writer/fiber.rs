@@ -294,8 +294,14 @@ fn handle_force_close(
 
     // Commitment enrichment: the same fields, parsed the same way, as the bulk
     // reducer writes (`bulk_build::owners::fiber::apply_commitment_enrichment`).
-    let (commitment_args, commitment_parsed) =
-        parse_commitment_args(metadata, "force_close", "commitmentLockArgs", tx_actions)?;
+    let commitment_args =
+        commitment_args_metadata(metadata, "force_close", "commitmentLockArgs", tx_actions)?;
+    let commitment_parsed = parse_tracked_commitment(
+        &commitment_args,
+        "force_close",
+        "commitmentLockArgs",
+        tx_actions,
+    )?;
     let commitment_output_index = parse_commitment_output_index(
         metadata,
         "force_close",
@@ -421,8 +427,14 @@ fn handle_commitment_revocation(
             hex::encode(&tx_actions.tx_hash)
         )
     })?;
-    let (new_args, new_commitment_parsed) = parse_commitment_args(
+    let new_args = commitment_args_metadata(
         metadata,
+        "commitment_revocation",
+        "newCommitmentLockArgs",
+        tx_actions,
+    )?;
+    let new_commitment_parsed = parse_tracked_commitment(
+        &new_args,
         "commitment_revocation",
         "newCommitmentLockArgs",
         tx_actions,
@@ -506,7 +518,7 @@ fn handle_commitment_revocation(
 pub(crate) fn apply_commitment_enrichment(
     channel: &mut FiberChannel,
     commitment_tx_hash: &[u8],
-    commitment_args: &CommitmentLockArgs,
+    commitment_args: &CommitmentLockArgs<'_>,
     commitment_output_index: u32,
 ) {
     channel.commitment_tx_hash = Some(commitment_tx_hash.to_vec());
@@ -514,17 +526,14 @@ pub(crate) fn apply_commitment_enrichment(
     channel.delay_epoch = Some(commitment_args.delay_epoch);
 }
 
-/// Decode and parse a commitment-lock-args metadata field, returning the raw
-/// bytes (the commitment index key) alongside the parsed fields.
-///
-/// Malformed args are an invariant violation: the detector only emits these
-/// events for cells whose lock actually IS a commitment lock.
-fn parse_commitment_args(
+/// Decode a commitment-lock-args metadata field: the raw args bytes, which
+/// key the commitment index.
+fn commitment_args_metadata(
     metadata: &serde_json::Value,
     action: &str,
     key: &str,
     tx_actions: &TxActions,
-) -> Result<(Vec<u8>, CommitmentLockArgs)> {
+) -> Result<Vec<u8>> {
     let args_hex = metadata.get(key).and_then(|v| v.as_str()).ok_or_else(|| {
         anyhow::anyhow!(
             "fiber {} missing {} metadata in tx 0x{} block={} — detector bug",
@@ -544,17 +553,29 @@ fn parse_commitment_args(
             tx_actions.block_number
         )
     })?;
-    let parsed = parse_commitment_lock_args(&args).ok_or_else(|| {
+    Ok(args)
+}
+
+/// The commitment args of the cell an event tracks, read by the one
+/// commitment-lock arbiter. The detector emits these events only for cells
+/// the arbiter accepted, so args it rejects here are a detector bug (an
+/// invariant violation), never a chain shape.
+fn parse_tracked_commitment<'a>(
+    args: &'a [u8],
+    action: &str,
+    key: &str,
+    tx_actions: &TxActions,
+) -> Result<CommitmentLockArgs<'a>> {
+    parse_commitment_lock_args(args).ok_or_else(|| {
         anyhow::anyhow!(
-            "fiber {}: {} is not valid commitment lock args in tx 0x{} block={} args_len={}",
+            "fiber {}: {} fits no commitment-lock layout in tx 0x{} block={} args_len={} — detector bug",
             action,
             key,
             hex::encode(&tx_actions.tx_hash),
             tx_actions.block_number,
             args.len()
         )
-    })?;
-    Ok((args, parsed))
+    })
 }
 
 /// Read a commitment output index emitted by the detector.
@@ -1207,6 +1228,58 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(looked_up, channel_id);
+    }
+
+    /// The detector emits `force_close` only with a commitment output the
+    /// arbiter accepted, so metadata naming 40-byte args (no deployed layout)
+    /// is a detector bug: the writer fails with context instead of tracking it.
+    #[test]
+    fn test_force_close_with_args_the_arbiter_rejects_is_a_detector_bug() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let funding_tx_hash = [0x10; 32];
+        let participant = [0xAA; 32];
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &[0xCC; 20]),
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &open_actions).unwrap();
+        batch.commit().unwrap();
+
+        let mut commitment_args = vec![0xDD; 20];
+        commitment_args.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args.extend_from_slice(&1u64.to_be_bytes());
+        commitment_args.extend_from_slice(&[0xEE; 4]);
+        assert_eq!(commitment_args.len(), 40);
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            serde_json::json!({
+                "event": "force_close",
+                "channelOutpoint": channel_outpoint_hex(&funding_tx_hash, 0),
+                "capacity": "50000000000",
+                "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
+                "commitmentOutputIndex": 0,
+            }),
+        );
+        let mut batch = StoreBatch::new(&store);
+        let error = process_fiber_channel_events(&mut batch, &fc_actions)
+            .expect_err("a tracked commitment the arbiter rejects is a detector bug");
+        let message = error.to_string();
+        assert!(
+            message.contains("fits no commitment-lock layout")
+                && message.contains("args_len=40")
+                && message.contains("block=5002"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
