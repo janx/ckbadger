@@ -9,7 +9,6 @@ import {
 
 vi.mock('@/components/command-palette', () => ({ CommandPalette: () => null }));
 vi.mock('@/components/search-bar', () => ({ SearchBar: () => <div>SearchBar</div> }));
-vi.mock('@/components/layout/logo', () => ({ Logo: () => <div data-testid="logo" /> }));
 vi.mock('@/components/stats-bar', () => ({
   VitalsStrip: () => <div data-testid="vitals-strip" />,
 }));

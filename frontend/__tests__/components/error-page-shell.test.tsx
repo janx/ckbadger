@@ -149,7 +149,7 @@ describe('ErrorPageShell', () => {
       expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
       expect(document.querySelector('canvas')).toBeNull();
       expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'static');
-      expect(screen.getByRole('link', { name: 'CKBadger Home' })).toHaveAttribute('href', '/');
+      expect(screen.getByRole('link', { name: 'CKBadger home' })).toHaveAttribute('href', '/');
     } finally {
       consoleError.mockRestore();
     }

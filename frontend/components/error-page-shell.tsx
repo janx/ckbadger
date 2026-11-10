@@ -17,6 +17,7 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { Header } from '@/components/layout/header';
+import { Wordmark } from '@/components/layout/wordmark';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { CssNight, ErrorNight } from '@/components/error-night';
 import { ErrorSign, type SignLines } from '@/components/error-sign';
@@ -77,15 +78,7 @@ export function ErrorPageShell({
     >
       {contextSafe ? (
         <header className="border-base-border-subtle bg-base-bg/95 relative z-20 border-b px-4 py-3 sm:px-8 lg:px-20">
-          <a href="/" aria-label="CKBadger Home" className="inline-flex items-center">
-            <img
-              src="/ckbadger-logo.webp"
-              alt="CKBadger"
-              width="143"
-              height="97"
-              className="h-auto w-28 rotate-[8deg]"
-            />
-          </a>
+          <Wordmark plain />
         </header>
       ) : standalone ? (
         <Header />

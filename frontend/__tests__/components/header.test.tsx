@@ -24,8 +24,8 @@ vi.mock('@/components/search-bar', () => ({
   SearchBar: (props: { variant?: 'default' | 'compact' | 'home' }) => searchBarMock(props),
 }));
 
-vi.mock('@/components/layout/logo', () => ({
-  Logo: () => <div data-testid="logo">Logo</div>,
+vi.mock('@/components/layout/wordmark', () => ({
+  Wordmark: () => <div data-testid="wordmark">Wordmark</div>,
 }));
 
 vi.mock('@/components/stats-bar', () => ({
@@ -97,23 +97,22 @@ describe('Header', () => {
     expect(screen.getByTestId('vitals-strip')).toBeInTheDocument();
   });
 
-  it('shows the badge at every width, with a notch reserved for it in the header and the strip', () => {
+  // Rubbing × Song print, phase 2: the badge and its notches are gone; the wordmark (the prompt
+  // square and `ckbadger`) leads the row in the flow, at every width.
+  it('shows the wordmark at every width, first in the header row', () => {
     usePathnameMock.mockReturnValue('/');
     render(<Header />);
 
-    const logo = screen.getByTestId('logo');
+    const wordmark = screen.getByTestId('wordmark');
     // Not wrapped in a desktop-only container any more.
-    expect(logo.closest('.hidden')).toBeNull();
-    const notch = screen.getByTestId('header-logo-notch');
-    expect(notch).toHaveAttribute('aria-hidden', 'true');
-    expect(notch.className).toContain('clamp(96px,11vw,157px)');
-    // The badge is at its 96 px minimum up to lg; a 52 px row there lets it hang across the border
-    // as the larger badge does across the 60 px desktop row.
-    expect(notch.parentElement).toHaveClass('min-h-[52px]', 'lg:min-h-[60px]');
-    expect(notch.parentElement).not.toHaveClass('md:min-h-[60px]');
-    // The nav starts right of the notch.
-    expect(notch.nextElementSibling).toBe(screen.getByRole('navigation', { name: 'Main' }));
-    expect(screen.getByTestId('vitals-logo-notch').className).toContain('md:block');
+    expect(wordmark.closest('.hidden')).toBeNull();
+    // A 52 px row up to lg, 60 px from lg.
+    expect(wordmark.parentElement).toHaveClass('min-h-[52px]', 'lg:min-h-[60px]');
+    expect(wordmark.parentElement).not.toHaveClass('md:min-h-[60px]');
+    // The nav follows it directly: nothing is reserved beside it any more.
+    expect(wordmark.nextElementSibling).toBe(screen.getByRole('navigation', { name: 'Main' }));
+    expect(screen.queryByTestId('header-logo-notch')).toBeNull();
+    expect(screen.queryByTestId('vitals-logo-notch')).toBeNull();
   });
 
   it('keeps only the header row sticky on phones and the row plus the vitals strip from md up', () => {
@@ -130,8 +129,8 @@ describe('Header', () => {
     const wrapper = banner.parentElement as HTMLElement;
     expect(wrapper).toHaveClass('contents', 'md:sticky', 'md:top-0', 'md:block');
     expect(wrapper).toContainElement(strip);
-    // The badge is in the sticky row in both layouts.
-    expect(banner).toContainElement(screen.getByTestId('logo'));
+    // The wordmark is in the sticky row in both layouts.
+    expect(banner).toContainElement(screen.getByTestId('wordmark'));
   });
 
   it('labels the nav in sentence case with normal tracking', () => {

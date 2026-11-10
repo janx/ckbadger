@@ -11,10 +11,6 @@ vi.mock('@/components/search-bar', () => ({
   SearchBar: () => <div data-testid="search-bar">SearchBar</div>,
 }));
 
-vi.mock('@/components/layout/logo', () => ({
-  Logo: () => <div data-testid="logo">Logo</div>,
-}));
-
 vi.mock('@/components/stats-bar', () => ({
   VitalsStrip: () => <div data-testid="vitals-strip">VitalsStrip</div>,
 }));

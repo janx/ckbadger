@@ -312,25 +312,6 @@ body * {
     animation: none;
   }
 
-  /* The badge's idle halo: dim and slow (logo-breathe, 4.8 s). */
-  .logo-image {
-    transform-origin: top left;
-    animation: logo-breathe 4.8s ease-in-out infinite;
-  }
-
-  .logo-image:hover {
-    animation-play-state: paused;
-    filter: saturate(1.3) brightness(1.08)
-      drop-shadow(0 0 4px rgb(var(--rgb-jade) / calc(0.85 * var(--m-glow))))
-      drop-shadow(0 0 14px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
-      drop-shadow(0 0 8px rgb(var(--rgb-aqua) / calc(0.4 * var(--m-glow))));
-  }
-
-  /* One flicker per new block. */
-  .logo-image.neon-flicker {
-    animation: neon-flicker-anim 0.8s steps(1) forwards;
-  }
-
   .byte-hover-breathe {
     animation: byte-breathe 1.15s ease-in-out infinite;
   }
@@ -367,99 +348,6 @@ body * {
     color: transparent;
     -webkit-text-fill-color: transparent;
     animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-}
-
-/* Idle ambient halo: a dim, slow breathing of the neon glow */
-@keyframes logo-breathe {
-  0%,
-  100% {
-    filter: saturate(1.15) drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
-      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow))))
-      drop-shadow(0 0 4px rgb(var(--rgb-aqua) / calc(0.18 * var(--m-glow))));
-  }
-  50% {
-    filter: saturate(1.2) brightness(1.02)
-      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow))))
-      drop-shadow(0 0 12px rgb(var(--rgb-jade) / calc(0.26 * var(--m-glow))))
-      drop-shadow(0 0 6px rgb(var(--rgb-aqua) / calc(0.24 * var(--m-glow))));
-  }
-}
-
-/* New-block flicker: tighter halo, higher brightness, ending on the idle halo */
-@keyframes neon-flicker-anim {
-  0% {
-    opacity: 1;
-    filter: saturate(1.2) brightness(1.05)
-      drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow))))
-      drop-shadow(0 0 6px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
-  }
-  6% {
-    opacity: 0.55;
-    filter: saturate(1.05) brightness(0.85)
-      drop-shadow(0 0 1px rgb(var(--rgb-jade) / calc(0.3 * var(--m-glow))));
-  }
-  12% {
-    opacity: 1;
-    filter: saturate(1.5) brightness(1.65)
-      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.95 * var(--m-glow))))
-      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.4 * var(--m-glow))))
-      drop-shadow(0 0 5px rgb(var(--rgb-aqua) / calc(0.55 * var(--m-glow))));
-  }
-  18% {
-    opacity: 0.8;
-    filter: saturate(1.15) brightness(1)
-      drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.4 * var(--m-glow))));
-  }
-  26% {
-    opacity: 1;
-    filter: saturate(1.6) brightness(1.8)
-      drop-shadow(0 0 4px rgb(var(--rgb-jade) / calc(1 * var(--m-glow))))
-      drop-shadow(0 0 10px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow))))
-      drop-shadow(0 0 6px rgb(var(--rgb-aqua) / calc(0.7 * var(--m-glow))));
-  }
-  34% {
-    opacity: 0.5;
-    filter: saturate(1) brightness(0.8)
-      drop-shadow(0 0 1px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
-  }
-  44% {
-    opacity: 1;
-    filter: saturate(1.55) brightness(1.7)
-      drop-shadow(0 0 4px rgb(var(--rgb-jade) / calc(0.95 * var(--m-glow))))
-      drop-shadow(0 0 9px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))));
-  }
-  56% {
-    opacity: 0.7;
-    filter: saturate(1.1) brightness(0.95)
-      drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.35 * var(--m-glow))));
-  }
-  68% {
-    opacity: 1;
-    filter: saturate(1.45) brightness(1.5)
-      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.9 * var(--m-glow))))
-      drop-shadow(0 0 7px rgb(var(--rgb-jade) / calc(0.4 * var(--m-glow))));
-  }
-  82% {
-    opacity: 0.95;
-    filter: saturate(1.3) brightness(1.25)
-      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.75 * var(--m-glow))))
-      drop-shadow(0 0 6px rgb(var(--rgb-jade) / calc(0.3 * var(--m-glow))));
-  }
-  100% {
-    opacity: 1;
-    filter: saturate(1.15) drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
-      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow))));
-  }
-}
-
-/* Reduced motion: no breathing and no flicker, a static halo. */
-@media (prefers-reduced-motion: reduce) {
-  .logo-image,
-  .logo-image.neon-flicker {
-    animation: none;
-    filter: saturate(1.15) drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
-      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow))));
   }
 }
 
@@ -1278,6 +1166,23 @@ h1.text-index {
 .comment > * {
   margin: 0;
   min-width: 0;
+}
+
+/* The skeleton (rubbing × Song print): the page is a terminal session. The prompt square is the
+   8 px cinnabar square (`mark`, a shape colour) that begins every command line — the wordmark's
+   first. No radius, no bloom: the square is ink, not phosphor. */
+.prompt-square {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background: var(--c-mark);
+}
+/* The wordmark's name, 15 px: a mark's size, set once here like the voice's 14 px, not a step of
+   the type scale that running text may take. */
+.wordmark {
+  font-size: 15px;
+  line-height: 1;
 }
 
 /* The not-found and error pages (direction Z): the sign over the night of ink. The sign is quiet —
