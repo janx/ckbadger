@@ -66,8 +66,9 @@ export function NotFoundPage({ entity, errMessage, standalone = false }: NotFoun
       standalone={standalone}
     >
       {entity && (
-        <span className="min-w-0 break-all">
-          checked <span>{entity.checkedEndpoint}</span> → 404 · requested{' '}
+        // words wrap between words; the endpoint and the identifier, long tokens, anywhere
+        <span className="min-w-0 [overflow-wrap:anywhere]">
+          checked <span className="break-all">{entity.checkedEndpoint}</span> → 404 · requested{' '}
           <span className="break-all">{entity.identifier}</span>
         </span>
       )}

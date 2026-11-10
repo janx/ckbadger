@@ -179,6 +179,11 @@ describe('NotFoundPage', () => {
     );
     expect(screen.getByText('/transactions/0x' + 'f'.repeat(64))).toBeInTheDocument();
     expect(screen.getByText('0x' + 'f'.repeat(64))).toHaveClass('break-all');
+    // the words of the line wrap between words; only the endpoint and the identifier break anywhere
+    const endpoint = screen.getByText('/transactions/0x' + 'f'.repeat(64));
+    expect(endpoint).toHaveClass('break-all');
+    expect(endpoint.parentElement).not.toHaveClass('break-all');
+    expect(endpoint.parentElement).toHaveClass('[overflow-wrap:anywhere]');
   });
 
   it('an entity’s verse: its kind in words, the index asked, and the meme last — never the route’s second line', () => {

@@ -161,6 +161,11 @@ describe('ErrorPageShell', () => {
     expect(screen.getByText('Error · not a 404')).toHaveClass('eyebrow');
     expect(screen.getByRole('alert')).toHaveTextContent('✗ TypeError: missing channel output');
     expect(screen.getAllByText('/mainnet/fiber/channels/0x01')).toHaveLength(2);
+    // the facts wrap between words; only the route, one long token, breaks anywhere
+    const route = screen.getAllByText('/mainnet/fiber/channels/0x01')[1];
+    expect(route).toHaveClass('break-all');
+    expect(route.parentElement).not.toHaveClass('break-all');
+    expect(route.parentElement).toHaveClass('[overflow-wrap:anywhere]');
     expect(
       screen.getByText(
         'the chain was not checked in this view — this says nothing about what it holds'

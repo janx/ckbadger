@@ -76,8 +76,9 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
       <span role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">
         ✗ {message}
       </span>
-      <span className="min-w-0 break-all">
-        page <span>{fullRoute}</span> · network {network} · CKBadger {build} ·{' '}
+      {/* words wrap between words; only the route, one long token, may break anywhere */}
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        page <span className="break-all">{fullRoute}</span> · network {network} · CKBadger {build} ·{' '}
         <span>the chain was not checked in this view — this says nothing about what it holds</span>
       </span>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
