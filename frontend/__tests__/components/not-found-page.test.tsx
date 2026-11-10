@@ -1,6 +1,6 @@
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { entityVerse, NotFoundPage, ROUTE_VERSE } from '@/components/not-found-page';
 import { useNotFoundEvidence } from '@/lib/not-found-evidence';
 
@@ -14,6 +14,13 @@ const HASH = '0x4222e86425cf6f48b95cd69a4aab946a91a2598d404411177b3003042f0aca85
 const TIP_HASH = '0xabc123def456789012345678901234567890123456789012345678901234abcd';
 const ROUTE_NAME =
   "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.";
+
+/** The pressed seal once its drawing (a lazy chunk) has arrived. */
+async function pressedSeal(): Promise<HTMLElement> {
+  const seal = await screen.findByTestId('error-seal');
+  await waitFor(() => expect(seal.querySelector('[data-hash-seal] svg')).not.toBeNull());
+  return seal;
+}
 
 /** The verse's lines as rendered, in order. */
 function verseLines(h1: HTMLElement): string[] {
@@ -59,7 +66,7 @@ describe('NotFoundPage', () => {
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
     expect(screen.queryByRole('contentinfo')).toBeNull();
     // behind the verse, the newest block's seal: the vitals' tip, its hash read from /blocks/{n}
-    const seal = await screen.findByTestId('error-seal');
+    const seal = await pressedSeal();
     expect(seal.querySelector('[data-hash-seal="brush"] svg')).toHaveAttribute(
       'aria-label',
       `Hash seal ${TIP_HASH.slice(0, 10)}`
@@ -148,7 +155,7 @@ describe('NotFoundPage', () => {
       "honey badger don't care.",
     ]);
     // the seal pressed behind is the newest block's, never the hash that was asked for
-    const seal = await screen.findByTestId('error-seal');
+    const seal = await pressedSeal();
     expect(seal.querySelector('svg')).toHaveAttribute(
       'aria-label',
       `Hash seal ${TIP_HASH.slice(0, 10)}`

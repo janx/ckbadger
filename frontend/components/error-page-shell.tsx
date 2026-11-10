@@ -14,7 +14,7 @@
 // while this page was not found. CSS only; no canvas, no WebGL, nothing moves but the seal, which
 // is the next block's when the tip moves.
 
-import { useState, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Header } from '@/components/layout/header';
@@ -23,7 +23,6 @@ import { SiteFooter } from '@/components/layout/site-footer';
 import { Wordmark } from '@/components/layout/wordmark';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
-import { HashSeal } from '@/components/ui/hash-seal';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { api } from '@/lib/api';
 import { color } from '@/lib/palette';
@@ -112,6 +111,15 @@ export function ErrorPageShell({
   );
 }
 
+/**
+ * The talisman generator arrives with the first 404 or error page, not with every first load: the
+ * shell is in the entry chunk (the error boundaries are), and the seal is the one thing on it a
+ * reader can wait a moment for — the verse, the facts and the caption are there at once.
+ */
+const HashSeal = lazy(() =>
+  import('@/components/ui/hash-seal').then((m) => ({ default: m.HashSeal }))
+);
+
 /** The seal's longer side as drawn; the CSS sets it to the first screen's height (`.error-seal`). */
 const SEAL_PX = 720;
 /** Pressed a little askew, as a hand presses a seal (the not-found board's −3°). */
@@ -139,13 +147,15 @@ function TipSeal() {
   return (
     <>
       <div className="error-seal" aria-hidden="true" data-testid="error-seal">
-        <HashSeal
-          hash={block.hash}
-          variant="brush"
-          size={SEAL_PX}
-          tilt={SEAL_TILT}
-          ink={color('mark')}
-        />
+        <Suspense fallback={null}>
+          <HashSeal
+            hash={block.hash}
+            variant="brush"
+            size={SEAL_PX}
+            tilt={SEAL_TILT}
+            ink={color('mark')}
+          />
+        </Suspense>
       </div>
       <p data-seal-caption="" className="text-text-ghost text-meta m-0 mt-8 min-w-0">
         behind: the seal of the newest block, <BlockLink number={block.number} /> ·{' '}

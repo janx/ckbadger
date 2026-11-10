@@ -82,6 +82,8 @@ describe('ErrorPageShell', () => {
       </MemoryRouter>
     );
     const seal = await screen.findByTestId('error-seal');
+    // the drawing is a lazy chunk: the talisman generator is not in the entry
+    await waitFor(() => expect(seal.querySelector('[data-hash-seal] svg')).not.toBeNull());
     // decoration behind the text: hidden from the reader, who has the caption
     expect(seal).toHaveAttribute('aria-hidden', 'true');
     expect(seal).toHaveClass('error-seal');
