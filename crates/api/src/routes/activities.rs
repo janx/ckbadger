@@ -516,7 +516,10 @@ fn lock_args_codec(name: &str) -> Option<(ArgsDecoder, &'static str)> {
         "rgbpp" => (decode_rgbpp_lock_args, "at least 36 bytes"),
         "btc_time_lock" => (decode_btc_time_lock_args, "at least 36 bytes"),
         "fiber_funding" => (decode_fiber_funding_lock_args, "at least 20 bytes"),
-        "fiber_commitment" => (decode_fiber_commitment_lock_args, "at least 36 bytes"),
+        "fiber_commitment" => (
+            decode_fiber_commitment_lock_args,
+            "36, 56 or 57 bytes, or 58 bytes ending in the features byte 0x01",
+        ),
         "utxoswap_intent" => (
             decode_utxoswap_intent_args,
             "at least 57 bytes with a known intent type at byte 56",
@@ -758,44 +761,37 @@ fn decode_btc_time_lock_args(args: &[u8]) -> Option<serde_json::Value> {
     }))
 }
 
+/// Fiber funding-lock args read by the indexer's one funding-lock arbiter
+/// (`parser::fiber::parse_funding_lock_args`): at least 20 bytes, of which
+/// every deployed lock reads the first 20.
 fn decode_fiber_funding_lock_args(args: &[u8]) -> Option<serde_json::Value> {
-    // Funding lock args: pubkey_hash (20 bytes minimum)
-    if args.len() < 20 {
-        return None;
-    }
+    let parsed = ckbadger_indexer::parser::fiber::parse_funding_lock_args(args)?;
     Some(serde_json::json!({
         "protocol": "fiber",
         "action": "funding",
-        "pubkeyHash": format!("0x{}", hex::encode(&args[0..20])),
+        "pubkeyHash": format!("0x{}", hex::encode(parsed.pubkey_hash)),
     }))
 }
 
+/// Fiber commitment-lock args read by the indexer's one commitment-lock
+/// arbiter (`parser::fiber::parse_commitment_lock_args`): only the layouts a
+/// deployed lock accepts. The 57- and 58-byte layouts add the settlement hash
+/// and flag.
 fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
-    // Commitment lock args layout:
-    //   Short (36B): pubkey_hash(20) + delay_epoch(8 LE) + version(8 BE)
-    //   Full (57B):  short + settlement_hash(20) + settlement_flag(1)
-    if args.len() < 36 {
-        return None;
-    }
-    let pubkey_hash = &args[0..20];
-    let delay_epoch = u64::from_le_bytes(args[20..28].try_into().ok()?);
-    let version = u64::from_be_bytes(args[28..36].try_into().ok()?);
-
+    let parsed = ckbadger_indexer::parser::fiber::parse_commitment_lock_args(args)?;
     let mut obj = serde_json::json!({
         "protocol": "fiber",
         "action": "commitment",
-        "pubkeyHash": format!("0x{}", hex::encode(pubkey_hash)),
-        "delayEpoch": delay_epoch,
-        "version": version,
+        "pubkeyHash": format!("0x{}", hex::encode(parsed.pubkey_hash)),
+        "delayEpoch": parsed.delay_epoch,
+        "version": parsed.version,
     });
-
-    if args.len() >= 57 {
-        let settlement_hash = &args[36..56];
-        let settlement_flag = args[56];
+    if let (Some(settlement_hash), Some(settlement_flag)) =
+        (parsed.settlement_hash(), parsed.settlement_flag())
+    {
         obj["settlementHash"] = serde_json::json!(format!("0x{}", hex::encode(settlement_hash)));
         obj["settlementFlag"] = serde_json::json!(settlement_flag);
     }
-
     Some(obj)
 }
 
@@ -1990,6 +1986,43 @@ mod tests {
     fn test_decode_fiber_commitment_lock_args_too_short() {
         let args = vec![0; 35]; // 1 byte short of minimum 36
         assert!(decode_fiber_commitment_lock_args(&args).is_none());
+    }
+
+    /// The decoder is the indexer's commitment-lock arbiter: lengths no
+    /// deployed lock accepts are not commitment args (the old decoder read
+    /// any >= 36 bytes), the 58-byte 0.7.0 layout reads like 57, and the
+    /// daric 56-byte layout carries no settlement fields.
+    #[test]
+    fn test_decode_fiber_commitment_lock_args_follows_the_arbiter() {
+        let mut head = vec![0x11u8; 20];
+        head.extend_from_slice(&42u64.to_le_bytes());
+        head.extend_from_slice(&3u64.to_be_bytes());
+        let with = |tail: &[u8]| [head.as_slice(), tail].concat();
+        for args in [
+            with(&[0x22; 4]),
+            with(&[0x22; 23]),
+            with(&[[0x22; 20].as_slice(), &[0x01, 0x00]].concat()),
+        ] {
+            assert!(
+                decode_fiber_commitment_lock_args(&args).is_none(),
+                "{} bytes",
+                args.len()
+            );
+        }
+        let v1 = decode_fiber_commitment_lock_args(&with(
+            &[[0x22; 20].as_slice(), &[0x01, 0x01]].concat(),
+        ))
+        .unwrap();
+        assert_eq!(
+            v1["settlementHash"],
+            format!("0x{}", hex::encode([0x22; 20]))
+        );
+        assert_eq!(v1["settlementFlag"], 1);
+        assert_eq!(v1["delayEpoch"], 42);
+        let daric56 = decode_fiber_commitment_lock_args(&with(&[0x22; 20])).unwrap();
+        assert_eq!(daric56["version"], 3);
+        assert!(daric56.get("settlementHash").is_none());
+        assert!(daric56.get("settlementFlag").is_none());
     }
 
     #[test]

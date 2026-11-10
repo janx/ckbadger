@@ -317,6 +317,41 @@ describe('FiberChannelBoard', () => {
     ).toHaveAttribute('href', `/mainnet/cell/${waitingEvidence.currentCommitment!.txHash}-1`);
   });
 
+  it('shows the settlement hash and flag of the 58-byte 0.7.0 layout as of the 57-byte one', () => {
+    const v1: FiberChannelEvidence = {
+      ...waitingEvidence,
+      currentCommitment: {
+        ...waitingEvidence.currentCommitment!,
+        lockArgs: `0x${'44'.repeat(57)}01`,
+        lockFormat: 'full58',
+      },
+    };
+    render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={v1} />);
+    expect(screen.getByText(/Fiber Commitment Lock · args, 58 bytes/)).toHaveTextContent('full58');
+    expect(screen.getByText('Settlement hash / flag').nextElementSibling).toHaveTextContent(
+      `0x${'66'.repeat(20)} · 1`
+    );
+  });
+
+  it('names a legacy layout by its own length (56-byte daric args)', () => {
+    const daric: FiberChannelEvidence = {
+      ...waitingEvidence,
+      currentCommitment: {
+        ...waitingEvidence.currentCommitment!,
+        lockArgs: `0x${'44'.repeat(56)}`,
+        settlementHash: null,
+        settlementFlag: null,
+        lockFormat: 'legacy56',
+        epochLock: 'legacyFormatRuleUnverified',
+      },
+    };
+    render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={daric} />);
+    expect(screen.queryByText('Settlement hash / flag')).toBeNull();
+    expect(
+      screen.getByText('Legacy 56-byte form: the deployed delay rule is not asserted here.')
+    ).toBeInTheDocument();
+  });
+
   it('renders the producer’s open channel: one step, still open, opening flows in tier 2', () => {
     expect(producerDetail.channelId).toBe(producerEvidence.channelId);
     render(

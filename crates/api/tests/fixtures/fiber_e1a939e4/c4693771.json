@@ -1,0 +1,68 @@
+{
+ "cell_deps": [
+  {
+   "dep_type": "dep_group",
+   "out_point": {
+    "index": "0x0",
+    "tx_hash": "0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c"
+   }
+  }
+ ],
+ "hash": "0xc46937718fdb92ad66feb99c64b676aa220ea896477d1a3a5dc14ddf17b6bfb9",
+ "header_deps": [],
+ "inputs": [
+  {
+   "previous_output": {
+    "index": "0x0",
+    "tx_hash": "0xee1d07e6a6e1e7aa4b1c5e2d2e1a6a12c030f3e2f35e26c9921d03b1741c17b3"
+   },
+   "since": "0x0"
+  },
+  {
+   "previous_output": {
+    "index": "0x1",
+    "tx_hash": "0xfd1ff084b679a6dcf71b115c5744d62c2419c5ae9d4cb8a4c54855fad81d362d"
+   },
+   "since": "0x0"
+  }
+ ],
+ "outputs": [
+  {
+   "capacity": "0x826299e00",
+   "lock": {
+    "args": "0x5c494edc86cce3a4d5692364453193e6ed9c6954",
+    "code_hash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+    "hash_type": "type"
+   },
+   "type": null
+  },
+  {
+   "capacity": "0x5d21db610",
+   "lock": {
+    "args": "0x7f0a30a2da9ee266d6f901daa52605d855c04449",
+    "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hash_type": "type"
+   },
+   "type": null
+  },
+  {
+   "capacity": "0x4b9f97143",
+   "lock": {
+    "args": "0xe2d5f53fcb8fde1a17cc8f81bde5ef9a92bcf7fc",
+    "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hash_type": "type"
+   },
+   "type": null
+  }
+ ],
+ "outputs_data": [
+  "0x",
+  "0x",
+  "0x"
+ ],
+ "version": "0x0",
+ "witnesses": [
+  "0x55000000100000005500000055000000410000000cb93092be9bdb099583c08a1f633986446baf8c745f74358cde340774a0d74712fbc6cbc179d974b8b9e656b180682cfbb9fe631d5907dfac8ff40ddc8a4a6d00",
+  "0x5500000010000000550000005500000041000000917ce59c27aef053851c981fa7de9cd08f5f7cd0c602848d3603d2830620cfd84cd7930eef4cada6dda8a09bb0b109dc17748e19285a55c34fbac18c290e47d000"
+ ]
+}
