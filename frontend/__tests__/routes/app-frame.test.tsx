@@ -110,6 +110,25 @@ describe('the header is part of the frame (visual finish V6)', () => {
 
   // Rubbing × Song print, phase 2: the status line is part of the frame too — once, fixed at the
   // foot of the window, last in reading order after the footer.
+  // The page ends on an empty prompt — the square and the block cursor — right under its last
+  // output, inside the page's wrapper, before the footer.
+  it('ends every page on one empty prompt, after the page and before the footer', async () => {
+    mount('/mainnet/dao');
+    const page = await screen.findByText('dao page', {}, LAZY);
+    const ends = screen.getAllByTestId('prompt-end');
+    expect(ends).toHaveLength(1);
+    const end = ends[0];
+    expect(end).toHaveAttribute('aria-hidden', 'true');
+    expect(end.querySelector('.prompt-square')).not.toBeNull();
+    expect(end.querySelector('.cursor')).not.toBeNull();
+    expect(end.previousElementSibling).toBe(page);
+    expect(page.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      end.compareDocumentPosition(screen.getByRole('contentinfo')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it('closes the frame on one status line, after the footer', async () => {
     mount('/mainnet/dao');
     expect(await screen.findByText('dao page', {}, LAZY)).toBeInTheDocument();

@@ -79,6 +79,12 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
       'text-body',
       'text-text'
     );
+    // Rubbing × Song print, phase 2: a tier-1 heading is a command line (PromptHeading: the
+    // prompt square is its ::before, the title the lowercase command); tier 2 stays unmarked.
+    const capacity = screen.getByRole('heading', { name: 'Capacity' });
+    expect(capacity).toHaveClass('prompt');
+    expect(capacity.firstElementChild).toHaveClass('lowercase');
+    expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('prompt');
   });
 
   it('opens tier 2 with one boundary: 96 px, a hairline, then the evidence eyebrow above the content', () => {

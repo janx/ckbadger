@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { BarChart, ChartFigure, type Bar } from '@/components/home/mini-chart';
 import { RankedBars, type RankedRow } from '@/components/home/ranked-bars';
-import { SECTION_HEADING_CLASS, bodyOf, derive, viewOf } from '@/components/home/section';
+import { SectionHeading, bodyOf, derive, viewOf } from '@/components/home/section';
 import {
   activityTypeShares,
   nonCellbaseCount,
@@ -38,7 +38,7 @@ export function ActivityStats() {
   return (
     <div data-testid="home-activity-stats" className="flex min-w-0 flex-col gap-[22px]">
       <div className="border-base-border-subtle flex h-11 items-center justify-between gap-4 border-b">
-        <h2 className={SECTION_HEADING_CLASS}>Activity, last 24 h</h2>
+        <SectionHeading command="Activity, last 24 h" />
         <Link
           href="/charts"
           className="text-interactive hover:text-jade text-small transition-colors"

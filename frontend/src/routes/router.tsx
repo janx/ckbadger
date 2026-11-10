@@ -3,6 +3,7 @@ import type { RouteObject } from 'react-router-dom';
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 import { Atmosphere } from '@/components/layout/atmosphere';
 import { Header } from '@/components/layout/header';
+import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { StatusLine } from '@/components/layout/status-line';
 import { TapOrHoverHintProvider } from '@/components/ui/tap-or-hover-hint';
@@ -47,9 +48,11 @@ function AppFrame() {
           <div className="flex min-h-screen flex-1 flex-col">
             <Header />
             {/* Visual finish V7: keyed by the path, so each route change mounts the new page and it
-                fades in (`.arrive`); the header, outside, stays. */}
+                fades in (`.arrive`); the header, outside, stays. The page ends on an empty prompt
+                right under its last output (rubbing × Song print, phase 2). */}
             <div key={pathname} className="arrive flex flex-1 flex-col">
               <Outlet />
+              <PromptEnd />
             </div>
           </div>
           <SiteFooter />

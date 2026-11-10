@@ -339,7 +339,8 @@ describe('move 1 on the page root', () => {
 });
 
 describe('move 2 on the frame and the tier boundary', () => {
-  it('sets the frame on glass, with the eyebrow at 500 / .12 em', () => {
+  // Rubbing × Song print, phase 2: the frame's head is a command line, no longer an eyebrow.
+  it('sets the frame on glass, headed by its command at 500, untracked', () => {
     render(
       <TerminalPanel data-testid="frame">
         <TerminalPanelHeader>Cells</TerminalPanelHeader>
@@ -348,9 +349,9 @@ describe('move 2 on the frame and the tier boundary', () => {
     const frame = screen.getByTestId('frame');
     expect(frame).toHaveClass('glass', 'border-base-border', 'neon-edge-top', 'rounded-lg');
     expect(frame).not.toHaveClass('bg-base-surface');
-    const eyebrow = screen.getByText('Cells');
-    expect(eyebrow).toHaveClass('eyebrow', 'text-small', 'text-text-dim');
-    expect(eyebrow).not.toHaveClass('uppercase', 'tracking-[0.08em]');
+    const head = screen.getByText('Cells').parentElement!;
+    expect(head).toHaveClass('prompt', 'font-medium', 'text-body', 'text-text-bright');
+    expect(head).not.toHaveClass('eyebrow', 'uppercase', 'tracking-[0.08em]');
   });
 
   it('grounds tier 2 one step deeper, through the gutters, under its tube', () => {

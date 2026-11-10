@@ -10,7 +10,7 @@ import {
 // flat". TerminalPanel is the one instrument frame — a #222840 hairline (`border-base-border`),
 // an 8 px radius (visual finish V10: glass frames take `rounded-lg`), glass (material pass v2, move 2:
 // `.glass` replaces the flat surface colour, so the sky's pool shows through), the jade top edge
-// (`.neon-edge-top`) and inset scanlines — with an uppercase 12 px eyebrow led by the section mark.
+// (`.neon-edge-top`) and inset scanlines — headed by a command line led by the prompt square.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
   it('frames its content: hairline, 8 px radius, glass, jade top edge, scanlines', () => {
     const { container } = render(
@@ -61,7 +61,10 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(frame).not.toHaveAttribute('style');
   });
 
-  it('heads the frame with the section mark and an uppercase 12 px eyebrow', () => {
+  // Rubbing × Song print, phase 2: the frame's head is a command line — the prompt square (still
+  // the frame's indicator), then the instrument's name as the command, lowercase, in the moon ink
+  // at 13 px / 500 — where it was the section mark and a dim upper-case 12 px eyebrow.
+  it('heads the frame with the prompt square and the instrument’s name as the command', () => {
     render(
       <TerminalPanel>
         <TerminalPanelHeader actions={<button type="button">Act</button>}>
@@ -74,14 +77,17 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(mark).toHaveClass('section-mark');
     expect(mark).toHaveAttribute('data-indicator', 'none');
     expect(mark).not.toHaveClass('section-mark-live', 'section-mark-gold', 'opacity-30');
-    const eyebrow = screen.getByText('Cells');
-    // material pass v2 (move 3): the eyebrow's case, tracking (.12 em) and weight (500) are one
-    // rule, `.eyebrow`, shared with the tier boundary and the hero labels
-    expect(eyebrow).toHaveClass('text-small', 'eyebrow', 'text-text-dim');
-    expect(eyebrow).not.toHaveClass('text-body', 'tracking-wider', 'tracking-[0.08em]');
+    const command = screen.getByText('Cells');
+    expect(command).toHaveClass('lowercase');
+    const head = command.parentElement!;
+    expect(head).toHaveClass('prompt', 'text-text-bright', 'text-body', 'font-medium');
+    expect(head).not.toHaveClass('eyebrow', 'text-text-dim', 'text-small');
+    // not a heading of the page outline: the frame's head is a div
+    expect(head.tagName).toBe('DIV');
     // the mark precedes the words, in one row with the actions at the right
-    expect(mark.compareDocumentPosition(eyebrow)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    const row = mark.parentElement!.parentElement!;
+    expect(mark.compareDocumentPosition(command)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(mark.parentElement).toBe(head);
+    const row = head.parentElement!;
     expect(row).toHaveClass('border-b', 'border-base-border', 'justify-between');
     expect(row).toContainElement(screen.getByRole('button', { name: 'Act' }));
   });

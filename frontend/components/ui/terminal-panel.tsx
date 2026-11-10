@@ -1,6 +1,7 @@
 'use client';
 
 import { type HTMLAttributes, type ReactNode } from 'react';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 
 type IndicatorStatus = 'active' | 'warning' | 'inactive' | 'none';
@@ -87,8 +88,11 @@ interface TerminalPanelHeaderProps {
   actions?: ReactNode;
 }
 
-/** The frame's eyebrow: the section mark, then the instrument's name in upper case (12 px,
- * `.eyebrow`: 500 at .12 em — material pass v2, move 3). */
+/**
+ * The frame's head is a command line (rubbing × Song print, phase 2): the prompt square — which
+ * is also the frame's indicator — then the instrument's name as the command, lowercase, in the
+ * moon ink at 13 px / 500.
+ */
 const MARK_CLASS: Record<IndicatorStatus, string> = {
   // the mark as it is on a tier-1 h2
   none: 'section-mark',
@@ -113,17 +117,19 @@ export function TerminalPanelHeader({
         className
       )}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span
-          aria-hidden="true"
-          data-indicator={indicator}
-          data-testid="terminal-panel-mark"
-          className={MARK_CLASS[indicator]}
-        />
-        <div className="eyebrow text-text-dim text-small min-w-0 break-words font-mono">
-          {children}
-        </div>
-      </div>
+      <PromptHeading
+        as="div"
+        mark={
+          <span
+            aria-hidden="true"
+            data-indicator={indicator}
+            data-testid="terminal-panel-mark"
+            className={cn(MARK_CLASS[indicator], 'mr-2.5')}
+          />
+        }
+        command={children}
+        className="text-body break-words font-mono font-medium"
+      />
 
       {actions && (
         <div className="flex max-w-full flex-wrap items-center justify-end gap-2">{actions}</div>

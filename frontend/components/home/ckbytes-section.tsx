@@ -16,7 +16,7 @@ import {
   type SignedPoint,
 } from '@/components/home/mini-chart';
 import {
-  SECTION_HEADING_CLASS,
+  SectionHeading,
   SECTION_HEAD_CLASS,
   SECTION_HINT_CLASS,
   SMALL_MULTIPLES_CLASS,
@@ -61,11 +61,14 @@ export function CkbytesSection() {
     <section aria-labelledby="home-ckbytes-heading" className="flex flex-col gap-[18px]">
       {/* C10: one "tap or hover" for the two daily-change figures, by the heading. */}
       <div className={SECTION_HEAD_CLASS}>
-        <h2 id="home-ckbytes-heading" className={SECTION_HEADING_CLASS}>
-          <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
-            CKBytes in circulation
-          </Link>
-        </h2>
+        <SectionHeading
+          id="home-ckbytes-heading"
+          command={
+            <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
+              CKBytes in circulation
+            </Link>
+          }
+        />
         <TapOrHoverHint className={SECTION_HINT_CLASS} />
       </div>
       <Allocation data={allocation.data} error={allocation.error} />

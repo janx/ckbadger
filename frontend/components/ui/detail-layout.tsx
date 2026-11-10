@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 import {
   documentTitleParts,
@@ -153,15 +154,14 @@ export function DetailSection({
   return (
     <section className={cn('min-w-0', className)}>
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-        {/* A tier-1 h2 is 600 through h2.text-section (globals.css, move 3); a tier-2 h2 stays
-            the quiet 500. */}
-        <h2
-          className={
-            tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'
-          }
-        >
-          {title}
-        </h2>
+        {/* A tier-1 h2 is a command line (rubbing × Song print, phase 2: the prompt square, the
+            title as the command) at 600 through h2.text-section (globals.css, move 3); a tier-2
+            h2 stays the quiet 500, unmarked. */}
+        {tier === 2 ? (
+          <h2 className="text-body text-text font-medium">{title}</h2>
+        ) : (
+          <PromptHeading command={title} />
+        )}
         {actions}
       </div>
       {children}

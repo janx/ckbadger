@@ -10,10 +10,10 @@ import {
   type SeriesPoint,
 } from '@/components/home/mini-chart';
 import {
-  SECTION_HEADING_CLASS,
   SECTION_HEAD_CLASS,
   SECTION_HINT_CLASS,
   SMALL_MULTIPLES_CLASS,
+  SectionHeading,
   bodyOf,
   derive,
   viewOf,
@@ -43,9 +43,7 @@ export function NetworkSection() {
     <section aria-labelledby="home-network-heading" className="flex flex-col gap-[18px]">
       {/* C10: one "tap or hover" for the four figures, by the heading. */}
       <div className={SECTION_HEAD_CLASS}>
-        <h2 id="home-network-heading" className={SECTION_HEADING_CLASS}>
-          Network
-        </h2>
+        <SectionHeading id="home-network-heading" command="Network" />
         <TapOrHoverHint className={SECTION_HINT_CLASS} />
       </div>
       <div className={SMALL_MULTIPLES_CLASS}>

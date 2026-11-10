@@ -610,25 +610,27 @@ body * {
  * token: jade #2edba3, the inks and the borders are the theme's own.
  */
 
-/* Move 1a — the section mark: a 6 px jade dot before every tier-1 h2 (`text-section`, 17 px; a
-   tier-2 h2 is `text-body` and has none), and as `.section-mark` for a frame's eyebrow. Its halo
-   is the rubbing's one bloom: 6 px of celadon at 45 % by night, none by day. */
+/* Move 1a — the section mark, now the prompt (rubbing × Song print, phase 2): every section is a
+   command line, so the mark before every tier-1 h2 (`text-section`, 17 px; a tier-2 h2 is
+   `text-body` and has none) is the 8 px cinnabar square of the wordmark (`.prompt-square`) and of a
+   frame's head (`.section-mark`). Ink, not phosphor: no radius, no bloom. A tier-1 h2 is set
+   lowercase, as a command is typed. */
+.prompt-square,
 .section-mark,
 h2.text-section::before {
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-jade);
-  box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background: var(--c-mark);
   vertical-align: middle;
 }
 h2.text-section::before {
   content: '';
   margin-right: 10px;
 }
-.section-mark {
-  flex: none;
+h2.text-section {
+  text-transform: lowercase;
 }
 /* The mark as a live indicator (a frame reporting a realtime feed) breathes; gold warns. */
 .section-mark-live {
@@ -636,7 +638,6 @@ h2.text-section::before {
 }
 .section-mark-gold {
   background: var(--c-gold);
-  box-shadow: 0 0 6px rgb(var(--rgb-gold) / calc(0.45 * var(--m-glow)));
 }
 
 /* Move 1b — one lit figure per page: the display figure, an entity page's h1, an index page's h1.
@@ -839,14 +840,15 @@ svg a:hover {
     0 0 16px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   animation: live-pulse 1.5s ease-in-out infinite;
 }
-/* A live mark breathes inside the one bloom: 6 px, from a faint 20 % up to the 45 % and back. */
+/* A live mark breathes: the square's ink fades to 45 % and back over 1.5 s (no bloom: the prompt
+   square is ink, not phosphor). */
 @keyframes live-pulse {
   0%,
   100% {
-    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.2 * var(--m-glow)));
+    opacity: 1;
   }
   50% {
-    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
+    opacity: 0.45;
   }
 }
 
@@ -1171,17 +1173,9 @@ h1.text-index {
   min-width: 0;
 }
 
-/* The skeleton (rubbing × Song print): the page is a terminal session. The prompt square is the
-   8 px cinnabar square (`mark`, a shape colour) that begins every command line — the wordmark's
-   first. No radius, no bloom: the square is ink, not phosphor. */
-.prompt-square {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  flex: none;
-  background: var(--c-mark);
-}
-/* The wordmark's name, 15 px: a mark's size, set once here like the voice's 14 px, not a step of
+/* The skeleton (rubbing × Song print): the page is a terminal session. The prompt square (the
+   8 px cinnabar square that begins every command line) is drawn with the section mark, below. The
+   wordmark's name, 15 px: a mark's size, set once here like the voice's 14 px, not a step of
    the type scale that running text may take. */
 .wordmark {
   font-size: 15px;
