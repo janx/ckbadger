@@ -39,6 +39,30 @@
   font-display: swap;
   src: url('/fonts/jetbrains-mono-italic.woff2') format('woff2');
 }
+/* The voice (rubbing × Song print): Courier Prime, OFL 1.1 (public/fonts/CourierPrime-OFL.txt),
+   latin subsets of the project's v3.018 faces. Only for comment lines (`.comment`) and the 404
+   verse — never in the UI mono's place, never in a measured label. */
+@font-face {
+  font-family: 'Courier Prime';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/courier-prime-regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Courier Prime';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/courier-prime-bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Courier Prime';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/courier-prime-italic.woff2') format('woff2');
+}
 
 :root {
   /* The colours and materials of both themes — `--c-<key>`, `--rgb-<key>`, `--m-<key>` — are
@@ -66,6 +90,7 @@
   --color-interactive-hover: var(--c-jade);
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
+  --font-voice: 'Courier Prime', 'Courier New', monospace;
 
   /* Material pass v2 (move 1): the three ambient pools, jade by default (the approved .10 / .07 /
      .07); a page root's data-tint gives the first pool the page's class hue (below). */
@@ -1232,6 +1257,35 @@ h1.text-index {
 }
 .prose-tier2 em {
   font-style: italic;
+}
+
+/* The voice (rubbing × Song print): Courier Prime, for comment lines and the 404 verse only. A
+   comment is a row: the ghost `#` in the UI mono (generated, with empty alternative text, so a
+   screen reader reads the words only), then the lines at 14 px on a 1.55 line in the dim ink. Its
+   one child holds the lines; nothing in it is a measured label. */
+.voice {
+  font-family: var(--font-voice);
+}
+.comment {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-voice);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--c-text-dim);
+}
+.comment::before {
+  content: '#';
+  content: '#' / '';
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--c-text-ghost);
+}
+.comment > * {
+  margin: 0;
+  min-width: 0;
 }
 
 /* The not-found and error pages (direction Z): the sign over the night of ink. The sign is quiet —
