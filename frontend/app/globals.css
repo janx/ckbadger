@@ -942,6 +942,34 @@ h1.text-index {
   margin: 0;
   min-width: 0;
 }
+/* The 404 verse: the same row at the boards' display size, 21 px (18 px on a phone, one step
+   down), its `#` at 16 px, a sentence to a line with 4 px between; the first line in the moon ink,
+   the next in the text ink and the last, the one that answers, in celadon (the not-found board). */
+.comment-lg {
+  gap: 16px;
+  font-size: 18px;
+  line-height: 1.5;
+}
+@media (min-width: 640px) {
+  .comment-lg {
+    font-size: 21px;
+  }
+}
+.comment-lg::before {
+  font-size: 16px;
+}
+.comment-lg > * {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--c-text);
+}
+.comment-lg > * > :first-child {
+  color: var(--c-text-bright);
+}
+.comment-lg > * > :last-child:not(:first-child) {
+  color: var(--c-jade);
+}
 
 /* The skeleton (rubbing × Song print): the page is a terminal session. The prompt square (the
    8 px cinnabar square that begins every command line) is drawn with the section mark, below. The
