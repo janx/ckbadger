@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
+import { ROW_SEAL_FOOTPRINT_PX, RowSeal } from '@/components/ui/row-seal';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -142,6 +143,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   return (
     <PhoneRow
       testId="transaction-row-mobile"
+      mark={<RowSeal hash={tx.hash} />}
       lines={[
         {
           key: 'identity',
@@ -229,20 +231,23 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      // 19 characters at 13 px (148.2 px) and the 16 px gap.
-      minWidth: 166,
+      // The row seal, 19 characters at 13 px (148.2 px) and the 16 px gap (was 166 without it).
+      minWidth: 165 + ROW_SEAL_FOOTPRINT_PX,
       // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
-      // row keeps its dim row class).
+      // row keeps its dim row class); its seal leads it, overhanging that line (RowSeal).
       render: (tx) => (
-        <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash
-            hash={tx.hash}
-            startChars={10}
-            endChars={6}
-            copyable={false}
-            className="text-body text-text-bright leading-[18px]"
-          />
-        </Link>
+        <span className="flex items-start">
+          <RowSeal hash={tx.hash} overhang />
+          <Link href={`/tx/${tx.hash}`} className="hover:underline">
+            <Hash
+              hash={tx.hash}
+              startChars={10}
+              endChars={6}
+              copyable={false}
+              className="text-body text-text-bright leading-[18px]"
+            />
+          </Link>
+        </span>
       ),
     },
     {
@@ -283,7 +288,10 @@ export function TransactionListTable({
     {
       key: 'value',
       label: 'Value, CKB',
-      minWidth: 170,
+      // Every value under a billion CKB, "999,999,999.99999999" (20 characters at 12 px, 144 px),
+      // and the 16 px gap; the next width is 22 characters, so 170 held nothing more. Its 10 px
+      // and the fee's 9 went to the row seal.
+      minWidth: 160,
       numeric: true,
       render: (tx) =>
         tx.isCellbase ? (
@@ -312,7 +320,8 @@ export function TransactionListTable({
     {
       key: 'fee',
       label: 'Fee, CKB',
-      minWidth: 105,
+      // A fee under 100 CKB, "99.99999999" (11 characters at 12 px, 79.2 px), and the 16 px gap.
+      minWidth: 96,
       numeric: true,
       render: (tx) => (
         <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
