@@ -7,8 +7,8 @@ use super::activities::{
     LockCallResponse, ParticipantResponse, ProtocolActionResponse, TypeCallResponse,
 };
 use crate::{
-    pool::{InterpretationResponse, PoolStatus},
-    response::{ok, ApiError, ApiResult},
+    pool::{InterpretationResponse, PoolSnapshot, PoolStatus},
+    response::{ok, ApiError, ApiResult, ApiRouteError},
     AppState,
 };
 
@@ -135,6 +135,36 @@ pub async fn list_pool_transactions(
                 .unwrap_or("not enabled or first refresh has not completed")
         )));
     }
+    let filter = filter.to_owned();
+    let activity_filter = activity_filter.map(str::to_owned);
+    // Every store read below (one `get_tx_location` per mirrored record, up
+    // to `pool_max_tracked_txs`, then the page's activity projections) runs on
+    // the blocking pool, under the read view this request pinned.
+    let response = tokio::task::spawn_blocking(move || {
+        pool_transactions_page(
+            &state,
+            &snapshot,
+            &filter,
+            activity_filter.as_deref(),
+            cursor,
+            limit,
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
+    ok(response)
+}
+
+/// The page of mirrored pool transactions the store has not indexed yet.
+/// Blocking: reads the store. Call it inside `spawn_blocking`.
+fn pool_transactions_page(
+    state: &AppState,
+    snapshot: &PoolSnapshot,
+    filter: &str,
+    activity_filter: Option<&str>,
+    cursor: Option<(u64, Vec<u8>)>,
+    limit: usize,
+) -> Result<PoolTransactionsResponse, ApiRouteError> {
     let mut totals = PoolTotals {
         pending: 0,
         proposed: 0,
@@ -257,7 +287,7 @@ pub async fn list_pool_transactions(
             activity,
         });
     }
-    ok(PoolTransactionsResponse {
+    Ok(PoolTransactionsResponse {
         summary,
         data,
         total,

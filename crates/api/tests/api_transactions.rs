@@ -2230,6 +2230,67 @@ async fn redesign_pool_unhealthy_is_not_reported_as_empty() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// Review finding 9: the pool list checks every mirrored record against the
+/// store (one `get_tx_location` each, up to `pool_max_tracked_txs` = 50,000
+/// per request) and builds the page's activity projections from it. Like the
+/// sibling store-reading handlers it does that on the blocking pool, so the
+/// runtime thread serving the request keeps running other tasks meanwhile.
+///
+/// Deterministic, no clock: the test holds the runtime's only blocking
+/// thread. A handler that reads on the blocking pool cannot finish until the
+/// test lets go; one that reads on the runtime thread finishes anyway.
+#[test]
+fn pool_list_reads_the_store_on_the_blocking_pool() {
+    use ckbadger_api::pool::PoolStatus;
+    use std::future::Future;
+    use std::task::Poll;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let state = test_app_state(test_config(test_store()));
+        state.pool_mirror.publish(healthy_pool_snapshot(vec![
+            make_test_pool_record(&[0x11; 32], &[0x21; 32], 700, 1000, PoolStatus::Pending),
+            make_test_pool_record(&[0x12; 32], &[0x21; 32], -800, 2000, PoolStatus::Proposed),
+        ]));
+        let app = router_from_state(state);
+
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = tokio::task::spawn_blocking(move || {
+            held_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        held_rx.await.unwrap();
+
+        let mut request = Box::pin(get_json(&app, "/transactions/pool"));
+        // Drive the request as far as it gets without the blocking pool,
+        // letting every other task on this thread run in between.
+        for poll in 0..100 {
+            let ready =
+                std::future::poll_fn(|cx| Poll::Ready(request.as_mut().poll(cx).is_ready())).await;
+            assert!(
+                !ready,
+                "poll {poll}: the pool list answered while the blocking pool was held, so it \
+                 read the store on the runtime thread"
+            );
+            tokio::task::yield_now().await;
+        }
+        // Meanwhile another task on this runtime thread runs to completion.
+        assert_eq!(tokio::spawn(async { 7 }).await.unwrap(), 7);
+
+        release_tx.send(()).unwrap();
+        holder.await.unwrap();
+        let (status, body) = request.await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["total"], 2, "{body}");
+        assert_eq!(body["data"][0]["hash"], format!("0x{}", "12".repeat(32)));
+    });
+}
+
 #[tokio::test]
 async fn redesign_committed_detail_requires_node_transaction_bytes() {
     let store = test_store();
