@@ -318,28 +318,34 @@ const RFC_VM1: &str = "0032";
 /// RFC number activating CKB-VM version 2 (CKB2023 / Meepo).
 const RFC_VM2: &str = "0049";
 
+/// Replay `tx_hash` in CKB-VM against the chain state the node serves.
+///
+/// One HTTP client per calculation: every RPC helper below takes it, so the
+/// round trips of one calculation share its connection pool instead of each
+/// opening a new connection.
 pub async fn calculate_cycles(
     ckb_rpc_url: &str,
     tx_hash: &str,
     expected_block_hash: &[u8; 32],
 ) -> Result<crate::cycles_task::TransactionCycles, CyclesError> {
-    let (tx, status) = fetch_transaction(ckb_rpc_url, tx_hash).await?;
+    let client = reqwest::Client::new();
+    let (tx, status) = fetch_transaction(&client, ckb_rpc_url, tx_hash).await?;
     let block_hash = committed_block_hash(tx_hash, &status)?;
     if block_hash != format!("0x{}", hex::encode(expected_block_hash)) {
         return Err(CyclesError::Unavailable(format!("transaction {tx_hash} commit block differs from canonical store: node={block_hash} store=0x{}", hex::encode(expected_block_hash))));
     }
-    let (epochs, max_cycles) = fetch_vm_consensus(ckb_rpc_url).await?;
-    let commit = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)
+    let (epochs, max_cycles) = fetch_vm_consensus(&client, ckb_rpc_url).await?;
+    let commit = vm::header(&fetch_header(&client, ckb_rpc_url, &block_hash).await?)
         .map_err(CyclesError::unavailable)?;
     if commit.number() == 0 {
         return Err(CyclesError::invalid_data(
             "genesis transactions have no consensus script execution",
         ));
     }
-    let mock = build_mock_transaction(ckb_rpc_url, &tx).await?;
+    let mock = build_mock_transaction(&client, ckb_rpc_url, &tx).await?;
     let mut extensions = std::collections::HashMap::new();
     for hash in &tx.header_deps {
-        if let Some(extension) = fetch_block_extension(ckb_rpc_url, hash).await? {
+        if let Some(extension) = fetch_block_extension(&client, ckb_rpc_url, hash).await? {
             let key = ckb_types::packed::Byte32::from_slice(
                 &hex::decode(hash.trim_start_matches("0x")).map_err(CyclesError::unavailable)?,
             )
@@ -353,6 +359,7 @@ pub async fn calculate_cycles(
 }
 
 async fn fetch_block_extension(
+    client: &reqwest::Client,
     url: &str,
     hash: &str,
 ) -> Result<Option<ckb_types::bytes::Bytes>, CyclesError> {
@@ -360,7 +367,7 @@ async fn fetch_block_extension(
     struct BlockExtension {
         extension: Option<String>,
     }
-    let response: RpcResponse<BlockExtension> = reqwest::Client::new()
+    let response: RpcResponse<BlockExtension> = client
         .post(url)
         .json(&serde_json::json!({"id":1,"jsonrpc":"2.0","method":"get_block","params":[hash]}))
         .send()
@@ -389,10 +396,10 @@ async fn fetch_block_extension(
 }
 
 async fn fetch_transaction(
+    client: &reqwest::Client,
     ckb_rpc_url: &str,
     tx_hash: &str,
 ) -> Result<(RpcTransaction, TxStatus), CyclesError> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
         "jsonrpc": "2.0",
@@ -458,10 +465,10 @@ fn committed_block_hash(tx_hash: &str, status: &TxStatus) -> Result<String, Cycl
 /// all the header association needs — the genesis system-script transaction
 /// alone is 2.4 MB, and cell payloads are resolved separately.
 async fn fetch_committing_transaction_info(
+    client: &reqwest::Client,
     ckb_rpc_url: &str,
     tx_hash: &str,
 ) -> Result<ckb_types::core::TransactionInfo, CyclesError> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
         "jsonrpc": "2.0",
@@ -495,7 +502,7 @@ async fn fetch_committing_transaction_info(
         CyclesError::unavailable(format!("committed transaction lacks tx_index: {tx_hash}"))
     })?;
     let index = parse_hex_index(index).map_err(CyclesError::unavailable)?;
-    let header = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)
+    let header = vm::header(&fetch_header(client, ckb_rpc_url, &block_hash).await?)
         .map_err(CyclesError::unavailable)?;
     Ok(ckb_types::core::TransactionInfo::new(
         header.number(),
@@ -508,8 +515,10 @@ async fn fetch_committing_transaction_info(
 /// Fetch the VM activation epochs (RFC0032 -> VM1, RFC0049 -> VM2) from the
 /// chain's `get_consensus` response. Chain data is the source of truth — no
 /// per-network hardcoded tables.
-async fn fetch_vm_consensus(ckb_rpc_url: &str) -> Result<(VmActivationEpochs, u64), CyclesError> {
-    let client = reqwest::Client::new();
+async fn fetch_vm_consensus(
+    client: &reqwest::Client,
+    ckb_rpc_url: &str,
+) -> Result<(VmActivationEpochs, u64), CyclesError> {
     let body = serde_json::json!({
         "id": 1,
         "jsonrpc": "2.0",
@@ -621,18 +630,20 @@ struct ResolvedCell {
 
 /// Resolve one out point into the cell payload plus its header association.
 async fn fetch_cell(
+    client: &reqwest::Client,
     ckb_rpc_url: &str,
     out_point: &RpcOutPoint,
 ) -> Result<ResolvedCell, CyclesError> {
-    let (output, data) = fetch_cell_with_data(ckb_rpc_url, out_point).await?;
-    let transaction_info = fetch_committing_transaction_info(ckb_rpc_url, &out_point.tx_hash)
-        .await
-        .map_err(|error| {
-            error.with_context(format!(
-                "committing transaction for cell {}:{}",
-                out_point.tx_hash, out_point.index
-            ))
-        })?;
+    let (output, data) = fetch_cell_with_data(client, ckb_rpc_url, out_point).await?;
+    let transaction_info =
+        fetch_committing_transaction_info(client, ckb_rpc_url, &out_point.tx_hash)
+            .await
+            .map_err(|error| {
+                error.with_context(format!(
+                    "committing transaction for cell {}:{}",
+                    out_point.tx_hash, out_point.index
+                ))
+            })?;
     Ok(ResolvedCell {
         output,
         data,
@@ -642,12 +653,11 @@ async fn fetch_cell(
 }
 
 async fn fetch_cell_with_data(
+    client: &reqwest::Client,
     ckb_rpc_url: &str,
     out_point: &RpcOutPoint,
 ) -> Result<(RpcOutput, String), CyclesError> {
     async {
-        let client = reqwest::Client::new();
-
         let body = serde_json::json!({
             "id": 1,
             "jsonrpc": "2.0",
@@ -680,7 +690,7 @@ async fn fetch_cell_with_data(
             }
         }
 
-        fetch_cell_from_transaction(ckb_rpc_url, out_point).await
+        fetch_cell_from_transaction(client, ckb_rpc_url, out_point).await
     }
     .await
     .map_err(|error: CyclesError| {
@@ -692,10 +702,10 @@ async fn fetch_cell_with_data(
 }
 
 async fn fetch_cell_from_transaction(
+    client: &reqwest::Client,
     ckb_rpc_url: &str,
     out_point: &RpcOutPoint,
 ) -> Result<(RpcOutput, String), CyclesError> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
         "jsonrpc": "2.0",
@@ -744,8 +754,11 @@ async fn fetch_cell_from_transaction(
     Ok((output, data))
 }
 
-async fn fetch_header(ckb_rpc_url: &str, block_hash: &str) -> Result<RpcHeader, CyclesError> {
-    let client = reqwest::Client::new();
+async fn fetch_header(
+    client: &reqwest::Client,
+    ckb_rpc_url: &str,
+    block_hash: &str,
+) -> Result<RpcHeader, CyclesError> {
     let body = serde_json::json!({
         "id": 1,
         "jsonrpc": "2.0",
@@ -869,18 +882,19 @@ fn mock_cell_dep_from(out_point: &RpcOutPoint, dep_type: &str, cell: ResolvedCel
 }
 
 async fn build_mock_transaction(
+    client: &reqwest::Client,
     ckb_rpc_url: &str,
     tx: &RpcTransaction,
 ) -> Result<MockTransaction, CyclesError> {
     let mut mock_inputs = Vec::new();
     for input in &tx.inputs {
-        let cell = fetch_cell(ckb_rpc_url, &input.previous_output).await?;
+        let cell = fetch_cell(client, ckb_rpc_url, &input.previous_output).await?;
         mock_inputs.push(mock_input_from(input, cell));
     }
 
     let mut mock_cell_deps = Vec::new();
     for cell_dep in &tx.cell_deps {
-        let cell = fetch_cell(ckb_rpc_url, &cell_dep.out_point).await?;
+        let cell = fetch_cell(client, ckb_rpc_url, &cell_dep.out_point).await?;
         let group_data = cell.data.clone();
 
         mock_cell_deps.push(mock_cell_dep_from(
@@ -905,7 +919,7 @@ async fn build_mock_transaction(
                     continue;
                 }
 
-                let ref_cell = fetch_cell(ckb_rpc_url, &ref_out_point).await?;
+                let ref_cell = fetch_cell(client, ckb_rpc_url, &ref_out_point).await?;
                 mock_cell_deps.push(mock_cell_dep_from(&ref_out_point, "code", ref_cell));
             }
         }
@@ -913,7 +927,7 @@ async fn build_mock_transaction(
 
     let mut mock_headers = Vec::new();
     for header_hash in &tx.header_deps {
-        let header = fetch_header(ckb_rpc_url, header_hash).await?;
+        let header = fetch_header(client, ckb_rpc_url, header_hash).await?;
         mock_headers.push(MockHeader {
             compact_target: header.compact_target,
             hash: header.hash,
@@ -995,7 +1009,7 @@ mod tests {
         rpc: &str,
         hash: &str,
     ) -> Result<crate::cycles_task::TransactionCycles, CyclesError> {
-        let (_, status) = fetch_transaction(rpc, hash).await?;
+        let (_, status) = fetch_transaction(&reqwest::Client::new(), rpc, hash).await?;
         let block = committed_block_hash(hash, &status)?;
         let bytes: [u8; 32] = hex::decode(block.trim_start_matches("0x"))
             .unwrap()
