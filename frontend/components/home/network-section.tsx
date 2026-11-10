@@ -3,9 +3,9 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  BarChart,
   ChartFigure,
   LineChart,
+  SparkChart,
   type Bar,
   type SeriesPoint,
 } from '@/components/home/mini-chart';
@@ -305,7 +305,11 @@ function txView(buckets: TxStatsDataPoint[], series: string): TxView | null {
   };
 }
 
-/** Transactions: one chart, one time scale at a time — hourly over 24 h or daily over 14 d. */
+/**
+ * Transactions: one chart, one time scale at a time — hourly over 24 h or daily over 14 d — drawn
+ * as a sparkline of eighth blocks (rubbing × Song print, phase 2) from the series the figure
+ * already fetches (`/statistics/tx-stats` hourlyData / dailyData).
+ */
 function TransactionsFigure() {
   const [txRange, setTxRange] = useState<TxRange>('24h');
   const { data, error } = useQuery({
@@ -330,13 +334,13 @@ function TransactionsFigure() {
     const last = view.last ? n(view.last.value) : 'none';
     const open = view.bars.filter((b) => b.state === 'inProgress').length;
     const unit = txRange === '24h' ? 'hour' : 'day';
-    const hollow =
+    const faint =
       open === 1
-        ? `the current ${unit} drawn hollow`
-        : `the ${open} ${unit}s still in progress drawn hollow`;
+        ? `the current ${unit} drawn faint`
+        : `the ${open} ${unit}s still in progress drawn faint`;
     return txRange === '24h'
-      ? `Transactions per hour over the last 24 hours, ${n(view.min)} to ${n(view.max)} per hour, ${last} in the last full hour, ${hollow}`
-      : `Transactions per day, ${view.bars[0].label} to ${view.bars[view.bars.length - 1].label}, ${n(view.min)} to ${n(view.max)} per day, ${last} on the last full day, ${hollow}`;
+      ? `Transactions per hour over the last 24 hours, ${n(view.min)} to ${n(view.max)} per hour, ${last} in the last full hour, ${faint}`
+      : `Transactions per day, ${view.bars[0].label} to ${view.bars[view.bars.length - 1].label}, ${n(view.min)} to ${n(view.max)} per day, ${last} on the last full day, ${faint}`;
   };
   return (
     <ChartFigure
@@ -371,7 +375,7 @@ function TransactionsFigure() {
         </span>
       }
       body={bodyOf(d, (view) => (
-        <BarChart bars={view.bars} formatValue={n} ariaLabel={ariaLabel(view)} />
+        <SparkChart bars={view.bars} formatValue={n} ariaLabel={ariaLabel(view)} />
       ))}
     />
   );

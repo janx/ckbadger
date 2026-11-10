@@ -6,6 +6,7 @@ import {
   ChartFigure,
   LineChart,
   SignedBarChart,
+  SparkChart,
   type Bar,
 } from '@/components/home/mini-chart';
 import { MINUS } from '@/lib/chart-ticks';
@@ -82,6 +83,54 @@ describe('mini charts', () => {
     const hollow = svg.querySelector('[data-bar="inProgress"]') as SVGRectElement;
     expect(hollow).toHaveAttribute('stroke-dasharray', '2 1.5');
     expect(hollow).toHaveAttribute('fill-opacity', '0.1');
+  });
+
+  // Rubbing × Song print, phase 2: counts as a sparkline of eighth blocks on the same canvas.
+  it('draws a sparkline: one eighth block per bucket, a slot wide, standing on the plot floor', () => {
+    const bars: Bar[] = [
+      { label: '09:00', value: 610, state: 'complete' },
+      { label: '10:00', value: 731, state: 'highlight' },
+      { label: '11:00', value: 326, state: 'inProgress' },
+    ];
+    render(<SparkChart bars={bars} ariaLabel="Transactions" formatValue={String} />);
+    const svg = screen.getByRole('img', { name: 'Transactions' });
+    const glyphs = [...svg.querySelectorAll('[data-spark] text')];
+    // from zero to the largest: 7 × 610 / 731 = 5.84 → ▇, 731 → █, 7 × 326 / 731 = 3.12 → ▄
+    expect(glyphs.map((g) => g.textContent).join('')).toBe('▇█▄');
+    expect(glyphs.map((g) => g.getAttribute('data-bar'))).toEqual([
+      'complete',
+      'highlight',
+      'inProgress',
+    ]);
+    expect(glyphs.map((g) => g.getAttribute('fill'))).toEqual([
+      'var(--c-jade)',
+      'var(--c-jade-bright)',
+      'var(--c-text-ghost)',
+    ]);
+    // 280 px: slots of (272 − 34) / 3 px; the glyph is one slot wide (0.6 em), capped so a full
+    // block (1.32 em) never outgrows the 74 px plot, and its foot (0.3 em under the baseline) is
+    // on the floor at y = 84
+    const size = Math.min((272 - 34) / 3 / 0.6, 74 / 1.32);
+    const group = svg.querySelector('[data-spark]')!;
+    expect(Number(group.getAttribute('font-size'))).toBeCloseTo(size, 1);
+    for (const g of glyphs) expect(Number(g.getAttribute('y')) + 0.3 * size).toBeCloseTo(84, 0);
+    // no bars, no y axis: the glyph heights are the scale
+    expect(svg.querySelector('rect')).toBeNull();
+    expect(texts(svg, 'y')).toEqual([]);
+    expect(texts(svg, 'x').map((t) => t.text)).toEqual(['09:00', '10:00', '11:00']);
+  });
+
+  it('rejects a negative count instead of drawing it', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <SparkChart
+          bars={[{ label: 'x', value: -1, state: 'complete' }]}
+          ariaLabel="bad"
+          formatValue={String}
+        />
+      )
+    ).toThrow('sparkline: -1 is not a count');
   });
 
   it('rejects a negative bar instead of drawing it below the base line', () => {

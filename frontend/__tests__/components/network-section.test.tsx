@@ -6,6 +6,7 @@ import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width
 import { server } from '@/__tests__/msw/server';
 import { averageBlockTimeChart, txStats, uncleRateChart } from '@/__tests__/msw/fixtures/home';
 import { NetworkSection } from '@/components/home/network-section';
+import { sparkline } from '@/lib/blocks-text';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 
 const API = '/api/:network/v1';
@@ -165,7 +166,7 @@ describe('NetworkSection', () => {
     expect(screen.queryByTestId('home-uncle-rate-headline')).not.toBeInTheDocument();
   });
 
-  it('shows the 24 h hourly view by default: the headline is the last full hour, the current hour hollow', async () => {
+  it('shows the 24 h hourly view by default: the headline is the last full hour, the current hour faint', async () => {
     render(<NetworkSection />);
     const fig = figure('home-transactions');
     const group = within(fig).getByRole('group', { name: 'Transactions range' });
@@ -185,6 +186,16 @@ describe('NetworkSection', () => {
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(24);
     expect(bars[23]).toHaveAttribute('data-bar', 'inProgress');
+    // Rubbing × Song print, phase 2: a sparkline of eighth blocks, one glyph per hour, from zero to
+    // the busiest hour; the newest complete hour bright, the current one faint, no bars drawn.
+    const glyphs = [...bars].map((b) => b.textContent).join('');
+    expect(glyphs).toMatch(/^[▁▂▃▄▅▆▇█]{24}$/);
+    expect(glyphs).toBe(sparkline(txStats.hourlyData.map((b) => b.value)));
+    for (const b of bars) expect(b.tagName).toBe('text');
+    expect(svg.querySelector('rect')).toBeNull();
+    expect(bars[0]).toHaveAttribute('fill', 'var(--c-jade)');
+    expect(bars[22]).toHaveAttribute('fill', 'var(--c-jade-bright)');
+    expect(bars[23]).toHaveAttribute('fill', 'var(--c-text-ghost)');
     // Hovering the current hour reads its count so far in the caption (centre at x ≈ 267).
     fireEvent.pointerMove(svg, { clientX: 268 });
     expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('326');
@@ -227,10 +238,10 @@ describe('NetworkSection', () => {
       '10/24 · in progress'
     );
     fireEvent.pointerLeave(svg);
-    expect(svg).toHaveAccessibleName(/15,710 on the last full day, the current day drawn hollow/);
+    expect(svg).toHaveAccessibleName(/15,710 on the last full day, the current day drawn faint/);
   });
 
-  it('draws every in-progress bucket hollow and heads with the newest complete one', async () => {
+  it('draws every in-progress bucket faint and heads with the newest complete one', async () => {
     // The first minutes of an hour: the previous hour is still in progress too.
     const hourlyData = txStats.hourlyData.map((bucket, i, all) => ({
       ...bucket,
@@ -252,7 +263,7 @@ describe('NetworkSection', () => {
     expect(bars[22]).toHaveAttribute('data-bar', 'inProgress');
     expect(bars[23]).toHaveAttribute('data-bar', 'inProgress');
     expect(within(fig).getByRole('img')).toHaveAccessibleName(
-      /the 2 hours still in progress drawn hollow$/
+      /the 2 hours still in progress drawn faint$/
     );
     fireEvent.pointerMove(within(fig).getByRole('img'), { clientX: 258 }); // bar 22, centre ≈ 257.1
     expect(screen.getByTestId('home-transactions-subtitle')).toHaveTextContent(

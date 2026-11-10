@@ -5,6 +5,7 @@ import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import type { NetworkStats } from '@/lib/api';
+import { BAR_EMPTY, BAR_FULL, blockBarCells } from '@/lib/blocks-text';
 import { parseEpoch, type EpochInfo } from '@/lib/epoch';
 import { formatBlockNumber } from '@/lib/format-block';
 import { cn } from '@/lib/utils';
@@ -17,7 +18,7 @@ import { cn } from '@/lib/utils';
  *
  * From md up it is one wrapping row. Below md it is three lines grouped by meaning, never a row to
  * pan (docs/superpowers/plans/2026-11-01-narrow-widths/SPEC.md): the block with Live at the right
- * end, the epoch with its bar taking the free width, then the three mining figures — inline pairs
+ * end, the epoch with its block-character bar, then the three mining figures — inline pairs
  * packed to the left from 640 px, three equal columns with the label over the value below it. One
  * grid places the items in document order, so from md up the same items flow as the row.
  */
@@ -148,9 +149,8 @@ function readEpoch(raw: string): { epoch: EpochInfo } | { error: string } {
 }
 
 /**
- * Epoch number, a neutral progress bar, `index / length` and the time left — or why it can't. Its
- * text never wraps: below md only the bar gives up width (down to 48 px), so the parts never stack
- * into a column.
+ * Epoch number, its progress in block characters, `index / length` and the time left — or why it
+ * can't. Its text never wraps: the parts never stack into a column.
  */
 function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string | null }) {
   const read = readEpoch(raw);
@@ -168,7 +168,6 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
     );
   }
   const { epoch } = read;
-  const pct = (epoch.index / epoch.length) * 100;
   const index = epoch.index.toLocaleString('en-US');
   const length = epoch.length.toLocaleString('en-US');
   return (
@@ -180,21 +179,51 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
     >
       <span className={LABEL}>Epoch</span>
       <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
-      <span
-        aria-hidden="true"
-        className="bg-base-border flex h-1 min-w-12 flex-[1_1_48px] overflow-hidden rounded-sm md:w-14 md:flex-none"
-      >
-        <span
-          data-testid="vitals-epoch-progress"
-          className="bg-text"
-          style={{ width: `${pct}%` }}
-        />
-      </span>
+      <EpochBar fraction={epoch.index / epoch.length} />
       <span className="text-text text-meta md:text-small tabular-nums">
         {index} / {length}
       </span>
       <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
     </Link>
+  );
+}
+
+/** The epoch bar's cells: ten from 640 px; five on a phone, whose line also holds the number,
+ * `index / length` and the time left at 360 px (a ten-cell bar there pushes the line past the
+ * width once the index has four digits). */
+const EPOCH_CELLS = { narrow: 5, wide: 10 } as const;
+
+/**
+ * The epoch's progress as block characters (rubbing × Song print, phase 2): the filled cells in
+ * celadon, the rest `░` in the dim ink (lib/blocks-text). Drawn for the eye only: the link's
+ * label says the numbers.
+ */
+function EpochBar({ fraction }: { fraction: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="vitals-epoch-bar"
+      className="text-meta md:text-small shrink-0 leading-none"
+    >
+      {(['narrow', 'wide'] as const).map((form) => {
+        const width = EPOCH_CELLS[form];
+        const full = blockBarCells(fraction, width);
+        return (
+          <span
+            key={form}
+            data-cells={width}
+            className={form === 'narrow' ? 'sm:hidden' : 'hidden sm:inline'}
+          >
+            <span data-part="full" className="text-jade">
+              {BAR_FULL.repeat(full)}
+            </span>
+            <span data-part="empty" className="text-text-dim">
+              {BAR_EMPTY.repeat(width - full)}
+            </span>
+          </span>
+        );
+      })}
+    </span>
   );
 }
 
