@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -100,6 +101,26 @@ describe('CellDetailPage', () => {
     view();
     expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
+  });
+  // Rubbing × Song print, phase 3: the page seal (112 px, 80 on a phone, −4°) of the out point's
+  // 32-byte part, the hash of the transaction that made the cell, pressed beside the out point.
+  it('presses the seal of its out point’s transaction hash beside the out point', async () => {
+    getCell.mockResolvedValue({ ...base, outputIndex: 2 });
+    outpoint = `${hash}-2`;
+    const { container } = view();
+    const title = await screen.findByRole('heading', { level: 1 });
+    const seal = expectOnePageSeal(container, base.txHash, 'object');
+    const head = seal.closest('[data-sealed-head]')!;
+    expect(head).toContainElement(title);
+    expect(head).toHaveTextContent(`${base.txHash}:2`);
+    expectBefore(seal, title);
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
+  });
+  it('presses no seal when the out point cannot be read', () => {
+    outpoint = hash;
+    const { container } = view();
+    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
   it('shows loading and then exact live cell anatomy, chronology and byte map', async () => {
     let resolve!: (value: Cell) => void;

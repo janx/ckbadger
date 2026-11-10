@@ -245,6 +245,8 @@ export default function BlockDetailPage() {
               <Hash hash={block.hash} truncate={false} />
             </span>
           }
+          // The block's talisman, the stamp the chain put on it, beside its height and hash.
+          seal={{ hash: block.hash, scale: 'record' }}
           status={
             activation && (
               <Link href="/hardforks" className="text-text-dim text-small">
