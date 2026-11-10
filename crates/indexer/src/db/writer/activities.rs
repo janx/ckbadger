@@ -169,6 +169,11 @@ pub struct InputCellView<'a> {
     /// facts, live from the identity entry the consume path just read — because
     /// an input cell reaches the activity builder without its data.
     pub dotcell: Option<&'a DotCellNameData>,
+    /// The consumed cell's own data length. `data` is not the cell's data in
+    /// every path (live and bulk pass a `.bit` account id or nothing), so a
+    /// detector that classifies a cell by its data size reads it here — the
+    /// Fiber funding-cell arbiter does, identically for inputs and outputs.
+    pub data_size: i32,
     pub data: &'a [u8],
     pub is_dao_withdraw_request: bool,
     pub dao_compensation: Option<i64>,
@@ -1512,6 +1517,7 @@ pub(crate) mod test_fixtures {
                 udt_amount: self.udt_amount,
                 bit_cell_identity_id: None,
                 dotcell: self.dotcell.as_ref(),
+                data_size: 0,
                 data: &self.data,
                 is_dao_withdraw_request: self.is_dao_withdraw_request,
                 dao_compensation: self.dao_compensation,
@@ -3359,6 +3365,7 @@ mod tests {
             udt_amount: None,
             bit_cell_identity_id: None,
             dotcell: None,
+            data_size: 0,
             data: &input_data,
             is_dao_withdraw_request: false,
             dao_compensation: None,
@@ -3618,6 +3625,7 @@ mod tests {
                 udt_amount: Some(1000),
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,

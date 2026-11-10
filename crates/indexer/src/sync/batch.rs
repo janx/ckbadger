@@ -648,6 +648,7 @@ fn build_activity_input_views<'a>(
                     .get(&key)
                     .map(Vec::as_slice),
                 dotcell: indexes.dotcell_inputs.get(&key),
+                data_size: info.data_size,
                 data,
                 is_dao_withdraw_request,
                 dao_compensation,

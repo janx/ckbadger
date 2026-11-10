@@ -152,6 +152,7 @@ mod tests {
                 udt_amount: None,
                 bit_cell_identity_id: None,
                 dotcell: None,
+                data_size: 0,
                 data: &self.data,
                 is_dao_withdraw_request: false,
                 dao_compensation: None,

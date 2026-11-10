@@ -557,7 +557,9 @@ fn commitment_args_metadata(
 }
 
 /// The commitment args of the cell an event tracks, read by the one
-/// commitment-lock arbiter.
+/// commitment-lock arbiter. The detector emits these events only for cells
+/// the arbiter accepted, so args it rejects here are a detector bug (an
+/// invariant violation), never a chain shape.
 fn parse_tracked_commitment<'a>(
     args: &'a [u8],
     action: &str,
@@ -566,7 +568,7 @@ fn parse_tracked_commitment<'a>(
 ) -> Result<CommitmentLockArgs<'a>> {
     parse_commitment_lock_args(args).ok_or_else(|| {
         anyhow::anyhow!(
-            "fiber {}: {} is not valid commitment lock args in tx 0x{} block={} args_len={}",
+            "fiber {}: {} fits no commitment-lock layout in tx 0x{} block={} args_len={} — detector bug",
             action,
             key,
             hex::encode(&tx_actions.tx_hash),
@@ -1226,6 +1228,58 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(looked_up, channel_id);
+    }
+
+    /// The detector emits `force_close` only with a commitment output the
+    /// arbiter accepted, so metadata naming 40-byte args (no deployed layout)
+    /// is a detector bug: the writer fails with context instead of tracking it.
+    #[test]
+    fn test_force_close_with_args_the_arbiter_rejects_is_a_detector_bug() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let funding_tx_hash = [0x10; 32];
+        let participant = [0xAA; 32];
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &[0xCC; 20]),
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &open_actions).unwrap();
+        batch.commit().unwrap();
+
+        let mut commitment_args = vec![0xDD; 20];
+        commitment_args.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args.extend_from_slice(&1u64.to_be_bytes());
+        commitment_args.extend_from_slice(&[0xEE; 4]);
+        assert_eq!(commitment_args.len(), 40);
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            serde_json::json!({
+                "event": "force_close",
+                "channelOutpoint": channel_outpoint_hex(&funding_tx_hash, 0),
+                "capacity": "50000000000",
+                "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
+                "commitmentOutputIndex": 0,
+            }),
+        );
+        let mut batch = StoreBatch::new(&store);
+        let error = process_fiber_channel_events(&mut batch, &fc_actions)
+            .expect_err("a tracked commitment the arbiter rejects is a detector bug");
+        let message = error.to_string();
+        assert!(
+            message.contains("fits no commitment-lock layout")
+                && message.contains("args_len=40")
+                && message.contains("block=5002"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
