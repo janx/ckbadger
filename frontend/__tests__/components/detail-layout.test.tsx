@@ -95,8 +95,8 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
     );
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border', 'pt-7');
-    // Midnight, continued (move 2): the boundary's 1 px border-t is a tube — painted by
-    // `.hairline-tube-border` (jade at the left, fading right); the border keeps its width.
+    // Midnight, continued (move 2): the boundary's 1 px border-t is coloured by
+    // `.hairline-tube-border` (a plain line since rubbing × Song print); the border keeps its width.
     expect(tier2).toHaveClass('hairline-tube-border');
     const eyebrow = tier2.firstElementChild as HTMLElement;
     expect(eyebrow).toHaveTextContent(/^Evidence · for developers$/);

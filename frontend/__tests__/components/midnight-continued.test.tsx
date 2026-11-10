@@ -47,16 +47,17 @@ describe('the rules in globals.css', () => {
     expect(css).toMatch(/\.hover-lit:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px/);
   });
 
-  it('move 2: the three tubes', () => {
+  // Rubbing × Song print, phase 2: the three tubes are set flat — a plain 1 px line in the line
+  // ink, no jade, no gradient; the class names (and so the markup) stay.
+  it('move 2: the three hairlines, a plain 1 px line', () => {
     expect(css).toMatch(
-      /\.hairline-tube\s*\{\s*height: 1px;\s*background: linear-gradient\(\s*90deg,\s*rgb\(var\(--rgb-jade\) \/ 0\.55\),\s*rgb\(var\(--rgb-jade\) \/ 0\.14\) 45%,\s*transparent 90%\s*\);/
+      /\.hairline-tube\s*\{\s*height: 1px;\s*background: var\(--c-base-border\);\s*\}/
     );
-    expect(css).toMatch(/\.hairline-tube-border\s*\{\s*border-image: linear-gradient\(/);
-    const header = css.match(/\.hairline-tube-header\s*\{([^}]*)\}/)!;
-    expect(header[1]).toMatch(/border-image: linear-gradient\(\s*90deg,/);
-    expect(header[1]).toContain('rgb(var(--rgb-jade) / 0.6),');
-    expect(header[1]).toContain('rgb(var(--rgb-jade) / 0.18) 30%,');
-    expect(header[1]).toMatch(/var\(--c-base-border-subtle\) 70%\s*\)\s*1;/);
+    expect(css).toMatch(/\.hairline-tube-border\s*\{\s*border-color: var\(--c-base-border\);\s*\}/);
+    expect(css).toMatch(/\.hairline-tube-header\s*\{\s*border-color: var\(--c-base-border\);\s*\}/);
+    for (const rule of css.match(/\.hairline-tube[\w-]*\s*\{[^}]*\}/g)!) {
+      expect(rule).not.toMatch(/border-image|gradient|--rgb-jade/);
+    }
   });
 
   it('move 3: the frame edge at .45', () => {

@@ -114,7 +114,9 @@
   --pipeline-pending: var(--c-pipeline-pending);
   --pipeline-proposed: var(--c-pipeline-proposed);
   --pipeline-committed: var(--c-pipeline-committed);
-  --pipeline-ember: var(--c-amber);
+  /* The ember a dropped tx greys toward: gold, the warning hue (rubbing × Song print, phase 2 —
+     amber became moss green one-to-one in phase 1, and a drop must not read as growth). */
+  --pipeline-ember: var(--c-gold);
   /* The pools are wells, recessed below the surface. */
   --pipeline-well: var(--c-pipeline-well);
   /* What a stage hue is mixed toward as cycles rise: white at night, the ink by day. */
@@ -189,16 +191,6 @@ body * {
     font-variant-numeric: tabular-nums;
   }
 
-  .terminal-text {
-    color: var(--c-jade);
-    text-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
-  }
-
-  .terminal-text-dim {
-    color: var(--c-jade-dim);
-    text-shadow: 0 0 4px rgb(var(--rgb-jade-dim) / calc(0.19 * var(--m-glow)));
-  }
-
   .crt-screen {
     position: relative;
     overflow: hidden;
@@ -228,18 +220,6 @@ body * {
     z-index: 10;
   }
 
-  .scanline-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 4px;
-    background: linear-gradient(to bottom, transparent, rgb(var(--rgb-jade) / 0.01), transparent);
-    animation: scan-line 8s linear infinite;
-    pointer-events: none;
-    z-index: 9999;
-  }
-
   .hex-char {
     display: inline-block;
     transition: all 0.1s ease-out;
@@ -265,11 +245,6 @@ body * {
     animation: digit-tick 0.2s ease-out;
   }
 
-  /* Glitch effect on hover */
-  .glitch-hover:hover {
-    animation: glitch 0.3s ease-out;
-  }
-
   /*
    * Row scan (Midnight, continued: move 4): a faint jade band crosses a hovered row once, in
    * 0.5 s. Painted as the row's own background image — a gradient three rows wide whose middle
@@ -292,27 +267,6 @@ body * {
 
   .row-scan:hover {
     animation: row-scan-sweep 0.5s ease-out forwards;
-  }
-
-  /* Indicator light pulse */
-  .indicator-light {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--c-jade);
-    box-shadow:
-      0 0 4px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow))),
-      0 0 8px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
-    animation: glow-pulse 1.5s ease-in-out infinite;
-  }
-
-  .indicator-light-gold {
-    background: var(--c-gold);
-    box-shadow: 0 0 6px rgb(var(--rgb-gold) / calc(1 * var(--m-glow)));
-  }
-
-  .indicator-light-static {
-    animation: none;
   }
 
   .byte-hover-breathe {
@@ -354,15 +308,6 @@ body * {
   }
 }
 
-@keyframes scan-line {
-  0% {
-    top: 0;
-  }
-  100% {
-    top: 100%;
-  }
-}
-
 @keyframes cycles-marquee-shine {
   0% {
     background-position: 220% 0;
@@ -381,18 +326,6 @@ body * {
   }
 }
 
-@keyframes glow-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    box-shadow: 0 0 6px currentColor;
-  }
-  50% {
-    opacity: 0.6;
-    box-shadow: 0 0 12px currentColor;
-  }
-}
-
 @keyframes digit-tick {
   0% {
     transform: translateY(-100%);
@@ -401,28 +334,6 @@ body * {
   100% {
     transform: translateY(0);
     opacity: 1;
-  }
-}
-
-@keyframes glitch {
-  0%,
-  100% {
-    transform: translateX(0);
-    filter: none;
-  }
-  20% {
-    transform: translateX(-2px);
-    filter: hue-rotate(90deg);
-  }
-  40% {
-    transform: translateX(2px);
-    filter: hue-rotate(-90deg);
-  }
-  60% {
-    transform: translateX(-1px);
-  }
-  80% {
-    transform: translateX(1px);
   }
 }
 
@@ -441,65 +352,6 @@ body * {
 @layer base {
   * {
     @apply border-base-border;
-  }
-}
-
-@layer components {
-  .terminal-card {
-    @apply relative overflow-hidden rounded-lg border;
-    border-color: var(--c-base-border);
-    background: var(--c-base-bg);
-    box-shadow:
-      inset 0 0 30px rgb(var(--rgb-jade) / calc(0.02 * var(--m-glow))),
-      0 0 10px rgb(var(--rgb-jade) / calc(0.04 * var(--m-glow)));
-  }
-
-  .terminal-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      var(--m-inset-scan) 0px,
-      var(--m-inset-scan) 1px,
-      transparent 1px,
-      transparent 2px
-    );
-    pointer-events: none;
-    z-index: 1;
-  }
-
-  .terminal-card-header {
-    @apply relative z-10 border-b px-4 py-3;
-    border-color: var(--c-base-border);
-    background: linear-gradient(to bottom, rgb(var(--rgb-jade) / 0.03), transparent);
-  }
-
-  .terminal-card-content {
-    @apply relative z-10 p-4;
-  }
-
-  .terminal-border-glow {
-    position: relative;
-  }
-
-  .terminal-border-glow::after {
-    content: '';
-    position: absolute;
-    inset: -1px;
-    border-radius: inherit;
-    padding: 1px;
-    background: linear-gradient(
-      135deg,
-      rgb(var(--rgb-jade) / 0.15),
-      transparent 50%,
-      rgb(var(--rgb-jade) / 0.06)
-    );
-    mask:
-      linear-gradient(#fff 0 0) content-box,
-      linear-gradient(#fff 0 0);
-    mask-composite: exclude;
-    pointer-events: none;
   }
 }
 
@@ -683,38 +535,20 @@ svg a:hover {
   text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
 }
 
-/* Move 2 — hairlines are tubes: a 1 px jade line lit from the left (where the mark is), fading
-   to the right. `.hairline-tube` is a standalone 1 px element (under an index page's title row);
-   `.hairline-tube-border` paints an element's own 1 px border with it, so `border-t` /
-   `border-b` keep their width (the tier boundary); `.hairline-tube-header` is the header's bottom
-   edge, which fades into the subtle border instead of to nothing. Table rules, frames and tier-2
-   rules stay flat. */
+/* Move 2 — the hairlines, set flat (rubbing × Song print, phase 2): the jade tubes lit from the
+   left are a plain 1 px line in the line ink, as a rule is on the boards. `.hairline-tube` is a
+   standalone 1 px element (under an index page's title row); `.hairline-tube-border` colours an
+   element's own 1 px border, so `border-t` / `border-b` keep their width (the tier boundary);
+   `.hairline-tube-header` is the header's bottom edge. The names stay, the light is gone. */
 .hairline-tube {
   height: 1px;
-  background: linear-gradient(
-    90deg,
-    rgb(var(--rgb-jade) / 0.55),
-    rgb(var(--rgb-jade) / 0.14) 45%,
-    transparent 90%
-  );
+  background: var(--c-base-border);
 }
 .hairline-tube-border {
-  border-image: linear-gradient(
-      90deg,
-      rgb(var(--rgb-jade) / 0.55),
-      rgb(var(--rgb-jade) / 0.14) 45%,
-      transparent 90%
-    )
-    1;
+  border-color: var(--c-base-border);
 }
 .hairline-tube-header {
-  border-image: linear-gradient(
-      90deg,
-      rgb(var(--rgb-jade) / 0.6),
-      rgb(var(--rgb-jade) / 0.18) 30%,
-      var(--c-base-border-subtle) 70%
-    )
-    1;
+  border-color: var(--c-base-border);
 }
 
 /* Move 4 — the terminal speaks: the search field's block cursor, after the typed text while the
@@ -762,9 +596,6 @@ svg a:hover {
 :root[data-theme='light'] .chart-line-halo {
   filter: none;
 }
-:root[data-theme='light'] .neon-bar-left::before {
-  box-shadow: none;
-}
 :root[data-theme='light'] .glow-neon,
 :root[data-theme='light'] .glow-soft {
   text-shadow: none;
@@ -800,22 +631,6 @@ svg a:hover {
   pointer-events: none;
 }
 
-.neon-bar-left {
-  position: relative;
-}
-.neon-bar-left::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 3px;
-  height: 100%;
-  background: var(--bar-color, var(--c-jade));
-  box-shadow:
-    0 0 20px var(--bar-color, var(--c-jade)),
-    0 0 40px var(--bar-glow, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
-}
-
 /* A stat figure's glow, held close (the rubbing's bloom is 6 px, never a wide neon wash): a 1 px
    core in the figure's colour and two short halos (components/ui/stat-block.tsx sets the three). */
 .glow-neon {
@@ -830,16 +645,6 @@ svg a:hover {
     0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
 }
 
-.live-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--c-jade);
-  box-shadow:
-    0 0 8px rgb(var(--rgb-jade) / calc(1 * var(--m-glow))),
-    0 0 16px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
-  animation: live-pulse 1.5s ease-in-out infinite;
-}
 /* A live mark breathes: the square's ink fades to 45 % and back over 1.5 s (no bloom: the prompt
    square is ink, not phosphor). */
 @keyframes live-pulse {
@@ -850,22 +655,6 @@ svg a:hover {
   50% {
     opacity: 0.45;
   }
-}
-
-@keyframes blink-cursor {
-  0%,
-  49% {
-    opacity: 1;
-    background-color: var(--c-jade-bright);
-  }
-  50%,
-  100% {
-    opacity: 0;
-    background-color: transparent;
-  }
-}
-.animate-blink-cursor {
-  animation: blink-cursor 1s step-end infinite;
 }
 
 /* Shield storage cards from CRT scanline overlay */

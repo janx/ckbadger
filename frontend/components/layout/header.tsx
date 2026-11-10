@@ -100,8 +100,8 @@ export function Header() {
   // and the strip scrolls away with the content.
   return (
     <div ref={wrapperRef} className="contents md:sticky md:top-0 md:z-40 md:mb-4 md:block">
-      {/* The header's bottom edge is a tube (Midnight, continued, move 2): `.hairline-tube-header`
-          paints the 1 px `border-b` jade at the left, fading into the subtle border. */}
+      {/* The header's bottom edge (Midnight, continued, move 2; set flat in rubbing × Song print):
+          `.hairline-tube-header` colours the 1 px `border-b` in the line ink. */}
       <header
         ref={headerRef}
         className="border-base-border-subtle hairline-tube-header bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"

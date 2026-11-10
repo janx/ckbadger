@@ -359,9 +359,9 @@ describe('Header', () => {
     expect(screen.getByText('Blocks', { selector: 'span' })).toHaveClass('text-jade');
   });
 
-  // Midnight, continued (review 2026-11-03, item 5, move 2): the header's bottom edge is a tube —
-  // the 1 px border-b painted by `.hairline-tube-header`, jade at the left fading into the
-  // subtle border. The sticky geometry is unchanged.
+  // Midnight, continued (review 2026-11-03, item 5, move 2): the header's bottom edge is the 1 px
+  // border-b coloured by `.hairline-tube-header` — jade fading into the subtle border then, a
+  // plain line in the line ink since rubbing × Song print. The sticky geometry is unchanged.
   it('closes the header row on a lit hairline (move 2)', () => {
     usePathnameMock.mockReturnValue('/');
     render(<Header />);
