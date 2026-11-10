@@ -1,8 +1,9 @@
 'use client';
 
-import { Fragment } from 'react';
+import { Fragment, type ReactElement, type ReactNode } from 'react';
 import { lockArgsLine } from '@/lib/lock-args';
 import Link from '@/components/ui/link';
+import { ErrorBoundary } from '@/components/error-boundary';
 import {
   getScriptDetailHref,
   getObjectDetailHref,
@@ -440,6 +441,28 @@ export function ActivityReadError({ txHash, error }: { txHash: string; error: un
     >
       {`Cannot read tx ${txHash}: ${message}`}
     </span>
+  );
+}
+
+/** Calls `render` while React renders it, so what it throws lands in the boundary around it. */
+function RenderedInBoundary({ render }: { render: () => ReactNode }) {
+  return <>{render()}</>;
+}
+
+/**
+ * A part the page cannot read is said in place, with the transaction it belongs to (review 45fd
+ * ruling D7): `render` runs during React's render inside an error boundary keyed by the
+ * transaction, so whatever it computes and every component it returns fail here, as an
+ * ActivityReadError, instead of reaching the page-level boundary. Adds no element of its own.
+ */
+export function readable(txHash: string, render: () => ReactNode): ReactElement {
+  return (
+    <ErrorBoundary
+      key={txHash}
+      fallbackRender={(error) => <ActivityReadError txHash={txHash} error={error} />}
+    >
+      <RenderedInBoundary render={render} />
+    </ErrorBoundary>
   );
 }
 

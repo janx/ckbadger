@@ -1,6 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
-import { ActivityReadError, ExactCkb, ItemDeltaFact } from '@/components/activity-event-row';
+import { ExactCkb, ItemDeltaFact, readable } from '@/components/activity-event-row';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -8,14 +7,6 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn, truncateHash } from '@/lib/utils';
-
-function readable(txHash: string, render: () => ReactNode): ReactNode {
-  try {
-    return render();
-  } catch (error) {
-    return <ActivityReadError txHash={txHash} error={error} />;
-  }
-}
 
 /** Each address's lock code hash, read off the transaction's own cells (inputs and outputs). */
 export function lockCodeHashesByAddress(
@@ -113,7 +104,8 @@ function partyKey(p: ParticipantInfo, i: number): string {
  * Balance changes (TX-12, TX-19): every participant, then the Net row that explains the sum.
  * The measured width decides the form (docs/RESPONSIVE_LAYOUT.md rule 4): the four-column table
  * where its 700 px fit, otherwise one card per participant — party and lock, CKB and occupied,
- * the items moved — with the Net row as the last card. Never a sideways scroller.
+ * the items moved — with the Net row as the last card. Never a sideways scroller. A value the
+ * section cannot read fails the section in place, under its heading (review 45fd ruling D7).
  */
 export function BalanceChanges({
   activity,
@@ -138,167 +130,170 @@ export function BalanceChanges({
     });
   return (
     <DetailSection title="Balance changes">
-      <div ref={ref} className="min-w-0">
-        {form === 'table' ? (
-          <div role="table" aria-label="Balance changes by participant">
-            <div
-              role="row"
-              className={cn(
-                BALANCE_GRID,
-                'border-base-border-subtle text-text-dim text-meta border-b pb-1.5'
-              )}
-            >
-              <span role="columnheader">Participant</span>
-              <span role="columnheader" className="text-right">
-                CKB
-              </span>
-              <span role="columnheader" className="text-right">
-                Occupied
-              </span>
-              <span role="columnheader">Items</span>
-            </div>
-            {activity.participants.map((p, i) => (
+      {readable(activity.txHash, () => (
+        <div ref={ref} className="min-w-0">
+          {form === 'table' ? (
+            <div role="table" aria-label="Balance changes by participant">
               <div
-                key={partyKey(p, i)}
                 role="row"
-                className={cn(BALANCE_GRID, 'border-base-elevated items-baseline border-b py-2')}
+                className={cn(
+                  BALANCE_GRID,
+                  'border-base-border-subtle text-text-dim text-meta border-b pb-1.5'
+                )}
               >
-                <span role="cell" className="min-w-0">
-                  <ParticipantRefView participant={p} compact quiet />
-                  <LockLabel participant={p} lockCodeHashes={lockCodeHashes} className="ml-2" />
+                <span role="columnheader">Participant</span>
+                <span role="columnheader" className="text-right">
+                  CKB
                 </span>
-                <span role="cell" className="text-right">
-                  <ExactCkb shannons={BigInt(p.ckbDelta)} />
+                <span role="columnheader" className="text-right">
+                  Occupied
                 </span>
-                <span role="cell" className="text-right tabular-nums">
-                  {formatOccupiedDelta(p.usedDelta)}
-                </span>
-                <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
-                  <Items participant={p} />
-                </span>
+                <span role="columnheader">Items</span>
               </div>
-            ))}
-            <div
-              role="row"
-              data-testid="tx-balance-net"
-              className={cn(BALANCE_GRID, 'text-text-dim items-baseline py-2')}
-            >
-              {readable(activity.txHash, () => {
-                const n = net();
-                return (
+              {activity.participants.map((p, i) => (
+                <div
+                  key={partyKey(p, i)}
+                  role="row"
+                  className={cn(BALANCE_GRID, 'border-base-elevated items-baseline border-b py-2')}
+                >
+                  <span role="cell" className="min-w-0">
+                    <ParticipantRefView participant={p} compact quiet />
+                    <LockLabel participant={p} lockCodeHashes={lockCodeHashes} className="ml-2" />
+                  </span>
+                  <span role="cell" className="text-right">
+                    <ExactCkb shannons={BigInt(p.ckbDelta)} />
+                  </span>
+                  <span role="cell" className="text-right tabular-nums">
+                    {formatOccupiedDelta(p.usedDelta)}
+                  </span>
+                  <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
+                    <Items participant={p} />
+                  </span>
+                </div>
+              ))}
+              <div
+                role="row"
+                data-testid="tx-balance-net"
+                className={cn(BALANCE_GRID, 'text-text-dim items-baseline py-2')}
+              >
+                {readable(activity.txHash, () => {
+                  const n = net();
+                  return (
+                    <>
+                      <span role="cell">Net</span>
+                      <span role="cell" className="text-right">
+                        <ExactCkb shannons={n.ckb} tone="plain" />
+                      </span>
+                      <span role="cell" className="text-right tabular-nums">
+                        {formatOccupiedDelta(n.occupied.toString())}
+                      </span>
+                      <span role="cell">{netNote(n.note)}</span>
+                    </>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <ul aria-label="Balance changes by participant" data-form={form}>
+              {activity.participants.map((p, i) => {
+                const party = <ParticipantRefView participant={p} compact quiet />;
+                const ckb = <ExactCkb shannons={BigInt(p.ckbDelta)} />;
+                const occupied = (
                   <>
-                    <span role="cell">Net</span>
-                    <span role="cell" className="text-right">
-                      <ExactCkb shannons={n.ckb} tone="plain" />
-                    </span>
-                    <span role="cell" className="text-right tabular-nums">
-                      {formatOccupiedDelta(n.occupied.toString())}
-                    </span>
-                    <span role="cell">{netNote(n.note)}</span>
+                    occupied{' '}
+                    <span className="tabular-nums">{formatOccupiedDelta(p.usedDelta)}</span>
                   </>
                 );
-              })}
-            </div>
-          </div>
-        ) : (
-          <ul aria-label="Balance changes by participant" data-form={form}>
-            {activity.participants.map((p, i) => {
-              const party = <ParticipantRefView participant={p} compact quiet />;
-              const ckb = <ExactCkb shannons={BigInt(p.ckbDelta)} />;
-              const occupied = (
-                <>
-                  occupied <span className="tabular-nums">{formatOccupiedDelta(p.usedDelta)}</span>
-                </>
-              );
-              const border = i === 0 ? 'border-base-border-subtle' : 'border-base-elevated';
-              return form === 'three-line' ? (
-                // Phone: who and their lock / how much CKB and occupied / what item moved.
-                <li
-                  key={partyKey(p, i)}
-                  data-balance-card
-                  className={cn('flex flex-col gap-1 border-t py-2.5', border)}
-                >
-                  <div
-                    data-line="party"
-                    className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
+                const border = i === 0 ? 'border-base-border-subtle' : 'border-base-elevated';
+                return form === 'three-line' ? (
+                  // Phone: who and their lock / how much CKB and occupied / what item moved.
+                  <li
+                    key={partyKey(p, i)}
+                    data-balance-card
+                    className={cn('flex flex-col gap-1 border-t py-2.5', border)}
                   >
-                    {party}
-                    <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
-                  </div>
-                  <div
-                    data-line="amounts"
-                    className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
-                  >
-                    <span className="text-body">{ckb}</span>
-                    <span className="text-text text-small whitespace-nowrap">{occupied}</span>
-                  </div>
-                  {p.itemDeltas.length > 0 && (
                     <div
-                      data-line="items"
-                      className="text-small flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
+                      data-line="party"
+                      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
+                    >
+                      {party}
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
+                    </div>
+                    <div
+                      data-line="amounts"
+                      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
+                    >
+                      <span className="text-body">{ckb}</span>
+                      <span className="text-text text-small whitespace-nowrap">{occupied}</span>
+                    </div>
+                    {p.itemDeltas.length > 0 && (
+                      <div
+                        data-line="items"
+                        className="text-small flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
+                      >
+                        <Items participant={p} />
+                      </div>
+                    )}
+                  </li>
+                ) : (
+                  // 480–699 px: party and lock | CKB on the first line, items | occupied on the
+                  // second.
+                  <li
+                    key={partyKey(p, i)}
+                    data-balance-card
+                    className={cn(
+                      'grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 gap-y-1 border-t py-2.5',
+                      border
+                    )}
+                  >
+                    <div
+                      data-role="party"
+                      className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
+                    >
+                      {party}
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
+                    </div>
+                    <div data-role="ckb" className="text-body text-right">
+                      {ckb}
+                    </div>
+                    <div
+                      data-role="items"
+                      className="text-small flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                     >
                       <Items participant={p} />
                     </div>
-                  )}
-                </li>
-              ) : (
-                // 480–699 px: party and lock | CKB on the first line, items | occupied on the
-                // second.
-                <li
-                  key={partyKey(p, i)}
-                  data-balance-card
-                  className={cn(
-                    'grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 gap-y-1 border-t py-2.5',
-                    border
-                  )}
-                >
-                  <div
-                    data-role="party"
-                    className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
-                  >
-                    {party}
-                    <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
-                  </div>
-                  <div data-role="ckb" className="text-body text-right">
-                    {ckb}
-                  </div>
-                  <div
-                    data-role="items"
-                    className="text-small flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
-                  >
-                    <Items participant={p} />
-                  </div>
-                  <div
-                    data-role="occupied"
-                    className="text-text text-small whitespace-nowrap text-right"
-                  >
-                    {occupied}
-                  </div>
-                </li>
-              );
-            })}
-            <li
-              data-testid="tx-balance-net"
-              className="border-base-border-subtle text-text-dim text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t pt-2.5"
-            >
-              {readable(activity.txHash, () => {
-                const n = net();
-                return (
-                  <>
-                    <span>
-                      Net <ExactCkb shannons={n.ckb} tone="plain" /> · occupied{' '}
-                      <span className="text-text tabular-nums">
-                        {formatOccupiedDelta(n.occupied.toString())}
-                      </span>
-                    </span>
-                    <span>{netNote(n.note)}</span>
-                  </>
+                    <div
+                      data-role="occupied"
+                      className="text-text text-small whitespace-nowrap text-right"
+                    >
+                      {occupied}
+                    </div>
+                  </li>
                 );
               })}
-            </li>
-          </ul>
-        )}
-      </div>
+              <li
+                data-testid="tx-balance-net"
+                className="border-base-border-subtle text-text-dim text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t pt-2.5"
+              >
+                {readable(activity.txHash, () => {
+                  const n = net();
+                  return (
+                    <>
+                      <span>
+                        Net <ExactCkb shannons={n.ckb} tone="plain" /> · occupied{' '}
+                        <span className="text-text tabular-nums">
+                          {formatOccupiedDelta(n.occupied.toString())}
+                        </span>
+                      </span>
+                      <span>{netNote(n.note)}</span>
+                    </>
+                  );
+                })}
+              </li>
+            </ul>
+          )}
+        </div>
+      ))}
     </DetailSection>
   );
 }

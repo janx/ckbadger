@@ -6,6 +6,8 @@ import { CrashPage } from '@/components/crash-page';
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  /** Renders the caught error in the children's place; when given, it wins over `fallback`. */
+  fallbackRender?: (error: Error) => ReactNode;
 }
 
 interface State {
@@ -29,6 +31,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      if (this.props.fallbackRender) {
+        return this.props.fallbackRender(this.state.error!);
+      }
+
       if (this.props.fallback) {
         return this.props.fallback;
       }

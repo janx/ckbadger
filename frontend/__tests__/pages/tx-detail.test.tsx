@@ -3,6 +3,7 @@ import { act, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
@@ -545,6 +546,63 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(/issued in the genesis block/)).toBeNull();
   });
 
+  // Review 45fd finding 7 (ruling D7): an activity value the page cannot read fails in its own
+  // section, not through the page-level boundary (here the shared ErrorBoundary, standing in for
+  // the route's errorElement).
+  it('keeps the page when a participant ckbDelta is not a number', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const [first, ...rest] = feedSamples.objectTransfer.participants;
+      vi.mocked(api.getTransactionActivity).mockResolvedValue({
+        ...feedSamples.objectTransfer,
+        txHash: TX_HASH,
+        typeCalls: [],
+        participants: [first, ...rest].map((p, i) => ({
+          ...p,
+          itemDeltas: [],
+          ...(i === 0 ? { ckbDelta: 'abc' } : {}),
+        })),
+      });
+      render(
+        <ErrorBoundary fallback={<p>page-level boundary</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      // Each section that renders the activity's values fails in place; the page stays.
+      const balance = (await screen.findByRole('heading', { name: 'Balance changes' })).closest(
+        'section'
+      )!;
+      expect(screen.queryByText('page-level boundary')).toBeNull();
+      const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+      expect(within(header).getByText(TX_HASH)).toBeInTheDocument();
+      // the summary slot, under the h1
+      expect(within(header).getByTestId('activity-read-error')).toHaveTextContent(
+        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+      );
+      expect(within(header).queryByTestId('tx-summary')).toBeNull();
+      const moved = screen.getByRole('heading', { name: 'What moved' }).closest('section')!;
+      expect(within(moved).getByTestId('activity-read-error')).toHaveTextContent(
+        `${TX_HASH}: participant ckbDelta "abc"`
+      );
+      expect(within(moved).queryByTestId('tx-what-moved')).toBeNull();
+      // Balance changes keeps its heading; its body is one error, the table is gone
+      expect(within(balance).getAllByTestId('activity-read-error')).toHaveLength(1);
+      expect(within(balance).getByTestId('activity-read-error')).toHaveTextContent(
+        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+      );
+      expect(within(balance).queryByRole('table')).toBeNull();
+      // The sections that do not read the activity render as always.
+      const facts = screen.getByRole('complementary', { name: 'Transaction facts' });
+      expect(within(facts).getByText('Fee')).toBeInTheDocument();
+      expect(screen.getByTestId('tx-io-input-0')).toBeInTheDocument();
+      expect(screen.getByTestId('tx-io-output-0')).toBeInTheDocument();
+      expect(screen.getByTestId('tx-capacity-equation')).toBeInTheDocument();
+      expect(screen.getAllByTestId('activity-read-error')).toHaveLength(3);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
   it('renders pending placeholders while committed-only queries stay disabled', async () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
 
@@ -814,6 +872,26 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+  });
+
+  // Review 45fd finding 7: readable() now always returns an element, so the witness note decides
+  // inside it whether there is a note at all; a witness with nothing to name gets no empty line.
+  it('draws no empty note under a witness that has nothing to name', async () => {
+    const tx = createCommittedTransactionDetail();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...tx,
+      witnessDetails: [tx.witnessDetails![0], { index: 1, size: 0, kind: 'empty', fields: [] }],
+      witnesses: [tx.witnesses[0], '0x'],
+    });
+    render(<TransactionDetailPage />);
+    const empty = await screen.findByTestId('tx-witness-item-1');
+    // the kind/size line only: no byte bar, no note
+    expect(empty.children).toHaveLength(1);
+    expect(empty).toHaveTextContent(/^#1 · empty0 B$/);
+    // a witness with fields keeps its bar and its note
+    const args = screen.getByTestId('tx-witness-item-0');
+    expect(args.children).toHaveLength(3);
+    expect(args.lastElementChild).toHaveTextContent('header 16 B · lock length 4 B · lock 2 B');
   });
 
   it('labels unavailable witness bytes without claiming the transaction has zero witnesses', async () => {

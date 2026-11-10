@@ -18,6 +18,7 @@ import {
   formatStandard,
   formatScriptRef,
   protocolActionNoteParts,
+  readable,
 } from '@/components/activity-event-row';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
@@ -27,7 +28,6 @@ import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-til
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
-import { txFlows } from '@/lib/tx-flows';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
@@ -127,14 +127,6 @@ function daoCompensation(activity: GlobalActivity): bigint | null {
   );
   if (completes.length === 0) return null;
   return completes.reduce((sum, pa) => sum + protocolActionMeta(pa).compensation!, BigInt(0));
-}
-/** A part the page cannot read is said in place, with the transaction it belongs to. */
-function readable(txHash: string, render: () => ReactNode): ReactNode {
-  try {
-    return render();
-  } catch (error) {
-    return <ActivityReadError txHash={txHash} error={error} />;
-  }
 }
 
 function CopyHash({ hash }: { hash: string }) {
@@ -387,7 +379,8 @@ function WitnessRow({
 }) {
   const on = lit?.witnesses.has(w.index) ?? false;
   const fields = w.fields.filter((f) => f.end > f.start);
-  const note = readable(tx.hash, () => {
+  // What the witness says, under its bar; nothing when there is nothing to name.
+  const noteText = (): string => {
     if (w.kind === 'cobuild' && w.actions && w.actions.length > 0) {
       const names = w.actions.map((a) => {
         const script = groupNameByHash.get(a.scriptHash) ?? truncateHash(a.scriptHash, 8, 4);
@@ -414,6 +407,10 @@ function WitnessRow({
       return `miner lock ${lock}(${truncateHash(witness.lock.args, 6, 4)}) · message ${message}`;
     }
     return fields.map((f) => `${f.name} ${formatCount(f.end - f.start, 'B', 'B')}`).join(' · ');
+  };
+  const note = readable(tx.hash, () => {
+    const text = noteText();
+    return text ? <span className="text-text-dim [overflow-wrap:anywhere]">{text}</span> : null;
   });
   return (
     <button
@@ -458,7 +455,7 @@ function WitnessRow({
           ))}
         </span>
       )}
-      {note && <span className="text-text-dim [overflow-wrap:anywhere]">{note}</span>}
+      {note}
     </button>
   );
 }
@@ -1303,24 +1300,16 @@ export default function TransactionDetailPage() {
                 before the ledger; an activity whose flows do not conserve reads as an error here
                 instead of taking the page down. */}
             <DetailSection title="What moved">
-              {readable(hash, () => {
-                txFlows({
-                  hash,
-                  activity,
-                  fee: tx.fee,
-                  compensation: compensation ?? null,
-                });
-                return (
-                  <WhatMoved
-                    hash={hash}
-                    activity={activity}
-                    fee={tx.fee}
-                    compensation={compensation ?? null}
-                    lockCodeHashes={lockCodeHashes}
-                    onHover={(h) => setHover(h ? { t: 'cells', ids: flowCells(h) } : null)}
-                  />
-                );
-              })}
+              {readable(hash, () => (
+                <WhatMoved
+                  hash={hash}
+                  activity={activity}
+                  fee={tx.fee}
+                  compensation={compensation ?? null}
+                  lockCodeHashes={lockCodeHashes}
+                  onHover={(h) => setHover(h ? { t: 'cells', ids: flowCells(h) } : null)}
+                />
+              ))}
             </DetailSection>
           </div>
         )}
