@@ -50,17 +50,89 @@ For reorgs up to 36 blocks deep, the indexer:
 5. Recomputes the DAO tip summary at the new tip
 6. Clears deep-fork flag if it was set
 7. Updates sync cache status and continues syncing
-8. Notifies pipeline fetcher via `reorg_notify_flag` and drains stale batches
+8. Resets the pipeline (`request_pipeline_reset`, see Pipeline Coordination) and drains stale
+   batches
 
 ### Pipeline Coordination
 
-The indexer uses a three-stage pipeline (Fetcher -> Parser -> Writer). On reorg:
+The indexer uses a three-stage pipeline (Fetcher -> Parser -> Writer). The writer is the only
+stage that runs reorg handling. It runs `check_and_handle_reorg` on the stored tip in three
+places:
+
+- **Stale-fork batch**: a received batch's first block is not the child of the stored tip.
+- **Tip check**: before writing a batch near the tip (lag-gated), the stored tip's hash is
+  compared with the node's.
+- **Orphaned tip reported by the parser**: see below. The parser has no batch it can hand over
+  in this case, so neither batch-time check can run.
+
+On reorg:
 
 1. Writer performs rollback
-2. Writer sets `reorg_notify_flag = true`
-3. Writer drains stale parser/output batches
-4. Fetcher sees the flag and resets local `next_block`
-5. Fetcher re-reads DB tip and resumes from correct height
+2. Writer clears the cell caches, reconciles the HODL and cell-distribution trackers, and calls
+   `request_pipeline_reset`, which records the reason and then bumps `pipeline_reset_epoch`. Every
+   reset is made by the writer after the store change it refers to has committed
+3. Writer drains stale parsed batches; the parser and the writer drop batches of an older epoch,
+   and the parser aborts an input-resolution retry whose batch belongs to one
+4. Fetcher loads the epoch once per fetch cycle, decides the cycle's start block under it and tags
+   the batch with it. It remembers its next block together with the epoch it was computed under;
+   a cycle whose epoch differs from the remembered one (`plan_fetch_start`) re-reads the DB tip
+   and resumes after it. A reset that lands after a cycle's load leaves that batch with the old
+   epoch, so it is dropped, and the next cycle starts from the DB tip
+
+#### Orphaned Tip: Parser to Writer Hand-off
+
+The fetcher does not compare hashes. When the node replaces the stored tip block (A at height N)
+with B and builds N+1 on B, the fetcher fetches N+1, and the parser cannot resolve inputs that
+spend outputs only B created: the store never indexed B. No writer progress can supply them, and
+the writer, which receives no batch, runs neither batch-time check. In v0.8.2 the parser spent its
+240-retry budget, the pipeline terminated, and every restart replayed the same state.
+
+When a batch's inputs stay unresolved, the parser classifies the attempt against the store tip,
+read through the writer's own source (`Repository::get_sync_tip`), with
+`classify_unresolved_inputs` (`crates/indexer/src/sync/diagnostics.rs`):
+
+| Cause             | Condition                                                    | Retry budget                              |
+| ----------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `WriterBehind`    | `start_block > db_tip + 1`: an earlier batch is in flight    | counts                                    |
+| `OrphanedTip`     | `start_block == db_tip + 1`, first parent != stored tip hash | frozen; requests a writer reorg check     |
+| `MissingInputs`   | `start_block == db_tip + 1`, first parent == stored tip hash | counts; fails fast when spent (real hole) |
+| `WriterPastBatch` | `start_block <= db_tip`: the writer already holds the start  | counts (a reset normally discards it)     |
+
+There is no rollback-in-progress cause: a rollback is one atomic write (see
+[`rollback_to_block(target)`](#rollback_to_blocktarget)), so the parser reads either the tip before
+it or the fork point after it, never a store in between.
+
+While the budget is frozen the parser warns at most once per 120 s and never probes the node over
+RPC; counting causes warn on the first attempt and every 10th, and only `MissingInputs` probes the
+node.
+
+On `OrphanedTip` the parser puts a report (its batch's pipeline epoch, start block and first parent
+hash) in `reorg_check_request` and keeps retrying. The writer takes the request on its idle branch
+(it times out on the parse channel after `2 × poll_interval_ms` whenever the parser produces
+nothing) and acts only if that epoch is still current. A request from an earlier epoch is dropped,
+so a reset is never followed by a check for a batch it already discarded. The pick-up bound does
+not hold while a deep fork is unresolved: the writer then stays in its pause loop and never reaches
+the idle branch, and the parser waits with its budget frozen. A background derivation with work
+pending (`docs/STORE_SCHEMA.md` → Derived Aggregates) does not delay it: the writer folds derive
+chunks back to back only while no parsed batch and no reorg-check request is waiting
+(`should_derive_again`), so with a request pending it falls through to the receive after at most
+one chunk and takes the request on that receive's timeout. Like the stale-fork check, this check
+bypasses the lag gate, because a parent mismatch is direct evidence:
+
+- **Reorg handled**: the same post-reorg sequence as the other two checks, pipeline reset, drain.
+- **Deep fork**: pipeline reset, sync paused (see Deep Fork below).
+- **No divergence**: the node's block at `db_tip` is the stored one, so the parser's batch came
+  from a fork the node has since left. Pipeline reset, so the fetcher refetches from `db_tip + 1`.
+
+Every outcome resets the pipeline, so the parser's stuck batch aborts on the epoch change; an
+error stops the pipeline. `run_pipeline` clears the request slot when it starts.
+
+No divergence is a race that the reset settles. The stale-fork check and this one count such
+results in one streak per store tip, ended by a handled divergence or a written batch. Ten in a row
+on the same tip mean the node's block at `db_tip + 1` does not extend its own block at `db_tip`, or
+the batch's parent hash is read wrongly, so the pipeline stops with the tip, the batch's start block
+and parent hash, the count and the epoch instead of resetting forever, and files the same text as a
+`pipeline_no_divergence_loop` incident report.
 
 ### Deep Fork (depth > 36)
 

@@ -96,9 +96,12 @@ memtable under a write lock. See POSTMORTEM `IDX-007`.
 
 **Key behaviors**:
 
-- Tracks `next_block` locally to avoid re-querying db_tip (prevents race condition - see POSTMORTEM IDX-004)
-- Resets `next_block` to `None` every 1000 blocks to resync with writer
-- On fetch error, waits 5s and resets `next_block` for recovery
+- Tracks its next block locally to avoid re-querying db_tip (prevents race condition - see
+  POSTMORTEM IDX-004), together with the pipeline epoch it was computed under
+- Loads the pipeline epoch once per fetch cycle and tags the batch with it; when the remembered next
+  block belongs to an older epoch (a pipeline reset since), re-reads db_tip and starts after it
+  (`plan_fetch_start`, `crates/indexer/src/sync/diagnostics.rs`)
+- On fetch error, waits 5s and forgets its next block for recovery
 
 ```rust
 type FetchedBatch = (u64, u64, Vec<BlockResponseWithCycles>);
@@ -170,8 +173,9 @@ bounded chunk through a snapshot taken at the sync tip — a fold of ≤ 20,000 
 ≤ 4,096 distinct derived keys (`CHUNK_MAX_KEYS`, which bounds the chunk's read-modify-write) and
 ≤ `CHUNK_MAX_TIME` = 150 ms of source reads, or, once the source is exhausted, a check of the
 next ≤ 20,000 rows against the aggregate's invariant — then goes straight back for the next chunk
-unless a parsed batch is waiting. A
-live batch therefore waits at most one chunk, an idle writer derives continuously, and a chunk
+unless a parsed batch or a parser's reorg-check request is waiting (`should_derive_again`). A
+live batch and an orphaned-tip hand-off (the request is taken by the receive's timeout) therefore
+wait at most one chunk, an otherwise idle writer derives continuously, and a chunk
 and a batch never write the same rows at once. Inside `write_parsed_batch`, `apply_live_batch`
 adds each block's deltas for every running or complete derivation to the batch's own domain
 write, each row in its block's scope so the block journal records it. Bulk build runs none of this.
@@ -378,6 +382,9 @@ Before processing each batch (only when close to chain tip):
 1. Fetch current db_tip and hash
 2. Compare with chain's block at that height
 3. If mismatch: handle reorg, drain stale batches
+
+A parser stuck on a batch that does not extend an orphaned store tip asks the writer for the same
+check: see Orphaned Tip: Parser to Writer Hand-off in `docs/prompts/REORG_HANDLING.md`.
 
 **Bulk Sync Optimization**: During bulk sync (blocks_remaining > bulk_sync_threshold), reorg checks are skipped since historical blocks are already finalized (CKB finalizes after 24 blocks).
 

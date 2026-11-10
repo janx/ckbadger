@@ -11,6 +11,7 @@ use tracing::info;
 use crate::runtime_diag::{CgroupMemorySnapshot, FlightEvent};
 
 use super::helpers::duration_from_millis;
+use super::indexer::next_start_block_from_db_tip;
 use super::types::CachedCellInfo;
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -975,7 +976,17 @@ impl RepeatedWarningTracker {
         key: &'static str,
         min_emit_interval: Duration,
     ) -> Option<RepeatedWarningSnapshot> {
-        let now = Instant::now();
+        self.record_at(key, min_emit_interval, Instant::now())
+    }
+
+    /// `record` at a given instant, so callers' cadences can be tested
+    /// without sleeping.
+    pub(crate) fn record_at(
+        &self,
+        key: &'static str,
+        min_emit_interval: Duration,
+        now: Instant,
+    ) -> Option<RepeatedWarningSnapshot> {
         let mut states = match self.states.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -1042,8 +1053,12 @@ pub(crate) fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> b
     blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
 }
 
+/// Attempt cadence for unresolved inputs while the retry budget counts: the
+/// first attempt and every 10th. The give-up attempt logs its own error. A
+/// batch's attempts can outnumber its budgeted retries (frozen attempts count
+/// as attempts), so nothing here is keyed on the budget limit.
 pub(crate) fn should_log_unresolved_retry(attempt: usize) -> bool {
-    attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
+    attempt == 1 || attempt.is_multiple_of(10)
 }
 
 /// What the parser should do after one unresolved-input attempt.
@@ -1053,13 +1068,113 @@ pub(crate) enum UnresolvedRetryDecision {
     GiveUp,
 }
 
+/// Why a parser batch still has inputs that neither the batch, the parser
+/// cache nor the store can resolve, judged against the store's committed tip
+/// exactly as the writer judges a batch it receives (position, then parent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UnresolvedInputCause {
+    /// The store's tip is below the block before this batch: an earlier batch
+    /// is still on its way through the writer.
+    WriterBehind,
+    /// The batch is the next one the writer expects, but its first block is
+    /// not the stored tip's child: the node has replaced the tip. Inputs
+    /// created only by the replacement block can never come from writer
+    /// progress; only the writer's reorg handling can resolve them. Carries
+    /// the stored tip's hash, which this classification requires to exist.
+    OrphanedTip { stored_tip_hash: Vec<u8> },
+    /// The batch extends the stored tip and nothing is in flight, yet inputs
+    /// are missing: a real hole, which the retry budget exists to catch.
+    MissingInputs,
+    /// The store already holds this batch's first block: the batch is stale
+    /// and the pipeline reset that discards it is pending.
+    WriterPastBatch,
+}
+
+impl UnresolvedInputCause {
+    /// Stable name for log fields.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            UnresolvedInputCause::WriterBehind => "writer_behind",
+            UnresolvedInputCause::OrphanedTip { .. } => "orphaned_tip",
+            UnresolvedInputCause::MissingInputs => "missing_inputs",
+            UnresolvedInputCause::WriterPastBatch => "writer_past_batch",
+        }
+    }
+
+    /// What the parser is waiting for while it retries under this cause.
+    pub(crate) fn waiting_for(&self) -> &'static str {
+        match self {
+            UnresolvedInputCause::WriterBehind => {
+                "the writer to commit the batches before this one"
+            }
+            UnresolvedInputCause::OrphanedTip { .. } => {
+                "the writer's reorg check of the orphaned store tip"
+            }
+            UnresolvedInputCause::MissingInputs => {
+                "nothing in flight: the inputs are missing from the store the batch extends"
+            }
+            UnresolvedInputCause::WriterPastBatch => {
+                "a pipeline reset: the writer already holds this batch's first block"
+            }
+        }
+    }
+}
+
+/// Classify one failed resolution attempt of the batch starting at
+/// `start_block`, whose first block's parent is `first_parent_hash`, against
+/// the store tip `(db_tip, db_tip_hash)` read through the writer's own source
+/// (`Repository::get_sync_tip`).
+pub(crate) fn classify_unresolved_inputs(
+    db_tip: i64,
+    db_tip_hash: &Option<Vec<u8>>,
+    start_block: u64,
+    first_parent_hash: &[u8],
+) -> anyhow::Result<UnresolvedInputCause> {
+    let expected_start = next_start_block_from_db_tip(
+        db_tip,
+        db_tip_hash,
+        "parser unresolved-input classification",
+    )?;
+    Ok(match start_block.cmp(&expected_start) {
+        std::cmp::Ordering::Greater => UnresolvedInputCause::WriterBehind,
+        std::cmp::Ordering::Less => UnresolvedInputCause::WriterPastBatch,
+        std::cmp::Ordering::Equal => match db_tip_hash {
+            Some(tip_hash) if tip_hash.as_slice() != first_parent_hash => {
+                UnresolvedInputCause::OrphanedTip {
+                    stored_tip_hash: tip_hash.clone(),
+                }
+            }
+            _ => UnresolvedInputCause::MissingInputs,
+        },
+    })
+}
+
 /// Advance the parser's unresolved-input retry budget by one attempt.
 ///
 /// The budget exists to detect inputs that will never resolve. A reorg
 /// rollback republishes the very cells the parser may be waiting on, in one
 /// atomic write of the block journal (bounded by the reorg depth), so it does
 /// not outlast the budget.
-pub(crate) fn advance_unresolved_retry_budget(retry_count: &mut usize) -> UnresolvedRetryDecision {
+///
+/// One cause makes "unresolved" expected and indefinite, and attempts made
+/// under it carry no evidence either way, so they must not consume the
+/// budget: an orphaned tip waits for the writer's reorg check, which the
+/// parser has requested. Counting those attempts was the v0.8.2 crash loop:
+/// the parser spent its budget on inputs only the replacement block creates,
+/// and the writer, which never received a batch, never compared the tip with
+/// the node.
+pub(crate) fn advance_unresolved_retry_budget(
+    retry_count: &mut usize,
+    cause: &UnresolvedInputCause,
+) -> UnresolvedRetryDecision {
+    match cause {
+        UnresolvedInputCause::OrphanedTip { .. } => {
+            return UnresolvedRetryDecision::Retry;
+        }
+        UnresolvedInputCause::WriterBehind
+        | UnresolvedInputCause::MissingInputs
+        | UnresolvedInputCause::WriterPastBatch => {}
+    }
     *retry_count += 1;
     if *retry_count >= PARSER_UNRESOLVED_MAX_RETRIES {
         UnresolvedRetryDecision::GiveUp
@@ -1068,8 +1183,250 @@ pub(crate) fn advance_unresolved_retry_budget(retry_count: &mut usize) -> Unreso
     }
 }
 
+/// How long the parser stays quiet between warnings about one frozen-budget
+/// wait: as long as the writer's own deep-fork pause warning.
+pub(crate) const PARSER_FROZEN_BUDGET_WARN_INTERVAL: Duration = Duration::from_secs(120);
+
+/// How the parser reports one failed resolution attempt.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UnresolvedRetryLog {
+    /// The budget counts: warn on the attempt cadence. Only a real hole is
+    /// worth asking the node about; inputs that an earlier in-flight batch or
+    /// a pending reset will settle are not.
+    Counting { rpc_probe: bool },
+    /// The budget is frozen: warn at most once per
+    /// `PARSER_FROZEN_BUDGET_WARN_INTERVAL` and never ask the node. The
+    /// missing outputs are in a block the store has not indexed, which the
+    /// node cannot explain, and the wait lasts as long as the writer needs —
+    /// indefinitely when a deep fork pauses sync.
+    Frozen(RepeatedWarningSnapshot),
+}
+
+/// Decide whether, and how, attempt number `attempt` under `cause` is logged.
+/// `frozen_waits` throttles the frozen cause by time; it lives as long as
+/// the parser task.
+pub(crate) fn plan_unresolved_retry_log(
+    cause: &UnresolvedInputCause,
+    attempt: usize,
+    frozen_waits: &RepeatedWarningTracker,
+    now: Instant,
+) -> Option<UnresolvedRetryLog> {
+    match cause {
+        UnresolvedInputCause::OrphanedTip { .. } => frozen_waits
+            .record_at(cause.name(), PARSER_FROZEN_BUDGET_WARN_INTERVAL, now)
+            .map(UnresolvedRetryLog::Frozen),
+        UnresolvedInputCause::MissingInputs => should_log_unresolved_retry(attempt)
+            .then_some(UnresolvedRetryLog::Counting { rpc_probe: true }),
+        UnresolvedInputCause::WriterBehind | UnresolvedInputCause::WriterPastBatch => {
+            should_log_unresolved_retry(attempt)
+                .then_some(UnresolvedRetryLog::Counting { rpc_probe: false })
+        }
+    }
+}
+
 pub(crate) fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -> bool {
     consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
+}
+
+/// After one background derive step, whether the writer loop goes straight
+/// back for the next one instead of falling through to its receive.
+///
+/// Only while nothing waits for the writer. A parsed batch is taken by the
+/// receive itself. A parser's reorg-check request is taken by the receive's
+/// timeout (the idle branch): the parser that made it is stuck on its batch
+/// and produces nothing, so a writer that kept deriving would not take it
+/// until the derivation had no work left.
+pub(crate) fn should_derive_again(parse_queue_empty: bool, reorg_check_pending: bool) -> bool {
+    parse_queue_empty && !reorg_check_pending
+}
+
+// ── Fetcher start position ──────────────────────────────────────────────
+
+/// Where the fetcher continues after a batch it sent: the block after the
+/// batch, and the pipeline epoch the batch was tagged with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FetchCursor {
+    pub(crate) epoch: u64,
+    pub(crate) next_block: u64,
+}
+
+/// Where one fetch cycle starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchStart {
+    /// At this block, right after the previous batch of the same epoch.
+    Continue(u64),
+    /// Right after the store's tip, read anew: there is no cursor (the first
+    /// cycle, a failed fetch, a resume from a rebuild pause), or the cursor
+    /// belongs to an earlier epoch, so a pipeline reset happened since it was
+    /// computed and the position it holds is the one the reset discarded.
+    FromDbTip,
+}
+
+/// Decide where the fetch cycle that loaded `cycle_epoch` starts.
+///
+/// The fetcher loads the epoch once per cycle and tags the cycle's batch with
+/// that same value, so the start position and the batch's epoch always come
+/// from one load. A reset that lands after the load leaves the batch with the
+/// old epoch, which the parser and the writer drop, and the next cycle finds
+/// its cursor from the old epoch and starts from the store's tip. A cursor
+/// from a later epoch than the cycle's means the epoch went backwards, which
+/// no reset does: an error.
+pub(crate) fn plan_fetch_start(
+    cycle_epoch: u64,
+    cursor: Option<FetchCursor>,
+) -> anyhow::Result<FetchStart> {
+    match cursor {
+        None => Ok(FetchStart::FromDbTip),
+        Some(cursor) if cursor.epoch == cycle_epoch => Ok(FetchStart::Continue(cursor.next_block)),
+        Some(cursor) if cursor.epoch < cycle_epoch => Ok(FetchStart::FromDbTip),
+        Some(cursor) => anyhow::bail!(
+            "pipeline epoch went backwards: the fetcher's cursor (next_block={}) was computed \
+             under epoch {}, but this fetch cycle loaded epoch {}",
+            cursor.next_block,
+            cursor.epoch,
+            cycle_epoch
+        ),
+    }
+}
+
+// ── Parser → writer reorg-check request ─────────────────────────────────
+
+/// What a parser batch stuck on an orphaned tip tells the writer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrphanedTipReport {
+    /// The pipeline epoch the batch belongs to.
+    pub(crate) batch_epoch: u64,
+    pub(crate) start_block: u64,
+    /// The parent hash of the batch's first block.
+    pub(crate) first_parent_hash: Vec<u8>,
+}
+
+/// What the writer finds in the reorg-check request slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReorgCheckRequest {
+    Empty,
+    /// Made for a batch of the current pipeline epoch: run the check.
+    Current(OrphanedTipReport),
+    /// Made for a batch of an earlier epoch. The reset that ended that epoch
+    /// discarded the batch, so the request means nothing any more.
+    Stale(OrphanedTipReport),
+}
+
+/// The parser's request for a writer reorg check: at most one report, the
+/// latest. The report carries its batch's epoch, so a request can never act
+/// in an epoch other than its own.
+#[derive(Debug, Default)]
+pub(crate) struct ReorgCheckRequestSlot(std::sync::Mutex<Option<OrphanedTipReport>>);
+
+impl ReorgCheckRequestSlot {
+    /// Parser side. The parser repeats the request on every attempt; each
+    /// repeat replaces the pending report with an identical one.
+    pub(crate) fn request(&self, report: OrphanedTipReport) {
+        *self.lock() = Some(report);
+    }
+
+    /// Writer side: take the pending request, emptying the slot.
+    pub(crate) fn take(&self, current_epoch: u64) -> ReorgCheckRequest {
+        match self.lock().take() {
+            None => ReorgCheckRequest::Empty,
+            Some(report) if report.batch_epoch == current_epoch => {
+                ReorgCheckRequest::Current(report)
+            }
+            Some(report) => ReorgCheckRequest::Stale(report),
+        }
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.lock() = None;
+    }
+
+    /// Whether a report is waiting, whatever its epoch. Does not take it: the
+    /// writer's idle branch takes it and tells current from stale.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.lock().is_some()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<OrphanedTipReport>> {
+        // Every critical section is a single `Option` store or take, which
+        // cannot panic, so a poisoned lock still guards a whole value.
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+// ── Writer reorg checks that find no divergence ─────────────────────────
+
+/// How many reorg checks in a row may find the node's block at `db_tip`
+/// equal to the stored one while a batch at `db_tip + 1` names another
+/// parent. One is a race that the following pipeline reset settles: the node
+/// switched forks between the fetch and the check. Ten in a row on the same
+/// tip mean the node's block at `db_tip + 1` does not extend its own block at
+/// `db_tip`, or the batch's parent hash is read wrongly: a broken invariant
+/// that no number of resets can repair.
+pub(crate) const MAX_CONSECUTIVE_NO_DIVERGENCE: u32 = 10;
+
+/// The batch behind one no-divergence result.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NoDivergenceEvidence<'a> {
+    /// Which writer check saw the parent mismatch.
+    pub(crate) source: &'static str,
+    pub(crate) pipeline_epoch: u64,
+    pub(crate) start_block: u64,
+    pub(crate) first_parent_hash: &'a [u8],
+}
+
+/// Consecutive no-divergence results for one store tip. The stale-fork
+/// branch and the parser-requested check share one streak.
+#[derive(Debug, Default)]
+pub(crate) struct NoDivergenceStreak {
+    tip: Option<(i64, Vec<u8>)>,
+    count: u32,
+}
+
+impl NoDivergenceStreak {
+    /// Record one check that found the node's block at `db_tip` to be
+    /// `stored_hash`. Returns the streak length for this tip, or the error
+    /// that stops the pipeline once it reaches `MAX_CONSECUTIVE_NO_DIVERGENCE`.
+    pub(crate) fn record(
+        &mut self,
+        db_tip: i64,
+        stored_hash: &[u8],
+        evidence: &NoDivergenceEvidence<'_>,
+    ) -> anyhow::Result<u32> {
+        let same_tip = matches!(
+            &self.tip,
+            Some((tip, hash)) if *tip == db_tip && hash.as_slice() == stored_hash
+        );
+        if same_tip {
+            self.count += 1;
+        } else {
+            self.tip = Some((db_tip, stored_hash.to_vec()));
+            self.count = 1;
+        }
+        if self.count >= MAX_CONSECUTIVE_NO_DIVERGENCE {
+            anyhow::bail!(
+                "pipeline stopped: {count} consecutive reorg checks found no divergence for the \
+                 same store tip (db_tip={db_tip}, stored_hash=0x{stored_hash}), while the \
+                 {source} batch starting at block {start_block} names parent 0x{parent} \
+                 (pipeline_epoch={epoch}). A consistent node cannot keep serving a block at \
+                 db_tip + 1 that does not extend its own block at db_tip: inspect the node's \
+                 chain store and the block parser's parent-hash extraction before restarting",
+                count = self.count,
+                stored_hash = hex::encode(stored_hash),
+                source = evidence.source,
+                start_block = evidence.start_block,
+                parent = hex::encode(evidence.first_parent_hash),
+                epoch = evidence.pipeline_epoch,
+            );
+        }
+        Ok(self.count)
+    }
+
+    /// A divergence was handled or a batch was written: the streak is over.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 // ── Worker exit reason helpers ──────────────────────────────────────────
@@ -1257,6 +1614,13 @@ mod tests {
         assert!(!should_log_unresolved_retry(2));
         assert!(should_log_unresolved_retry(10));
         assert!(should_log_unresolved_retry(PARSER_UNRESOLVED_MAX_RETRIES));
+        // Past the budget limit (a frozen budget) the cadence stays 1-in-10.
+        assert!(!should_log_unresolved_retry(
+            PARSER_UNRESOLVED_MAX_RETRIES + 1
+        ));
+        assert!(should_log_unresolved_retry(
+            PARSER_UNRESOLVED_MAX_RETRIES * 10
+        ));
     }
 
     #[test]
@@ -1264,15 +1628,469 @@ mod tests {
         let mut retry_count = 0usize;
         for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
             assert_eq!(
-                advance_unresolved_retry_budget(&mut retry_count),
+                advance_unresolved_retry_budget(
+                    &mut retry_count,
+                    &UnresolvedInputCause::MissingInputs
+                ),
                 UnresolvedRetryDecision::Retry
             );
         }
         assert_eq!(
-            advance_unresolved_retry_budget(&mut retry_count),
+            advance_unresolved_retry_budget(&mut retry_count, &UnresolvedInputCause::MissingInputs),
             UnresolvedRetryDecision::GiveUp
         );
         assert_eq!(retry_count, PARSER_UNRESOLVED_MAX_RETRIES);
+    }
+
+    /// Regression test for the v0.8.2 testnet crash loop: the store's tip
+    /// was orphaned, the parser spent its whole budget on inputs that only
+    /// the replacement block creates, and the pipeline died before the writer
+    /// ever compared the tip with the node. While the parser waits for the
+    /// writer's reorg check, attempts must not consume the budget.
+    #[test]
+    fn test_unresolved_retry_budget_frozen_while_orphaned_tip_awaits_writer_reorg() {
+        assert_budget_frozen_then_fully_available(orphaned_tip());
+    }
+
+    fn assert_budget_frozen_then_fully_available(frozen: UnresolvedInputCause) {
+        let mut retry_count = 0usize;
+        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES * 10) {
+            assert_eq!(
+                advance_unresolved_retry_budget(&mut retry_count, &frozen),
+                UnresolvedRetryDecision::Retry
+            );
+        }
+        assert_eq!(
+            retry_count, 0,
+            "{frozen:?} attempts must not consume budget"
+        );
+
+        // Once the writer has acted, the full budget is still available.
+        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
+            assert_eq!(
+                advance_unresolved_retry_budget(
+                    &mut retry_count,
+                    &UnresolvedInputCause::MissingInputs
+                ),
+                UnresolvedRetryDecision::Retry
+            );
+        }
+        assert_eq!(
+            advance_unresolved_retry_budget(&mut retry_count, &UnresolvedInputCause::MissingInputs),
+            UnresolvedRetryDecision::GiveUp
+        );
+    }
+
+    /// Unchanged behaviour: waiting on an earlier in-flight batch, and a batch
+    /// the writer has already passed (a reset is pending), both still count.
+    #[test]
+    fn test_unresolved_retry_budget_counts_writer_behind_and_writer_past_batch() {
+        for cause in [
+            UnresolvedInputCause::WriterBehind,
+            UnresolvedInputCause::WriterPastBatch,
+            UnresolvedInputCause::MissingInputs,
+        ] {
+            let mut retry_count = 0usize;
+            assert_eq!(
+                advance_unresolved_retry_budget(&mut retry_count, &cause),
+                UnresolvedRetryDecision::Retry
+            );
+            assert_eq!(retry_count, 1, "{} consumes budget", cause.name());
+        }
+    }
+
+    const STORED_TIP_HASH: [u8; 32] = [0x11; 32];
+    const OTHER_HASH: [u8; 32] = [0x22; 32];
+
+    fn orphaned_tip() -> UnresolvedInputCause {
+        UnresolvedInputCause::OrphanedTip {
+            stored_tip_hash: STORED_TIP_HASH.to_vec(),
+        }
+    }
+
+    fn classify(
+        db_tip: i64,
+        start_block: u64,
+        first_parent_hash: [u8; 32],
+    ) -> UnresolvedInputCause {
+        classify_unresolved_inputs(
+            db_tip,
+            &Some(STORED_TIP_HASH.to_vec()),
+            start_block,
+            &first_parent_hash,
+        )
+        .expect("non-negative tip classifies")
+    }
+
+    #[test]
+    fn test_classify_orphaned_tip_when_the_next_batch_is_not_the_tips_child() {
+        assert_eq!(classify(100, 101, OTHER_HASH), orphaned_tip());
+    }
+
+    #[test]
+    fn test_classify_missing_inputs_when_the_next_batch_extends_the_tip() {
+        assert_eq!(
+            classify(100, 101, STORED_TIP_HASH),
+            UnresolvedInputCause::MissingInputs
+        );
+    }
+
+    /// Only the batch right after the tip can be judged against the tip's
+    /// hash; any later batch waits for the earlier ones, whatever its parent.
+    #[test]
+    fn test_classify_writer_behind_when_an_earlier_batch_is_still_in_flight() {
+        for (start_block, parent) in [
+            (102, OTHER_HASH),
+            (102, STORED_TIP_HASH),
+            (5_000, OTHER_HASH),
+        ] {
+            assert_eq!(
+                classify(100, start_block, parent),
+                UnresolvedInputCause::WriterBehind,
+                "start_block={start_block}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_writer_past_batch_when_the_store_already_holds_its_start() {
+        for (db_tip, parent) in [(101, OTHER_HASH), (101, STORED_TIP_HASH), (250, OTHER_HASH)] {
+            assert_eq!(
+                classify(db_tip, 101, parent),
+                UnresolvedInputCause::WriterPastBatch,
+                "db_tip={db_tip}"
+            );
+        }
+    }
+
+    /// An empty store has no tip hash to compare: the genesis batch's missing
+    /// inputs are a real hole, any later batch waits for genesis.
+    #[test]
+    fn test_classify_empty_store() {
+        assert_eq!(
+            classify_unresolved_inputs(0, &None, 0, &OTHER_HASH).unwrap(),
+            UnresolvedInputCause::MissingInputs
+        );
+        assert_eq!(
+            classify_unresolved_inputs(0, &None, 1, &OTHER_HASH).unwrap(),
+            UnresolvedInputCause::WriterBehind
+        );
+    }
+
+    #[test]
+    fn test_classify_rejects_a_negative_store_tip() {
+        let err = classify_unresolved_inputs(-1, &Some(STORED_TIP_HASH.to_vec()), 0, &OTHER_HASH)
+            .unwrap_err();
+        assert!(err.to_string().contains("negative block number"), "{err}");
+    }
+
+    /// A frozen wait warns once, then at most once per interval however many
+    /// attempts it makes, and never asks the node.
+    #[test]
+    fn test_frozen_budget_warns_at_most_once_per_interval_without_node_probe() {
+        let cause = orphaned_tip();
+        let waits = RepeatedWarningTracker::default();
+        let start = Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let interval = PARSER_FROZEN_BUDGET_WARN_INTERVAL.as_secs();
+
+        // `Frozen` carries no probe: a frozen wait never asks the node.
+        assert!(
+            matches!(
+                plan_unresolved_retry_log(&cause, 1, &waits, at(0)),
+                Some(UnresolvedRetryLog::Frozen(_))
+            ),
+            "{}: the first frozen attempt warns",
+            cause.name()
+        );
+        // One attempt every 500 ms until just before the interval ends,
+        // including attempt numbers the counting cadence would log.
+        for (attempt, half_secs) in (2..).zip(1..(interval * 2)) {
+            let now = start + Duration::from_millis(half_secs * 500);
+            assert!(
+                plan_unresolved_retry_log(&cause, attempt, &waits, now).is_none(),
+                "{}: attempt {attempt} inside the interval stays quiet",
+                cause.name()
+            );
+        }
+        match plan_unresolved_retry_log(&cause, 10_000, &waits, at(interval)) {
+            Some(UnresolvedRetryLog::Frozen(repeat)) => {
+                assert_eq!(repeat.suppressed_since_last_emit, interval * 2 - 1);
+                assert_eq!(repeat.first_seen_secs_ago, interval);
+            }
+            other => panic!(
+                "{}: expected the next frozen warn, got {other:?}",
+                cause.name()
+            ),
+        }
+        assert!(plan_unresolved_retry_log(&cause, 10_001, &waits, at(interval + 1)).is_none());
+    }
+
+    /// Counting causes keep the attempt cadence; only a real hole asks the node.
+    #[test]
+    fn test_counting_budget_warns_on_attempt_cadence_and_probes_only_missing_inputs() {
+        let waits = RepeatedWarningTracker::default();
+        let now = Instant::now();
+        for (cause, rpc_probe) in [
+            (UnresolvedInputCause::MissingInputs, true),
+            (UnresolvedInputCause::WriterBehind, false),
+            (UnresolvedInputCause::WriterPastBatch, false),
+        ] {
+            for attempt in [1, 10, 240, 2_400] {
+                match plan_unresolved_retry_log(&cause, attempt, &waits, now) {
+                    Some(UnresolvedRetryLog::Counting { rpc_probe: probe }) => {
+                        assert_eq!(probe, rpc_probe, "{} attempt {attempt}", cause.name());
+                    }
+                    other => panic!("{} attempt {attempt}: {other:?}", cause.name()),
+                }
+            }
+            for attempt in [2, 9, 241] {
+                assert!(plan_unresolved_retry_log(&cause, attempt, &waits, now).is_none());
+            }
+        }
+    }
+
+    fn report(batch_epoch: u64) -> OrphanedTipReport {
+        OrphanedTipReport {
+            batch_epoch,
+            start_block: 102,
+            first_parent_hash: OTHER_HASH.to_vec(),
+        }
+    }
+
+    #[test]
+    fn test_take_reorg_check_request_when_none_was_made() {
+        let slot = ReorgCheckRequestSlot::default();
+        assert_eq!(slot.take(0), ReorgCheckRequest::Empty);
+    }
+
+    #[test]
+    fn test_reorg_check_request_is_served_once_in_its_own_epoch() {
+        let slot = ReorgCheckRequestSlot::default();
+        slot.request(report(3));
+        // The parser repeats the request every attempt; it stays one request.
+        slot.request(report(3));
+        assert_eq!(slot.take(3), ReorgCheckRequest::Current(report(3)));
+        assert_eq!(slot.take(3), ReorgCheckRequest::Empty);
+    }
+
+    /// A pipeline reset discards the batch that asked. Its request must not
+    /// reach the next epoch, even when the parser stores it after the reset.
+    #[test]
+    fn test_reorg_check_request_from_an_earlier_epoch_is_stale() {
+        let slot = ReorgCheckRequestSlot::default();
+        slot.request(report(3));
+        assert_eq!(slot.take(4), ReorgCheckRequest::Stale(report(3)));
+        assert_eq!(slot.take(4), ReorgCheckRequest::Empty);
+    }
+
+    /// `run_pipeline` clears the slot when it starts.
+    #[test]
+    fn test_reorg_check_request_clear_drops_a_pending_request() {
+        let slot = ReorgCheckRequestSlot::default();
+        slot.request(report(0));
+        slot.clear();
+        assert_eq!(slot.take(0), ReorgCheckRequest::Empty);
+    }
+
+    /// `is_pending` sees a report of any epoch and leaves it for the idle
+    /// branch's `take`.
+    #[test]
+    fn test_reorg_check_request_is_pending_does_not_take_the_report() {
+        let slot = ReorgCheckRequestSlot::default();
+        assert!(!slot.is_pending(), "an empty slot");
+
+        slot.request(report(3));
+        assert!(slot.is_pending());
+        assert!(slot.is_pending(), "asking twice does not consume it");
+        assert_eq!(slot.take(3), ReorgCheckRequest::Current(report(3)));
+        assert!(!slot.is_pending(), "taken");
+
+        // A report from an earlier epoch is still pending until the idle
+        // branch takes and drops it.
+        slot.request(report(3));
+        assert!(slot.is_pending());
+        assert_eq!(slot.take(4), ReorgCheckRequest::Stale(report(3)));
+        assert!(!slot.is_pending());
+
+        slot.request(report(5));
+        slot.clear();
+        assert!(!slot.is_pending(), "cleared at run_pipeline start");
+    }
+
+    /// The writer loop folds derive chunks back to back only while nothing
+    /// waits for it. A parser stuck on an orphaned tip produces no batch, so
+    /// before this rule a pending derivation kept the writer from ever
+    /// reaching the receive whose timeout takes the parser's reorg-check
+    /// request: live sync stalled until the derivation had no work left.
+    #[test]
+    fn test_derive_again_only_while_no_batch_and_no_reorg_check_wait() {
+        assert!(
+            should_derive_again(true, false),
+            "nothing waiting: derive the next chunk"
+        );
+        assert!(
+            !should_derive_again(false, false),
+            "a parsed batch waits: receive it"
+        );
+        assert!(
+            !should_derive_again(true, true),
+            "a reorg-check request waits: fall through to the receive and its idle branch"
+        );
+        assert!(!should_derive_again(false, true));
+    }
+
+    fn cursor(epoch: u64, next_block: u64) -> Option<FetchCursor> {
+        Some(FetchCursor { epoch, next_block })
+    }
+
+    #[test]
+    fn test_fetch_start_continues_after_the_previous_batch_of_the_same_epoch() {
+        assert_eq!(
+            plan_fetch_start(5, cursor(5, 103)).unwrap(),
+            FetchStart::Continue(103)
+        );
+    }
+
+    /// The fetcher epoch race (review finding 2): the reset flag was taken at
+    /// the top of a cycle and the epoch loaded later, after the node refresh
+    /// and the tip read. A reset landing in between sent a batch from the
+    /// stale position 103 tagged with the new epoch 6, which the parser
+    /// accepted. A cursor computed under epoch 5 must never start a cycle of
+    /// epoch 6, however many resets came between.
+    #[test]
+    fn test_fetch_start_after_a_reset_reads_the_db_tip_instead_of_the_stale_position() {
+        for cycle_epoch in [6, 7, 1_000] {
+            assert_eq!(
+                plan_fetch_start(cycle_epoch, cursor(5, 103)).unwrap(),
+                FetchStart::FromDbTip,
+                "cursor of epoch 5, cycle of epoch {cycle_epoch}"
+            );
+        }
+    }
+
+    /// No cursor: the first cycle of a run, after a failed fetch, or after a
+    /// resume from a rebuild pause.
+    #[test]
+    fn test_fetch_start_without_a_cursor_reads_the_db_tip() {
+        for cycle_epoch in [0, 6] {
+            assert_eq!(
+                plan_fetch_start(cycle_epoch, None).unwrap(),
+                FetchStart::FromDbTip
+            );
+        }
+    }
+
+    /// A reset after the cycle's load: the batch goes out under the epoch the
+    /// cycle loaded (5), which the parser drops once the epoch is 6, and the
+    /// cursor it leaves (epoch 5) makes the next cycle start from the DB tip.
+    #[test]
+    fn test_fetch_start_after_a_reset_that_lands_after_the_cycle_loaded_its_epoch() {
+        let cycle_epoch = 5;
+        assert_eq!(
+            plan_fetch_start(cycle_epoch, cursor(5, 103)).unwrap(),
+            FetchStart::Continue(103)
+        );
+        let after_batch = cursor(cycle_epoch, 111);
+        // The reset bumps the epoch to 6 while the batch is in flight.
+        assert_eq!(
+            plan_fetch_start(6, after_batch).unwrap(),
+            FetchStart::FromDbTip
+        );
+    }
+
+    #[test]
+    fn test_fetch_start_rejects_a_cursor_from_a_later_epoch() {
+        let err = plan_fetch_start(6, cursor(7, 103)).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("pipeline epoch went backwards"),
+            "{message}"
+        );
+        assert!(message.contains("next_block=103"), "{message}");
+        assert!(message.contains("epoch 7"), "{message}");
+        assert!(message.contains("loaded epoch 6"), "{message}");
+    }
+
+    fn evidence(source: &'static str) -> NoDivergenceEvidence<'static> {
+        NoDivergenceEvidence {
+            source,
+            pipeline_epoch: 9,
+            start_block: 102,
+            first_parent_hash: &OTHER_HASH,
+        }
+    }
+
+    /// Ten checks in a row on one tip stop the pipeline with everything an
+    /// operator needs to find the broken side.
+    #[test]
+    fn test_no_divergence_streak_stops_at_the_bound_with_full_context() {
+        let mut streak = NoDivergenceStreak::default();
+        for expected in 1..MAX_CONSECUTIVE_NO_DIVERGENCE {
+            assert_eq!(
+                streak
+                    .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+                    .unwrap(),
+                expected
+            );
+        }
+        let message = streak
+            .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+            .unwrap_err()
+            .to_string();
+        for expected in [
+            format!("{MAX_CONSECUTIVE_NO_DIVERGENCE} consecutive reorg checks found no divergence"),
+            format!("db_tip=101, stored_hash=0x{}", hex::encode(STORED_TIP_HASH)),
+            format!(
+                "the stale-fork batch starting at block 102 names parent 0x{}",
+                hex::encode(OTHER_HASH)
+            ),
+            "pipeline_epoch=9".to_string(),
+        ] {
+            assert!(
+                message.contains(&expected),
+                "missing `{expected}` in: {message}"
+            );
+        }
+    }
+
+    /// Progress (a written batch) or a handled divergence ends the streak,
+    /// and so does a different store tip.
+    #[test]
+    fn test_no_divergence_streak_restarts_on_reset_and_on_a_new_tip() {
+        let mut streak = NoDivergenceStreak::default();
+        let checks = MAX_CONSECUTIVE_NO_DIVERGENCE - 1;
+        for _ in 0..checks {
+            streak
+                .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+                .unwrap();
+        }
+        streak.reset();
+        for expected in 1..=checks {
+            assert_eq!(
+                streak
+                    .record(101, &STORED_TIP_HASH, &evidence("stale-fork"))
+                    .unwrap(),
+                expected
+            );
+        }
+        // Another tip height, then the same height with another hash.
+        assert_eq!(
+            streak
+                .record(
+                    102,
+                    &STORED_TIP_HASH,
+                    &evidence("parser-reported orphaned tip")
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            streak
+                .record(102, &OTHER_HASH, &evidence("parser-reported orphaned tip"))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
