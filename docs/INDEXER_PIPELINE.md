@@ -173,8 +173,9 @@ bounded chunk through a snapshot taken at the sync tip — a fold of ≤ 20,000 
 ≤ 4,096 distinct derived keys (`CHUNK_MAX_KEYS`, which bounds the chunk's read-modify-write) and
 ≤ `CHUNK_MAX_TIME` = 150 ms of source reads, or, once the source is exhausted, a check of the
 next ≤ 20,000 rows against the aggregate's invariant — then goes straight back for the next chunk
-unless a parsed batch is waiting. A
-live batch therefore waits at most one chunk, an idle writer derives continuously, and a chunk
+unless a parsed batch or a parser's reorg-check request is waiting (`should_derive_again`). A
+live batch and an orphaned-tip hand-off (the request is taken by the receive's timeout) therefore
+wait at most one chunk, an otherwise idle writer derives continuously, and a chunk
 and a batch never write the same rows at once. Inside `write_parsed_batch`, `apply_live_batch`
 adds each block's deltas for every running or complete derivation to the batch's own domain
 write, each row in its block's scope so the block journal records it. Bulk build runs none of this.

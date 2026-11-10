@@ -1228,6 +1228,18 @@ pub(crate) fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -
     consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
 }
 
+/// After one background derive step, whether the writer loop goes straight
+/// back for the next one instead of falling through to its receive.
+///
+/// Only while nothing waits for the writer. A parsed batch is taken by the
+/// receive itself. A parser's reorg-check request is taken by the receive's
+/// timeout (the idle branch): the parser that made it is stuck on its batch
+/// and produces nothing, so a writer that kept deriving would not take it
+/// until the derivation had no work left.
+pub(crate) fn should_derive_again(parse_queue_empty: bool, reorg_check_pending: bool) -> bool {
+    parse_queue_empty && !reorg_check_pending
+}
+
 // ── Fetcher start position ──────────────────────────────────────────────
 
 /// Where the fetcher continues after a batch it sent: the block after the
@@ -1326,6 +1338,12 @@ impl ReorgCheckRequestSlot {
 
     pub(crate) fn clear(&self) {
         *self.lock() = None;
+    }
+
+    /// Whether a report is waiting, whatever its epoch. Does not take it: the
+    /// writer's idle branch takes it and tells current from stale.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.lock().is_some()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<OrphanedTipReport>> {
@@ -1873,6 +1891,53 @@ mod tests {
         slot.request(report(0));
         slot.clear();
         assert_eq!(slot.take(0), ReorgCheckRequest::Empty);
+    }
+
+    /// `is_pending` sees a report of any epoch and leaves it for the idle
+    /// branch's `take`.
+    #[test]
+    fn test_reorg_check_request_is_pending_does_not_take_the_report() {
+        let slot = ReorgCheckRequestSlot::default();
+        assert!(!slot.is_pending(), "an empty slot");
+
+        slot.request(report(3));
+        assert!(slot.is_pending());
+        assert!(slot.is_pending(), "asking twice does not consume it");
+        assert_eq!(slot.take(3), ReorgCheckRequest::Current(report(3)));
+        assert!(!slot.is_pending(), "taken");
+
+        // A report from an earlier epoch is still pending until the idle
+        // branch takes and drops it.
+        slot.request(report(3));
+        assert!(slot.is_pending());
+        assert_eq!(slot.take(4), ReorgCheckRequest::Stale(report(3)));
+        assert!(!slot.is_pending());
+
+        slot.request(report(5));
+        slot.clear();
+        assert!(!slot.is_pending(), "cleared at run_pipeline start");
+    }
+
+    /// The writer loop folds derive chunks back to back only while nothing
+    /// waits for it. A parser stuck on an orphaned tip produces no batch, so
+    /// before this rule a pending derivation kept the writer from ever
+    /// reaching the receive whose timeout takes the parser's reorg-check
+    /// request: live sync stalled until the derivation had no work left.
+    #[test]
+    fn test_derive_again_only_while_no_batch_and_no_reorg_check_wait() {
+        assert!(
+            should_derive_again(true, false),
+            "nothing waiting: derive the next chunk"
+        );
+        assert!(
+            !should_derive_again(false, false),
+            "a parsed batch waits: receive it"
+        );
+        assert!(
+            !should_derive_again(true, true),
+            "a reorg-check request waits: fall through to the receive and its idle branch"
+        );
+        assert!(!should_derive_again(false, true));
     }
 
     fn cursor(epoch: u64, next_block: u64) -> Option<FetchCursor> {

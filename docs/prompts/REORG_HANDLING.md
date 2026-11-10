@@ -112,12 +112,12 @@ hash) in `reorg_check_request` and keeps retrying. The writer takes the request 
 nothing) and acts only if that epoch is still current. A request from an earlier epoch is dropped,
 so a reset is never followed by a check for a batch it already discarded. The pick-up bound does
 not hold while a deep fork is unresolved: the writer then stays in its pause loop and never reaches
-the idle branch, and the parser waits with its budget frozen. Nor does it hold while a background
-derivation has work pending (`docs/STORE_SCHEMA.md` → Derived Aggregates): the writer then folds one
-derive chunk per loop iteration and goes straight back for the next while no parsed batch is
-waiting, so it reaches the idle branch, and takes the request, once the derivation is complete; the
-parser waits with its budget frozen until then. Like the stale-fork check, this check bypasses the
-lag gate, because a parent mismatch is direct evidence:
+the idle branch, and the parser waits with its budget frozen. A background derivation with work
+pending (`docs/STORE_SCHEMA.md` → Derived Aggregates) does not delay it: the writer folds derive
+chunks back to back only while no parsed batch and no reorg-check request is waiting
+(`should_derive_again`), so with a request pending it falls through to the receive after at most
+one chunk and takes the request on that receive's timeout. Like the stale-fork check, this check
+bypasses the lag gate, because a parent mismatch is direct evidence:
 
 - **Reorg handled**: the same post-reorg sequence as the other two checks, pipeline reset, drain.
 - **Deep fork**: pipeline reset, sync paused (see Deep Fork below).

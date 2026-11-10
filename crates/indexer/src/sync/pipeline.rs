@@ -2609,16 +2609,17 @@ impl Indexer {
             // Derivations start only once sync is within the bulk threshold of
             // the tip (the DOB worker's gate). While one is pending, the loop
             // folds one chunk per iteration and goes straight back for the
-            // next one unless a parsed batch is waiting: live batches wait at
-            // most one chunk (`CHUNK_MAX_TIME`), and an idle writer derives
-            // continuously.
+            // next one unless a parsed batch or a parser's reorg-check request
+            // is waiting (`should_derive_again`): live batches and the
+            // orphaned-tip hand-off wait at most one chunk (`CHUNK_MAX_TIME`),
+            // and an otherwise idle writer derives continuously.
             if self.progress.blocks_remaining() <= self.config.bulk_sync_threshold
                 && derive_scheduler.has_pending_work()?
             {
                 derive_scheduler
                     .step()
                     .context("background derivation failed (fail fast: the indexer stops)")?;
-                if parse_rx.is_empty() {
+                if should_derive_again(parse_rx.is_empty(), self.reorg_check_request.is_pending()) {
                     continue;
                 }
             }
@@ -3381,7 +3382,9 @@ impl Indexer {
                         ));
                     }
                     // A parser stuck on an orphaned tip produces nothing, so
-                    // its request reaches this branch within one recv timeout.
+                    // its request reaches this branch within one recv timeout,
+                    // also while a derivation is pending (the derive branch
+                    // falls through to the receive while a request waits).
                     let pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
                     match self.reorg_check_request.take(pipeline_epoch) {
                         ReorgCheckRequest::Empty => {}
