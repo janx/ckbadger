@@ -4,8 +4,12 @@
 #   scripts/sweep-targets.sh           dry run: report what would be removed
 #   scripts/sweep-targets.sh --apply   remove it
 #
-# 1. A worktree with no uncommitted changes whose HEAD is already in main loses
-#    its whole target/: its work is merged, nothing there will be built again.
+# 1. A worktree with no uncommitted changes whose HEAD has moved since it was
+#    created and is already in main loses its whole target/: its work is
+#    merged, nothing there will be built again. "Moved" means the oldest entry
+#    of the worktree's own HEAD reflog is not its current HEAD. A worktree
+#    just created from main is in main too, but its target/ was seeded for the
+#    work to come, so one that never moved (or has no reflog) is left to rule 2.
 # 2. Every other target/ (the main checkout's included) keeps only artifacts
 #    built by SWEEP_TOOLCHAINS (default: the checkout's active toolchain) within
 #    SWEEP_DAYS (default: 14), via cargo-sweep, and drops incremental caches
@@ -72,6 +76,24 @@ checkout_busy() {
   return 1
 }
 
+# `git worktree add` writes the first entry of the new checkout's HEAD reflog
+# (followed by "reset: moving to HEAD" when it also creates a branch), so HEAD
+# has moved since creation when that oldest entry is not the current HEAD. Git
+# reads the branch's reflog when HEAD has none; no reflog at all reads as
+# never moved.
+head_moved() {
+  local checkout="$1" created head
+  created="$(git -C "$checkout" reflog show --format=%H HEAD | tail -n 1)" || {
+    echo "ERROR: cannot read the HEAD reflog of $checkout" >&2
+    exit 1
+  }
+  head="$(git -C "$checkout" rev-parse HEAD)" || {
+    echo "ERROR: cannot resolve HEAD of $checkout" >&2
+    exit 1
+  }
+  [[ -n "$created" && "$created" != "$head" ]]
+}
+
 # cargo-sweep logs its failures and still exits 0.
 cargo_sweep() {
   local log
@@ -114,6 +136,7 @@ while IFS= read -r line; do
 
   if [[ "$checkout" != "$main_checkout" ]] &&
     [[ -z "$(git -C "$checkout" status --porcelain)" ]] &&
+    head_moved "$checkout" &&
     git -C "$checkout" merge-base --is-ancestor HEAD "$main_ref"; then
     echo "== $name: merged into $main_ref, remove target/ ($(du -sh "$target" | cut -f1))"
     if $apply; then rm -rf -- "$target"; fi
