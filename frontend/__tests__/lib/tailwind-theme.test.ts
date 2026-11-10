@@ -18,6 +18,8 @@ describe('tailwind.config.ts draws every colour through the theme variables', ()
     expect((colors.base as Record<string, string>).bg).toBe(twColor('base-bg'));
     expect((colors.text as Record<string, string>).dim).toBe(twColor('text-dim'));
     expect(colors.copper).toBe(twColor('copper'));
+    // the cinnabar mark (prompt squares, seals, the search square) is its own token
+    expect(colors.mark).toBe(twColor('mark'));
     expect((colors.interactive as Record<string, string>).hover).toBe(twColor('jade'));
     expect((colors.emphasis as Record<string, string>).glow).toBe('rgb(var(--rgb-jade) / 0.25)');
   });

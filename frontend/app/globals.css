@@ -244,7 +244,7 @@ body * {
 
   .hex-char:hover {
     color: var(--color-emphasis);
-    text-shadow: 0 0 8px var(--color-emphasis);
+    text-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
     transform: scale(1.1);
   }
 
@@ -625,7 +625,8 @@ body * {
  * are declared on :root and redefined per tint below.
  */
 
-/* The scanlines (visual finish V2): 1 px in every 3, a blue-black at 6 % — glass, not dirt. */
+/* The scanlines (visual finish V2; rubbing × Song print): 1 px in every 3 — black at 22 % by night
+   (the CRT), the ink at 4.5 % by day (ruled paper); lib/palette.ts `scanline-ink`. */
 .crt-scanlines {
   position: fixed;
   inset: 0;
@@ -648,10 +649,10 @@ body * {
   z-index: -1;
 }
 
-/* The sky (material pass v2, move 1): the ground is a gradient — the night #0b0d17 at the top,
-   #08090e past the middle, a hair warmer at the foot — not one hex; body keeps the void behind it.
-   By day the same three stops are paper (lib/palette.ts: sky-top, sky-mid, sky-bottom). A page
-   paints no opaque ground of its own over it. */
+/* The sky (material pass v2, move 1): the ground is a gradient of three stops round the page
+   ground (lib/palette.ts: sky-top, sky-mid, sky-bottom — the warm ink by night, paper by day), a
+   hair lighter at the top and deeper at the foot; body keeps the void behind it. A page paints no
+   opaque ground of its own over it. */
 .ambient-glow {
   position: fixed;
   inset: 0;
@@ -698,8 +699,8 @@ body * {
 }
 /* The grain of a CRT (visual finish V3): a 128 px tile of Gaussian white noise (public/noise.png,
    8-bit grey, mean 128, sigma 28, fixed seed — one value per pixel, so it reads as grain, not the
-   clouds of the old fractal tile), drawn at its own size and screened over the page at 3 %,
-   under the scanlines. */
+   clouds of the old fractal tile), drawn at its own size under the scanlines: screened at 2 % by
+   night, multiplied at 3 % by day (lib/palette.ts grain-opacity, grain-blend). */
 .crt-grain {
   position: fixed;
   inset: 0;
@@ -719,7 +720,8 @@ body * {
  */
 
 /* Move 1a — the section mark: a 6 px jade dot before every tier-1 h2 (`text-section`, 17 px; a
-   tier-2 h2 is `text-body` and has none), and as `.section-mark` for a frame's eyebrow. */
+   tier-2 h2 is `text-body` and has none), and as `.section-mark` for a frame's eyebrow. Its halo
+   is the rubbing's one bloom: 6 px of celadon at 45 % by night, none by day. */
 .section-mark,
 h2.text-section::before {
   display: inline-block;
@@ -727,9 +729,7 @@ h2.text-section::before {
   height: 6px;
   border-radius: 50%;
   background: var(--c-jade);
-  box-shadow:
-    0 0 4px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow))),
-    0 0 10px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
+  box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
   vertical-align: middle;
 }
 h2.text-section::before {
@@ -745,23 +745,21 @@ h2.text-section::before {
 }
 .section-mark-gold {
   background: var(--c-gold);
-  box-shadow:
-    0 0 4px rgb(var(--rgb-gold) / calc(0.6 * var(--m-glow))),
-    0 0 10px rgb(var(--rgb-gold) / calc(0.25 * var(--m-glow)));
+  box-shadow: 0 0 6px rgb(var(--rgb-gold) / calc(0.45 * var(--m-glow)));
 }
 
 /* Move 1b — one lit figure per page: the display figure, an entity page's h1, an index page's h1.
    The colour is untouched (ink-bright stays ink-bright, DAO gold stays gold): only a white-jade
    halo. Its quieter companions inside the same element — decimals, a unit, "at #block" — are not
-   lit, nor is a ghost zero. */
+   lit, nor is a ghost zero. The rubbing keeps it close: a 1 px moon edge at 40 % and the one 14 px
+   celadon halo, no far tail. */
 .text-display,
 .sm\:text-display,
 h1.text-entity,
 h1.text-index {
   text-shadow:
-    0 0 1px rgb(var(--rgb-text-bright) / calc(0.6 * var(--m-glow))),
-    0 0 14px rgb(var(--rgb-jade) / calc(0.28 * var(--m-glow))),
-    0 0 32px rgb(var(--rgb-jade) / calc(0.12 * var(--m-glow)));
+    0 0 1px rgb(var(--rgb-text-bright) / calc(0.4 * var(--m-glow))),
+    0 0 14px rgb(var(--rgb-jade) / calc(0.28 * var(--m-glow)));
 }
 :is(.text-display, .sm\:text-display, h1.text-entity, h1.text-index)
   :is(
@@ -879,9 +877,6 @@ svg a:hover {
 :root[data-theme='light'] .glow-soft {
   text-shadow: none;
 }
-:root[data-theme='light'] .hex-char:hover {
-  text-shadow: none;
-}
 
 /* Reduced motion: no sweep, no blink; the halos are static anyway. */
 @media (prefers-reduced-motion: reduce) {
@@ -929,16 +924,18 @@ svg a:hover {
     0 0 40px var(--bar-glow, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
 }
 
+/* A stat figure's glow, held close (the rubbing's bloom is 6 px, never a wide neon wash): a 1 px
+   core in the figure's colour and two short halos (components/ui/stat-block.tsx sets the three). */
 .glow-neon {
   text-shadow:
-    0 0 10px var(--glow-color),
-    0 0 30px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 60px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
+    0 0 1px var(--glow-color),
+    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
+    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
 }
 .glow-soft {
   text-shadow:
-    0 0 20px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 40px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
+    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
+    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
 }
 
 .live-dot {
@@ -951,15 +948,14 @@ svg a:hover {
     0 0 16px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   animation: live-pulse 1.5s ease-in-out infinite;
 }
+/* A live mark breathes inside the one bloom: 6 px, from a faint 20 % up to the 45 % and back. */
 @keyframes live-pulse {
   0%,
   100% {
-    box-shadow: 0 0 4px rgb(var(--rgb-jade) / calc(1 * var(--m-glow)));
+    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.2 * var(--m-glow)));
   }
   50% {
-    box-shadow:
-      0 0 10px rgb(var(--rgb-jade) / calc(1 * var(--m-glow))),
-      0 0 20px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
+    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
   }
 }
 
@@ -1018,11 +1014,7 @@ svg a:hover {
 /* Storage tier text effects */
 .storage-text-gem {
   color: var(--c-gem-jade-1);
-  text-shadow:
-    0 0 4px rgb(var(--rgb-gem-jade-1) / calc(0.6 * var(--m-glow))),
-    0 0 12px rgb(var(--rgb-gem-jade-1) / calc(0.4 * var(--m-glow))),
-    0 0 28px rgb(var(--rgb-jade-bright) / calc(0.2 * var(--m-glow))),
-    0 0 50px rgb(var(--rgb-aqua) / calc(0.1 * var(--m-glow)));
+  text-shadow: 0 0 6px rgb(var(--rgb-gem-jade-1) / calc(0.45 * var(--m-glow)));
 }
 /* Both text: gold→emerald split */
 .storage-text-split {
@@ -1038,7 +1030,7 @@ svg a:hover {
   color: transparent;
   -webkit-text-fill-color: transparent;
   filter: drop-shadow(0 -1px 0 rgb(var(--rgb-gold-bright) / calc(0.25 * var(--m-glow))))
-    drop-shadow(0 0 8px rgb(var(--rgb-jade-bright) / calc(0.25 * var(--m-glow))));
+    drop-shadow(0 0 6px rgb(var(--rgb-jade-bright) / calc(0.25 * var(--m-glow))));
 }
 
 /* Ambient glow breathing animation for on-chain preview */
@@ -1113,13 +1105,12 @@ svg a:hover {
  * Nothing here adds a colour token.
  */
 
-/* Move 2a — the instrument frame's glass, read as a bezel (visual finish V4): 72 % opaque over the
-   sky (the pool shows through) under a 3 % white sheen that fades out over the top 56 px; a 10 %
-   white highlight on the top edge, a dark line on the bottom edge, and a 1 px dark line just
-   outside the border (a spread-only shadow), the way a bezel catches light and sits in its case.
-   No drop shadow: nothing casts one at night. No backdrop-filter: nothing behind a frame has
-   detail to blur (the ground is a gradient, the pools 300 px soft, the grain 3 %), so a blur
-   would buy a compositing layer and a re-blur on every scroll for no visible gain. */
+/* Move 2a — the instrument frame (visual finish V4's bezel layers, kept as the rule's structure).
+   In the rubbing / Song print theme every layer is a material of lib/palette.ts set flat: the fill
+   is the surface, opaque; the sheen over the top 56 px, the top and bottom edges and the outer ring
+   are transparent — a frame is a tile, the surface under its own 1 px border (TerminalPanel's
+   `border-base-border`). No drop shadow. No backdrop-filter: nothing behind a frame shows through
+   to blur. */
 .glass {
   background: linear-gradient(180deg, var(--m-glass-sheen), transparent 56px), var(--m-glass-fill);
   box-shadow:
@@ -1128,10 +1119,11 @@ svg a:hover {
     0 0 0 1px var(--m-glass-ring);
 }
 
-/* Move 2b — a well: dark glass, inset, for what is typed into (the search field, a filter, the
-   command palette) and what is read as bytes (a hex dump, raw JSON). 3 px corners, the row-rule
-   ink; `--well-radius` lets the header's search field keep the board's 6 px. Its lower lip (visual
-   finish V4) is a 4 % white line under the border: the light the inset edge catches. */
+/* Move 2b — a well: inset, for what is typed into (the search field, a filter, the command palette)
+   and what is read as bytes (a hex dump, raw JSON). 3 px corners, the row-rule ink; `--well-radius`
+   lets the header's search field keep the board's 6 px. The inset is the boards' (`inset 0 1px
+   3px`, 60 % black by night, the ink at 8 % by day); the lower lip (visual finish V4) is kept as a
+   material and set transparent: the rubbing has none. */
 .well {
   background: var(--c-well-bg);
   border: 1px solid var(--c-base-border-subtle);
