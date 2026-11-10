@@ -108,6 +108,20 @@ describe('the header is part of the frame (visual finish V6)', () => {
     );
   });
 
+  // Rubbing × Song print, phase 2: the status line is part of the frame too — once, fixed at the
+  // foot of the window, last in reading order after the footer.
+  it('closes the frame on one status line, after the footer', async () => {
+    mount('/mainnet/dao');
+    expect(await screen.findByText('dao page', {}, LAZY)).toBeInTheDocument();
+    const lines = screen.getAllByRole('status', { name: 'Status line' });
+    expect(lines).toHaveLength(1);
+    expect(
+      screen.getByRole('contentinfo').compareDocumentPosition(lines[0]) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(document.querySelector('[data-tint]')!.lastElementChild).toBe(lines[0]);
+  });
+
   it('renders the not-found route under the frame’s header, once', async () => {
     mount('/mainnet/no-such-page');
     expect(

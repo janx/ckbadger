@@ -213,4 +213,25 @@ describe('CommandPalette', () => {
     });
     expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
   });
+
+  // Rubbing × Song print, phase 2: the status line names the release and its key hints from md up
+  // only; the help (which a phone opens from the footer) names the release and the clock's zone.
+  it('names the release and the status clock’s time zone under the shortcuts', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = { buildVersion: '0.8.2@f8947b8d3915' };
+    try {
+      render(<CommandPalette />);
+      fireEvent.keyDown(window, { key: '?' });
+      const about = screen.getByTestId('shortcuts-about');
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      expect(about).toHaveTextContent(
+        `ckbadger 0.8.2 · the status line's clock is local time, ${zone}`
+      );
+      expect(screen.getByText('ckbadger 0.8.2')).toHaveAttribute(
+        'title',
+        'ckbadger 0.8.2@f8947b8d3915'
+      );
+    } finally {
+      delete window.__CKBADGER_RUNTIME_CONFIG__;
+    }
+  });
 });

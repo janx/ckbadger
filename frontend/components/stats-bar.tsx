@@ -1,10 +1,10 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
-import { api, type NetworkStats } from '@/lib/api';
+import type { NetworkStats } from '@/lib/api';
 import { parseEpoch, type EpochInfo } from '@/lib/epoch';
 import { formatBlockNumber } from '@/lib/format-block';
 import { cn } from '@/lib/utils';
@@ -22,12 +22,7 @@ import { cn } from '@/lib/utils';
  * grid places the items in document order, so from md up the same items flow as the row.
  */
 export function VitalsStrip() {
-  const { data: stats, error } = useQuery({
-    queryKey: ['network-stats'],
-    queryFn: () => api.getNetworkStats(),
-    staleTime: 0,
-    refetchInterval: 10000,
-  });
+  const { data: stats, error } = useNetworkStats();
   const isConnected = useRealtimeStore((s) => s.isConnected);
   const held = useRealtimeStore((s) => s.socketHeld);
 

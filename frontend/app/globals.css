@@ -129,6 +129,9 @@ body {
   color: var(--foreground);
   background: var(--background);
   min-height: 100vh;
+  /* The status line (components/layout/status-line.tsx) is fixed at the foot of the window, 26 px
+     tall: the page ends above it, so the footer is never under it. */
+  padding-bottom: 26px;
 }
 
 /*
