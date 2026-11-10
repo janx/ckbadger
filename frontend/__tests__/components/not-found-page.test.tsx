@@ -1,7 +1,7 @@
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { entityHash, NotFoundPage } from '@/components/not-found-page';
+import { entityVerse, NotFoundPage, ROUTE_VERSE } from '@/components/not-found-page';
 import { useNotFoundEvidence } from '@/lib/not-found-evidence';
 
 vi.mock('@/lib/not-found-evidence', () => ({
@@ -10,23 +10,39 @@ vi.mock('@/lib/not-found-evidence', () => ({
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
 const HASH = '0x4222e86425cf6f48b95cd69a4aab946a91a2598d404411177b3003042f0aca85';
+/** The tip's block hash the MSW `/blocks/:id` answers with (the vitals' tip is #1,000,000). */
+const TIP_HASH = '0xabc123def456789012345678901234567890123456789012345678901234abcd';
+const ROUTE_NAME =
+  "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.";
+
+/** The verse's lines as rendered, in order. */
+function verseLines(h1: HTMLElement): string[] {
+  return Array.from(h1.querySelectorAll('[data-comment-line]'), (l) => l.textContent ?? '');
+}
 
 describe('NotFoundPage', () => {
-  it('a route that names no page: the thought, the honest line, the ways on — and no claim about an entity', () => {
+  it('a route that names no page: the three lines of the verse, the ways on — and no claim about an entity', async () => {
     render(
       <MemoryRouter initialEntries={['/mainnet/a-route-that-is-not-here']}>
         <NotFoundPage />
       </MemoryRouter>
     );
 
-    expect(
-      screen.getByRole('heading', { level: 1, name: 'all that is was worked for. this was not.' })
-    ).toHaveClass('sign');
+    // rubbing × Song print, phase 4: the title is the verse, in the voice, at the display size
+    const h1 = screen.getByRole('heading', { level: 1, name: ROUTE_NAME });
+    expect(h1).toHaveClass('comment', 'comment-lg');
+    expect(verseLines(h1)).toEqual([
+      'no page at this path.',
+      'the chain was not asked; nothing on it is lost.',
+      "honey badger don't care.",
+    ]);
+    expect(verseLines(h1)).toEqual([...ROUTE_VERSE]);
     expect(screen.getByText('Not found · 404')).toHaveClass('eyebrow');
     expect(screen.getByText(/a-route-that-is-not-here/)).toBeInTheDocument();
-    expect(screen.getByText('no page at this path.')).toBeInTheDocument();
-    expect(screen.getByText(/the chain was not asked · nothing on it is lost/)).toBeInTheDocument();
-    expect(screen.queryByText(/searched every block|pool|cell_not_found/i)).not.toBeInTheDocument();
+    // the route's facts are the ways on: the verse already says what happened
+    expect(
+      screen.queryByText(/searched every block|pool|cell_not_found|checked/i)
+    ).not.toBeInTheDocument();
     const nav = screen.getByRole('navigation', { name: 'Find another route' });
     expect(within(nav).getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
       'href',
@@ -41,10 +57,15 @@ describe('NotFoundPage', () => {
       '/mainnet/inventory/tokens'
     );
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
-    // the night waits for the first block: no hash of its own, so no grid in the CSS night either
-    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'failed');
-    expect(screen.getByTestId('css-night').querySelector('.error-night-bits')).toBeNull();
     expect(screen.queryByRole('contentinfo')).toBeNull();
+    // behind the verse, the newest block's seal: the vitals' tip, its hash read from /blocks/{n}
+    const seal = await screen.findByTestId('error-seal');
+    expect(seal.querySelector('[data-hash-seal="brush"] svg')).toHaveAttribute(
+      'aria-label',
+      `Hash seal ${TIP_HASH.slice(0, 10)}`
+    );
+    // no WebGL, no canvas, no 256 squares: the night is gone
+    expect(document.querySelector('canvas, .error-night, [data-tube]')).toBeNull();
   });
 
   it('an entity known as something else: the hash is a fact, and the verified alternative is the way on', () => {
@@ -76,10 +97,13 @@ describe('NotFoundPage', () => {
       </MemoryRouter>
     );
 
-    expect(
-      screen.getByRole('heading', { name: 'a hash is a fact. a name, a guess.' })
-    ).toBeInTheDocument();
-    expect(screen.getByText('no transaction at this address.')).toBeInTheDocument();
+    // the index was asked, so the verse says so; the finding names the alternative
+    const h1 = screen.getByRole('heading', {
+      level: 1,
+      name: "no transaction at this address. the local index was asked; it holds none. honey badger don't care.",
+    });
+    expect(verseLines(h1)[0]).toBe('no transaction at this address.');
+    expect(screen.queryByText(/the chain was not asked/)).toBeNull();
     expect(screen.getByText('/transactions/0xabc')).toBeInTheDocument();
     expect(screen.getByText(/A block matched this exact hash/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '→ open block #42' })).toHaveAttribute(
@@ -93,7 +117,7 @@ describe('NotFoundPage', () => {
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
   });
 
-  it('preserves and wraps a full endpoint in a verified finding, and pours the asked hash as the first grid', () => {
+  it('preserves and wraps a full endpoint in a verified finding; the seal is the tip’s, not the asked hash', async () => {
     const endpoint = `/transactions/${HASH}/detail`;
     const finding = `The ${endpoint} entity request returned HTTP 404; /search identified this exact hash as a block.`;
     vi.mocked(useNotFoundEvidence).mockReturnValueOnce({
@@ -117,13 +141,21 @@ describe('NotFoundPage', () => {
     const findingText = screen.getByText(finding);
     expect(findingText).toHaveTextContent(endpoint);
     expect(findingText).toHaveClass('break-all');
-    // nothing answered: the sign is the absence that is not denial
-    expect(
-      screen.getByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
-    ).toBeInTheDocument();
-    // jsdom has no WebGL2: the CSS night shows the asked hash, bit for bit
-    expect(screen.getByTestId('css-night').querySelectorAll('.error-night-bits i')).toHaveLength(
-      256
+    // nothing answered: the same verse as an entity known as something else
+    expect(verseLines(screen.getByRole('heading', { level: 1 }))).toEqual([
+      'no transaction at this address.',
+      'the local index was asked; it holds none.',
+      "honey badger don't care.",
+    ]);
+    // the seal pressed behind is the newest block's, never the hash that was asked for
+    const seal = await screen.findByTestId('error-seal');
+    expect(seal.querySelector('svg')).toHaveAttribute(
+      'aria-label',
+      `Hash seal ${TIP_HASH.slice(0, 10)}`
+    );
+    expect(seal.querySelector('svg')).not.toHaveAttribute(
+      'aria-label',
+      `Hash seal ${HASH.slice(0, 10)}`
     );
   });
 
@@ -149,23 +181,23 @@ describe('NotFoundPage', () => {
     expect(screen.getByText('0x' + 'f'.repeat(64))).toHaveClass('break-all');
   });
 
-  it('the hash a page is about: a 32-byte hash, an out point’s transaction, or nothing', () => {
-    expect(entityHash(undefined)).toBeNull();
+  it('an entity’s verse: its kind in words, the index asked, and the meme last — never the route’s second line', () => {
     expect(
-      entityHash({
-        kind: 'transaction',
-        identifier: '0x' + HASH.slice(2).toUpperCase(),
-        checkedEndpoint: '/x',
+      entityVerse({
+        kind: 'fiber-channel',
+        identifier: '0x01',
+        checkedEndpoint: '/fiber/channels/0x01',
       })
-    ).toBe(HASH);
-    expect(entityHash({ kind: 'cell', identifier: `${HASH}-3`, checkedEndpoint: '/x' })).toBe(HASH);
+    ).toEqual([
+      'no fiber channel at this address.',
+      'the local index was asked; it holds none.',
+      "honey badger don't care.",
+    ]);
+    expect(entityVerse({ kind: 'block', identifier: '1', checkedEndpoint: '/blocks/1' })[0]).toBe(
+      'no block at this address.'
+    );
     expect(
-      entityHash({
-        kind: 'address',
-        identifier:
-          'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2qf8keemy2p5uu0g0gn8cd4ju23s5269qk8rk4r',
-        checkedEndpoint: '/x',
-      })
-    ).toBeNull();
+      entityVerse({ kind: 'script-family', identifier: 'x', checkedEndpoint: '/x' })
+    ).not.toContain(ROUTE_VERSE[1]);
   });
 });

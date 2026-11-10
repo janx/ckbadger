@@ -572,7 +572,11 @@ describe('ScriptDetailPage', () => {
 
   it.each([
     { status: 500, expectedTitle: 'Script data unavailable' },
-    { status: 404, expectedTitle: 'known to some, perhaps. to all, not yet.' },
+    {
+      status: 404,
+      expectedTitle:
+        "no script family at this address. the local index was asked; it holds none. honey badger don't care.",
+    },
   ])(
     'distinguishes named script HTTP $status from not found',
     async ({ status, expectedTitle }) => {

@@ -121,7 +121,6 @@ lightness only (lighter by night, darker by day) until it clears that ratio on a
 | `badge-*`, `bitcoin-*`                                  | celadon, copper                         | inner = celadon 7 % / copper 6 % on the well; jade pale / light / mid = neon-white / jade-bright / their mix (day jade-dim family); bitcoin light copper 30 % in warm white, dark copper L −0.16 |
 | `gem-*`                                                 | gold, celadon                           | gold-bright, gold, jade, jade-bright (day gold, gold-bright, jade-dim, jade)                                                                                                                     |
 | `life-bg-*`                                             | celadon, gold on the well               | 4 % / 3 % (day 6 % / 5 % on bg)                                                                                                                                                                  |
-| `night-*`                                               | well, the boards' rouge, lotus          | base mix well black 0.85; rose = the boards' rouge L +0.06; violet = lotus (day: bg, `#9c3b5f`, `#5e4d9a`)                                                                                       |
 | `sky-*`, `well-bg`, `selection-ink`                     | bg, surface, void                       | top mix surface bg 0.35, mid = bg, foot mix void bg 0.4 (day: elevated 30 % at the foot); well-bg = the well; selection `#f6f2ea` / ink                                                          |
 | `crystal-*`, `mount-*`                                  | celadon, ochre                          | artwork, the same in both themes: a celadon crystal (`#b7d9d0`, `#93c1b6` stepped) on an ochre mount (`#cc8a5e` stepped)                                                                         |
 
@@ -134,7 +133,9 @@ the midnight strength); `grain-opacity` 0.02 / 0.03; `glow` 1 / 0; `glass-fill` 
 opaque, and `glass-sheen` / `-top-edge` / `-bottom-edge` / `-ring` transparent (a frame is a tile:
 the surface under its own 1 px border); `well-inset` black 60 % / ink 8 % (the boards' `inset`),
 `well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the well
-/ bg at 80 %. A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
+/ bg at 80 %; `seal-press` 0.16 / 0.08, the opacity of the newest block's seal pressed behind the
+404 verse (the most each theme allows with every ink of the verse and its facts text-grade across a
+stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
 calc(0.45 * var(--m-glow)))`), out by day.
 
 ## Semantic colors

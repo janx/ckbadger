@@ -160,10 +160,6 @@ const dark = {
   // the Game of Life tile
   'life-bg-ckb': '#141412',
   'life-bg-dual': '#15120d',
-  // the not-found night
-  'night-base': '#0d0b09',
-  'night-rose': '#dd91a5',
-  'night-violet': '#a797c4',
   // the sky: the page ground is the boards' bg, a hair lighter at the top, a hair deeper at the foot
   'sky-top': '#171411',
   'sky-mid': '#15120f',
@@ -296,9 +292,6 @@ const light: Palette = {
   'gem-jade-1': '#2f6b63',
   'life-bg-ckb': '#e7e6dc',
   'life-bg-dual': '#ede7d9',
-  'night-base': '#f3eee4',
-  'night-rose': '#9c3b5f',
-  'night-violet': '#5e4d9a',
   'sky-top': '#f5f1e8',
   'sky-mid': '#f3eee4',
   'sky-bottom': '#f0eadf',
@@ -330,7 +323,10 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
  * and the grain sit at about half their midnight strength. A frame (`.glass`, the rule name kept)
  * is a flat tile: the surface, opaque, under its own 1 px border — no sheen, no lit edges, no
  * outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
- * 8 % by day) with no lip. The tints are the palette's own grounds and inks.
+ * 8 % by day) with no lip. The tints are the palette's own grounds and inks. `seal-press` is how
+ * faint the newest block's seal is pressed behind the 404 verse: the cinnabar at 16 % on the night,
+ * 8 % on paper (where the same red reads stronger): the most each allows with every ink of the
+ * verse and its facts still text-grade across a stroke (palette.test).
  */
 const darkMaterials = {
   glow: '1',
@@ -353,6 +349,7 @@ const darkMaterials = {
   'preview-inset': `inset 0 2px 8px rgba(0, 0, 0, 0.7), inset 0 0 1px ${hexAlpha(dark['text-bright'], 0.04)}`,
   'preview-cast': 'rgba(0, 0, 0, 0.5)',
   'preview-sheen': hexAlpha(dark['text-bright'], 0.08),
+  'seal-press': '0.16',
 } as const;
 export type MaterialKey = keyof typeof darkMaterials;
 export type Materials = Readonly<Record<MaterialKey, string>>;
@@ -383,6 +380,7 @@ const lightMaterials: Materials = {
   'preview-inset': `inset 0 2px 8px ${hexAlpha(DAY_INK, 0.12)}, inset 0 0 1px ${hexAlpha(DAY_PAPER, 0.6)}`,
   'preview-cast': hexAlpha(DAY_INK, 0.18),
   'preview-sheen': hexAlpha(DAY_PAPER, 0.5),
+  'seal-press': '0.08',
 };
 
 export const MATERIALS: Readonly<Record<ThemeName, Materials>> = {

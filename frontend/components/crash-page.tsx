@@ -4,7 +4,6 @@ import { useContext, useState } from 'react';
 import { UNSAFE_LocationContext } from 'react-router-dom';
 import Link from '@/components/ui/link';
 import { ErrorPageShell } from '@/components/error-page-shell';
-import type { SignLines } from '@/components/error-sign';
 import { usePathname } from '@/src/navigation';
 import { resolveBuildVersion } from '@/lib/runtime-config';
 import { isKnownNetwork } from '@/lib/active-network';
@@ -12,13 +11,11 @@ import { useDocumentTitle } from '@/lib/use-document-title';
 
 const ERROR_TITLE = ['Error'] as const;
 
-/** A page that fell: the world keeps only what succeeded; a failed transition leaves no state. */
-const ERROR_READINGS: readonly SignLines[] = [
-  ['the chain keeps', 'what succeeded.', 'this did not.'],
-  ['a transition', 'that failed', 'leaves no state.'],
-  ['work was spent,', 'and nothing', 'came of it.'],
-  ['our fault.', 'the chain', 'was not asked.'],
-];
+/**
+ * A page that fell, in the voice: the world keeps only what succeeded; a failed transition leaves
+ * no state. Its own words, not the 404's (the meme is the 404's alone).
+ */
+const CRASH_VERSE = ['the chain keeps what succeeded.', 'this did not.'] as const;
 
 interface CrashPageProps {
   message: string;
@@ -71,9 +68,7 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
     <ErrorPageShell
       status="Error · not a 404"
       path={fullRoute}
-      sign={ERROR_READINGS[0]}
-      readings={ERROR_READINGS}
-      brownout
+      verse={CRASH_VERSE}
       // the outer React boundary is above the router, so never inside the frame
       standalone={standalone || contextSafe}
       contextSafe={contextSafe}

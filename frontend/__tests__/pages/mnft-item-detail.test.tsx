@@ -235,7 +235,10 @@ describe('MnftItemDetailPage', () => {
     );
     render(<MnftItemDetailPage objectId={id} />);
     expect(
-      await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+      await screen.findByRole('heading', {
+        level: 1,
+        name: "no object at this address. the local index was asked; it holds none. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.getByText(`/assets/objects/items/${id}`)).toBeInTheDocument();
     expect(api.getItemProtocol).not.toHaveBeenCalled();
@@ -258,7 +261,7 @@ describe('MnftItemDetailPage', () => {
     );
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('canonical item mismatch');
-    expect(screen.queryByText('known to some, perhaps. to all, not yet.')).not.toBeInTheDocument();
+    expect(screen.queryByText('the local index was asked; it holds none.')).not.toBeInTheDocument();
   });
 
   it('retains item content while showing a background read failure', async () => {
