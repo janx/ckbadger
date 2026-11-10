@@ -93,7 +93,9 @@ describe('cell microscope', () => {
     const box = screen.getByLabelText('Cell bytes');
     expect(box).toHaveAttribute('data-instrument-frame');
     expect(box).toHaveAttribute('data-cell-bytes');
-    expect(box).toHaveClass('neon-edge-top', 'rounded-lg', 'border', 'border-base-border');
+    // a flat tile since rubbing × Song print: no lit top edge
+    expect(box).toHaveClass('rounded-lg', 'border', 'border-base-border');
+    expect(box).not.toHaveClass('neon-edge-top');
     expect(box).not.toHaveClass('border-base-border-subtle');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
     expect(dump).toHaveClass('px-4', 'py-3');

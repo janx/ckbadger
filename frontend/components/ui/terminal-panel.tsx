@@ -5,43 +5,25 @@ import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 
 type IndicatorStatus = 'active' | 'warning' | 'inactive' | 'none';
-type AccentColor = 'jade' | 'aqua' | 'gold' | 'rouge' | 'lavender' | 'amber';
-
-/**
- * The frame's top edge colour (`--neon-color`, read by `.neon-edge-top::after`), as a class rather
- * than an inline style: the frame then carries no inline ink, which the pages' "no coloured text
- * outside the graphics" checks count. Jade is the approved .45; the others keep their .4.
- */
-const accentClass: Record<AccentColor, string> = {
-  jade: '[--neon-color:rgb(var(--rgb-jade)/0.45)]',
-  aqua: '[--neon-color:rgb(var(--rgb-aqua)/0.4)]',
-  gold: '[--neon-color:rgb(var(--rgb-gold)/0.4)]',
-  rouge: '[--neon-color:rgb(var(--rgb-rouge)/0.4)]',
-  lavender: '[--neon-color:rgb(var(--rgb-lavender)/0.4)]',
-  amber: '[--neon-color:rgb(var(--rgb-amber)/0.4)]',
-};
-
 interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   variant?: 'default' | 'elevated' | 'inset';
   glow?: boolean;
-  accentColor?: AccentColor;
 }
 
 /**
- * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"):
- * a #222840 hairline, an 8 px radius, glass (material pass v2, move 2: `.glass` — 72 % opaque over
- * the night sky, a 1 px highlight on the top edge, a dark line on the bottom edge; no
- * backdrop-filter, see globals.css), a jade edge along the top (`.neon-edge-top`) and inset
- * scanlines. The transaction pipeline, the tx page's cells diagram, the cell page's byte dump,
- * the DNA gel and the network map sit in it; prose, tables and charts stay unframed.
+ * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"),
+ * a flat tile since rubbing × Song print: the surface under its own 1 px border in the line ink,
+ * an 8 px radius, `.glass` (its materials now the opaque surface with no sheen, no edges, no ring;
+ * see globals.css) and inset scanlines — no lit edge along the top. The transaction pipeline, the
+ * tx page's cells diagram, the cell page's byte dump, the DNA gel and the network map sit in it;
+ * prose, tables and charts stay unframed.
  */
 export function TerminalPanel({
   children,
   className,
   variant = 'default',
   glow = false,
-  accentColor = 'jade',
   style,
   ...props
 }: TerminalPanelProps) {
@@ -58,8 +40,7 @@ export function TerminalPanel({
       {...props}
       data-instrument-frame=""
       className={cn(
-        'neon-edge-top relative overflow-hidden border transition-shadow duration-300',
-        accentClass[accentColor],
+        'relative overflow-hidden border transition-shadow duration-300',
         variantClasses[variant],
         glow && 'hover:shadow-glow',
         className

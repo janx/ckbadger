@@ -612,25 +612,6 @@ svg a:hover {
   }
 }
 
-.neon-edge-top {
-  position: relative;
-}
-.neon-edge-top::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--neon-color, rgb(var(--rgb-jade) / 0.45)),
-    transparent
-  );
-  pointer-events: none;
-}
-
 /* A stat figure's glow, held close (the rubbing's bloom is 6 px, never a wide neon wash): a 1 px
    core in the figure's colour and two short halos (components/ui/stat-block.tsx sets the three). */
 .glow-neon {

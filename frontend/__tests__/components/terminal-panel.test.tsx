@@ -7,12 +7,12 @@ import {
 } from '@/components/ui/terminal-panel';
 
 // Midnight, continued (review 2026-11-03, item 5, move 3): "instruments are framed, text is
-// flat". TerminalPanel is the one instrument frame — a #222840 hairline (`border-base-border`),
-// an 8 px radius (visual finish V10: glass frames take `rounded-lg`), glass (material pass v2, move 2:
-// `.glass` replaces the flat surface colour, so the sky's pool shows through), the jade top edge
-// (`.neon-edge-top`) and inset scanlines — headed by a command line led by the prompt square.
+// flat". TerminalPanel is the one instrument frame — a 1 px line (`border-base-border`), an 8 px
+// radius (visual finish V10: glass frames take `rounded-lg`), `.glass` (material pass v2, move 2)
+// and inset scanlines — headed by a command line led by the prompt square. Rubbing × Song print,
+// phase 2: a flat tile, the glass's materials the opaque surface, and no jade top edge.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
-  it('frames its content: hairline, 8 px radius, glass, jade top edge, scanlines', () => {
+  it('frames its content: hairline, 8 px radius, the flat glass tile, scanlines, no lit edge', () => {
     const { container } = render(
       <TerminalPanel aria-label="An instrument" data-testid="frame">
         <TerminalPanelContent>inside</TerminalPanelContent>
@@ -22,7 +22,6 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(frame).toHaveAttribute('data-instrument-frame');
     expect(frame).toHaveAttribute('aria-label', 'An instrument');
     expect(frame).toHaveClass(
-      'neon-edge-top',
       'relative',
       'overflow-hidden',
       'rounded-lg',
@@ -43,8 +42,9 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
       expect(getByTestId(`flat-${variant}`)).not.toHaveClass('glass');
       unmount();
     }
-    // the jade edge's colour, at the approved .45, as a class: the frame carries no inline ink
-    expect(frame).toHaveClass('[--neon-color:rgb(var(--rgb-jade)/0.45)]');
+    // no lit top edge, no edge colour; the frame carries no inline ink
+    expect(frame).not.toHaveClass('neon-edge-top');
+    expect(frame.className).not.toContain('--neon-color');
     expect(frame).not.toHaveAttribute('style');
     // the inset scanlines, 1 px on, 1 px off, under the content, in the theme's inset ink
     const scan = container.querySelector('.pointer-events-none > div') as HTMLElement;
@@ -53,12 +53,18 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(screen.getByText('inside').parentElement).toHaveClass('relative', 'z-10');
   });
 
-  it('colours the edge by accent, still without an inline style', () => {
-    render(<TerminalPanel accentColor="gold" data-testid="frame" children="x" />);
-    const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('[--neon-color:rgb(var(--rgb-gold)/0.4)]');
-    expect(frame).not.toHaveClass('[--neon-color:rgb(var(--rgb-jade)/0.45)]');
-    expect(frame).not.toHaveAttribute('style');
+  // The accent colours went with the edge they coloured: every frame is the same tile.
+  it('draws every variant without an edge or an inline style', () => {
+    for (const variant of ['default', 'elevated', 'inset'] as const) {
+      const { getByTestId, unmount } = render(
+        <TerminalPanel variant={variant} data-testid="frame" children="x" />
+      );
+      const frame = getByTestId('frame');
+      expect(frame).not.toHaveClass('neon-edge-top');
+      expect(frame.className).not.toContain('--neon-color');
+      expect(frame).not.toHaveAttribute('style');
+      unmount();
+    }
   });
 
   // Rubbing × Song print, phase 2: the frame's head is a command line — the prompt square (still

@@ -39,7 +39,9 @@ describe('Independent DOB evidence', () => {
     const plate = container.querySelector('[data-gel-plate]') as HTMLElement;
     expect(plate).toHaveAttribute('data-gel-plate', 'frame');
     expect(plate).toHaveAttribute('data-instrument-frame');
-    expect(plate).toHaveClass('neon-edge-top', 'rounded-lg', 'border-base-border');
+    // a flat tile since rubbing × Song print: no lit top edge
+    expect(plate).toHaveClass('rounded-lg', 'border-base-border');
+    expect(plate).not.toHaveClass('neon-edge-top');
     expect(plate).toContainElement(container.querySelector('[data-gene]') as HTMLElement);
     expect(plate.querySelector('.space-y-4')).toHaveClass('px-4', 'py-4', 'sm:px-5');
     rerender(<ObjectGeneticsView evidence={data} subject="Spore" tier="btc_ckb" />);

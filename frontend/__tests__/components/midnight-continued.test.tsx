@@ -60,8 +60,10 @@ describe('the rules in globals.css', () => {
     }
   });
 
-  it('move 3: the frame edge at .45', () => {
-    expect(css).toMatch(/var\(--neon-color, rgb\(var\(--rgb-jade\) \/ 0\.45\)\)/);
+  // Rubbing × Song print, phase 2: the frame is a flat tile — the surface under its 1 px line —
+  // so the jade edge along its top (`.neon-edge-top`, at .45) is gone.
+  it('move 3: the frame has no lit edge', () => {
+    expect(css).not.toMatch(/\.neon-edge-top|--neon-color/);
   });
 
   it('move 4: the block cursor and a row-scan a <tr> can carry; reduced motion stills both', () => {
@@ -281,8 +283,10 @@ describe('move 3 on the tx page’s cells diagram', () => {
     const frame = screen.getByTestId('tx-cells-frame');
     expect(frame).toHaveAttribute('data-instrument-frame');
     expect(frame).toHaveAttribute('aria-label', 'Cells consumed and created');
-    // material pass v2 (move 2): the frame's surface is glass (`.glass`), not the flat colour
-    expect(frame).toHaveClass('neon-edge-top', 'rounded-lg', 'border', 'glass');
+    // material pass v2 (move 2): the frame's surface is `.glass`, not the flat colour — a flat
+    // tile since rubbing × Song print, with no lit top edge
+    expect(frame).toHaveClass('rounded-lg', 'border', 'glass');
+    expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).toContainElement(container.querySelector('[data-tx-canvas]') as HTMLElement);
     // the column heads are the frame's eyebrows
     expect(frame).toHaveTextContent('1 cell consumed');

@@ -347,7 +347,9 @@ describe('move 2 on the frame and the tier boundary', () => {
       </TerminalPanel>
     );
     const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('glass', 'border-base-border', 'neon-edge-top', 'rounded-lg');
+    expect(frame).toHaveClass('glass', 'border-base-border', 'rounded-lg');
+    // a flat tile since rubbing × Song print: no lit top edge
+    expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).not.toHaveClass('bg-base-surface');
     const head = screen.getByText('Cells').parentElement!;
     expect(head).toHaveClass('prompt', 'font-medium', 'text-body', 'text-text-bright');
