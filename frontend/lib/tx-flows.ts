@@ -3,10 +3,10 @@
  * one flow from the parties it came from to the parties it went to, read off the activity's
  * signed per-party deltas — the API's Layer-1 opinion, never re-derived from cells. No pairing is
  * invented: a flow has givers and receivers and passes through the asset, which is all the chain
- * states. The CKB flow is conserved on the page: the fee leaves to the miner, Nervos DAO
- * compensation enters, a genesis transaction issues from nothing, so what left the givers equals
- * what reached the receivers. Every amount is an exact bigint; a sum that does not conserve is an
- * upstream bug and throws with the transaction hash.
+ * states. The CKB flow is conserved on the page: the fee leaves to the miner and Nervos DAO
+ * compensation enters, so what left the givers equals what reached the receivers. Every amount is
+ * an exact bigint; a sum that does not conserve is an upstream bug and throws with the transaction
+ * hash.
  */
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
 import { PARTICIPANT_LIMIT } from '@/lib/participant-order';
@@ -19,14 +19,13 @@ export type FlowAsset =
 
 /**
  * One end of a flow: a party with its exact amount, or a terminal — the miner (the fee, a
- * receiver), Nervos DAO compensation and a genesis issue (givers), an item minted here (no giver
- * on chain) or burnt here (no holder after). `more` is a fold of party ends (see `foldEnds`).
+ * receiver), Nervos DAO compensation (a giver), an item minted here (no giver on chain) or burnt
+ * here (no holder after). `more` is a fold of party ends (see `foldEnds`).
  */
 export type FlowEnd =
   | { t: 'party'; party: ParticipantInfo; amount: bigint }
   | { t: 'miner'; amount: bigint }
   | { t: 'compensation'; amount: bigint }
-  | { t: 'genesis'; amount: bigint }
   | { t: 'minted'; amount: bigint }
   | { t: 'burnt'; amount: bigint }
   | { t: 'more'; count: number; amount: bigint; ends: readonly FlowEnd[] };
@@ -35,7 +34,7 @@ export interface TxFlow {
   /** `ckb`, `token:<type hash>`, `object:<id>` or `identity:<standard>:<id>`. */
   key: string;
   asset: FlowAsset;
-  /** Givers, largest amount first; a giving terminal (compensation, genesis, minted) first. */
+  /** Givers, largest amount first; a giving terminal (compensation, minted) first. */
   from: FlowEnd[];
   /** Receivers, largest amount first; a receiving terminal (the miner, burnt) last. */
   to: FlowEnd[];
@@ -92,21 +91,18 @@ function sum(ends: readonly FlowEnd[]): bigint {
  * identities as the participants list them), CKB last — CKB is also the container the items ride
  * in. An item whose receivers got more than its givers gave was minted here (a `minted` giver
  * carries the difference); less, burnt here (a `burnt` receiver). The CKB flow carries the fee
- * as the miner's receipt, DAO compensation as a giver, a genesis issue as a giver, and must then
- * conserve exactly.
+ * as the miner's receipt and DAO compensation as a giver, and must then conserve exactly.
  */
 export function txFlows({
   hash,
   activity,
   fee,
   compensation,
-  genesis,
 }: {
   hash: string;
   activity: Pick<GlobalActivity, 'participants'>;
   fee: string;
   compensation: bigint | null;
-  genesis: boolean;
 }): TxFlow[] {
   const items = new Map<string, { asset: FlowAsset; from: Entry[]; to: Entry[] }>();
   const order: string[] = [];
@@ -150,12 +146,6 @@ export function txFlows({
       throw new Error(`${hash}: DAO compensation ${compensation} is not positive`);
     from.unshift({ t: 'compensation', amount: compensation });
   }
-  if (genesis) {
-    const issued = sum(to) - sum(from);
-    if (issued <= ZERO)
-      throw new Error(`${hash}: a genesis transaction issues capacity, but ${issued} shannons`);
-    from.unshift({ t: 'genesis', amount: issued });
-  }
   if (from.length > 0 || to.length > 0) {
     const given = sum(from);
     const received = sum(to);
@@ -178,9 +168,7 @@ const SHOWN_WHEN_FOLDED = PARTICIPANT_LIMIT - 1;
 export function foldEnds(ends: readonly FlowEnd[], expanded: boolean): FlowEnd[] {
   const parties = ends.filter((e) => e.t === 'party');
   if (expanded || parties.length <= PARTICIPANT_LIMIT) return [...ends];
-  const leading = ends.filter(
-    (e) => e.t === 'compensation' || e.t === 'genesis' || e.t === 'minted'
-  );
+  const leading = ends.filter((e) => e.t === 'compensation' || e.t === 'minted');
   const trailing = ends.filter((e) => e.t === 'miner' || e.t === 'burnt');
   const rest = parties.slice(SHOWN_WHEN_FOLDED);
   return [

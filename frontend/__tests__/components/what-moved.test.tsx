@@ -86,7 +86,6 @@ function renderAt(width: number, a = sale(), onHover?: (h: WhatMovedHover | null
       activity={a}
       fee="8888"
       compensation={null}
-      genesis={false}
       lockCodeHashes={codeHashes(a)}
       onHover={onHover}
     />
@@ -201,7 +200,6 @@ describe('WhatMoved, the ribbon form', () => {
         activity={a}
         fee="30698"
         compensation={BigInt('17530634165')}
-        genesis={false}
         lockCodeHashes={codeHashes(a)}
       />
     );

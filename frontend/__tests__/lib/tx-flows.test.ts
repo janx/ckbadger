@@ -1,7 +1,7 @@
 /**
  * "What moved" (tx page, review 2026-11-03 v2): the flows a transaction's activity states — items
- * first, CKB last; givers and receivers by exact amount; the fee to the miner, compensation and a
- * genesis issue as givers, mint and burn terminals; the fold beyond six parties; ribbon weights.
+ * first, CKB last; givers and receivers by exact amount; the fee to the miner, compensation as a
+ * giver, mint and burn terminals; the fold beyond six parties; ribbon weights.
  */
 import { describe, expect, it } from 'vitest';
 import { flowKey, foldEnds, ribbonWeight, txFlows, type FlowEnd } from '@/lib/tx-flows';
@@ -41,6 +41,33 @@ const activity = (participants: ParticipantInfo[]): Pick<GlobalActivity, 'partic
 const amounts = (ends: readonly FlowEnd[]) =>
   ends.map((e) => [e.t, e.t === 'party' ? e.party.address!.slice(-6) : e.t, e.amount.toString()]);
 
+/** The participants of the genesis dep-group transaction, verbatim from mainnet :8101. */
+const GENESIS_DEP_GROUP_PARTICIPANTS: ParticipantInfo[] = [
+  {
+    address:
+      'ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz',
+    lockHash: '0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2',
+    lockHashPrefix: null,
+    lockKind: null,
+    roles: [],
+    ckbDelta: '-23400000000',
+    usedDelta: '-6100000000',
+    itemDeltas: [],
+    tags: 128,
+  },
+  {
+    address: 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d',
+    lockHash: '0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590',
+    lockHashPrefix: null,
+    lockKind: 'Zero Lock',
+    roles: [],
+    ckbDelta: '23400000000',
+    usedDelta: '23400000000',
+    itemDeltas: [],
+    tags: 0,
+  },
+];
+
 describe('txFlows', () => {
   it('reads a swap as two flows, items first then CKB, each from the left to the right', () => {
     // 0x91429fbc…: 25,442.40236569 iCKB from the limit order to rvxmvg, 30,700.918 CKB the other way.
@@ -52,7 +79,6 @@ describe('txFlows', () => {
       ]),
       fee: '30698',
       compensation: null,
-      genesis: false,
     });
     expect(flows.map((f) => f.key)).toEqual([`token:${ICKB}`, 'ckb']);
     // the asset is named by the first item delta met: the token's hash and symbol, no amount
@@ -84,7 +110,6 @@ describe('txFlows', () => {
       ]),
       fee: '10',
       compensation: null,
-      genesis: false,
     });
     expect(flows).toHaveLength(1);
     expect(amounts(flows[0].from)).toEqual([
@@ -104,7 +129,6 @@ describe('txFlows', () => {
       activity: activity([party('aaaaaa', '-5', [token('-700')])]),
       fee: '5',
       compensation: null,
-      genesis: false,
     });
     expect(amounts(burn[0].to)).toEqual([['burnt', 'burnt', '700']]);
     expect(burn[0].total).toBe(BigInt(700));
@@ -116,7 +140,6 @@ describe('txFlows', () => {
       ]),
       fee: '5',
       compensation: null,
-      genesis: false,
     });
     expect(amounts(mint[0].from)).toEqual([
       ['minted', 'minted', '800'],
@@ -125,13 +148,12 @@ describe('txFlows', () => {
     expect(mint[0].total).toBe(BigInt(900));
   });
 
-  it('lets Nervos DAO compensation in first and a genesis issue in from nothing', () => {
+  it('lets Nervos DAO compensation in first', () => {
     const dao = txFlows({
       hash: HASH,
       activity: activity([party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')]),
       fee: '936',
       compensation: BigInt('17530634165'),
-      genesis: false,
     });
     expect(amounts(dao[0].from)).toEqual([
       ['compensation', 'compensation', '17530634165'],
@@ -141,15 +163,23 @@ describe('txFlows', () => {
       ['party', 'bbbbbb', '2622530633229'],
       ['miner', 'miner', '936'],
     ]);
-    const genesis = txFlows({
-      hash: HASH,
-      activity: activity([party('aaaaaa', '840000000000000000')]),
+  });
+
+  // Review 45fd finding 5 (ruling D6): the only block-0 transaction the page reads an activity for
+  // is the genesis dep-group transaction (0x71a7…e46c, mainnet :8101 2026-11-10). It is not a
+  // cellbase and issues nothing: an ordinary conserving transfer with a fee of 0.
+  it('reads the genesis dep-group transaction as a plain conserving transfer with no fee', () => {
+    const flows = txFlows({
+      hash: '0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c',
+      activity: { participants: GENESIS_DEP_GROUP_PARTICIPANTS },
       fee: '0',
       compensation: null,
-      genesis: true,
     });
-    expect(amounts(genesis[0].from)).toEqual([['genesis', 'genesis', '840000000000000000']]);
-    expect(amounts(genesis[0].to)).toEqual([['party', 'aaaaaa', '840000000000000000']]);
+    expect(flows).toHaveLength(1);
+    expect(flows[0].key).toBe('ckb');
+    expect(amounts(flows[0].from)).toEqual([['party', 'gh76tz', '23400000000']]);
+    expect(amounts(flows[0].to)).toEqual([['party', '4maw7d', '23400000000']]);
+    expect(flows[0].total).toBe(BigInt('23400000000'));
   });
 
   it('refuses a CKB flow that does not conserve, naming the transaction', () => {
@@ -159,7 +189,6 @@ describe('txFlows', () => {
         activity: activity([party('aaaaaa', '-100'), party('bbbbbb', '95')]),
         fee: '1',
         compensation: null,
-        genesis: false,
       })
     ).toThrow(`${HASH}: the CKB flow does not conserve: 100 shannons from the givers, 96`);
     expect(() =>
@@ -168,7 +197,6 @@ describe('txFlows', () => {
         activity: activity([party('aaaaaa', '1.5')]),
         fee: '0',
         compensation: null,
-        genesis: false,
       })
     ).toThrow(`${HASH}: participant ckbDelta "1.5"`);
   });

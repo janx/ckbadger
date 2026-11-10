@@ -37,8 +37,10 @@ class MockWebSocket {
 
 let instances: MockWebSocket[] = [];
 
-// Mirrors RECONNECT_INTERVAL in @/hooks/useRealtimeStore.
+// Mirror the reconnect pace in @/hooks/useRealtimeStore: ten retries 3 s apart, then 30 s apart.
 const RECONNECT_INTERVAL_MS = 3000;
+const FAST_RECONNECT_ATTEMPTS = 10;
+const SLOW_RECONNECT_INTERVAL_MS = 30_000;
 
 // The query cache the hook actually writes to lives inside NetworkQueryScope
 // (one client per active network), not in the outer provider.
@@ -165,25 +167,71 @@ describe('useRealtimeData network scoping', () => {
     expect(instances[0].closed).toBe(true);
   });
 
-  it('stops after ten failed reconnects and restores the budget for a new subscription', async () => {
+  // Review 45fd finding 4 (ruling D5, reverses the 0ad8f535 cap): while a page holds the socket it
+  // never gives up — ten retries 3 s apart, then one every 30 s — and an open restores the 3 s pace.
+  it('retries ten times 3 s apart, then every 30 s while subscribed, and 3 s again after an open', async () => {
     vi.useFakeTimers();
     try {
-      const first = renderHarness();
-      for (let retry = 0; retry < 10; retry++) {
-        act(() => instances[instances.length - 1].close());
+      const view = renderHarness();
+      const fail = () => act(() => instances[instances.length - 1].close());
+      for (let retry = 0; retry < FAST_RECONNECT_ATTEMPTS; retry++) {
+        fail();
         await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS));
         expect(instances).toHaveLength(retry + 2);
       }
-      act(() => instances[instances.length - 1].close());
-      await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS * 2));
-      expect(instances).toHaveLength(11);
-      first.unmount();
-      const second = renderHarness();
-      expect(instances).toHaveLength(12);
-      act(() => instances[instances.length - 1].close());
+      // From the eleventh retry on, 30 s apart: not at 3 s, and not never.
+      for (let retry = FAST_RECONNECT_ATTEMPTS; retry < FAST_RECONNECT_ATTEMPTS + 3; retry++) {
+        fail();
+        await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS));
+        expect(instances).toHaveLength(retry + 1);
+        await act(async () =>
+          vi.advanceTimersByTimeAsync(SLOW_RECONNECT_INTERVAL_MS - RECONNECT_INTERVAL_MS - 1)
+        );
+        expect(instances).toHaveLength(retry + 1);
+        await act(async () => vi.advanceTimersByTimeAsync(1));
+        expect(instances).toHaveLength(retry + 2);
+      }
+      // A socket that opens resets the pace: its close is retried at 3 s again.
+      act(() => {
+        const latest = instances[instances.length - 1];
+        latest.readyState = MockWebSocket.OPEN;
+        latest.onopen?.();
+      });
+      const opened = instances.length;
+      fail();
       await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS));
-      expect(instances).toHaveLength(13);
+      expect(instances).toHaveLength(opened + 1);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens no socket once the last subscriber leaves, however long the timers run', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = renderHarness();
+      const fail = () => act(() => instances[instances.length - 1].close());
+      // Into the 30 s pace, then leave while a retry is scheduled.
+      for (let retry = 0; retry <= FAST_RECONNECT_ATTEMPTS; retry++) {
+        fail();
+        await act(async () => vi.advanceTimersByTimeAsync(SLOW_RECONNECT_INTERVAL_MS));
+      }
+      expect(instances).toHaveLength(FAST_RECONNECT_ATTEMPTS + 2);
+      fail();
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      first.unmount();
+      await act(async () => vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000));
+      expect(instances).toHaveLength(FAST_RECONNECT_ATTEMPTS + 2);
+      // A new subscription starts again at the 3 s pace.
+      const second = renderHarness();
+      expect(instances).toHaveLength(FAST_RECONNECT_ATTEMPTS + 3);
+      fail();
+      await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS));
+      expect(instances).toHaveLength(FAST_RECONNECT_ATTEMPTS + 4);
       second.unmount();
+      await act(async () => vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000));
+      expect(instances).toHaveLength(FAST_RECONNECT_ATTEMPTS + 4);
     } finally {
       vi.useRealTimers();
     }

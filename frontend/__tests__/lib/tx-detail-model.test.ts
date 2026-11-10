@@ -87,9 +87,11 @@ describe('txLinks (TX-14: linked by group identity)', () => {
 describe('balanceNet (TX-19 Net row)', () => {
   const participants = feedSamples.objectTransfer.participants;
   it('sums the participant changes and names the fee as their difference', () => {
-    expect(
-      balanceNet({ hash: HASH, participants, fee: '64119', compensation: null, genesis: false })
-    ).toEqual({ ckb: BigInt(-64119), occupied: BigInt(2600000000), note: 'fee' });
+    expect(balanceNet({ hash: HASH, participants, fee: '64119', compensation: null })).toEqual({
+      ckb: BigInt(-64119),
+      occupied: BigInt(2600000000),
+      note: 'fee',
+    });
   });
 
   it('names DAO compensation less the fee when a withdrawal pays it', () => {
@@ -103,27 +105,30 @@ describe('balanceNet (TX-19 Net row)', () => {
         participants: paid,
         fee: '936',
         compensation: BigInt(17530634165),
-        genesis: false,
       })
     ).toEqual({ ckb: BigInt(17530633229), occupied: BigInt(-4100000000), note: 'compensation' });
   });
 
   it('fails loudly when the changes do not add up to the fee', () => {
     expect(() =>
-      balanceNet({ hash: HASH, participants, fee: '58803', compensation: null, genesis: false })
+      balanceNet({ hash: HASH, participants, fee: '58803', compensation: null })
     ).toThrow(`${HASH}: participant CKB changes sum to -64119, expected -58803`);
   });
 
-  it('marks genesis issuance without asserting a fee', () => {
+  // Review 45fd finding 5 (ruling D6): the genesis dep-group transaction (0x71a7…e46c) conserves
+  // and pays no fee; its Net row says so instead of naming a fee paid to the miner.
+  it('names a net of zero with no fee as no fee, for the genesis dep-group transaction', () => {
     expect(
       balanceNet({
         hash: HASH,
-        participants: [{ ckbDelta: '100', usedDelta: '0' }],
+        participants: [
+          { ckbDelta: '-23400000000', usedDelta: '-6100000000' },
+          { ckbDelta: '23400000000', usedDelta: '23400000000' },
+        ],
         fee: '0',
         compensation: null,
-        genesis: true,
-      }).note
-    ).toBe('genesis');
+      })
+    ).toEqual({ ckb: BigInt(0), occupied: BigInt(17300000000), note: 'no-fee' });
   });
 });
 

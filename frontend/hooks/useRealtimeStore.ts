@@ -92,10 +92,21 @@ let wsInstance: WebSocket | null = null;
 // reconnect instead of silently streaming the wrong network's data.
 let wsNetwork: string | null = null;
 let wsSubscribers = 0;
+// Failed reconnects since the last open (or network switch). It picks the wait before the next
+// retry; it never stops one: while a page holds the socket, the socket keeps coming back (review
+// 45fd ruling D5). Only the subscriber count and a cleared timer stop reconnection.
 let reconnectAttempts = 0;
 let reconnectTimeout: NodeJS.Timeout | null = null;
-const MAX_RECONNECT_ATTEMPTS = 10;
-const RECONNECT_INTERVAL = 3000;
+const FAST_RECONNECT_ATTEMPTS = 10;
+const FAST_RECONNECT_INTERVAL_MS = 3000;
+const SLOW_RECONNECT_INTERVAL_MS = 30_000;
+
+/** The wait before the next retry: 3 s for the first ten failed reconnects, 30 s after. */
+function reconnectDelay(failedAttempts: number): number {
+  return failedAttempts < FAST_RECONNECT_ATTEMPTS
+    ? FAST_RECONNECT_INTERVAL_MS
+    : SLOW_RECONNECT_INTERVAL_MS;
+}
 
 type MessageHandler = (message: WebSocketMessage) => void;
 const messageHandlers = new Set<MessageHandler>();
@@ -167,11 +178,11 @@ function connectWebSocket(network: string) {
       useRealtimeStore.getState().setConnected(false);
       wsInstance = null;
 
-      if (wsSubscribers > 0 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      if (wsSubscribers > 0) {
         reconnectTimeout = setTimeout(() => {
           reconnectAttempts++;
           connectWebSocket(network);
-        }, RECONNECT_INTERVAL);
+        }, reconnectDelay(reconnectAttempts));
       }
     };
 
@@ -184,11 +195,12 @@ function connectWebSocket(network: string) {
 }
 
 function disconnectWebSocket() {
+  // The last subscriber left: no retry may fire (the timer is cleared here) and none is scheduled
+  // later (onclose is detached below, and it schedules only while wsSubscribers > 0).
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
-  reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
   if (wsInstance) {
     // `close()` delivers `onclose` asynchronously, so a still-attached handler
     // would run AFTER a new socket exists: it would null `wsInstance` (orphaning

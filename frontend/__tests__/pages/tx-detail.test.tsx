@@ -3,6 +3,7 @@ import { act, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
@@ -147,6 +148,84 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     feePaidBy: [],
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
+
+const GENESIS_DEP_GROUP_TX_HASH =
+  '0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c';
+const GENESIS_DEP_GROUP_SENDER =
+  'ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz';
+const ZERO_LOCK_ADDRESS = 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d';
+
+/**
+ * The genesis dep-group transaction (review 45fd finding 5): block 0, index 1, not a cellbase, fee
+ * 0, 234 CKB in and out — the summary fields as mainnet :8101 served them on 2026-11-10. The cells
+ * are built to agree with them and with its activity: one 234 CKB input under a 20-byte-args lock
+ * (61 bytes occupied), two Zero Lock dep-group outputs of 117 CKB each (a two-member dep group:
+ * 8 + 33 + 76 bytes).
+ */
+function createGenesisDepGroupTransactionDetail(): Awaited<
+  ReturnType<typeof api.getTransactionDetail>
+> {
+  const tx = createCommittedTransactionDetail();
+  const zeroLock = { codeHash: `0x${'0'.repeat(64)}`, hashType: 'data', args: '0x' };
+  const output = {
+    capacity: '11700000000',
+    commonKnowledgeSize: '117',
+    status: 'live',
+    isChange: false,
+    display: null,
+    lock: zeroLock,
+    address: ZERO_LOCK_ADDRESS,
+  };
+  return {
+    ...tx,
+    hash: GENESIS_DEP_GROUP_TX_HASH,
+    blockNumber: 0,
+    index: 1,
+    isCellbase: false,
+    fee: '0',
+    feeRate: '0',
+    inputsCount: 1,
+    outputsCount: 2,
+    inputsCapacity: '23400000000',
+    outputsCapacity: '23400000000',
+    inputsCommonKnowledgeSize: '61',
+    outputsCommonKnowledgeSize: '234',
+    cycles: 0,
+    cyclesStatus: 'complete',
+    timestamp: '2019-11-15T21:09:50.812+00:00',
+    inputs: [
+      {
+        ...tx.inputs![0],
+        capacity: '23400000000',
+        commonKnowledgeSize: '61',
+        cellType: undefined,
+        type: undefined,
+        address: GENESIS_DEP_GROUP_SENDER,
+      },
+    ],
+    outputs: [output, { ...output }],
+    scriptGroups: [
+      { ...tx.scriptGroups![0], ran: false, cycles: null, witnessIndex: null },
+      {
+        scriptHash: '0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590',
+        kind: 'lock',
+        ran: false,
+        inputIndices: [],
+        outputIndices: [0, 1],
+        witnessIndex: null,
+        script: zeroLock,
+        cycles: null,
+      },
+    ],
+    witnessDetails: [],
+    witnesses: [],
+  } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+}
+
+/** Its activity, verbatim from mainnet :8101 (`/transactions/0x71a7…e46c/activity`). */
+const GENESIS_DEP_GROUP_ACTIVITY = JSON.parse(
+  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","scriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
+) as Awaited<ReturnType<typeof api.getTransactionActivity>>;
 
 /** The keys the API omits (never nulls) for a transaction it has not indexed (TX-06). */
 const UNINDEXED_KEYS = [
@@ -395,6 +474,21 @@ describe('TransactionDetailPage', () => {
     expect(time.textContent).not.toMatch(/Z/);
   });
 
+  // Review 45fd finding 3 (ruling D4): the node's clock 2 s ahead of this browser's is two
+  // clocks, not a broken page.
+  it('renders a pool transaction whose pendingSince is 2 s after this device’s now', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-03-12T11:59:58Z'));
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
+    render(<TransactionDetailPage />);
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
+      'Waiting in the pool'
+    );
+    const row = screen.getByText('Pending since').parentElement!;
+    expect(row).toHaveTextContent('2026-03-12 20:00:00 UTC+8');
+    expect(row).toHaveTextContent(/0s ago$/);
+  });
+
   it.each([null, 1000])('shows deep-fork replay pause with scalar cycles %s', async (cycles) => {
     vi.mocked(useCyclesCalculation).mockReturnValue({
       cycles,
@@ -421,6 +515,92 @@ describe('TransactionDetailPage', () => {
     await waitFor(() => {
       expect(useCyclesCalculation).toHaveBeenLastCalledWith(TX_HASH, 0, true, 'complete', false);
     });
+  });
+
+  // Review 45fd finding 5 (ruling D6): issuance happens in a cellbase, not in "a transaction of
+  // block 0"; the genesis dep-group transaction conserves and pays no fee.
+  it('reads the genesis dep-group transaction as a conserving transfer with no fee', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(createGenesisDepGroupTransactionDetail());
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(GENESIS_DEP_GROUP_ACTIVITY);
+    render(<TransactionDetailPage />);
+    expect(await screen.findByRole('heading', { name: 'What moved' })).toBeInTheDocument();
+    expect(screen.queryByTestId('activity-read-error')).toBeNull();
+    const moved = screen.getByTestId('tx-what-moved');
+    const flows = within(moved).getAllByRole('group');
+    expect(flows.map((f) => f.getAttribute('data-flow'))).toEqual(['ckb']);
+    const from = flows[0].querySelector('[data-flow-side="from"]')!;
+    const to = flows[0].querySelector('[data-flow-side="to"]')!;
+    expect([...from.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
+      expect.stringMatching(/^ckb1qpcf\.\.\.gh76tz.*234\.00000000 CKB$/),
+    ]);
+    expect([...to.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
+      expect.stringMatching(/4maw7d.*234\.00000000 CKB$/),
+    ]);
+    // no fee and nothing issued: no miner end, no genesis end
+    expect(moved.querySelector('[data-flow-end="miner"]')).toBeNull();
+    expect(moved).not.toHaveTextContent(/genesis|issued/);
+    const net = screen.getByTestId('tx-balance-net');
+    expect(net).toHaveTextContent(/^Net0 CKB\+173no fee: nothing paid to the miner$/);
+    expect(net).toHaveTextContent('no fee: nothing paid to the miner');
+    expect(net).not.toHaveTextContent(/fee, paid|genesis|issued/);
+    expect(screen.queryByText(/issued in the genesis block/)).toBeNull();
+  });
+
+  // Review 45fd finding 7 (ruling D7): an activity value the page cannot read fails in its own
+  // section, not through the page-level boundary (here the shared ErrorBoundary, standing in for
+  // the route's errorElement).
+  it('keeps the page when a participant ckbDelta is not a number', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const [first, ...rest] = feedSamples.objectTransfer.participants;
+      vi.mocked(api.getTransactionActivity).mockResolvedValue({
+        ...feedSamples.objectTransfer,
+        txHash: TX_HASH,
+        typeCalls: [],
+        participants: [first, ...rest].map((p, i) => ({
+          ...p,
+          itemDeltas: [],
+          ...(i === 0 ? { ckbDelta: 'abc' } : {}),
+        })),
+      });
+      render(
+        <ErrorBoundary fallback={<p>page-level boundary</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      // Each section that renders the activity's values fails in place; the page stays.
+      const balance = (await screen.findByRole('heading', { name: 'Balance changes' })).closest(
+        'section'
+      )!;
+      expect(screen.queryByText('page-level boundary')).toBeNull();
+      const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+      expect(within(header).getByText(TX_HASH)).toBeInTheDocument();
+      // the summary slot, under the h1
+      expect(within(header).getByTestId('activity-read-error')).toHaveTextContent(
+        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+      );
+      expect(within(header).queryByTestId('tx-summary')).toBeNull();
+      const moved = screen.getByRole('heading', { name: 'What moved' }).closest('section')!;
+      expect(within(moved).getByTestId('activity-read-error')).toHaveTextContent(
+        `${TX_HASH}: participant ckbDelta "abc"`
+      );
+      expect(within(moved).queryByTestId('tx-what-moved')).toBeNull();
+      // Balance changes keeps its heading; its body is one error, the table is gone
+      expect(within(balance).getAllByTestId('activity-read-error')).toHaveLength(1);
+      expect(within(balance).getByTestId('activity-read-error')).toHaveTextContent(
+        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+      );
+      expect(within(balance).queryByRole('table')).toBeNull();
+      // The sections that do not read the activity render as always.
+      const facts = screen.getByRole('complementary', { name: 'Transaction facts' });
+      expect(within(facts).getByText('Fee')).toBeInTheDocument();
+      expect(screen.getByTestId('tx-io-input-0')).toBeInTheDocument();
+      expect(screen.getByTestId('tx-io-output-0')).toBeInTheDocument();
+      expect(screen.getByTestId('tx-capacity-equation')).toBeInTheDocument();
+      expect(screen.getAllByTestId('activity-read-error')).toHaveLength(3);
+    } finally {
+      quiet.mockRestore();
+    }
   });
 
   it('renders pending placeholders while committed-only queries stay disabled', async () => {
@@ -692,6 +872,26 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+  });
+
+  // Review 45fd finding 7: readable() now always returns an element, so the witness note decides
+  // inside it whether there is a note at all; a witness with nothing to name gets no empty line.
+  it('draws no empty note under a witness that has nothing to name', async () => {
+    const tx = createCommittedTransactionDetail();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...tx,
+      witnessDetails: [tx.witnessDetails![0], { index: 1, size: 0, kind: 'empty', fields: [] }],
+      witnesses: [tx.witnesses[0], '0x'],
+    });
+    render(<TransactionDetailPage />);
+    const empty = await screen.findByTestId('tx-witness-item-1');
+    // the kind/size line only: no byte bar, no note
+    expect(empty.children).toHaveLength(1);
+    expect(empty).toHaveTextContent(/^#1 · empty0 B$/);
+    // a witness with fields keeps its bar and its note
+    const args = screen.getByTestId('tx-witness-item-0');
+    expect(args.children).toHaveLength(3);
+    expect(args.lastElementChild).toHaveTextContent('header 16 B · lock length 4 B · lock 2 B');
   });
 
   it('labels unavailable witness bytes without claiming the transaction has zero witnesses', async () => {

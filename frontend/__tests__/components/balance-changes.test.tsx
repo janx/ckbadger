@@ -52,13 +52,7 @@ function renderAt(width: number) {
   stubChartWidth(width);
   const a = activity();
   return render(
-    <BalanceChanges
-      activity={a}
-      fee="64119"
-      compensation={null}
-      genesis={false}
-      lockCodeHashes={codeHashes(a)}
-    />
+    <BalanceChanges activity={a} fee="64119" compensation={null} lockCodeHashes={codeHashes(a)} />
   );
 }
 

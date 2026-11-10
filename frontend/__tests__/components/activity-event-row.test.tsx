@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '../utils/test-utils';
 import {
   ActivityEventGroup,
@@ -12,6 +12,7 @@ import {
   buildGlobalTxEvents,
   formatStandard,
   globalTxEvents,
+  readable,
 } from '@/components/activity-event-row';
 import { MINUS } from '@/lib/chart-ticks';
 import type { Activity, GlobalActivity } from '@/lib/api';
@@ -1015,5 +1016,65 @@ describe('row parts (F2-tx)', () => {
     const link = screen.getByRole('link', { name: `${MINUS}84,651.87699473 iCKB` });
     expect(link).toHaveClass('text-negative');
     expect(within(link).getByText('iCKB')).toHaveClass('text-text-dim');
+  });
+});
+
+// Review 45fd ruling D7: readable() is a real error boundary — it catches what a component it
+// returns throws while rendering, not only what its thunk throws, and adds no element of its own.
+describe('readable', () => {
+  const TX = `0x${'ab'.repeat(32)}`;
+
+  function Broken(): never {
+    throw new Error('participant ckbDelta "abc"');
+  }
+
+  it('says a render-time error of a returned component in place, with the transaction', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <p data-testid="slot">
+          before{' '}
+          {readable(TX, () => (
+            <Broken />
+          ))}{' '}
+          after
+        </p>
+      );
+      const error = screen.getByTestId('activity-read-error');
+      expect(error).toHaveTextContent(`Cannot read tx ${TX}: participant ckbDelta "abc"`);
+      expect(screen.getByTestId('slot')).toHaveTextContent(/^before .* after$/);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('says an error its thunk throws the same way', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <div>
+          {readable(TX, () => {
+            throw new Error('fee "x"');
+          })}
+        </div>
+      );
+      expect(screen.getByTestId('activity-read-error')).toHaveTextContent(
+        `Cannot read tx ${TX}: fee "x"`
+      );
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('renders exactly what the thunk returns, and nothing for null', () => {
+    const { container } = render(
+      <div>
+        {readable(TX, () => (
+          <span className="a">one</span>
+        ))}
+        {readable(`0x${'cd'.repeat(32)}`, () => null)}
+      </div>
+    );
+    expect(container.innerHTML).toBe('<div><span class="a">one</span></div>');
   });
 });

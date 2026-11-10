@@ -94,33 +94,35 @@ function exact(value: string, what: string, hash: string): bigint {
 
 /**
  * The Net row of Balance changes: the participants' changes added up, and what the difference
- * is — the fee paid to the miner, or the DAO compensation less the fee. A sum that is neither is
- * a broken invariant upstream. Genesis transactions issue capacity and pay no fee.
+ * is — the fee paid to the miner (or no fee: a sum of zero), or the DAO compensation less the fee.
+ * A sum that is none of these is a broken invariant upstream.
  */
 export function balanceNet({
   hash,
   participants,
   fee,
   compensation,
-  genesis,
 }: {
   hash: string;
   participants: readonly Pick<ParticipantInfo, 'ckbDelta' | 'usedDelta'>[];
   fee: string;
   compensation: bigint | null;
-  genesis: boolean;
-}): { ckb: bigint; occupied: bigint; note: 'fee' | 'compensation' | 'genesis' } {
+}): { ckb: bigint; occupied: bigint; note: 'fee' | 'no-fee' | 'compensation' } {
   let ckb = BigInt(0);
   let occupied = BigInt(0);
   for (const p of participants) {
     ckb += exact(p.ckbDelta, 'participant ckbDelta', hash);
     occupied += exact(p.usedDelta, 'participant usedDelta', hash);
   }
-  if (genesis) return { ckb, occupied, note: 'genesis' };
-  const expected = (compensation ?? BigInt(0)) - exact(fee, 'fee', hash);
+  const feeShannons = exact(fee, 'fee', hash);
+  const expected = (compensation ?? BigInt(0)) - feeShannons;
   if (ckb !== expected)
     throw new Error(`${hash}: participant CKB changes sum to ${ckb}, expected ${expected}`);
-  return { ckb, occupied, note: compensation === null ? 'fee' : 'compensation' };
+  return {
+    ckb,
+    occupied,
+    note: compensation !== null ? 'compensation' : feeShannons === BigInt(0) ? 'no-fee' : 'fee',
+  };
 }
 
 /**
