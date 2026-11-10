@@ -107,7 +107,7 @@ impl FiberOwner {
     fn handle_channel_open(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let funding_lock_args = summary
             .funding_output_pubkey_hash
@@ -188,7 +188,7 @@ impl FiberOwner {
     fn handle_channel_close(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let funding_outpoint = summary.funding_input_outpoint.ok_or_else(|| {
             anyhow!(
@@ -234,7 +234,7 @@ impl FiberOwner {
     fn handle_force_close(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let funding_outpoint = summary.funding_input_outpoint.ok_or_else(|| {
             anyhow!(
@@ -327,7 +327,7 @@ impl FiberOwner {
     fn handle_settlement(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let commitment_args = summary.commitment_input_args.as_deref().ok_or_else(|| {
             anyhow!(
@@ -381,7 +381,7 @@ impl FiberOwner {
     fn handle_commitment_revocation(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        summary: &FiberTxSummary,
+        summary: &FiberTxSummary<'_>,
     ) -> Result<()> {
         let old_commitment_args =
             summary.commitment_input_args.as_deref().ok_or_else(|| {
@@ -479,7 +479,7 @@ enum FiberEvent {
 }
 
 #[derive(Debug, Default)]
-struct FiberTxSummary {
+struct FiberTxSummary<'a> {
     has_funding_input: bool,
     has_funding_output: bool,
     has_commitment_input: bool,
@@ -491,14 +491,14 @@ struct FiberTxSummary {
     commitment_input_args: Option<Vec<u8>>,
     commitment_output_args: Option<Vec<u8>>,
     commitment_output_index: Option<u32>,
-    commitment_output_parsed_args: Option<CommitmentLockArgs>,
+    commitment_output_parsed_args: Option<CommitmentLockArgs<'a>>,
     /// UDT identity of the funding output, when it carries a type script.
     funding_output_udt: Option<(Vec<u8>, u128)>,
     participants: BTreeSet<Vec<u8>>,
 }
 
-impl FiberTxSummary {
-    fn from_tx(tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<Self> {
+impl<'a> FiberTxSummary<'a> {
+    fn from_tx(tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'a>) -> Result<Self> {
         let mut summary = Self::default();
 
         for input in &tx.resolved_inputs {
@@ -531,7 +531,7 @@ impl FiberTxSummary {
         &mut self,
         tx: &ResolvedTxFacts<'_>,
         input: &ResolvedInputFacts,
-        ctx: &ReducerContext<'_>,
+        ctx: &ReducerContext<'a>,
     ) -> Result<()> {
         let lock_code_hash = ctx.resolve_identity(input.lock_code_hash_id);
         let lock_args = ctx.resolve_identity(input.lock_args_id);
@@ -571,7 +571,7 @@ impl FiberTxSummary {
         &mut self,
         tx: &ResolvedTxFacts<'_>,
         cell: &CellFacts,
-        ctx: &ReducerContext<'_>,
+        ctx: &ReducerContext<'a>,
     ) -> Result<()> {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
         let lock_args = ctx.resolve_identity(cell.lock_args_id);
@@ -631,7 +631,7 @@ impl FiberTxSummary {
                         Some((ctx.resolve_identity(type_script_hash_id).to_vec(), amount))
                     }
                 };
-                self.funding_output_pubkey_hash = Some(parsed.pubkey_hash);
+                self.funding_output_pubkey_hash = Some(parsed.pubkey_hash.to_vec());
                 self.funding_output_capacity = Some(capacity);
                 self.funding_output_index = Some(cell.outpoint.index);
             }
@@ -1637,7 +1637,7 @@ mod tests {
             }
         }
 
-        fn open_summary(funding_args: Vec<u8>) -> FiberTxSummary {
+        fn open_summary(funding_args: Vec<u8>) -> FiberTxSummary<'static> {
             FiberTxSummary {
                 funding_output_pubkey_hash: Some(funding_args),
                 funding_output_capacity: Some(500_00000000),

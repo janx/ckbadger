@@ -581,7 +581,7 @@ fn build_evidence(
             .get_sync_tip_block()?
             .ok_or_else(|| anyhow!("Fiber evidence missing indexed tip"))?;
         let (epoch_lock, ready, met) =
-            commitment_epoch_rule(parsed.settlement_flag, &header, &tip, &delay).with_context(
+            commitment_epoch_rule(parsed.settlement_flag(), &header, &tip, &delay).with_context(
                 || format!("Fiber commitment 0x{}:{output_index}", hex::encode(hash)),
             )?;
         if is_updated_commitment(ch.close_tx_hash.as_deref(), hash) {
@@ -615,12 +615,12 @@ fn build_evidence(
         }
         Some(FiberCommitmentEvidence {
             cell: cell_evidence(&version),
-            pubkey_hash: format_hex(&parsed.pubkey_hash),
+            pubkey_hash: format_hex(parsed.pubkey_hash),
             delay_epoch: parsed.delay_epoch.to_string(),
             delay_epoch_decoded: delay,
             version: parsed.version.to_string(),
-            settlement_hash: parsed.settlement_hash.as_ref().map(|v| format_hex(v)),
-            settlement_flag: parsed.settlement_flag,
+            settlement_hash: parsed.settlement_hash().map(|v| format_hex(v)),
+            settlement_flag: parsed.settlement_flag(),
             lock_format: if args.len() == 36 {
                 "legacy36"
             } else {
