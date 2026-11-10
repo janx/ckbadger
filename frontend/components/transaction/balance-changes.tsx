@@ -95,11 +95,14 @@ function Items({ participant }: { participant: ParticipantInfo }) {
 const BALANCE_GRID = 'grid grid-cols-[190px_180px_100px_minmax(0,1fr)] gap-4';
 
 function netNote(note: ReturnType<typeof balanceNet>['note']): string {
-  return note === 'fee'
-    ? 'the fee, paid to the miner'
-    : note === 'compensation'
-      ? 'Nervos DAO compensation, less the fee'
-      : 'issued in the genesis block';
+  switch (note) {
+    case 'fee':
+      return 'the fee, paid to the miner';
+    case 'no-fee':
+      return 'no fee: nothing paid to the miner';
+    case 'compensation':
+      return 'Nervos DAO compensation, less the fee';
+  }
 }
 
 function partyKey(p: ParticipantInfo, i: number): string {
@@ -116,13 +119,11 @@ export function BalanceChanges({
   activity,
   fee,
   compensation,
-  genesis,
   lockCodeHashes,
 }: {
   activity: GlobalActivity;
   fee: string;
   compensation: bigint | null;
-  genesis: boolean;
   /** Address → lock code hash, from the transaction's cells (`lockCodeHashesByAddress`). */
   lockCodeHashes: ReadonlyMap<string, string>;
 }) {
@@ -134,7 +135,6 @@ export function BalanceChanges({
       participants: activity.participants,
       fee,
       compensation,
-      genesis,
     });
   return (
     <DetailSection title="Balance changes">

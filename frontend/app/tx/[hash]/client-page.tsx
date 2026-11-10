@@ -760,7 +760,6 @@ export default function TransactionDetailPage() {
   if (selectedGroup !== null && !groups.some((g) => groupKey(g) === selectedGroup))
     throw new Error(`Transaction ${hash}: unknown script group ${selectedGroup}`);
   const tiles = isProvisional ? null : cellTiles(tx, lookup);
-  const genesis = tx.blockNumber === 0;
   const compensation = activity ? daoCompensation(activity) : undefined;
 
   // ---- hover linking by group identity (TX-14) ----
@@ -1310,7 +1309,6 @@ export default function TransactionDetailPage() {
                   activity,
                   fee: tx.fee,
                   compensation: compensation ?? null,
-                  genesis,
                 });
                 return (
                   <WhatMoved
@@ -1318,7 +1316,6 @@ export default function TransactionDetailPage() {
                     activity={activity}
                     fee={tx.fee}
                     compensation={compensation ?? null}
-                    genesis={genesis}
                     lockCodeHashes={lockCodeHashes}
                     onHover={(h) => setHover(h ? { t: 'cells', ids: flowCells(h) } : null)}
                   />
@@ -1333,7 +1330,6 @@ export default function TransactionDetailPage() {
               activity={activity}
               fee={tx.fee}
               compensation={compensation ?? null}
-              genesis={genesis}
               lockCodeHashes={lockCodeHashes}
             />
           </div>

@@ -135,8 +135,6 @@ function terminalWords(end: FlowEnd): { who: string; role: string } {
       return { who: 'the miner', role: 'fee' };
     case 'compensation':
       return { who: 'Nervos DAO', role: 'compensation' };
-    case 'genesis':
-      return { who: 'the genesis block', role: 'issued' };
     case 'minted':
       return { who: 'no holder before', role: 'minted' };
     case 'burnt':
@@ -504,7 +502,6 @@ export function WhatMoved({
   activity,
   fee,
   compensation,
-  genesis,
   lockCodeHashes,
   onHover,
 }: {
@@ -512,13 +509,12 @@ export function WhatMoved({
   activity: GlobalActivity;
   fee: string;
   compensation: bigint | null;
-  genesis: boolean;
   /** Address → lock code hash, from the transaction's cells (`lockCodeHashesByAddress`). */
   lockCodeHashes: ReadonlyMap<string, string>;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  const flows = txFlows({ hash, activity, fee, compensation, genesis });
+  const flows = txFlows({ hash, activity, fee, compensation });
   const form: 'ribbons' | 'list' =
     width === null || width >= RIBBON_FORM_MIN_W ? 'ribbons' : 'list';
   const Strip = form === 'ribbons' ? RibbonStrip : ListStrip;
