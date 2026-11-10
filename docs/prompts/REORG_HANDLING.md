@@ -69,12 +69,15 @@ On reorg:
 
 1. Writer performs rollback
 2. Writer clears the cell caches, reconciles the HODL and cell-distribution trackers, and calls
-   `request_pipeline_reset`, which bumps `pipeline_reset_epoch` and sets
-   `pipeline_reset_notify_flag`
-3. Writer drains stale parsed batches; the parser drops fetched batches of an older epoch and
-   aborts an input-resolution retry whose batch belongs to one
-4. Fetcher sees the flag and resets local `next_block`
-5. Fetcher re-reads DB tip and resumes from correct height
+   `request_pipeline_reset`, which records the reason and then bumps `pipeline_reset_epoch`. Every
+   reset is made by the writer after the store change it refers to has committed
+3. Writer drains stale parsed batches; the parser and the writer drop batches of an older epoch,
+   and the parser aborts an input-resolution retry whose batch belongs to one
+4. Fetcher loads the epoch once per fetch cycle, decides the cycle's start block under it and tags
+   the batch with it. It remembers its next block together with the epoch it was computed under;
+   a cycle whose epoch differs from the remembered one (`plan_fetch_start`) re-reads the DB tip
+   and resumes after it. A reset that lands after a cycle's load leaves that batch with the old
+   epoch, so it is dropped, and the next cycle starts from the DB tip
 
 #### Orphaned Tip: Parser to Writer Hand-off
 

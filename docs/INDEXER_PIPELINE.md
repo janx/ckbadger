@@ -96,9 +96,12 @@ memtable under a write lock. See POSTMORTEM `IDX-007`.
 
 **Key behaviors**:
 
-- Tracks `next_block` locally to avoid re-querying db_tip (prevents race condition - see POSTMORTEM IDX-004)
-- Resets `next_block` to `None` every 1000 blocks to resync with writer
-- On fetch error, waits 5s and resets `next_block` for recovery
+- Tracks its next block locally to avoid re-querying db_tip (prevents race condition - see
+  POSTMORTEM IDX-004), together with the pipeline epoch it was computed under
+- Loads the pipeline epoch once per fetch cycle and tags the batch with it; when the remembered next
+  block belongs to an older epoch (a pipeline reset since), re-reads db_tip and starts after it
+  (`plan_fetch_start`, `crates/indexer/src/sync/diagnostics.rs`)
+- On fetch error, waits 5s and forgets its next block for recovery
 
 ```rust
 type FetchedBatch = (u64, u64, Vec<BlockResponseWithCycles>);

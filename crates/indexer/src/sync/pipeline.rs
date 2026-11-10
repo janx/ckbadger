@@ -1683,7 +1683,6 @@ impl Indexer {
         let repo = self.repo.clone();
         let run_id_for_fetcher = self.run_id.clone();
         let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
-        let pipeline_reset_notify = Arc::clone(&self.pipeline_reset_notify_flag);
         let pipeline_reset_reason_code = Arc::clone(&self.pipeline_reset_reason_code);
         let pipeline_epoch_for_fetcher = Arc::clone(&self.pipeline_reset_epoch);
         let ckb_store = self
@@ -1698,7 +1697,11 @@ impl Indexer {
 
         // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
-            let mut next_block: Option<u64> = None;
+            // The block after the last batch sent, with the epoch that batch
+            // carried; `plan_fetch_start` decides from it where a cycle starts.
+            let mut cursor: Option<FetchCursor> = None;
+            // The last epoch this task has seen, only to log each reset once.
+            let mut observed_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
             let mut was_paused = false;
 
             loop {
@@ -1710,21 +1713,31 @@ impl Indexer {
                 }
                 if was_paused {
                     info!("Fetcher resuming from pause, resetting next_block to re-query DB state");
-                    next_block = None;
+                    cursor = None;
                     was_paused = false;
                 }
-                if pipeline_reset_notify.swap(false, Ordering::SeqCst) {
+                // The cycle's one epoch load. The start block below is decided
+                // under it and the batch is tagged with it, so a position never
+                // travels under an epoch it was not computed in: a reset that
+                // lands after this load leaves the batch with the old epoch,
+                // which the parser and the writer drop, and the next cycle
+                // starts from the DB tip.
+                let cycle_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
+                if cycle_epoch != observed_epoch {
+                    // `request_pipeline_reset` stores the reason before it
+                    // bumps the epoch, so the reason read here is this
+                    // epoch's (or a later reset's).
                     let reason = decode_pipeline_reset_reason(
                         pipeline_reset_reason_code.load(Ordering::SeqCst),
                     );
-                    let pipeline_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
                     info!(
                         run_id = %run_id_for_fetcher,
-                        pipeline_epoch,
+                        pipeline_epoch = cycle_epoch,
+                        previous_epoch = observed_epoch,
                         reason,
                         "Fetcher received pipeline reset notification, resetting next_block"
                     );
-                    next_block = None;
+                    observed_epoch = cycle_epoch;
                 }
 
                 if let Err(e) = ckb_store.refresh() {
@@ -1753,9 +1766,17 @@ impl Indexer {
                 };
                 progress.update_target(chain_tip);
 
-                let start_block = match next_block {
-                    Some(nb) => nb,
-                    None => {
+                let start_block = match plan_fetch_start(cycle_epoch, cursor) {
+                    Ok(FetchStart::Continue(next_block)) => next_block,
+                    Err(e) => {
+                        error!("Fetcher cannot decide its start block: {:#}", e);
+                        record_worker_exit_reason(
+                            &fetcher_exit_reason_for_fetcher,
+                            format!("fetch start decision failed: {e:#}"),
+                        );
+                        break;
+                    }
+                    Ok(FetchStart::FromDbTip) => {
                         let (db_tip, db_tip_hash) = match repo.get_sync_tip().await {
                             Ok(tip) => tip,
                             Err(e) => {
@@ -1792,11 +1813,10 @@ impl Indexer {
                 let end_block = std::cmp::min(start_block + dynamic_span - 1, chain_tip);
 
                 debug!(
-                    "Fetcher: fetching blocks {} to {} (chain_tip={}, next_block={:?}, span={})",
-                    start_block, end_block, chain_tip, next_block, dynamic_span
+                    "Fetcher: fetching blocks {} to {} (chain_tip={}, cursor={:?}, pipeline_epoch={}, span={})",
+                    start_block, end_block, chain_tip, cursor, cycle_epoch, dynamic_span
                 );
 
-                let fetch_cycle_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
                 let fetch_started = Instant::now();
                 let store = Arc::clone(&ckb_store);
                 let sb = start_block;
@@ -1810,13 +1830,13 @@ impl Indexer {
                     Ok(Err(e)) => {
                         error!("Failed to fetch blocks from RocksDB: {}", e);
                         sleep(Duration::from_secs(5)).await;
-                        next_block = None;
+                        cursor = None;
                         continue;
                     }
                     Err(e) => {
                         error!("Block fetch task panicked: {}", e);
                         sleep(Duration::from_secs(5)).await;
-                        next_block = None;
+                        cursor = None;
                         continue;
                     }
                 };
@@ -1831,7 +1851,7 @@ impl Indexer {
 
                 if fetch_tx
                     .send((
-                        fetch_cycle_epoch,
+                        cycle_epoch,
                         start_block,
                         end_block,
                         chain_tip,
@@ -1844,7 +1864,7 @@ impl Indexer {
                         &fetcher_exit_reason_for_fetcher,
                         format!(
                             "failed to send fetched batch to parser: range={}-{}, chain_tip={}, pipeline_epoch={}",
-                            start_block, end_block, chain_tip, fetch_cycle_epoch
+                            start_block, end_block, chain_tip, cycle_epoch
                         ),
                     );
                     break;
@@ -1857,7 +1877,10 @@ impl Indexer {
                     fetch_tx.max_capacity(),
                 );
 
-                next_block = Some(next_fetch_start_after_batch(end_block));
+                cursor = Some(FetchCursor {
+                    epoch: cycle_epoch,
+                    next_block: next_fetch_start_after_batch(end_block),
+                });
             }
         });
 

@@ -390,14 +390,19 @@ pub struct Indexer {
     /// disagree with the memtable the stores actually carry.
     pub(crate) startup_decision: StartupSyncDecision,
     pub(crate) rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     /// The parser's request for a writer reorg check, made by a batch that
     /// found the store's tip orphaned. The writer, the only owner of reorg
     /// handling, takes it on its idle branch and honours it only in the
     /// batch's own pipeline epoch.
     pub(crate) reorg_check_request: Arc<ReorgCheckRequestSlot>,
+    /// The reason of the latest pipeline reset, stored before the epoch
+    /// bump that publishes it (`request_pipeline_reset`).
     pub(crate) pipeline_reset_reason_code: Arc<AtomicU8>,
     pub(crate) startup_phase: AtomicU8,
+    /// Counts pipeline resets. Every fetched and parsed batch carries the
+    /// epoch its fetch cycle loaded; a batch of an older epoch is dropped, and
+    /// a fetcher whose remembered next block belongs to an older epoch starts
+    /// again from the DB tip (`plan_fetch_start`).
     pub(crate) pipeline_reset_epoch: Arc<AtomicU64>,
     pub(crate) incident_seq: AtomicU64,
     pub(crate) flight_recorder: FlightRecorder,
@@ -502,7 +507,6 @@ impl Indexer {
             bulk_sync_allowed: AtomicBool::new(bulk_sync_allowed),
             startup_decision,
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_check_request: Arc::new(ReorgCheckRequestSlot::default()),
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
             startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
@@ -1007,11 +1011,14 @@ impl Indexer {
         writer_queue_depth: Option<usize>,
     ) {
         let reason_code = encode_pipeline_reset_reason(reason);
-        let epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
+        // The reason first: the epoch bump publishes the reset, and a fetcher
+        // that sees the new epoch reads the reason after it. Every caller is
+        // the writer, after the store change the reset refers to (a rollback,
+        // a batch cleanup) has committed, so the fetcher's DB tip read under
+        // the new epoch sees it.
         self.pipeline_reset_reason_code
             .store(reason_code, Ordering::SeqCst);
-        self.pipeline_reset_notify_flag
-            .store(true, Ordering::SeqCst);
+        let epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
         info!(
             run_id = %self.run_id,
             epoch,

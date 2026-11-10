@@ -1228,6 +1228,55 @@ pub(crate) fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -
     consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
 }
 
+// ── Fetcher start position ──────────────────────────────────────────────
+
+/// Where the fetcher continues after a batch it sent: the block after the
+/// batch, and the pipeline epoch the batch was tagged with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FetchCursor {
+    pub(crate) epoch: u64,
+    pub(crate) next_block: u64,
+}
+
+/// Where one fetch cycle starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchStart {
+    /// At this block, right after the previous batch of the same epoch.
+    Continue(u64),
+    /// Right after the store's tip, read anew: there is no cursor (the first
+    /// cycle, a failed fetch, a resume from a rebuild pause), or the cursor
+    /// belongs to an earlier epoch, so a pipeline reset happened since it was
+    /// computed and the position it holds is the one the reset discarded.
+    FromDbTip,
+}
+
+/// Decide where the fetch cycle that loaded `cycle_epoch` starts.
+///
+/// The fetcher loads the epoch once per cycle and tags the cycle's batch with
+/// that same value, so the start position and the batch's epoch always come
+/// from one load. A reset that lands after the load leaves the batch with the
+/// old epoch, which the parser and the writer drop, and the next cycle finds
+/// its cursor from the old epoch and starts from the store's tip. A cursor
+/// from a later epoch than the cycle's means the epoch went backwards, which
+/// no reset does: an error.
+pub(crate) fn plan_fetch_start(
+    cycle_epoch: u64,
+    cursor: Option<FetchCursor>,
+) -> anyhow::Result<FetchStart> {
+    match cursor {
+        None => Ok(FetchStart::FromDbTip),
+        Some(cursor) if cursor.epoch == cycle_epoch => Ok(FetchStart::Continue(cursor.next_block)),
+        Some(cursor) if cursor.epoch < cycle_epoch => Ok(FetchStart::FromDbTip),
+        Some(cursor) => anyhow::bail!(
+            "pipeline epoch went backwards: the fetcher's cursor (next_block={}) was computed \
+             under epoch {}, but this fetch cycle loaded epoch {}",
+            cursor.next_block,
+            cursor.epoch,
+            cycle_epoch
+        ),
+    }
+}
+
 // ── Parser → writer reorg-check request ─────────────────────────────────
 
 /// What a parser batch stuck on an orphaned tip tells the writer.
@@ -1824,6 +1873,78 @@ mod tests {
         slot.request(report(0));
         slot.clear();
         assert_eq!(slot.take(0), ReorgCheckRequest::Empty);
+    }
+
+    fn cursor(epoch: u64, next_block: u64) -> Option<FetchCursor> {
+        Some(FetchCursor { epoch, next_block })
+    }
+
+    #[test]
+    fn test_fetch_start_continues_after_the_previous_batch_of_the_same_epoch() {
+        assert_eq!(
+            plan_fetch_start(5, cursor(5, 103)).unwrap(),
+            FetchStart::Continue(103)
+        );
+    }
+
+    /// The fetcher epoch race (review finding 2): the reset flag was taken at
+    /// the top of a cycle and the epoch loaded later, after the node refresh
+    /// and the tip read. A reset landing in between sent a batch from the
+    /// stale position 103 tagged with the new epoch 6, which the parser
+    /// accepted. A cursor computed under epoch 5 must never start a cycle of
+    /// epoch 6, however many resets came between.
+    #[test]
+    fn test_fetch_start_after_a_reset_reads_the_db_tip_instead_of_the_stale_position() {
+        for cycle_epoch in [6, 7, 1_000] {
+            assert_eq!(
+                plan_fetch_start(cycle_epoch, cursor(5, 103)).unwrap(),
+                FetchStart::FromDbTip,
+                "cursor of epoch 5, cycle of epoch {cycle_epoch}"
+            );
+        }
+    }
+
+    /// No cursor: the first cycle of a run, after a failed fetch, or after a
+    /// resume from a rebuild pause.
+    #[test]
+    fn test_fetch_start_without_a_cursor_reads_the_db_tip() {
+        for cycle_epoch in [0, 6] {
+            assert_eq!(
+                plan_fetch_start(cycle_epoch, None).unwrap(),
+                FetchStart::FromDbTip
+            );
+        }
+    }
+
+    /// A reset after the cycle's load: the batch goes out under the epoch the
+    /// cycle loaded (5), which the parser drops once the epoch is 6, and the
+    /// cursor it leaves (epoch 5) makes the next cycle start from the DB tip.
+    #[test]
+    fn test_fetch_start_after_a_reset_that_lands_after_the_cycle_loaded_its_epoch() {
+        let cycle_epoch = 5;
+        assert_eq!(
+            plan_fetch_start(cycle_epoch, cursor(5, 103)).unwrap(),
+            FetchStart::Continue(103)
+        );
+        let after_batch = cursor(cycle_epoch, 111);
+        // The reset bumps the epoch to 6 while the batch is in flight.
+        assert_eq!(
+            plan_fetch_start(6, after_batch).unwrap(),
+            FetchStart::FromDbTip
+        );
+    }
+
+    #[test]
+    fn test_fetch_start_rejects_a_cursor_from_a_later_epoch() {
+        let err = plan_fetch_start(6, cursor(7, 103)).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("pipeline epoch went backwards"),
+            "{message}"
+        );
+        assert!(message.contains("next_block=103"), "{message}");
+        assert!(message.contains("epoch 7"), "{message}");
+        assert!(message.contains("loaded epoch 6"), "{message}");
     }
 
     fn evidence(source: &'static str) -> NoDivergenceEvidence<'static> {
