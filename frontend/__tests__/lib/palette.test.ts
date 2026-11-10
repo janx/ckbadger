@@ -247,6 +247,14 @@ describe('the rubbing / Song print finish', () => {
     expect(Number(MATERIALS.dark['grain-opacity'])).toBeLessThan(0.03);
     expect(Number(MATERIALS.light['grain-opacity'])).toBeLessThan(0.05);
   });
+
+  it('keeps the sticky vitals strip opaque: the page scrolls under it, never through it', () => {
+    // midnight let the page show through an 80 % strip; the terminal skeleton has no translucency
+    for (const theme of THEMES) {
+      expect(MATERIALS[theme]['header-strip'], theme).toBe(PALETTE[theme]['base-surface']);
+      expect(MATERIALS[theme]['header-strip'], theme).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
 });
 
 describe('the palette as CSS', () => {

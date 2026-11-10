@@ -347,7 +347,8 @@ const darkMaterials = {
   'well-inset': 'rgba(0, 0, 0, 0.6)',
   'well-lip': 'transparent',
   'tier2-ground': hexAlpha(dark['base-void'], 0.9),
-  'header-strip': hexAlpha(dark['base-void'], 0.8),
+  // the sticky vitals strip is opaque: the page scrolls under it, never through it
+  'header-strip': dark['base-surface'],
   'drop-shadow': '0 14px 32px rgba(0, 0, 0, 0.68)',
   'raised-shadow': '0 10px 24px rgba(0, 0, 0, 0.28)',
   'preview-inset': `inset 0 2px 8px rgba(0, 0, 0, 0.7), inset 0 0 1px ${hexAlpha(dark['text-bright'], 0.04)}`,
@@ -377,7 +378,7 @@ const lightMaterials: Materials = {
   'well-inset': hexAlpha(DAY_INK, 0.08),
   'well-lip': 'transparent',
   'tier2-ground': hexAlpha(light['base-elevated'], 0.9),
-  'header-strip': hexAlpha(light['base-bg'], 0.8),
+  'header-strip': light['base-surface'],
   'drop-shadow': `0 14px 32px ${hexAlpha(DAY_INK, 0.18)}`,
   'raised-shadow': `0 10px 24px ${hexAlpha(DAY_INK, 0.12)}`,
   'preview-inset': `inset 0 2px 8px ${hexAlpha(DAY_INK, 0.12)}, inset 0 0 1px ${hexAlpha(DAY_PAPER, 0.6)}`,
