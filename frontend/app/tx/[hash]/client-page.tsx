@@ -1332,8 +1332,11 @@ export default function TransactionDetailPage() {
         )}
         {tiles && (
           <div className="min-w-0 lg:col-start-1">
+            {/* The command and what it runs on (rubbing × Song print, phase 5, the Transaction
+                board): `cells 3 in → 2 out`; the legend stays the row's right end. */}
             <DetailSection
-              title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
+              title="Cells"
+              args={`${tiles.inputs.length.toLocaleString('en-US')} in → ${tiles.outputs.length.toLocaleString('en-US')} out`}
               actions={
                 legend.length > 0 && (
                   <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-3.5 gap-y-1">

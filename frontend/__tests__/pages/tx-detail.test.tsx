@@ -454,10 +454,17 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
   });
 
-  it('agrees nouns with counts in the cell heading and the confirmations (TX-34)', async () => {
+  // Rubbing × Song print, phase 5 (T1): the cells heading is a command and its args, `cells 1 in →
+  // 1 out` (plain counts, no nouns to agree); the confirmations still agree with their count.
+  it('runs the cells command on its counts and agrees nouns with counts in the confirmations (TX-34)', async () => {
     render(<TransactionDetailPage />);
-    const heading = await screen.findByRole('heading', { name: /consumed → .* created$/ });
-    expect(heading.textContent).toMatch(/^1 cell consumed → (1 cell|\d+ cells) created$/);
+    const heading = await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' });
+    expect(heading).toHaveClass('prompt', 'text-section');
+    const [command, args] = Array.from(heading.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^Cells$/);
+    expect(command).toHaveClass('lowercase');
+    expect(args).toHaveTextContent(/^1 in → 1 out$/);
+    expect(args).toHaveClass('text-text-dim');
     // Consistency plan C1: the tab names the page.
     expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/);
     expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
@@ -1145,6 +1152,10 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     const continuity = await screen.findByRole('button', { name: 'same type id continues' });
+    // The legend stays the cells row's actions, beside the command and outside its name (T1).
+    const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
+    expect(cells).not.toContainElement(continuity);
+    expect(cells.parentElement).toContainElement(continuity);
     expect(document.querySelector('path[data-continuity-kind="type-id"]')).toHaveAttribute(
       'stroke',
       CELL_COLORS.type

@@ -331,7 +331,7 @@ describe('Transaction board, tier 1', () => {
       await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW)
     );
     expect(head).not.toContainElement(
-      await screen.findByRole('heading', { name: /consumed → .* created/ }, SLOW)
+      await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' }, SLOW)
     );
   });
 
@@ -358,7 +358,7 @@ describe('Transaction board, tier 1', () => {
     const before = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     const hash = screen.getByRole('button', { name: 'Copy transaction hash' });
-    const cells = screen.getByRole('heading', { name: /consumed → .* created/ });
+    const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
     expect(before(hash, rail)).toBe(true);
     expect(before(rail, table)).toBe(true);
     expect(before(rail, cells)).toBe(true);
@@ -613,6 +613,8 @@ describe('Transaction variants (D4)', () => {
       within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#101' })
     ).toHaveAttribute('href', '/mainnet/blocks/101');
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
+    // A cellbase consumes no cell: the cells command runs on 0 in (T1).
+    expect(screen.getByRole('heading', { name: 'Cells 0 in → 1 out' })).toBeInTheDocument();
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(
       () =>
