@@ -6,6 +6,7 @@ import { api, type Address, type AddressHoldings, type AddressCellClass } from '
 import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -514,9 +515,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     <section aria-labelledby="holdings-heading" className="space-y-7">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-          <h2 id="holdings-heading" className="text-text-bright text-section font-medium">
-            Holdings
-          </h2>
+          {/* Rubbing × Song print, phase 5 (A21): the holdings, run on the live cells they are;
+              the count nav stays beside, the classes it does not hold are the note. */}
+          <PromptHeading
+            id="holdings-heading"
+            command="Holdings"
+            args={formatCount(holdings.liveCellsCount, 'cell')}
+          />
           {held.length > 0 && (
             <nav aria-label="Holdings" className="text-text-dim text-small">
               ·{' '}
@@ -538,8 +543,12 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             </nav>
           )}
         </div>
+        {/* The right-prompt note, drawn as PromptHeading draws one: the count nav stands between
+            the heading and it, and PromptHeading's own row has no place for that. */}
         {missing.length > 0 && (
-          <span className="text-text-dim text-small">{missing.map((c) => c.none).join(' · ')}</span>
+          <span data-prompt-note="" className="text-text-ghost text-meta ml-auto">
+            {missing.map((c) => c.none).join(' · ')}
+          </span>
         )}
       </div>
       {holdings.holdings.object > 0 && (
