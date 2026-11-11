@@ -109,6 +109,99 @@ export function expectOnePageSeal(
   return seal;
 }
 
+/** The parts of a sealed head (the name plate, seals by kind C10), as `expectNamePlate` finds them. */
+export interface NamePlate {
+  head: HTMLElement;
+  stone: HTMLElement;
+  plate: HTMLElement;
+  kindLine: HTMLElement;
+  nameBox: HTMLElement;
+  title: HTMLElement;
+  idLine: HTMLElement;
+  below: HTMLElement | null;
+}
+
+/** The plate's id line's own classes (C10 round 2): the kind line's quiet voice, set once. */
+export const ID_LINE_CLASS = 'text-text-dim text-small min-w-0 [overflow-wrap:anywhere]';
+
+/** A class that sets a text size or ink, at any variant (`text-body`, `md:text-small`, …). */
+const VOICE_CLASS = /(^|\s)([a-z-]+:)*text-/;
+
+/**
+ * `idLine` is a name plate's id line in its one quiet voice (seals by kind, C10 round 2): exactly
+ * `ID_LINE_CLASS` (text-small in text-text-dim, the kind line's voice), and nothing in it outside
+ * its copy control sets a size or an ink of its own, so the hash, the out point or the address
+ * takes the line's voice on every page and a page cannot drift from it.
+ */
+export function expectQuietIdLine(idLine: HTMLElement): void {
+  expect(idLine).toHaveAttribute('data-sealed-id');
+  expect(idLine.className).toBe(ID_LINE_CLASS);
+  const voiced = Array.from(idLine.querySelectorAll<HTMLElement>('[class]')).filter(
+    (element) =>
+      element.closest('button') === null && VOICE_CLASS.test(element.getAttribute('class')!)
+  );
+  const markup = voiced.map((element) => element.outerHTML).join(' ');
+  expect(voiced, `the id line's pieces set a voice of their own: ${markup}`).toEqual([]);
+}
+
+/**
+ * `root` holds exactly one sealed head and exactly one h1, laid out as the name plate (seals by
+ * kind, C10): the head a two-column grid whose rows are centred (`items-center`) and whose children
+ * are exactly the stone, the plate and — when there is one — `below`; the plate `contents` below md
+ * (its two boxes are the grid's own items there) and a column from md; its first box the kind line,
+ * opening on `kind` alone in the dim small voice; its second the name-and-id box, spanning both
+ * columns below md, holding exactly the h1 and the id line in its one quiet voice
+ * (`expectQuietIdLine`); `below` spanning both columns at every width. jsdom has
+ * no layout, so the classes that make the arrangement are what is pinned; none of the head's boxes
+ * is hidden at any width (one DOM). Returns the parts.
+ */
+export function expectNamePlate(root: ParentNode, kind: string): NamePlate {
+  const heads = root.querySelectorAll<HTMLElement>('[data-sealed-head]');
+  expect(heads).toHaveLength(1);
+  const [head] = Array.from(heads);
+  expect(head).toHaveClass(
+    'grid',
+    'min-w-0',
+    'grid-cols-[auto_minmax(0,1fr)]',
+    'items-center',
+    'gap-x-4',
+    'gap-y-4',
+    'md:gap-x-5',
+    'md:gap-y-5'
+  );
+  const titles = root.querySelectorAll<HTMLElement>('h1');
+  expect(titles).toHaveLength(1);
+  const [title] = Array.from(titles);
+  const parts = Array.from(head.children) as HTMLElement[];
+  expect([2, 3]).toContain(parts.length);
+  const [stone, plate, below = null] = parts;
+  expect(stone).toHaveAttribute('data-seal-form', 'page');
+  expect(plate).toHaveAttribute('data-sealed-plate');
+  expect(plate).toHaveClass('contents', 'md:flex', 'md:min-w-0', 'md:flex-col', 'md:gap-2');
+  expect(plate.children).toHaveLength(2);
+  const [kindLine, nameBox] = Array.from(plate.children) as HTMLElement[];
+  expect(kindLine).toHaveAttribute('data-sealed-kind');
+  expect(kindLine).toHaveClass('flex', 'min-w-0', 'flex-wrap', 'items-baseline', 'gap-x-3');
+  const word = kindLine.firstElementChild as HTMLElement;
+  expect(word.tagName).toBe('SPAN');
+  expect(word.textContent).toBe(kind);
+  expect(word).toHaveClass('text-text-dim', 'text-small');
+  expect(nameBox).toHaveAttribute('data-sealed-name');
+  expect(nameBox).toHaveClass('flex', 'min-w-0', 'flex-col', 'gap-2', 'max-md:col-span-2');
+  expect(nameBox.children).toHaveLength(2);
+  const idLine = nameBox.lastElementChild as HTMLElement;
+  expect(nameBox.firstElementChild).toBe(title);
+  expectQuietIdLine(idLine);
+  if (below !== null) {
+    expect(below).toHaveAttribute('data-sealed-below');
+    expect(below).toHaveClass('col-span-2', 'min-w-0');
+    expect(below.className).not.toMatch(/col-start/);
+  }
+  for (const box of [head, stone, plate, kindLine, nameBox, title, idLine, below])
+    expect(box?.className ?? '').not.toMatch(/(^|\s|:)(hidden|sr-only|invisible)(\s|$)/);
+  return { head, stone, plate, kindLine, nameBox, title, idLine, below };
+}
+
 /**
  * `row` holds exactly one seal of the seals by kind, the row stone of `id` in `state` (pressed
  * when not given): the drawing of that id (compared as markup with `drawSeal`'s), at its kind's

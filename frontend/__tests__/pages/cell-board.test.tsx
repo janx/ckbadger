@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
-import { expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -89,8 +89,11 @@ describe('Cell page against the Cell board', () => {
     expect(seal.querySelector('path[fill="none"][d$="Z"]')).not.toBeNull();
   });
 
-  it('says what inventory item the cell is, in one line right under the h1 (lane U, U6)', async () => {
-    view();
+  // Lane U (U6): the inventory item the cell is, in one line. The name plate (seals by kind, C10):
+  // it opens what is under the stone and the plate, after the full out point, from the page's left
+  // edge (it was the first line beside the stone, under the h1).
+  it('says what inventory item the cell is, in one line opening the head under the plate (lane U, U6)', async () => {
+    const { container } = view();
     const line = await screen.findByTestId('cell-inventory', undefined, { timeout: 5000 });
     expect(await within(line).findByText(/Nervape 3x/)).toBeInTheDocument();
     expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6…2796f2 BTC\+CKB$/);
@@ -98,11 +101,53 @@ describe('Cell page against the Cell board', () => {
       'href',
       `/mainnet/objects/${cell.type!.args}`
     );
-    // first under the h1 row: before the full out point and its copy
-    const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
-    expect(header).toContainElement(line);
+    const { plate, below } = expectNamePlate(container, 'Cell');
+    expect(below!.children).toHaveLength(1);
+    expect(below!.firstElementChild!.firstElementChild).toBe(line);
+    expect(plate).not.toContainElement(line);
+    // after the full out point and its copy, in the plate
     const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
-    expect(line.compareDocumentPosition(outpointLine)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(plate).toContainElement(outpointLine);
+    expectBefore(outpointLine, line);
+  });
+
+  // The name plate (C10): the kind line "Cell" with its status, the h1 the short out point alone
+  // (the dim "Cell" that opened it is the kind line now), the id line the full out point and its
+  // copy; under both, the inventory line, the origin line and the "only name" sentence, in order.
+  it('stands the cell’s name plate beside its stone: Cell and its status, the short out point, the full one', async () => {
+    const { container } = view();
+    await screen.findByTestId('cell-inventory', undefined, { timeout: 5000 });
+    const { kindLine, nameBox, title, below } = expectNamePlate(container, 'Cell');
+    // the kind word, then the status: the live dot (no text) and "live"
+    expect(kindLine.children).toHaveLength(2);
+    expect(kindLine).toHaveTextContent(/^Celllive$/);
+    expect(title).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
+    expect(title.children).toHaveLength(0);
+    expect(title).toHaveClass('text-entity', 'max-md:text-index');
+    expect(nameBox.children).toHaveLength(2);
+    const idLine = nameBox.lastElementChild as HTMLElement;
+    expect(idLine).toHaveTextContent(new RegExp(`^${cell.txHash}:1copy$`));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy out point' }));
+    // C10 round 2: the id line in the plate's one quiet voice, set by the plate: the full out
+    // point (it was text-body in the bright ink, competing with the h1 above it) takes it, its
+    // colon in the same ink; the copy button keeps its own classes
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    const full = within(idLine).getByText(`${cell.txHash}:1`);
+    expect(full.className).toBe('min-w-0');
+    expect(full.children).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Copy out point' })).toHaveClass(
+      'text-text-dim',
+      'text-meta',
+      'h-[26px]'
+    );
+    const parts = Array.from(below!.firstElementChild!.children);
+    expect(parts).toEqual([
+      screen.getByTestId('cell-inventory'),
+      screen.getByTestId('cell-origin'),
+      screen.getByText(/The out point is the cell's only name/),
+    ]);
+    // the origin and the sentence keep the identity lines' dim small voice
+    expect(below!.firstElementChild).toHaveClass('text-text-dim', 'text-small', 'space-y-1.5');
   });
 
   it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
@@ -113,12 +158,10 @@ describe('Cell page against the Cell board', () => {
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
     expect(screen.queryByText(/^Transaction 0x/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Copy out point' })).toBeInTheDocument();
-    // Consistency round C13 + U3: the h1 is "Cell" (dim) before the bright short out point.
+    // Consistency round C13 + U3, the name plate (C10): the h1 is the bright short out point; the
+    // kind line before it says "Cell".
     const h1 = screen.getByRole('heading', { level: 1 });
-    expect(h1).toHaveTextContent(/^Cell 0xbe1b9761…936cd8:1$/);
-    expect(within(h1).getByText('Cell')).toHaveClass('text-text-dim');
-    // the out point is one box: a phone wraps "Cell" away before breaking it
-    expect(within(h1).getByText('0xbe1b9761…936cd8:1')).toHaveClass('inline-block');
+    expect(h1).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
     expect(h1).toHaveClass('text-entity');
     expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger');
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);

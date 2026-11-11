@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
-import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -243,13 +243,15 @@ describe('Block board · first tier', () => {
     );
   });
 
-  // Seals by kind (C7): the block's 80 px stone leaves the identity column 262 px at 390 and 232 px
-  // at 360, and the one-line title (‹ 36 px, the 30 px height, › 36 px) needs 283 px, so the page
-  // scrolled sideways. Below sm the height takes the first line and the step links follow as a pair
-  // on the second; from sm up the links flank the height on one line, as before. One DOM (the same
-  // two links in the same order), rearranged by wrapping and order alone; jsdom has no layout, so
-  // the classes that make the arrangement are what is pinned.
-  it('stands the height on its own line below sm, the step links paired under it, in one DOM', async () => {
+  // The name plate (seals by kind, C10, superseding C7): the height stands first, on the plate's
+  // left edge where the kind word and the hash start (the ‹ link before it pushed the number 46 px
+  // right of them), and the step links follow it as one pair, ‹ ›. C7 stood the height on its own
+  // line below sm because the title sat beside the 80 px stone in 232 px at 360; under the stone
+  // the title has the full width (328 px at 360) and the row (the 26 px height, 166 px, + 10 + the
+  // 36 + 6 + 36 pair) needs 254, so C7's order-first / basis-full is gone. The row still wraps, the
+  // pair as a whole, should it ever be too narrow. One DOM, nothing reordered by CSS; jsdom has no
+  // layout, so the classes that make the arrangement are what is pinned.
+  it('stands the height first on the name plate, the step links paired after it, in one DOM', async () => {
     render(<BlockDetailPage />);
     const title = await screen.findByRole('heading', { level: 1 });
     const steps = screen.getAllByRole('link', { name: /^(Previous|Next) block,/, hidden: true });
@@ -261,19 +263,26 @@ describe('Block board · first tier', () => {
     const height = within(title).getByText('#20,827,932');
     const row = height.parentElement!;
     expect(row.parentElement).toBe(title);
-    expect(Array.from(row.children)).toEqual([previous, height, next]);
-    expect(row).toHaveClass('flex', 'flex-wrap', 'gap-x-2.5', 'sm:flex-nowrap');
-    expect(height).toHaveClass('max-sm:order-first', 'max-sm:basis-full');
-    // From sm up nothing moves: the height has no rule there, and the links keep their 36 px
-    // targets and their place in the DOM order (no order of their own at any width).
-    expect(height.className).not.toMatch(/(^|\s)(sm|md|lg|xl):/);
+    // reading order: the height, then the pair, previous then next
+    expect(row.children).toHaveLength(2);
+    const pair = row.lastElementChild as HTMLElement;
+    expect(row.firstElementChild).toBe(height);
+    expect(Array.from(pair.children)).toEqual([previous, next]);
+    expect(row).toHaveClass('flex', 'flex-wrap', 'items-center', 'gap-x-2.5', 'gap-y-2');
+    expect(pair).toHaveClass('flex', 'shrink-0', 'items-center', 'gap-1.5');
+    // nothing moves by width: no order, basis or breakpoint rule on the row, the height or the pair
+    for (const box of [row, height, pair]) {
+      expect(box.className).not.toMatch(/(^|[\s:])(order|basis)-/);
+      expect(box.className).not.toMatch(/(^|\s)(max-)?(sm|md|lg|xl):/);
+    }
+    // the links keep their 36 px targets and their place in the DOM order
     for (const link of [previous, next]) {
       expect(link).toHaveClass('h-9', 'w-9', 'shrink-0');
       expect(link.className).not.toMatch(/(^|[\s:])order-/);
     }
   });
 
-  it('puts the genesis block’s lone next link on the second line below sm, under its height', async () => {
+  it('stands the genesis block’s height first, its lone next link after it', async () => {
     // Genesis as the API serves it: no parent, no miner, no reward, epoch 0's first block.
     const genesis = {
       ...block,
@@ -320,15 +329,18 @@ describe('Block board · first tier', () => {
     const height = within(title).getByText('#0');
     const row = height.parentElement!;
     expect(row.parentElement).toBe(title);
-    expect(Array.from(row.children)).toEqual([height, next]);
-    expect(row).toHaveClass('flex', 'flex-wrap', 'sm:flex-nowrap');
-    expect(height).toHaveClass('max-sm:order-first', 'max-sm:basis-full');
+    // the height first; the pair holds only the next link (genesis has no parent)
+    expect(row.firstElementChild).toBe(height);
+    expect(Array.from((row.lastElementChild as HTMLElement).children)).toEqual([next]);
+    expect(row).toHaveClass('flex', 'flex-wrap', 'items-center');
+    expect(height.className).not.toMatch(/(^|[\s:])(order|basis)-/);
   });
 
   // Seals by kind (phase C1): the block's stone (the 104 px page seal, 80 below md, −4°), its hash
-  // and its transaction count, pressed beside its height and hash, as a collector's stamp; never
-  // inside the content.
-  it('presses the block’s seal beside its height and hash, outside the content', async () => {
+  // and its transaction count, as a collector's stamp; never inside the content. The name plate
+  // (C10): beside it the kind line "Block", the height and the hash alone — the "Block" that stood
+  // before the hash is the kind line now.
+  it('presses the block’s seal beside its name plate: Block, the height, the hash', async () => {
     const { container } = render(<BlockDetailPage />);
     const title = await screen.findByRole('heading', { level: 1 });
     const seal = expectOnePageSeal(container, sealOf(block));
@@ -337,26 +349,62 @@ describe('Block board · first tier', () => {
       'aria-label',
       `Block seal ${block.hash.slice(0, 10)}, 4 transactions`
     );
-    const head = seal.closest('[data-sealed-head]')!;
-    expect(head).toContainElement(title);
-    expect(head).toHaveTextContent(`Block${block.hash}`);
+    const { head, stone, kindLine, nameBox } = expectNamePlate(container, 'Block');
+    expect(stone).toBe(seal);
+    // no hardfork activation on this block: the kind line is the kind word alone
+    expect(kindLine).toHaveTextContent(/^Block$/);
+    expect(nameBox.children).toHaveLength(2);
+    expect(nameBox.firstElementChild).toBe(title);
+    const idLine = nameBox.lastElementChild as HTMLElement;
+    expect(idLine).toHaveTextContent(new RegExp(`^${block.hash}$`));
+    // C10 round 2: the id line in the plate's one quiet voice, the hash taking it (it was text-body
+    // in the text ink); its click-to-copy, the block's copy control, stays as it was
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    const hash = within(idLine).getByText(block.hash);
+    expect(hash.parentElement).toBe(idLine);
+    expect(hash.className).toBe('font-mono hover-lit cursor-pointer transition-colors');
+    expect(hash).toHaveAttribute('title', 'Click to copy');
+    expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
     expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
   });
 
-  // Phase 5 (Gate 3 note): the summary stands beside the seal with the height and hash, the
-  // head's last line, instead of opening the content under an empty gap.
-  it('reads the summary in the sealed head, after the hash, before the tab row', async () => {
+  // The hardfork activation is the block's status: on the kind line, after "Block".
+  it('sets the hardfork activation on the kind line, after the kind word', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...block,
+      hardforkActivation: {
+        id: 'mirana-2021',
+        name: 'CKB Edition Mirana',
+        shortName: 'Mirana',
+        activationEpoch: 5414,
+        activationDate: '2022-05-10',
+        resources: [{ label: 'CKB2021', url: 'https://example.org/ckb2021' }],
+      },
+    });
+    const { container } = render(<BlockDetailPage />);
+    const link = await screen.findByRole('link', { name: 'HARDFORK ACTIVATION · MIRANA' });
+    const { kindLine, nameBox } = expectNamePlate(container, 'Block');
+    expect(kindLine.lastElementChild).toBe(link);
+    expect(kindLine).toHaveTextContent(/^BlockHARDFORK ACTIVATION · MIRANA$/);
+    expect(link).toHaveAttribute('href', '/mainnet/hardforks');
+    expect(nameBox).not.toContainElement(link);
+  });
+
+  // Phase 5 (Gate 3 note): the summary is the head's last line, before the content. The name plate
+  // (C10): under the stone and the plate, from the page's left edge at every width, where the tab
+  // row and every section under the head start (beside the stone it was indented by 124 px).
+  it('reads the summary under the stone and the plate, after the hash, before the tab row', async () => {
     const { container } = render(<BlockDetailPage />);
     const summary = await screen.findByTestId('block-summary');
-    const seal = expectOnePageSeal(container, sealOf(block));
-    const head = seal.closest('[data-sealed-head]')!;
+    expectOnePageSeal(container, sealOf(block));
+    const { head, plate, below } = expectNamePlate(container, 'Block');
     expect(head).toContainElement(summary);
+    expect(plate).not.toContainElement(summary);
+    expect(below!.children).toHaveLength(1);
+    expect(below!.firstElementChild).toBe(summary);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
-    const column = seal.nextElementSibling!;
-    expect(column.lastElementChild).toContainElement(summary);
-    expect(summary.parentElement).toHaveAttribute('data-detail-lede');
     expectBefore(screen.getByText(block.hash), summary);
     expectBefore(summary, screen.getByRole('group', { name: 'Block contents' }));
     // The header keeps the 32 px to the content; the summary carries no margin of its own.
@@ -716,8 +764,15 @@ describe('Block board · R2b-a fields', () => {
     expect(raw).toHaveTextContent('Block bytes3,205 bytes, molecule-serialized');
   });
 
-  it('keeps the "Block" label whole beside the hash', async () => {
-    render(<BlockDetailPage />);
-    expect(await screen.findByText('Block', { selector: 'span' })).toHaveClass('shrink-0');
+  // The "Block" label stood in the hash's flex row, kept whole there by shrink-0. The name plate
+  // (seals by kind, C10) makes it the kind line's word, apart from the hash: no row it shares with
+  // the hash can squeeze it, and the hash's line is the hash alone.
+  it('keeps the "Block" label whole: the kind line’s word, not in the hash’s line', async () => {
+    const { container } = render(<BlockDetailPage />);
+    const label = await screen.findByText('Block', { selector: 'span' });
+    const { kindLine, nameBox } = expectNamePlate(container, 'Block');
+    expect(kindLine.firstElementChild).toBe(label);
+    expect(nameBox).not.toContainElement(label);
+    expect(nameBox.lastElementChild).toHaveTextContent(new RegExp(`^${block.hash}$`));
   });
 });
