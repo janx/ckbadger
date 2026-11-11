@@ -28,6 +28,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -64,21 +65,30 @@ function formatAr(raw: string): string {
   return formatAccumulatedRate(BigInt(raw));
 }
 
+/**
+ * A tier-1 section, its heading a command line (rubbing × Song print, phase 5): the question it
+ * answers as the command, what it runs on as the args, 18 px above the evidence. The section is
+ * named by its title alone.
+ */
 function Section({
   title,
+  args,
   note,
   children,
 }: {
   title: string;
+  /** What the section is read at or counts: `at #20,969,560`, `12 ready · 48 waiting`. */
+  args?: ReactNode;
   /** Only "Who deposits" keeps a note beside its heading (its link to every depositor). */
   note?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="min-w-0" aria-label={title}>
-      <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">{title}</h2>
-        {note && <span className="text-text-dim text-meta">{note}</span>}
+      {/* The heading's box is its words (w-fit); with a note, PromptHeading's own row puts the
+          note at the row's right end. */}
+      <div className="mb-[18px]">
+        <PromptHeading command={title} args={args} note={note} className="w-fit" />
       </div>
       {children}
     </section>
@@ -442,7 +452,14 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
       };
   const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
   return (
-    <Section title="Where secondary issuance goes">
+    <Section
+      title="Where secondary issuance goes"
+      args={
+        <>
+          at <BlockLink number={statistics.tipBlockNumber} />
+        </>
+      }
+    >
       <div ref={ref} className="min-w-0">
         {root === null ? (
           <div className="text-text-dim text-small">
@@ -798,7 +815,10 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     barWidth !== null &&
     ((barWidth - 2) * Number(readyPercent)) / 100 >= claimableChars * monoAdvance(12) + 24;
   return (
-    <Section title="When deposits can leave">
+    <Section
+      title="When deposits can leave"
+      args={`${ready.count.toLocaleString('en-US')} ready · ${waiting.count.toLocaleString('en-US')} waiting`}
+    >
       <div className="relative">
         <span className="text-text-dim text-meta pointer-events-none absolute left-2 top-1">
           CKB whose 180-epoch cycle ends in the next 30 days

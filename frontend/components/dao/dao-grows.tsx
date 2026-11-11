@@ -10,10 +10,18 @@ import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal'
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatUtc8Date } from '@/lib/utils';
 
 /** The board's example deposit: 10,000 CKB, in shannons. */
 const EXAMPLE_DEPOSIT = '1000000000000';
+/** The example deposit as the page writes it, from the one constant: `10,000 CKB`, whole CKB. */
+const EXAMPLE_DEPOSIT_CKB = (() => {
+  const parts = splitCkbAmount(parseShannons(EXAMPLE_DEPOSIT, 'DAO example deposit'));
+  if (parts.fraction !== '')
+    throw new Error(`DAO example deposit ${EXAMPLE_DEPOSIT} shannons is not a whole CKB amount`);
+  return `${parts.integer} CKB`;
+})();
 const DAY_MS = 86_400_000;
 /** A hovered day asks the calculator once the pointer rests this long, not on every pixel. */
 const SETTLE_MS = 150;
@@ -89,7 +97,7 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
       <div className="mt-2.5">
         <ReadoutRow label="Deposit reading" pinned={pin.showingPin}>
           <span className="text-text-dim">
-            10,000 CKB deposited {day.date} →{' '}
+            {EXAMPLE_DEPOSIT_CKB} deposited {day.date} →{' '}
             {current?.isError ? (
               <span role="alert" className="text-negative">
                 (the calculator failed: {String(current.error)})
@@ -145,7 +153,12 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
   // axis line — then one caption on one line; what AR is, and why the curve flattens, read in tier 2.
   return (
     <section aria-label="How a deposit grows" className="flex min-w-0 flex-col">
-      <h2 className="text-text-bright text-section mb-[18px] font-medium">How a deposit grows</h2>
+      {/* Phase 5 (B2): the question the section answers, run on the board's example deposit. */}
+      <PromptHeading
+        command="How a deposit grows"
+        args={EXAMPLE_DEPOSIT_CKB}
+        className="mb-[18px]"
+      />
       {history.isError ? (
         <div role="alert" className="text-rouge text-small">
           AR history could not be read: {String(history.error)}
