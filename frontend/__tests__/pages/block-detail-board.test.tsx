@@ -243,6 +243,88 @@ describe('Block board · first tier', () => {
     );
   });
 
+  // Seals by kind (C7): the block's 80 px stone leaves the identity column 262 px at 390 and 232 px
+  // at 360, and the one-line title (‹ 36 px, the 30 px height, › 36 px) needs 283 px, so the page
+  // scrolled sideways. Below sm the height takes the first line and the step links follow as a pair
+  // on the second; from sm up the links flank the height on one line, as before. One DOM (the same
+  // two links in the same order), rearranged by wrapping and order alone; jsdom has no layout, so
+  // the classes that make the arrangement are what is pinned.
+  it('stands the height on its own line below sm, the step links paired under it, in one DOM', async () => {
+    render(<BlockDetailPage />);
+    const title = await screen.findByRole('heading', { level: 1 });
+    const steps = screen.getAllByRole('link', { name: /^(Previous|Next) block,/, hidden: true });
+    expect(steps.map((link) => link.getAttribute('aria-label'))).toEqual([
+      'Previous block, 20,827,931',
+      'Next block, 20,827,933',
+    ]);
+    const [previous, next] = steps;
+    const height = within(title).getByText('#20,827,932');
+    const row = height.parentElement!;
+    expect(row.parentElement).toBe(title);
+    expect(Array.from(row.children)).toEqual([previous, height, next]);
+    expect(row).toHaveClass('flex', 'flex-wrap', 'gap-x-2.5', 'sm:flex-nowrap');
+    expect(height).toHaveClass('max-sm:order-first', 'max-sm:basis-full');
+    // From sm up nothing moves: the height has no rule there, and the links keep their 36 px
+    // targets and their place in the DOM order (no order of their own at any width).
+    expect(height.className).not.toMatch(/(^|\s)(sm|md|lg|xl):/);
+    for (const link of [previous, next]) {
+      expect(link).toHaveClass('h-9', 'w-9', 'shrink-0');
+      expect(link.className).not.toMatch(/(^|[\s:])order-/);
+    }
+  });
+
+  it('puts the genesis block’s lone next link on the second line below sm, under its height', async () => {
+    // Genesis as the API serves it: no parent, no miner, no reward, epoch 0's first block.
+    const genesis = {
+      ...block,
+      number: 0,
+      hash: h('92'),
+      parentHash: h('00'),
+      timestamp: '2019-11-15T21:09:50.812Z',
+      parentTimestamp: null,
+      transactionsCount: 2,
+      transactionSizes: [355, 516],
+      proposalsCount: 0,
+      unclesCount: 0,
+      uncles: [],
+      epoch: '0/1743',
+      epochNumber: 0,
+      epochIndex: 0,
+      epochLength: 1743,
+      minerAddress: null,
+      minerMessage: null,
+      minerMessageText: null,
+      miningReward: null,
+      miningRewardTxHash: null,
+      rewardBreakdown: null,
+      cellbasePays: null,
+      rewardPaidAtBlock: null,
+      rewardFinalizesAt: null,
+    };
+    vi.mocked(api.getBlock).mockResolvedValue(genesis);
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      data: [
+        { ...genesis, number: 2, hash: h('02'), timestamp: '2019-11-16T06:12:03.871Z' },
+        { ...genesis, number: 1, hash: h('01'), timestamp: '2019-11-16T06:11:53.574Z' },
+        genesis,
+      ],
+      total: 3,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<BlockDetailPage />);
+    const title = await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryAllByRole('link', { name: /^Previous block,/, hidden: true })).toEqual([]);
+    const next = screen.getByRole('link', { name: 'Next block, 1', hidden: true });
+    const height = within(title).getByText('#0');
+    const row = height.parentElement!;
+    expect(row.parentElement).toBe(title);
+    expect(Array.from(row.children)).toEqual([height, next]);
+    expect(row).toHaveClass('flex', 'flex-wrap', 'sm:flex-nowrap');
+    expect(height).toHaveClass('max-sm:order-first', 'max-sm:basis-full');
+  });
+
   // Seals by kind (phase C1): the block's stone (the 104 px page seal, 80 below md, −4°), its hash
   // and its transaction count, pressed beside its height and hash, as a collector's stamp; never
   // inside the content.

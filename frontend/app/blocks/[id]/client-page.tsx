@@ -223,8 +223,13 @@ export default function BlockDetailPage() {
         )}
         <DetailLayout
           documentTitle={[formatBlockNumber(block.number), 'block']}
+          // Below sm the height takes the first line and the step links follow as a pair on the
+          // next (seal kinds, C7): the block's 80 px stone leaves the title 262 px at 390 and 232 px
+          // at 360, and the one-line row (36 + 10 + the 191 px height + 10 + 36) needs 283 px. One
+          // DOM in reading order, previous, height, next (genesis has no previous: its next link
+          // stands alone on the second line); from sm up the links flank the height on one line.
           title={
-            <span className="flex items-center gap-2.5">
+            <span className="flex flex-wrap items-center gap-x-2.5 gap-y-2 sm:flex-nowrap">
               {block.number > 0 && (
                 <ArrowLink
                   href={`/blocks/${block.number - 1}`}
@@ -232,7 +237,9 @@ export default function BlockDetailPage() {
                   d="M7.5 2 3.5 6l4 4"
                 />
               )}
-              {formatBlockNumber(block.number)}
+              <span className="max-sm:order-first max-sm:basis-full">
+                {formatBlockNumber(block.number)}
+              </span>
               <ArrowLink
                 href={`/blocks/${block.number + 1}`}
                 label={`Next block, ${(block.number + 1).toLocaleString('en-US')}`}
