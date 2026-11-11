@@ -8,14 +8,14 @@
  * same outline the prototype's markup writes, to within the tolerance plus 0.05 units.
  */
 
-import type { Cap, Pt } from '@/lib/talisman/brush';
+import type { Cap, Pt } from '@/lib/seal/brush';
 
 /**
  * Ramer–Douglas–Peucker: the fewest points of `pts` (first and last always kept) such that no
  * dropped point lies farther than `tol` from the segment that replaces it.
  */
 export function simplify(pts: readonly Pt[], tol: number): Pt[] {
-  if (!(tol >= 0)) throw new Error(`talisman: simplify tolerance ${tol}`);
+  if (!(tol >= 0)) throw new Error(`seal: simplify tolerance ${tol}`);
   if (pts.length < 3) return pts.slice();
   const keep = new Uint8Array(pts.length);
   keep[0] = 1;
@@ -49,7 +49,7 @@ export function simplify(pts: readonly Pt[], tol: number): Pt[] {
 
 /** A count of tenths in its shortest SVG form: 14 → "1.4", 4 → ".4", -4 → "-.4", 30 → "3". */
 export function tenths(n: number): string {
-  if (!Number.isInteger(n)) throw new Error(`talisman: ${n} is not a whole number of tenths`);
+  if (!Number.isInteger(n)) throw new Error(`seal: ${n} is not a whole number of tenths`);
   const sign = n < 0 ? '-' : '';
   const a = Math.abs(n);
   const whole = Math.floor(a / 10),

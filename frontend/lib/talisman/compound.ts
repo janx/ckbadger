@@ -8,6 +8,7 @@
  * inner HTML without a sanitiser.
  */
 
+import { assertSealHash } from '@/lib/seal/bits';
 import {
   f2,
   orderStrokes,
@@ -16,17 +17,13 @@ import {
   type Outline,
   type Pt,
   type StrokeOptions,
-} from '@/lib/talisman/brush';
-import { compactCap, compactOutline } from '@/lib/talisman/encode';
-import {
-  FIGURES,
-  type BrushSpec,
-  type FigureName,
-  type FigureStroke,
-} from '@/lib/talisman/figures';
+} from '@/lib/seal/brush';
+import { compactCap, compactOutline } from '@/lib/seal/encode';
+import { assertPaint } from '@/lib/seal/paint';
+import type { BrushSpec, FigureStroke } from '@/lib/seal/textures';
+import { FIGURES, type FigureName } from '@/lib/talisman/figures';
 import { plan, type Plan } from '@/lib/talisman/plan';
 import type { Recipe, Stone } from '@/lib/talisman/recipes';
-import { assertSealHash } from '@/lib/talisman/bits';
 
 export interface SealPaint {
   /** The stone and the red text: frame and strokes (zhu), the stone (bai), the strokes (ink). */
@@ -41,15 +38,6 @@ export interface Seal {
   readonly svg: string;
   readonly bitsUsed: number;
   readonly chosen: FigureName[];
-}
-
-const PAINT = /^(#[0-9a-f]{6}|var\(--c-[a-z0-9-]+\))$/i;
-
-export function assertPaint(name: string, value: string): void {
-  if (typeof value !== 'string' || !PAINT.test(value))
-    throw new Error(
-      `hash seal: ${name} must be a hex colour or a var(--c-…) palette reference, got ${JSON.stringify(value)}`
-    );
 }
 
 /** The brush the layout's own strokes (head, dividers, foot) are written with. */

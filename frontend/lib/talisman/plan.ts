@@ -17,17 +17,12 @@
  * every sword does, to the stone's foot, so the sword is what takes up the rest of the stone.
  */
 
-import { BitReader, valueOf, type BitSlice } from '@/lib/talisman/bits';
-import {
-  CORE_LEXICON,
-  FIGURES,
-  LEXICON,
-  type FigureName,
-  type FigureStroke,
-} from '@/lib/talisman/figures';
+import { BitReader, valueOf, type BitSlice } from '@/lib/seal/bits';
+import type { Pt } from '@/lib/seal/brush';
+import type { FigureStroke } from '@/lib/seal/textures';
+import { CORE_LEXICON, FIGURES, LEXICON, type FigureName } from '@/lib/talisman/figures';
 import { BELOW, footOf, layTalisman, type FootName, type HeadName } from '@/lib/talisman/layout';
 import type { DrawnRecipe, FoldRecipe, Recipe, RecipeName } from '@/lib/talisman/recipes';
-import type { Pt } from '@/lib/talisman/brush';
 
 export interface Compartment {
   readonly figure: FigureName;
