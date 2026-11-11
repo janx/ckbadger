@@ -231,8 +231,15 @@ describe('BlockDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/HARDFORK ACTIVATION/i)).toBeInTheDocument();
-      expect(screen.getByText(/HARDFORK RESOURCES/i)).toBeInTheDocument();
     });
+    // Phase 5 (B6): the resources head is a tier-1 command line in the bright ink, the edition's
+    // short name its args in their own case.
+    const resources = screen.getByRole('heading', { level: 2, name: 'hardfork resources Mirana' });
+    expect(resources).toHaveClass('prompt', 'text-section', 'text-text-bright');
+    expect(resources).not.toHaveClass('text-text-dim');
+    expect(resources.lastElementChild).toHaveTextContent(/^Mirana$/);
+    expect(resources.lastElementChild).toHaveClass('text-text-dim', 'normal-case');
+    expect(screen.getByRole('region', { name: 'Hardfork resources' })).toContainElement(resources);
 
     const resourceLinks = screen.getAllByTestId('block-hardfork-resource-link');
     expect(resourceLinks).toHaveLength(2);

@@ -170,7 +170,10 @@ it('reports missing identity and unavailable raw evidence without inventing a do
   );
   const { unmount } = render(<Page identityId={evidence.itemId} />);
   expect(
-    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+    await screen.findByRole('heading', {
+      level: 1,
+      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+    })
   ).toBeInTheDocument();
   expect(
     screen.getByText(`/assets/identities/dotbit/items/${evidence.itemId}`)
@@ -192,7 +195,7 @@ it('keeps a failed identity source distinct from an absent identity', async () =
   );
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('alert')).toHaveTextContent('identity index mismatch');
-  expect(screen.queryByText('known to some, perhaps. to all, not yet.')).not.toBeInTheDocument();
+  expect(screen.queryByText('the local index was asked; it holds none.')).not.toBeInTheDocument();
 });
 
 // ── F2 identities (round 2): the IdentityBit board's tier 1 (ID-C5/C6/C7/C10, ID-B1/B2/B4) ──
@@ -218,7 +221,7 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
   expect(screen.getByRole('heading', { name: 'This identity, in words' })).toBeInTheDocument();
   expect(ledeRestatements(container)).toEqual([]);
   expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
-  expect(screen.getByRole('heading', { name: 'Held until 2030-03-18' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Term held until 2030-03-18' })).toBeInTheDocument();
   expect(Array.from(facts.querySelectorAll('dt')).map((dt) => dt.textContent)).toEqual([
     'Owner',
     'Expires',
@@ -247,7 +250,7 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
 it('puts the metrics row right after the header in reading order (ID-C11, C7)', async () => {
   render(<Page identityId={evidence.itemId} />);
   const facts = await screen.findByRole('region', { name: 'Metrics' }, { timeout: 4000 });
-  const term = screen.getByRole('heading', { name: /^Held until/ });
+  const term = screen.getByRole('heading', { name: /^Term held until/ });
   expect(facts.compareDocumentPosition(term) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 

@@ -29,6 +29,7 @@ import { CapacityHistory } from '@/components/asset/capacity-history';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Address } from '@/components/ui/address';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
@@ -658,7 +659,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       {kind === 'identity' && <CollectionItems id={id} kind={kind} />}
       {kind === 'identity' && isDidCkbCollectionAlias(id) && (
         <section aria-label="PDS distribution" className="space-y-4">
-          <h2 className="text-text-bright text-section">Personal data servers</h2>
+          <PromptHeading command="Personal data servers" />
           {pds.data ? (
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />

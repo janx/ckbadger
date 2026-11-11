@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
+import { ROW_SEAL_FOOTPRINT_PX, RowSeal } from '@/components/ui/row-seal';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
@@ -129,6 +130,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   return (
     <PhoneRow
       testId="pool-row-mobile"
+      mark={<RowSeal hash={tx.hash} />}
       lines={[
         {
           key: 'identity',
@@ -264,21 +266,24 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      // 21 characters at 13 px (163.8 px) and the 16 px gap.
-      minWidth: 184,
+      // The row seal, 21 characters at 13 px (163.8 px) and the 16 px gap (was 184 without it).
+      minWidth: 180 + ROW_SEAL_FOOTPRINT_PX,
       render: (tx) => (
-        <div className="space-y-1">
-          {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
-          <Link href={`/tx/${tx.hash}`}>
-            <Hash
-              hash={tx.hash}
-              startChars={12}
-              endChars={6}
-              copyable={false}
-              className="text-body text-text-bright leading-[18px]"
-            />
-          </Link>
-          <PoolInterpretationNotice interpretation={tx.interpretation} />
+        <div className="flex items-start">
+          <RowSeal hash={tx.hash} overhang />
+          <div className="min-w-0 space-y-1">
+            {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
+            <Link href={`/tx/${tx.hash}`}>
+              <Hash
+                hash={tx.hash}
+                startChars={12}
+                endChars={6}
+                copyable={false}
+                className="text-body text-text-bright leading-[18px]"
+              />
+            </Link>
+            <PoolInterpretationNotice interpretation={tx.interpretation} />
+          </div>
         </div>
       ),
     },
@@ -348,7 +353,9 @@ export default function TransactionsPage() {
     {
       key: 'feeRate',
       label: 'Fee rate, shannon/KB',
-      minWidth: 130,
+      // The head on its two lines ("shannon/KB", 10 characters at 11 px, 66 px) or a rate of
+      // 1,000,000,000 (13 at 12 px, 93.6 px), and the 16 px gap; 7 px went to the row seal.
+      minWidth: 123,
       numeric: true,
       render: (tx) => BigInt(tx.feeRate).toLocaleString('en-US'),
     },
@@ -362,7 +369,9 @@ export default function TransactionsPage() {
     {
       key: 'cycles',
       label: 'Cycles',
-      minWidth: 110,
+      // The most a transaction may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
+      // gap (the last column); 16 px went to the row seal, so the table keeps its 1,200 px.
+      minWidth: 94,
       numeric: true,
       render: (tx) => BigInt(tx.cycles).toLocaleString('en-US'),
     },

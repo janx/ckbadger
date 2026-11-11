@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MINUS } from '@/lib/chart-ticks';
 import {
+  exactCkbText,
   formatDecimalBytes,
   formatPercent,
   formatSignedCkbExact,
@@ -147,5 +148,17 @@ describe('splitCkbAmount', () => {
       const p = splitCkbAmount(BigInt(s));
       expect((p.fraction + p.ghost).length).toBe(9);
     }
+  });
+});
+
+describe('exactCkbText', () => {
+  it('writes the digits ExactCkb prints: every decimal, the sign only when signed, zero as 0', () => {
+    expect(exactCkbText(BigInt(1647), false)).toBe('0.00001647');
+    expect(exactCkbText(BigInt(-30000), false)).toBe('0.00030000');
+    expect(exactCkbText(BigInt(-30000), true)).toBe(`${MINUS}0.00030000`);
+    expect(exactCkbText(BigInt('75000000000'), true)).toBe('+750.00000000');
+    expect(exactCkbText(BigInt('193912572831'), false)).toBe('1,939.12572831');
+    expect(exactCkbText(BigInt(0), false)).toBe('0');
+    expect(exactCkbText(BigInt(0), true)).toBe('0');
   });
 });

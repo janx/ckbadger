@@ -202,6 +202,8 @@ describe('NetworkTrends', () => {
     await waitFor(() =>
       expect(screen.getByText('Loading verified peer history…')).toBeInTheDocument()
     );
+    // Phase 5 (B12): no day count while the pair is loading (never a made-up 0 days).
+    expect(screen.getByRole('heading', { level: 2 })).toHaveAccessibleName('Over time');
   });
 
   it('reports a failed reachable history instead of crashing the page (#2)', async () => {

@@ -1,4 +1,5 @@
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import {
   describeIdentityRecords,
   type IdentityRecordInput,
@@ -80,10 +81,12 @@ export function IdentityRecords({
   const title = `What ${subject} points to`;
   return (
     <section aria-label={title} className="min-w-0 space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-section font-medium">{title}</h2>
-        <span className="text-text-dim text-small">its records</span>
-      </div>
+      {/* Rubbing × Song print, phase 5 (A5): the records, run on the name and their count; the
+          command says what the old "its records" note did. */}
+      <PromptHeading
+        command="Records"
+        args={`${subject} · ${records.length.toLocaleString('en-US')}`}
+      />
       {records.length === 0 ? (
         <p className="text-text">No records are set.</p>
       ) : (

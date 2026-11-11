@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CHIP_PAINT,
@@ -159,5 +161,18 @@ describe('ageOpacity: older blocks step back', () => {
   it('rejects an age that is not a count of blocks', () => {
     expect(() => ageOpacity(-1)).toThrow(/age/);
     expect(() => ageOpacity(1.5)).toThrow(/age/);
+  });
+});
+
+// Rubbing × Song print, phase 2: phase 1 mapped amber to moss green one-to-one, which turned the
+// ember a dropped transaction greys toward into a green. The ember is gold now, the warning hue.
+describe('the drop ember', () => {
+  const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+  it('greys a dropped tx toward the gold ember, not toward moss', () => {
+    expect(css).toMatch(/--pipeline-ember: var\(--c-gold\);/);
+    expect(css).not.toMatch(/--pipeline-ember: var\(--c-amber\)/);
+    expect(css).toMatch(
+      /--pipeline-drop: color-mix\(in srgb, var\(--c-pipeline-drop-neutral\), var\(--pipeline-ember\)\);/
+    );
   });
 });

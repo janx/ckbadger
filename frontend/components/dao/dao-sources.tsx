@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import Link from '@/components/ui/link';
 import { ActivityRow } from '@/components/activity/activity-row';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 
 /** Hierarchy R15 (v3): a topic page's activity feed shows three rows; the list pages page the rest. */
 const RECENT_ROWS = 3;
@@ -23,22 +24,28 @@ export function DaoSources() {
   const rows = activities.data?.data;
   return (
     <section className="min-w-0" aria-label="Recent DAO activity">
-      <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">Recent DAO activity</h2>
-        <span className="text-small flex flex-wrap items-baseline gap-x-6 gap-y-1">
-          <Link
-            href="/activities?filter=dao"
-            className="text-text hover:text-text-bright hover:underline"
-          >
-            All DAO activity →
-          </Link>
-          <Link
-            href="/transactions?kind=dao"
-            className="text-text hover:text-text-bright hover:underline"
-          >
-            DAO transactions →
-          </Link>
-        </span>
+      {/* Phase 5 (B1): the feed as a command on its row count; the two list links are the note. */}
+      <div className="mb-2.5">
+        <PromptHeading
+          command="dao activity"
+          args={`--last ${RECENT_ROWS}`}
+          note={
+            <span className="text-small flex flex-wrap items-baseline gap-x-6 gap-y-1">
+              <Link
+                href="/activities?filter=dao"
+                className="text-text hover:text-text-bright hover:underline"
+              >
+                All DAO activity →
+              </Link>
+              <Link
+                href="/transactions?kind=dao"
+                className="text-text hover:text-text-bright hover:underline"
+              >
+                DAO transactions →
+              </Link>
+            </span>
+          }
+        />
       </div>
       {activities.isError ? (
         <div role="alert" className="text-rouge text-small py-4">

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { expectOnePageSeal } from '@/__tests__/utils/seals';
 
 describe('DetailLayout identity', () => {
   it('keeps prose words intact while allowing an unbroken identifier to wrap', () => {
@@ -20,6 +21,104 @@ describe('DetailLayout identity', () => {
 });
 
 // Visual finish V7: an entity page's content fades in when its data arrives and the layout mounts.
+// Rubbing × Song print, phase 3: an object page presses its hash seal beside its title and
+// identity; the facts and the content run under it, never beside the stamp.
+describe('DetailLayout seal', () => {
+  const HASH = `0x${'a1'.repeat(32)}`;
+
+  it('presses the page seal beside the title and identity, not the facts or the content', () => {
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={<span>Block {HASH}</span>}
+        seal={{ hash: HASH, scale: 'record' }}
+        facts={[{ label: 'Epoch', value: '15,271' }]}
+      >
+        <p>content</p>
+      </DetailLayout>
+    );
+    const seal = expectOnePageSeal(container, HASH, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    const header = container.querySelector('header')!;
+    expect(head.parentElement).toBe(header);
+    expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(head).toHaveTextContent(`Block ${HASH}`);
+    expect(head).not.toContainElement(screen.getByText('15,271'));
+    expect(header).toContainElement(screen.getByText('15,271'));
+    expect(header).not.toContainElement(screen.getByText('content'));
+  });
+
+  it('draws no seal when it is given none', () => {
+    const { container } = render(<DetailLayout title="Blocks" kind="index" children="rows" />);
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
+    expect(container.querySelector('[data-sealed-head]')).toBeNull();
+    expect(container.querySelector('header')!.firstElementChild).toContainElement(
+      screen.getByRole('heading', { level: 1 })
+    );
+  });
+});
+
+// Rubbing × Song print, phase 5 (Gate 3 note): the page's opening sentence reads with its name, the
+// head's last line after the identity — beside the seal, so the stamp's height holds the words.
+describe('DetailLayout lede', () => {
+  const HASH = `0x${'b2'.repeat(32)}`;
+
+  it('sets the lede in the sealed head’s column, after the identity, before the facts and content', () => {
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={<span data-testid="identity">Block {HASH}</span>}
+        seal={{ hash: HASH, scale: 'record' }}
+        lede={<p data-testid="lede">4 transactions, mined by a pool.</p>}
+        facts={[{ label: 'Epoch', value: '15,271' }]}
+      >
+        <p>content</p>
+      </DetailLayout>
+    );
+    const seal = expectOnePageSeal(container, HASH, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    const lede = screen.getByTestId('lede');
+    // The column beside the seal holds the title row, the identity and then the lede, last.
+    const column = seal.nextElementSibling as HTMLElement;
+    expect(column).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(column).toContainElement(lede);
+    const holder = lede.parentElement!;
+    expect(holder).toHaveAttribute('data-detail-lede');
+    expect(holder).toHaveClass('mt-4', 'min-w-0');
+    expect(column.lastElementChild).toBe(holder);
+    expect(holder.previousElementSibling).toContainElement(screen.getByTestId('identity'));
+    expect(head).not.toContainElement(screen.getByText('15,271'));
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(lede);
+  });
+
+  it('sets the lede after the identity in a head without a seal', () => {
+    const { container } = render(
+      <DetailLayout title="Transaction" identity="0xabc" lede={<p>Two cells became one.</p>}>
+        content
+      </DetailLayout>
+    );
+    const header = container.querySelector('header')!;
+    const lede = screen.getByText('Two cells became one.').parentElement!;
+    expect(header).toContainElement(lede);
+    expect(lede.previousElementSibling).toHaveTextContent(/^0xabc$/);
+  });
+
+  it('adds nothing to the head when it is given none', () => {
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={`Block ${HASH}`}
+        seal={{ hash: HASH, scale: 'record' }}
+      >
+        content
+      </DetailLayout>
+    );
+    expect(container.querySelector('[data-detail-lede]')).toBeNull();
+    const column = container.querySelector('[data-sealed-head]')!.lastElementChild!;
+    expect(column.lastElementChild).toHaveTextContent(`Block ${HASH}`);
+  });
+});
+
 describe('DetailLayout arrival (visual finish V7)', () => {
   it('carries the arrival fade on its root', () => {
     const { container } = render(<DetailLayout title="Transaction" children="tx" />);
@@ -79,6 +178,43 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
       'text-body',
       'text-text'
     );
+    // Rubbing × Song print, phase 2: a tier-1 heading is a command line (PromptHeading: the
+    // prompt square is its ::before, the title the lowercase command); tier 2 stays unmarked.
+    const capacity = screen.getByRole('heading', { name: 'Capacity' });
+    expect(capacity).toHaveClass('prompt');
+    expect(capacity.firstElementChild).toHaveClass('lowercase');
+    expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('prompt');
+  });
+
+  it('runs a section command on its args in either tier (phase 5): dim, after the title, in the name', () => {
+    render(
+      <DetailLayout
+        title="Script"
+        tier2={
+          <DetailSection title="Code versions" args="4">
+            evidence
+          </DetailSection>
+        }
+      >
+        <DetailSection title="Cells" args="128,440 live" actions={<span>newest first</span>}>
+          rows
+        </DetailSection>
+      </DetailLayout>
+    );
+    const cells = screen.getByRole('heading', { name: 'Cells 128,440 live' });
+    expect(cells).toHaveClass('prompt', 'text-section');
+    const [command, args] = Array.from(cells.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^Cells$/);
+    expect(args).toHaveTextContent(/^128,440 live$/);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    // the actions stay the row's right end, outside the heading
+    expect(cells.parentElement).toHaveTextContent('newest first');
+    expect(cells).not.toHaveTextContent('newest first');
+    // a tier-2 section keeps its quiet h2; the args ride in it, dim, with no prompt
+    const versions = screen.getByRole('heading', { name: 'Code versions 4' });
+    expect(versions).toHaveClass('text-body', 'text-text');
+    expect(versions).not.toHaveClass('prompt');
+    expect(versions.lastElementChild).toHaveClass('text-text-dim', 'font-normal');
   });
 
   it('opens tier 2 with one boundary: 96 px, a hairline, then the evidence eyebrow above the content', () => {
@@ -89,8 +225,8 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
     );
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border', 'pt-7');
-    // Midnight, continued (move 2): the boundary's 1 px border-t is a tube — painted by
-    // `.hairline-tube-border` (jade at the left, fading right); the border keeps its width.
+    // Midnight, continued (move 2): the boundary's 1 px border-t is coloured by
+    // `.hairline-tube-border` (a plain line since rubbing × Song print); the border keeps its width.
     expect(tier2).toHaveClass('hairline-tube-border');
     const eyebrow = tier2.firstElementChild as HTMLElement;
     expect(eyebrow).toHaveTextContent(/^Evidence · for developers$/);

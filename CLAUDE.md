@@ -226,7 +226,7 @@ ckbadger verify --list-checks             # List all checks
 
 **Prettier**: semi, singleQuote, tabWidth 2, printWidth 100, trailingComma es5. **Imports**: Always `@/` path alias (not relative). **Components**: `'use client'` for interactivity, named exports, Props interface. **Data Fetching**: TanStack Query v5.
 
-**Colour / themes**: two themes (dark = midnight, the default; light = ink on paper) from one palette, `frontend/lib/palette.ts`, emitted as CSS variables by `tailwind.config.ts` and switched by `data-theme` on `<html>` (`lib/theme.ts`, header `ThemeSwitcher`). Page code writes no hex: Tailwind classes, `lib/design-tokens.ts` constants, or `color()` / `alpha()` / `glowAlpha()` / `material()` / `fade()` from the palette; a canvas or shader reads concrete values through `useThemePalette()`. A glow is a `--m-glow`-scaled alpha so it goes out by day. A new colour goes into both themes; `__tests__/lib/palette.test.ts` pins contrast (≥ 4.5:1 text-grade) and `__tests__/lib/theme-tokens-gate.test.ts` refuses hex outside the palette. See `frontend/docs/ui-color-guidelines.md`.
+**Colour / themes**: two themes (night = rubbing (dark warm ink), the default; day = Song print (the same inks on paper)) from one palette, `frontend/lib/palette.ts`, emitted as CSS variables by `tailwind.config.ts` and switched by `data-theme` on `<html>` (`lib/theme.ts`, header `ThemeSwitcher`). Page code writes no hex: Tailwind classes, `lib/design-tokens.ts` constants, or `color()` / `alpha()` / `glowAlpha()` / `material()` / `fade()` from the palette; a canvas or shader reads concrete values through `useThemePalette()`. A glow is a `--m-glow`-scaled alpha so it goes out by day. A new colour goes into both themes; `__tests__/lib/palette.test.ts` pins contrast (≥ 4.5:1 text-grade; ≥ 3:1 for the cinnabar `mark`, a shape colour — text in cinnabar is `rouge`) and `__tests__/lib/theme-tokens-gate.test.ts` refuses hex outside the palette. See `frontend/docs/ui-color-guidelines.md`.
 
 ## Key Workflows
 
@@ -358,31 +358,34 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 
 ## File Locations
 
-| What             | Where                                                                                                                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                                                       |
-| Config           | `crates/config/src/lib.rs` (per-network `config.toml`); `crates/config/src/orchestrator.rs` (orchestrator `ckbadger.toml`, `[[network]]`)                                                |
-| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                                                            |
-| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                                                            |
-| API routes       | `crates/api/src/routes/*.rs` (20 mounted modules + `tx_lookup`/`proposal_window`/`address_presence`/`address_pool` helpers)                                                              |
-| Response types   | `crates/api/src/response.rs`                                                                                                                                                             |
-| WebSocket        | `crates/api/src/ws/`                                                                                                                                                                     |
-| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                                                                                       |
-| Parsers          | `crates/indexer/src/parser/*.rs` (bit_cell, block, cell, dao, did_ckb, dotbit, dotcell, fiber, media_source, mnft, registry, rgbpp, script, spore, stablepp, transaction, udt, utxoswap) |
-| DB writers       | `crates/indexer/src/db/writer/*.rs` (24 modules, incl. `dotcell` + `dotcell_detector`)                                                                                                   |
-| DOB decoder      | `crates/dob-decoder/src/` (lib, vm, cache, fetch, types)                                                                                                                                 |
-| Label import     | `crates/indexer/src/label_import.rs`                                                                                                                                                     |
-| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                                                                                         |
-| TUI              | `crates/tui/src/`                                                                                                                                                                        |
-| Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                                                       |
-| Frontend API     | `frontend/lib/api.ts`                                                                                                                                                                    |
-| Theme / palette  | `frontend/lib/palette.ts` (both themes, one source), `frontend/lib/theme.ts` (preference store), `frontend/components/layout/theme-switcher.tsx`                                         |
-| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                                                              |
-| UI components    | `frontend/components/ui/`                                                                                                                                                                |
-| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                                                           |
-| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` in one `tests/integration.rs` binary (shared helpers in `crates/api/tests/common/mod.rs`)                                |
-| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                                                            |
-| CI               | `.github/workflows/ci.yml`                                                                                                                                                               |
+| What             | Where                                                                                                                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                                                             |
+| Config           | `crates/config/src/lib.rs` (per-network `config.toml`); `crates/config/src/orchestrator.rs` (orchestrator `ckbadger.toml`, `[[network]]`)                                                      |
+| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                                                                  |
+| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                                                                  |
+| API routes       | `crates/api/src/routes/*.rs` (20 mounted modules + `tx_lookup`/`proposal_window`/`address_presence`/`address_pool` helpers)                                                                    |
+| Response types   | `crates/api/src/response.rs`                                                                                                                                                                   |
+| WebSocket        | `crates/api/src/ws/`                                                                                                                                                                           |
+| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                                                                                             |
+| Parsers          | `crates/indexer/src/parser/*.rs` (bit_cell, block, cell, dao, did_ckb, dotbit, dotcell, fiber, media_source, mnft, registry, rgbpp, script, spore, stablepp, transaction, udt, utxoswap)       |
+| DB writers       | `crates/indexer/src/db/writer/*.rs` (24 modules, incl. `dotcell` + `dotcell_detector`)                                                                                                         |
+| DOB decoder      | `crates/dob-decoder/src/` (lib, vm, cache, fetch, types)                                                                                                                                       |
+| Label import     | `crates/indexer/src/label_import.rs`                                                                                                                                                           |
+| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                                                                                               |
+| TUI              | `crates/tui/src/`                                                                                                                                                                              |
+| Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                                                             |
+| Frontend API     | `frontend/lib/api.ts`                                                                                                                                                                          |
+| Theme / palette  | `frontend/lib/palette.ts` (both themes, one source), `frontend/lib/theme.ts` (preference store), `frontend/components/layout/theme-switcher.tsx`                                               |
+| Shell pieces     | `frontend/components/layout/wordmark.tsx` (the text logo), `status-line.tsx` (the 26 px terminal status line), `prompt-end.tsx` (the page's last prompt), `header.tsx`                         |
+| Prompt headings  | `frontend/components/ui/prompt-heading.tsx` (`■ command args · note`; `DetailSection`, `SectionHeading`, `TerminalPanelHeader` wrap it), `components/ui/comment.tsx` (the `#` voice lines)     |
+| Hash seals       | `frontend/lib/talisman/` (the deterministic talisman of a 32-byte hash: `plan`, `compound`, recipes PAGE / ROW / BRUSH), `components/ui/hash-seal.tsx` (lazy), `page-seal.tsx`, `row-seal.tsx` |
+| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                                                                    |
+| UI components    | `frontend/components/ui/`                                                                                                                                                                      |
+| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                                                                 |
+| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` in one `tests/integration.rs` binary (shared helpers in `crates/api/tests/common/mod.rs`)                                      |
+| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                                                                  |
+| CI               | `.github/workflows/ci.yml`                                                                                                                                                                     |
 
 ## Dependencies
 

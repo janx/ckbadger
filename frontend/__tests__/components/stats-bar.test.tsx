@@ -129,7 +129,14 @@ describe('VitalsStrip', () => {
     expect(epoch).toHaveTextContent('15,168');
     expect(epoch).toHaveTextContent('246 / 1,590');
     expect(epoch).toHaveTextContent('≈ 3h 8m left');
-    expect(screen.getByTestId('vitals-epoch-progress').style.width).toBe(`${(246 / 1590) * 100}%`);
+    // rubbing × Song print, phase 2: the progress in block characters, 246 / 1590 of the cells
+    // filled (whole cells only): one of ten from 640 px, none of five on a phone
+    const bar = screen.getByTestId('vitals-epoch-bar');
+    expect(bar).toHaveAttribute('aria-hidden', 'true');
+    expect(bar.querySelector('[data-cells="10"]')).toHaveTextContent(/^█░{9}$/);
+    expect(bar.querySelector('[data-cells="5"]')).toHaveTextContent(/^░{5}$/);
+    expect(bar.querySelector('[data-cells="10"] [data-part="full"]')).toHaveClass('text-jade');
+    expect(bar.querySelector('[data-cells="10"] [data-part="empty"]')).toHaveClass('text-text-dim');
     expect(strip).toHaveTextContent('Block time8.43 s');
     expect(screen.getByRole('link', { name: /Hash rate 93.91 PH\/s/ })).toHaveAttribute(
       'href',
@@ -149,7 +156,7 @@ describe('VitalsStrip', () => {
     expect(error).toHaveAttribute('role', 'alert');
     expect(error).toHaveTextContent('epoch "100/50/1000" is not number(index/length)');
     expect(screen.queryByText('1,800')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('vitals-epoch-progress')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vitals-epoch-bar')).not.toBeInTheDocument();
   });
 
   // TX-01 (Main.dc.html vitals): "● Live" closes the strip, pushed to its right end, and only on
@@ -215,11 +222,14 @@ describe('VitalsStrip', () => {
     expect(block).toHaveClass('col-span-2', 'sm:col-span-3');
     const live = screen.getByTestId('vitals-live');
     expect(live).toHaveClass('row-start-1', 'col-start-3', 'sm:col-start-4', 'ml-auto');
-    // Line 2: the epoch alone across the full width, its bar taking the free width.
+    // Line 2: the epoch alone across the full width. Its bar is block characters (rubbing × Song
+    // print, phase 2): five cells below 640 px, ten from 640 px, never shrunk or clipped.
     const epoch = screen.getByTestId('vitals-epoch');
     expect(epoch).toHaveClass('col-span-3', 'sm:col-span-4');
-    const bar = screen.getByTestId('vitals-epoch-progress').parentElement as HTMLElement;
-    expect(bar).toHaveClass('flex-[1_1_48px]', 'min-w-12', 'md:w-14', 'md:flex-none');
+    const bar = screen.getByTestId('vitals-epoch-bar');
+    expect(bar).toHaveClass('shrink-0');
+    expect(bar.querySelector('[data-cells="5"]')).toHaveClass('sm:hidden');
+    expect(bar.querySelector('[data-cells="10"]')).toHaveClass('hidden', 'sm:inline');
     // Line 3: block time, hash rate, difficulty, one track each, label over value below 640 and
     // label beside value from 640 up.
     const mining = [
@@ -271,8 +281,8 @@ describe('VitalsStrip', () => {
 
   it('keeps every vital whole: each is one element, and the epoch never stacks', async () => {
     // Below md each vital owns its grid track or line, so nothing is squeezed by a neighbour. The
-    // epoch is a plain row whose text never wraps: only its bar gives up width (down to 48 px), so
-    // its number, index and time left stay on one line instead of stacking into a column.
+    // epoch is a plain row whose text never wraps, its bar a fixed run of block characters (five
+    // cells on a phone), so its number, index and time left stay on one line instead of stacking.
     useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
@@ -283,8 +293,7 @@ describe('VitalsStrip', () => {
     const epoch = screen.getByTestId('vitals-epoch');
     expect(epoch).toHaveClass('flex', 'whitespace-nowrap');
     expect(epoch).not.toHaveClass('flex-wrap');
-    const bar = screen.getByTestId('vitals-epoch-progress').parentElement as HTMLElement;
-    expect(bar).toHaveClass('min-w-12');
+    expect(screen.getByTestId('vitals-epoch-bar')).toHaveClass('shrink-0');
   });
 
   it('refuses a block time that is not "<seconds>s" (TX-05)', async () => {
@@ -295,13 +304,13 @@ describe('VitalsStrip', () => {
     );
   });
 
-  it('spaces the items 24 px apart from md up, with a 56 px epoch bar, so one row fits at 1280', async () => {
+  it('spaces the items 24 px apart from md up, with a ten-cell epoch bar, so one row fits at 1280', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     expect(strip).toHaveClass('md:gap-x-6');
-    const bar = (await screen.findByTestId('vitals-epoch-progress')).parentElement as HTMLElement;
-    expect(bar).toHaveClass('md:w-14');
+    const bar = await screen.findByTestId('vitals-epoch-bar');
+    expect([...(bar.querySelector('[data-cells="10"]')!.textContent ?? '')]).toHaveLength(10);
   });
 
   it('shows an explicit error, not endless skeletons, when the stats fail to load', async () => {

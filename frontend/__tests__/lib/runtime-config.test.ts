@@ -4,6 +4,7 @@ import {
   DEFAULT_CKB_NETWORK,
   DEFAULT_CKB_RPC_URL,
   DEFAULT_WS_URL,
+  releaseOf,
   resolveApiBase,
   resolveApiBasePattern,
   resolveBuildVersion,
@@ -46,6 +47,15 @@ describe('runtime config helpers', () => {
     expect(resolveCkbNetwork(config)).toBe(DEFAULT_CKB_NETWORK);
     expect(resolveCkbRpcUrl(config)).toBe(DEFAULT_CKB_RPC_URL);
     expect(resolveBuildVersion(config)).toBe(DEFAULT_BUILD_VERSION);
+  });
+});
+
+describe('releaseOf', () => {
+  it('names the release before any build metadata or commit', () => {
+    expect(releaseOf('0.1.0+feature/foo@abcdef123456')).toBe('0.1.0');
+    expect(releaseOf('0.8.2@f8947b8d3915')).toBe('0.8.2');
+    expect(releaseOf('0.8.2')).toBe('0.8.2');
+    expect(releaseOf(DEFAULT_BUILD_VERSION)).toBe('dev');
   });
 });
 

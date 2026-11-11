@@ -16,24 +16,25 @@ import { PALETTE } from '@/lib/palette';
 /**
  * Visual finish V11: the bracket-hex inks page code drew became named constants without a value
  * change; the light theme then made each constant a reference into the palette. Each is pinned
- * here to its theme key, and the midnight value of that key to the exact hex the sites wrote, so a
+ * here to its theme key, and the night value of that key to its rubbing value (re-derived from the
+ * design boards in the rubbing × Song print re-theme, frontend/docs/ui-color-guidelines.md), so a
  * drift fails here before it shows on a page.
  */
 describe('inks with no theme token (V11)', () => {
-  it('keeps the boards’ shared inks at the keys whose midnight values their sites wrote', () => {
+  it('keeps the boards’ shared inks at their keys and rubbing values', () => {
     expect(BOARD_INKS).toEqual({
       quiet: 'var(--c-ink-quiet)',
       link: 'var(--c-board-link)',
       cellLink: 'var(--c-cell-lock)',
     });
-    expect(PALETTE.dark['ink-quiet']).toBe('#4b5266');
-    expect(PALETTE.dark['board-link']).toBe('#6aa9c4');
-    expect(PALETTE.dark['cell-lock']).toBe('#7aa7d6');
+    expect(PALETTE.dark['ink-quiet']).toBe('#60574d');
+    expect(PALETTE.dark['board-link']).toBe('#87afc1');
+    expect(PALETTE.dark['cell-lock']).toBe('#85a9d0');
     // the cell links are the lock blue, one value
     expect(BOARD_INKS.cellLink).toBe(CELL_COLORS.lock);
   });
 
-  it('keeps the storage tiers’ inks at the keys whose midnight values their sites wrote', () => {
+  it('keeps the storage tiers’ inks at their keys and rubbing values', () => {
     expect(STORAGE_TIER_COLORS).toEqual({
       btc_ckb: {
         ink: 'var(--c-tier-btc-ink)',
@@ -55,21 +56,21 @@ describe('inks with no theme token (V11)', () => {
     });
     const { dark } = PALETTE;
     expect([dark['tier-btc-ink'], dark['tier-btc-ink-lit'], dark['tier-btc-edge']]).toEqual([
-      '#a0b880',
-      '#c0d8a0',
-      '#4a6838',
+      '#a7bc8a',
+      '#bdd3a0',
+      '#485036',
     ]);
-    expect([dark['tier-btc-edge-lit'], dark['tier-btc-wash']]).toEqual(['#6a8850', '#4a3a12']);
+    expect([dark['tier-btc-edge-lit'], dark['tier-btc-wash']]).toEqual(['#5f6c47', '#473b25']);
     expect([dark['tier-pure-ink'], dark['tier-pure-ink-lit'], dark['tier-pure-edge']]).toEqual([
-      '#5abfa0',
-      '#40e8b0',
-      '#1a6050',
+      '#87b4a9',
+      '#b7d9d0',
+      '#404e48',
     ]);
-    expect([dark['tier-pure-edge-lit'], dark['tier-pure-wash']]).toEqual(['#2a8068', '#0e3830']);
-    expect(dark['tier-centralized-edge']).toBe('#5a2020');
+    expect([dark['tier-pure-edge-lit'], dark['tier-pure-wash']]).toEqual(['#546a63', '#292e2a']);
+    expect(dark['tier-centralized-edge']).toBe('#57251a');
   });
 
-  it('keeps the chrome inks and the family additions at their keys and midnight values', () => {
+  it('keeps the chrome inks and the family additions at their keys and rubbing values', () => {
     expect(ROW_TAG_COLORS).toEqual({ accentEdge: 'var(--c-row-tag-accent-edge)' });
     expect(SEARCH_RESULT_COLORS).toEqual({
       panel: 'var(--c-search-panel)',
@@ -83,15 +84,15 @@ describe('inks with no theme token (V11)', () => {
     expect(BLOCK_POSITION_COLORS).toEqual({ currentTile: 'var(--c-tile-current)' });
     expect(FIBER_COLORS.filterOn).toBe('var(--c-slate-other)');
     const { dark } = PALETTE;
-    expect(dark['row-tag-accent-edge']).toBe('#1f5a46');
+    expect(dark['row-tag-accent-edge']).toBe('#42514b');
     expect([dark['search-panel'], dark['search-selected'], dark['search-hover']]).toEqual([
-      '#06090f',
-      '#091217',
-      '#070e13',
+      '#0c0a09',
+      '#1a1b19',
+      '#131210',
     ]);
-    expect([dark['stream-pending'], dark['stream-pending-hover']]).toEqual(['#04070d', '#060a11']);
-    expect(dark['tile-current']).toBe('#123029');
-    expect(dark['slate-other']).toBe('#2c3348');
+    expect([dark['stream-pending'], dark['stream-pending-hover']]).toEqual(['#0b0908', '#0d0b0a']);
+    expect(dark['tile-current']).toBe('#313631');
+    expect(dark['slate-other']).toBe('#342c25');
   });
 
   it('passes CSS variables to a style prop as they are', () => {

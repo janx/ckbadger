@@ -70,17 +70,21 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith({ filter: 'dao', limit: 3 })
     );
     const section = screen.getByRole('region', { name: 'Recent DAO activity' });
-    expect(within(section).getByRole('heading', { level: 2 })).toHaveTextContent(
-      'Recent DAO activity'
-    );
-    expect(within(section).getByRole('heading', { level: 2 })).toHaveClass(
-      'text-section',
-      'font-medium'
-    );
-    // The note under the heading moved to tier 2 (dao-board); only the two links stay beside it.
+    // Phase 5 (B1): the feed as a command run on its row count, the --last flag its parameter.
+    const heading = within(section).getByRole('heading', {
+      level: 2,
+      name: 'dao activity --last 3',
+    });
+    expect(heading).toHaveClass('prompt', 'text-section', 'text-text-bright');
+    expect(heading.lastElementChild).toHaveTextContent(/^--last 3$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
+    // The note under the heading moved to tier 2 (dao-board); only the two links stay beside it,
+    // as the right-prompt note, outside the heading's name.
     expect(section).not.toHaveTextContent(/newest first/);
-    const links = within(section).getByRole('heading', { level: 2 }).nextElementSibling!;
-    expect(Array.from(links.children).map((c) => c.textContent)).toEqual([
+    const note = heading.nextElementSibling as HTMLElement;
+    expect(note).toHaveAttribute('data-prompt-note');
+    expect(heading).not.toContainElement(note);
+    expect(Array.from(note.firstElementChild!.children).map((c) => c.textContent)).toEqual([
       'All DAO activity →',
       'DAO transactions →',
     ]);

@@ -39,6 +39,42 @@ describe('PhoneRow (boards L1–L8)', () => {
     expect(row.querySelector('.truncate')).toBeNull();
   });
 
+  // Rubbing × Song print, phase 3: the row seal leads the row as its own column beside every line,
+  // so the lines keep one left edge; they stay the row's children (phoneLines reads them).
+  it('leads the row with a mark in its own column, spanning every line', () => {
+    render(
+      <PhoneRow
+        testId="row"
+        mark={<span data-testid="seal">seal</span>}
+        lines={[
+          { key: 'identity', tone: 'head', left: '#20,895,267', right: '4 txs' },
+          false,
+          { key: 'miner', tone: 'body', left: 'miner …ratvu9' },
+          { key: 'figures', tone: 'quiet', left: '3,344 B' },
+        ]}
+      />
+    );
+    const row = screen.getByTestId('row');
+    expect(row).toHaveClass('grid', 'grid-cols-[auto_minmax(0,1fr)]', 'gap-y-[3px]');
+    const mark = row.firstElementChild as HTMLElement;
+    expect(mark).toHaveAttribute('data-part', 'mark');
+    expect(mark).toContainElement(screen.getByTestId('seal'));
+    expect(mark).toHaveClass('col-start-1', 'self-start');
+    // three lines shown (the false one is left out), so the mark spans three rows
+    expect(mark.style.gridRow).toBe('1 / span 3');
+    expect(phoneLines(row).map((l) => l.key)).toEqual(['identity', 'miner', 'figures']);
+    for (const line of Array.from(row.querySelectorAll(':scope > [data-line]')))
+      expect(line).toHaveClass('col-start-2');
+  });
+
+  it('draws no mark column when it is given none', () => {
+    render(<PhoneRow testId="row" lines={[{ key: 'identity', tone: 'head', left: '#1' }]} />);
+    const row = screen.getByTestId('row');
+    expect(row).toHaveClass('flex', 'flex-col');
+    expect(row).not.toHaveClass('grid');
+    expect(row.querySelector('[data-part="mark"]')).toBeNull();
+  });
+
   it('refuses a row without a line', () => {
     expect(() => render(<PhoneRow lines={[false, null]} />)).toThrow('at least one line');
   });

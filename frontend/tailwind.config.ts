@@ -36,8 +36,10 @@ export default {
     },
     extend: {
       // Every colour resolves through the theme's CSS variables (lib/palette.ts declares both
-      // themes; `twColor` keeps the class's opacity modifier working). The names are the
-      // Chinese traditional palette — ink and silk in midnight, the same ink on paper by day.
+      // themes; `twColor` keeps the class's opacity modifier working). The key names are the
+      // roles the pages were written against; the values are the rubbing by night and the Song
+      // print by day (jade = celadon, aqua = indigo, rouge = cinnabar text, lavender = lotus,
+      // amber = moss; `mark` is cinnabar itself — see frontend/docs/ui-color-guidelines.md).
       colors: {
         base: {
           void: twColor('base-void'),
@@ -111,6 +113,9 @@ export default {
           DEFAULT: twColor('amber'),
           dim: twColor('amber-dim'),
         },
+        // Cinnabar, the mark (UI grade, ≥ 3:1): prompt squares, seals, the search square — never
+        // body text (text in cinnabar is `rouge`).
+        mark: twColor('mark'),
         // Activity type semantic colors
         token: {
           DEFAULT: twColor('token'),

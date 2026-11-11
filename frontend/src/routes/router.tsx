@@ -3,7 +3,9 @@ import type { RouteObject } from 'react-router-dom';
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 import { Atmosphere } from '@/components/layout/atmosphere';
 import { Header } from '@/components/layout/header';
+import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { StatusLine } from '@/components/layout/status-line';
 import { TapOrHoverHintProvider } from '@/components/ui/tap-or-hover-hint';
 import { tintOfPath } from '@/lib/page-tint';
 import { NetworkQueryScope } from '@/components/network-query-scope';
@@ -22,7 +24,8 @@ type ParamRecord = Record<string, string | undefined>;
  * The page root (material pass v2): `data-tint` names the page's class hue for the ambient pools
  * (lib/page-tint, from the path after the network segment), the atmosphere paints the night sky,
  * the grain and the CRT layers once for every route, and the tap-or-hover registry lets one hint
- * per page render; then the network-scoped header and page, and the footer.
+ * per page render; then, in the network's query scope, the header and page, the footer and the
+ * status line fixed at the foot of the window (rubbing × Song print, phase 2).
  *
  * The header is part of the frame (visual finish V6): it renders here, once, above the page — so
  * a cold load shows it from the first paint, before the page's lazy chunk arrives, and no page
@@ -41,17 +44,22 @@ function AppFrame() {
     <div data-tint={tintOfPath(path)} className="flex min-h-screen flex-col">
       <Atmosphere />
       <TapOrHoverHintProvider>
-        <div className="flex min-h-screen flex-1 flex-col">
-          <NetworkQueryScope>
+        <NetworkQueryScope>
+          <div className="flex min-h-screen flex-1 flex-col">
             <Header />
             {/* Visual finish V7: keyed by the path, so each route change mounts the new page and it
-                fades in (`.arrive`); the header, outside, stays. */}
+                fades in (`.arrive`); the header, outside, stays. The page ends on an empty prompt
+                right under its last output (rubbing × Song print, phase 2). */}
             <div key={pathname} className="arrive flex flex-1 flex-col">
               <Outlet />
+              <PromptEnd />
             </div>
-          </NetworkQueryScope>
-        </div>
-        <SiteFooter />
+          </div>
+          <SiteFooter />
+          {/* Fixed at the foot of the window; last in reading order. In the network's scope, so it
+              reads the vitals strip's own query. */}
+          <StatusLine />
+        </NetworkQueryScope>
       </TapOrHoverHintProvider>
     </div>
   );

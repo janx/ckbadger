@@ -4,6 +4,7 @@ import type { Cell, CellElfAnalysis } from '@/lib/api';
 import { BlockLink } from '@/components/ui/block-link';
 import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 
 const DATA_HASH_TYPES = new Set(['data', 'data1', 'data2']);
 /** A cell or script link in the lock blue; the global `a:hover` jade still wins over it. */
@@ -41,9 +42,13 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
   const who = names.length ? `${names.join(' / ')} ` : '';
   return (
     <section aria-labelledby="code-cell-heading" className="min-w-0 space-y-3">
-      <h2 id="code-cell-heading" className="text-text-bright text-section font-medium">
-        This cell is code
-      </h2>
+      {/* Rubbing × Song print, phase 5 (A8): the code, run on the script name(s) it is; a binary
+          no registered script names runs on nothing. */}
+      <PromptHeading
+        id="code-cell-heading"
+        command="Code"
+        args={names.length ? names.join(' · ') : undefined}
+      />
       <p className="text-body max-w-[860px] leading-relaxed">
         Its data is a RISC-V program. A script names it in one of two ways, and each way decides
         what happens when the code changes.

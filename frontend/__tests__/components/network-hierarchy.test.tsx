@@ -216,8 +216,8 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     expect(screen.queryByRole('heading', { name: 'Verified peers across the world' })).toBeNull();
     // The picture is at least 280 px tall at every width (the map's own floor is 220 + its band).
     expect(Number(mapSvg.getAttribute('height'))).toBeGreaterThanOrEqual(220);
-    expect(container.querySelector('[data-tier="1"] h2')).toHaveTextContent(
-      /^Where they run$|^Which software they run$/
+    expect(container.querySelector('[data-tier="1"] h2')).toHaveAccessibleName(
+      /^(Where they run|Which software they run) 66 nodes$/
     );
   });
 
@@ -258,7 +258,7 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
       addressAttempts: 90,
       blockedReason: null,
     });
-    await within(tier1).findByRole('heading', { name: 'Which software they run' });
+    await within(tier1).findByRole('heading', { name: 'Which software they run 66 nodes' });
     const figure = hero.querySelector('[data-role="reachable"]')!;
     const coloured = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
       el
@@ -394,8 +394,11 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
 
   it('heads its own section and draws a 28 px bar with names and shares inside the segments', async () => {
     const section = await renderHosting(1200);
-    const h2 = within(section).getByRole('heading', { level: 2, name: 'Where they run' });
-    expect(h2).toHaveClass('text-section', 'text-text-bright');
+    // Phase 5 (B10): the section runs on the verified nodes its bar partitions.
+    const h2 = within(section).getByRole('heading', { level: 2, name: 'Where they run 66 nodes' });
+    expect(h2).toHaveClass('prompt', 'text-section', 'text-text-bright');
+    expect(h2.lastElementChild).toHaveTextContent(/^66 nodes$/);
+    expect(h2.lastElementChild).toHaveClass('text-text-dim');
     expect(h2.parentElement).toHaveClass('mb-[18px]');
     const bar = within(section).getByRole('img', { name: 'Verified nodes by hosting network' });
     expect(bar).toHaveClass('h-[28px]');
@@ -435,8 +438,12 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
   it('heads the software list alone; its scope note is tier 2', async () => {
     stubChartWidth(1248);
     const { tier1, tier2 } = await renderPage();
-    const h2 = await within(tier1).findByRole('heading', { name: 'Which software they run' });
-    expect(h2).toHaveClass('text-section');
+    // Phase 5 (B11): the list runs on every verified node, reachable now or verified before.
+    const h2 = await within(tier1).findByRole('heading', {
+      name: 'Which software they run 66 nodes',
+    });
+    expect(h2).toHaveClass('prompt', 'text-section');
+    expect(h2.lastElementChild).toHaveTextContent(/^66 nodes$/);
     expect(h2.parentElement).toHaveClass('mb-[18px]');
     expect(tier1).not.toHaveTextContent('reachable now or verified before');
     expect(tier2).toHaveTextContent(
@@ -477,6 +484,10 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     const svg = await within(section).findByRole('img', {
       name: 'Verified and reachable peers, peers',
     });
+    // Phase 5 (B12): the section runs on the days it plots.
+    expect(within(section).getByRole('heading', { level: 2 })).toHaveAccessibleName(
+      'Over time 3 days'
+    );
     expect(section.querySelector('figcaption')).toBeNull();
     expect(svg.querySelector('[data-role="chart-name"]')).toHaveTextContent(
       'verified and reachable peers per completed UTC+8 day'

@@ -21,11 +21,12 @@ import {
   signedAxisCap,
 } from '@/lib/chart-ticks';
 import { usePhosphor } from '@/hooks/usePhosphor';
+import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
 
 /**
- * The homepage small multiples: one figure frame (caption + headline + chart) and three SVG chart
- * kinds — a line, bars from zero, and signed bars around zero. They share one geometry, one
+ * The homepage small multiples: one figure frame (caption + headline + chart) and four SVG chart
+ * kinds — a line, bars from zero, a sparkline of eighth blocks, and signed bars around zero. They share one geometry, one
  * colour set (one data hue), draw 1:1 so their 10 px axis text never scales, and share one hover:
  * the pointer (or ←/→ on the focused chart) picks the nearest bucket, a thin guide marks it, the
  * other marks step back, and the caption's headline and sub-label read it out, as does the readout
@@ -533,6 +534,19 @@ interface BarChartProps {
 
 const BAR_FILL = 0.72;
 
+/** A bar's readout: its value, and its label — marked when its hour or day is not over yet. */
+function barReadout(bars: Bar[], formatValue: (v: number) => string) {
+  return (i: number): Readout => {
+    const b = bars[i];
+    const text = formatValue(b.value);
+    return {
+      value: text,
+      text,
+      label: b.state === 'inProgress' ? `${b.label} · in progress` : b.label,
+    };
+  };
+}
+
 export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
   if (bars.length === 0) throw new Error('BarChart needs at least one bar');
   bars.forEach((b) => {
@@ -552,15 +566,7 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
         const g = slots(w, n, BAR_FILL);
         return bars.map((_, i) => g.centre(i));
       }}
-      readoutOf={(i) => {
-        const b = bars[i];
-        const text = formatValue(b.value);
-        return {
-          value: text,
-          text,
-          label: b.state === 'inProgress' ? `${b.label} · in progress` : b.label,
-        };
-      }}
+      readoutOf={barReadout(bars, formatValue)}
       signature={signatureOf(bars)}
     >
       {(width, hovered) => {
@@ -617,6 +623,82 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
                 </g>
               );
             })}
+            <XAxisLabels
+              labels={xLabels(
+                bars.map((b) => b.label),
+                mid,
+                centre(mid),
+                right
+              )}
+            />
+          </>
+        );
+      }}
+    </ChartCanvas>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A sparkline of eighth blocks
+// ---------------------------------------------------------------------------
+
+/** JetBrains Mono's advance: a glyph is 0.6 em wide. */
+const GLYPH_ADVANCE = 0.6;
+/** Its block elements stand on the descender, 0.3 em under the baseline, and are 1.32 em tall. */
+const GLYPH_DESCENT = 0.3;
+const GLYPH_HEIGHT = 1.32;
+
+/** The ink of a spark glyph: the headline's bucket bright, an unfinished one faint. */
+const SPARK_INK: Record<BarState, string> = {
+  complete: 'var(--c-jade)',
+  highlight: 'var(--c-jade-bright)',
+  inProgress: 'var(--c-text-ghost)',
+};
+
+/**
+ * Counts as a sparkline (rubbing × Song print, phase 2): one eighth block per bucket
+ * (lib/blocks-text `sparkline`, from zero to the largest), set in the mono at the size that makes
+ * each glyph one slot wide, standing on the plot's floor; the newest complete bucket bright, the
+ * unfinished ones faint. It sits on the same canvas as the bars it replaces, so the pointer, the
+ * keys and a tap read a bucket out the same way.
+ */
+export function SparkChart({ bars, ariaLabel, formatValue }: BarChartProps) {
+  if (bars.length === 0) throw new Error('SparkChart needs at least one bar');
+  const glyphs = [...sparkline(bars.map((b) => b.value))];
+  const n = bars.length;
+  return (
+    <ChartCanvas
+      ariaLabel={ariaLabel}
+      xsFor={(w) => {
+        const g = slots(w, n, 1);
+        return bars.map((_, i) => g.centre(i));
+      }}
+      readoutOf={barReadout(bars, formatValue)}
+      signature={signatureOf(bars)}
+    >
+      {(width, hovered) => {
+        const { right, bw, centre } = slots(width, n, 1);
+        // one glyph a slot wide, never taller than the plot
+        const size = Math.min(bw / GLYPH_ADVANCE, PLOT_H / GLYPH_HEIGHT);
+        const mid = Math.floor(n / 2);
+        return (
+          <>
+            <g data-spark="" fontSize={f1(size)} textAnchor="middle">
+              {bars.map((b, i) => (
+                <text
+                  key={i}
+                  data-bucket={i}
+                  data-bar={b.state}
+                  data-hovered={hovered === i || undefined}
+                  x={f1(centre(i))}
+                  y={f1(BOTTOM - GLYPH_DESCENT * size)}
+                  fill={SPARK_INK[b.state]}
+                  opacity={bucketOpacity(i, hovered)}
+                >
+                  {glyphs[i]}
+                </text>
+              ))}
+            </g>
             <XAxisLabels
               labels={xLabels(
                 bars.map((b) => b.label),

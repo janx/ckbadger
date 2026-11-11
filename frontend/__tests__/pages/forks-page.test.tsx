@@ -241,6 +241,17 @@ describe('ForksPage', () => {
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
+    // Phase 5 (B8): the list as a command run on every switch it counts and whose view it is;
+    // the shape key stays the row's control beside it.
+    const heading = screen.getByRole('heading', {
+      level: 2,
+      name: 'branch switches 18 · this node',
+    });
+    expect(heading).toHaveClass('prompt', 'text-section', 'text-text-bright');
+    expect(heading).toHaveAttribute('id', 'fork-switches-heading');
+    expect(heading.lastElementChild).toHaveTextContent(/^18 · this node$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
+    expect(heading.nextElementSibling).toBe(screen.getByRole('list', { name: 'Shape key' }));
     const bodyRows = () => table().querySelectorAll('tbody tr');
     // collapsed by default: the first five rows, the expander, no pager yet
     expect(bodyRows()).toHaveLength(5);

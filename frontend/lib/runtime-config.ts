@@ -60,6 +60,14 @@ export function resolveBuildVersion(
   return configured && configured.length > 0 ? configured : DEFAULT_BUILD_VERSION;
 }
 
+/**
+ * The release a build string names: its part before any semver build metadata ("+…") or commit
+ * ("@…") — "0.8.2" for "0.8.2@f8947b8d3915". The whole build string stays in a title beside it.
+ */
+export function releaseOf(buildVersion: string): string {
+  return buildVersion.split(/[+@]/)[0];
+}
+
 export function resolveNetworks(
   config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}
 ): string[] {

@@ -1,5 +1,6 @@
 import type { DidPdsDistribution, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { readDidDocument } from '@/lib/did-document';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
@@ -49,12 +50,11 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
   };
   return (
     <section aria-label="DID document" className="min-w-0 space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-section font-medium">DID document</h2>
-        <span className="text-text-dim text-small">
-          read from the cell · version {n} of {n}
-        </span>
-      </div>
+      <PromptHeading
+        command="DID document"
+        args={`version ${n} of ${n}`}
+        note="read from the cell"
+      />
       <dl className="border-base-border-subtle flex flex-col border-b">
         <Row term="Handle" field="alsoKnownAs">
           {current.handles.length ? (
@@ -170,12 +170,10 @@ export function AmongDidCkb({
   const named = segments.reduce((s, g) => s + g.count, 0);
   return (
     <section aria-label="Among did:ckb" className="min-w-0 space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-section font-medium">Among did:ckb</h2>
-        <AppLink href={collectionHref} className="text-small">
-          All {total.toLocaleString('en-US')} →
-        </AppLink>
-      </div>
+      <PromptHeading
+        command="Among did:ckb"
+        note={<AppLink href={collectionHref}>All {total.toLocaleString('en-US')} →</AppLink>}
+      />
       <p>
         {total.toLocaleString('en-US')} did:ckb identities live on CKB. By the personal data server
         their documents name:

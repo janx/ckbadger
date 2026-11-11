@@ -5,8 +5,7 @@ import { usePathname } from '@/src/navigation';
 import { useRef, useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
-import { Logo } from '@/components/layout/logo';
-import { LOGO_NOTCH_CLASS, LOGO_STRIP_NOTCH_CLASS } from '@/components/layout/logo-geometry';
+import { Wordmark } from '@/components/layout/wordmark';
 import { useStickyHeaderHeight } from '@/components/layout/sticky-header';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 import { NavMenu } from '@/components/layout/nav-menu';
@@ -101,15 +100,14 @@ export function Header() {
   // and the strip scrolls away with the content.
   return (
     <div ref={wrapperRef} className="contents md:sticky md:top-0 md:z-40 md:mb-4 md:block">
-      {/* The header's bottom edge is a tube (Midnight, continued, move 2): `.hairline-tube-header`
-          paints the 1 px `border-b` jade at the left, fading into the subtle border. */}
+      {/* The header's bottom edge (Midnight, continued, move 2; set flat in rubbing × Song print):
+          `.hairline-tube-header` colours the 1 px `border-b` in the line ink. */}
       <header
         ref={headerRef}
         className="border-base-border-subtle hairline-tube-header bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"
       >
         <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 md:gap-8 lg:min-h-[60px]">
-          <Logo />
-          <div data-testid="header-logo-notch" aria-hidden="true" className={LOGO_NOTCH_CLASS} />
+          <Wordmark />
 
           <nav
             aria-label="Main"
@@ -284,11 +282,6 @@ export function Header() {
         className="border-base-border-subtle mb-4 border-b bg-[var(--m-header-strip)] md:mb-0"
       >
         <div className="container mx-auto flex">
-          <div
-            data-testid="vitals-logo-notch"
-            aria-hidden="true"
-            className={LOGO_STRIP_NOTCH_CLASS}
-          />
           <VitalsStrip />
         </div>
       </div>

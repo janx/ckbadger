@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { ActivityRow, ActivityRowHead, activityRowTitle } from '@/components/activity/activity-row';
+import { ACTIVITY_HEAD_CLASS, SectionHeading } from '@/components/home/section';
 export { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { useFreshKeys } from '@/hooks/useFreshKeys';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
@@ -42,7 +43,23 @@ export function ActivityFeed() {
 
   return (
     <div data-testid="home-feed" className="flex min-w-0 flex-col">
-      <div className="border-base-border-subtle flex items-center justify-between gap-4 border-b">
+      {/* Rubbing × Song print, phase 5 (H4): the feed is a command on its row count, the way to
+          the whole list (following the tab) its note; the tabs are a smaller row under it. */}
+      <div className={ACTIVITY_HEAD_CLASS}>
+        <SectionHeading
+          command="feed"
+          args={`--last ${FEED_ROWS}`}
+          note={
+            <Link
+              href={active.viewAll}
+              className="text-interactive hover:text-jade text-small whitespace-nowrap transition-colors"
+            >
+              view all →
+            </Link>
+          }
+        />
+      </div>
+      <div className="border-base-border-subtle flex items-center border-b">
         <div role="group" aria-label="Feed" className="flex gap-4 sm:gap-6">
           {TABS.map((t) => (
             <button
@@ -51,7 +68,7 @@ export function ActivityFeed() {
               aria-pressed={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                'sm:text-section text-body -mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 transition-colors',
+                'text-body -mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 transition-colors',
                 tab === t.id
                   ? 'border-jade text-text-bright font-medium'
                   : 'text-text-dim hover:text-text border-transparent'
@@ -61,12 +78,6 @@ export function ActivityFeed() {
             </button>
           ))}
         </div>
-        <Link
-          href={active.viewAll}
-          className="text-interactive hover:text-jade text-small whitespace-nowrap transition-colors"
-        >
-          View all →
-        </Link>
       </div>
       {/* Keyed by tab: a tab switch starts a fresh "new rows" baseline. */}
       {tab === 'activity' ? (

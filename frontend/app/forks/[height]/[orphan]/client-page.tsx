@@ -475,8 +475,11 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
       </p>
 
       <div className="mt-11 flex flex-col gap-11">
+        {/* The commands run on what they show (rubbing × Song print, phase 5): the switch's depth,
+            the blocks listed, the dropped transactions listed. */}
         <DetailSection
           title="The two branches"
+          args={`depth ${event.depth.toLocaleString('en-US')}`}
           actions={
             <span className="text-text-dim text-meta flex flex-wrap gap-x-4 gap-y-1">
               <span>dashed: blocks that lost</span>
@@ -529,7 +532,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
           </div>
         </DetailSection>
 
-        <DetailSection title="Blocks">
+        <DetailSection title="Blocks" args={rows.length.toLocaleString('en-US')}>
           <ListTable
             label="Blocks"
             rows={rows}
@@ -625,7 +628,10 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
         </DetailSection>
 
         {nonCellbase.length > 0 && (
-          <DetailSection title="Transactions from the dropped branch">
+          <DetailSection
+            title="Dropped transactions"
+            args={nonCellbase.length.toLocaleString('en-US')}
+          >
             <ListTable
               label="Dropped branch transactions"
               rows={nonCellbase}

@@ -9,6 +9,7 @@ import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
@@ -118,8 +119,9 @@ async function page() {
 it('makes Objects the gel of the genes that vary beside the 20 newest (OB-C1, C9, C11)', async () => {
   const { container } = await page();
   const objects = screen.getByRole('region', { name: 'Objects' });
-  expect(within(objects).getByRole('heading', { level: 2 })).toHaveTextContent(
-    'Objects · 90 · three genes vary'
+  // Phase 5 (A14): the live count and the genes that vary are the objects command's args.
+  expect(within(objects).getByRole('heading', { level: 2 })).toHaveAccessibleName(
+    'Objects 90 live · three genes vary'
   );
   expect(
     within(objects).getByRole('img', { name: /allele gel of 90 objects/ })
@@ -204,11 +206,12 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
 // recent activity.
 it('orders sections as the board: History in the hero, Objects, Who holds it beside Recent activity', async () => {
   await page();
+  // Phase 5: a tier-1 heading is a command line; its command is the section's word.
   const heads = screen
     .getAllByRole('heading', { level: 2 })
-    .map((h) => (h.textContent ?? '').split(' · ')[0])
-    .filter((t) => ['Objects', 'History', 'Who holds it', 'Recent activity'].includes(t));
-  expect(heads).toEqual(['History', 'Objects', 'Who holds it', 'Recent activity']);
+    .map((h) => (h.classList.contains('prompt') ? h.firstElementChild!.textContent : h.textContent))
+    .filter((t) => ['Objects', 'History', 'Who holds it', 'Activity'].includes(t ?? ''));
+  expect(heads).toEqual(['History', 'Objects', 'Who holds it', 'Activity']);
   const holders = screen.getByRole('region', { name: 'Who holds it' });
   expect(holders.parentElement).toHaveClass('lg:grid-cols-2');
   expect(holders.parentElement).toContainElement(
@@ -235,6 +238,12 @@ it('opens Recent activity with five rows and two links that open the full feed i
     limit: 5,
   });
   expect(within(recent).queryByRole('tab')).toBeNull();
+  // Phase 5 (A10): the activity, run on the rows it shows; the two links are the note.
+  const heading = within(recent).getByRole('heading', { name: 'Activity --last 5' });
+  expectPrompt(heading, 'Activity', '--last 5');
+  const note = promptNote(heading);
+  expect(within(note).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
+  expect(within(note).getByRole('button', { name: '184 transactions →' })).toBeInTheDocument();
   fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
   expect(await screen.findByRole('tab', { name: 'Transactions' })).toHaveAttribute(
     'aria-selected',

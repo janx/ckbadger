@@ -33,6 +33,7 @@ import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { BlockLink } from '@/components/ui/block-link';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
@@ -412,7 +413,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               subject={title}
               history={versions.data}
               life
-              title="CKB held in its cell"
+              title="CKB held"
               actions={
                 <span className="text-text-dim text-small">
                   1 CKB per byte ·{' '}
@@ -452,14 +453,13 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       </div>
       {object.clusterId && (
         <section aria-label={`In ${collectionName ?? 'this collection'}`} className="space-y-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="text-text-bright text-section">
-              In {collectionName ?? 'this collection'}
-            </h2>
-            <AppLink href={collectionHref!} className="text-small">
-              Open the collection →
-            </AppLink>
-          </div>
+          {/* Rubbing × Song print, phase 5 (A11): the collection, run on its name; the link to it
+              is the right-prompt note. */}
+          <PromptHeading
+            command="Collection"
+            args={collectionName ?? 'this collection'}
+            note={<AppLink href={collectionHref!}>Open the collection →</AppLink>}
+          />
           {coll ? (
             <>
               <AssetReadState label="collection" error={collection.error} retained />

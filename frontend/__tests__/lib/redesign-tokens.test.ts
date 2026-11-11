@@ -18,6 +18,15 @@ it('keeps class/copper encodings separate and bundles fonts without runtime requ
   expect(html).not.toMatch(/fonts\.googleapis|fonts\.gstatic/);
   for (const font of ['jetbrains-mono-regular', 'jetbrains-mono-medium'])
     expect(statSync(resolve(`public/fonts/${font}.woff2`)).size).toBeGreaterThan(1000);
+  // the voice (rubbing × Song print): Courier Prime, self-hosted, with its OFL 1.1 licence
+  for (const font of ['courier-prime-regular', 'courier-prime-bold', 'courier-prime-italic']) {
+    const file = readFileSync(resolve(`public/fonts/${font}.woff2`));
+    expect(file.length, font).toBeGreaterThan(1000);
+    expect(file.subarray(0, 4).toString('ascii'), font).toBe('wOF2');
+  }
+  expect(readFileSync(resolve('public/fonts/CourierPrime-OFL.txt'), 'utf8')).toContain(
+    'SIL OPEN FONT LICENSE Version 1.1'
+  );
   const css = readFileSync(resolve('app/globals.css'), 'utf8');
   // the serif left with the vessels: the error pages are the mono sign over the night
   expect(css).not.toContain('Noto Serif Display');

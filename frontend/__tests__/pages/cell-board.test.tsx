@@ -86,7 +86,7 @@ describe('Cell page against the Cell board', () => {
 
   it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
     view();
-    await screen.findByText('The cell, byte by byte', undefined, { timeout: 5000 });
+    await screen.findByRole('heading', { name: /^Bytes / }, { timeout: 5000 });
     // Lane U (U3): the page presents a CELL, not a transaction output — no "Transaction … /
     // output 1" breadcrumb; the transaction and the index are one line under the full out point.
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
@@ -244,7 +244,10 @@ describe('Cell page against the Cell board', () => {
       },
     } as Cell);
     view();
-    const dao = await screen.findByText(/withdrawn · deposit block/);
+    const dao = (await screen.findByText(/^deposit block/)).closest('p') as HTMLElement;
+    // phase 5 (D1): the section's command runs on the status, said there and not in the line
+    expect(screen.getByRole('heading', { name: 'Nervos DAO withdrawn' })).toBeInTheDocument();
+    expect(dao).not.toHaveTextContent('withdrawn');
     expect(dao).toHaveTextContent('deposit block #20,311,586');
     expect(within(dao).getByRole('link', { name: '#20,311,586' })).toHaveAttribute(
       'href',

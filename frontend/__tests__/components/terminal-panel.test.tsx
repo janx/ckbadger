@@ -7,12 +7,12 @@ import {
 } from '@/components/ui/terminal-panel';
 
 // Midnight, continued (review 2026-11-03, item 5, move 3): "instruments are framed, text is
-// flat". TerminalPanel is the one instrument frame — a #222840 hairline (`border-base-border`),
-// an 8 px radius (visual finish V10: glass frames take `rounded-lg`), glass (material pass v2, move 2:
-// `.glass` replaces the flat surface colour, so the sky's pool shows through), the jade top edge
-// (`.neon-edge-top`) and inset scanlines — with an uppercase 12 px eyebrow led by the section mark.
+// flat". TerminalPanel is the one instrument frame — a 1 px line (`border-base-border`), an 8 px
+// radius (visual finish V10: glass frames take `rounded-lg`), `.glass` (material pass v2, move 2)
+// and inset scanlines — headed by a command line led by the prompt square. Rubbing × Song print,
+// phase 2: a flat tile, the glass's materials the opaque surface, and no jade top edge.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
-  it('frames its content: hairline, 8 px radius, glass, jade top edge, scanlines', () => {
+  it('frames its content: hairline, 8 px radius, the flat glass tile, scanlines, no lit edge', () => {
     const { container } = render(
       <TerminalPanel aria-label="An instrument" data-testid="frame">
         <TerminalPanelContent>inside</TerminalPanelContent>
@@ -22,7 +22,6 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(frame).toHaveAttribute('data-instrument-frame');
     expect(frame).toHaveAttribute('aria-label', 'An instrument');
     expect(frame).toHaveClass(
-      'neon-edge-top',
       'relative',
       'overflow-hidden',
       'rounded-lg',
@@ -43,8 +42,9 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
       expect(getByTestId(`flat-${variant}`)).not.toHaveClass('glass');
       unmount();
     }
-    // the jade edge's colour, at the approved .45, as a class: the frame carries no inline ink
-    expect(frame).toHaveClass('[--neon-color:rgb(var(--rgb-jade)/0.45)]');
+    // no lit top edge, no edge colour; the frame carries no inline ink
+    expect(frame).not.toHaveClass('neon-edge-top');
+    expect(frame.className).not.toContain('--neon-color');
     expect(frame).not.toHaveAttribute('style');
     // the inset scanlines, 1 px on, 1 px off, under the content, in the theme's inset ink
     const scan = container.querySelector('.pointer-events-none > div') as HTMLElement;
@@ -53,15 +53,24 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(screen.getByText('inside').parentElement).toHaveClass('relative', 'z-10');
   });
 
-  it('colours the edge by accent, still without an inline style', () => {
-    render(<TerminalPanel accentColor="gold" data-testid="frame" children="x" />);
-    const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('[--neon-color:rgb(var(--rgb-gold)/0.4)]');
-    expect(frame).not.toHaveClass('[--neon-color:rgb(var(--rgb-jade)/0.45)]');
-    expect(frame).not.toHaveAttribute('style');
+  // The accent colours went with the edge they coloured: every frame is the same tile.
+  it('draws every variant without an edge or an inline style', () => {
+    for (const variant of ['default', 'elevated', 'inset'] as const) {
+      const { getByTestId, unmount } = render(
+        <TerminalPanel variant={variant} data-testid="frame" children="x" />
+      );
+      const frame = getByTestId('frame');
+      expect(frame).not.toHaveClass('neon-edge-top');
+      expect(frame.className).not.toContain('--neon-color');
+      expect(frame).not.toHaveAttribute('style');
+      unmount();
+    }
   });
 
-  it('heads the frame with the section mark and an uppercase 12 px eyebrow', () => {
+  // Rubbing × Song print, phase 2: the frame's head is a command line — the prompt square (still
+  // the frame's indicator), then the instrument's name as the command, lowercase, in the moon ink
+  // at 13 px / 500 — where it was the section mark and a dim upper-case 12 px eyebrow.
+  it('heads the frame with the prompt square and the instrument’s name as the command', () => {
     render(
       <TerminalPanel>
         <TerminalPanelHeader actions={<button type="button">Act</button>}>
@@ -74,16 +83,46 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(mark).toHaveClass('section-mark');
     expect(mark).toHaveAttribute('data-indicator', 'none');
     expect(mark).not.toHaveClass('section-mark-live', 'section-mark-gold', 'opacity-30');
-    const eyebrow = screen.getByText('Cells');
-    // material pass v2 (move 3): the eyebrow's case, tracking (.12 em) and weight (500) are one
-    // rule, `.eyebrow`, shared with the tier boundary and the hero labels
-    expect(eyebrow).toHaveClass('text-small', 'eyebrow', 'text-text-dim');
-    expect(eyebrow).not.toHaveClass('text-body', 'tracking-wider', 'tracking-[0.08em]');
+    const command = screen.getByText('Cells');
+    expect(command).toHaveClass('lowercase');
+    const head = command.parentElement!;
+    expect(head).toHaveClass('prompt', 'text-text-bright', 'text-body', 'font-medium');
+    expect(head).not.toHaveClass('eyebrow', 'text-text-dim', 'text-small');
+    // not a heading of the page outline: the frame's head is a div
+    expect(head.tagName).toBe('DIV');
     // the mark precedes the words, in one row with the actions at the right
-    expect(mark.compareDocumentPosition(eyebrow)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    const row = mark.parentElement!.parentElement!;
+    expect(mark.compareDocumentPosition(command)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(mark.parentElement).toBe(head);
+    const row = head.parentElement!;
     expect(row).toHaveClass('border-b', 'border-base-border', 'justify-between');
     expect(row).toContainElement(screen.getByRole('button', { name: 'Act' }));
+  });
+
+  // Rubbing × Song print, phase 5 (H1): the head runs its command on args — `pipeline --tip #N`
+  // — dim and regular after the name, inside the command line, never among the actions.
+  it('writes its args dim after the command, inside the command line, not with the actions', () => {
+    const { rerender } = render(
+      <TerminalPanelHeader
+        args={<span data-testid="args">--tip #20,969,560</span>}
+        actions={<a href="/blocks">all blocks →</a>}
+      >
+        Pipeline
+      </TerminalPanelHeader>
+    );
+    const command = screen.getByText('Pipeline');
+    const head = command.parentElement!;
+    const args = screen.getByTestId('args').parentElement!;
+    expect(args.parentElement).toBe(head);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    expect(args).not.toHaveClass('lowercase');
+    expect(command.compareDocumentPosition(args)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(head).toHaveTextContent(/^Pipeline--tip #20,969,560$/);
+    const link = screen.getByRole('link', { name: 'all blocks →' });
+    expect(head).not.toContainElement(link);
+    expect(head.parentElement).toContainElement(link);
+    // no args: the name alone, as before
+    rerender(<TerminalPanelHeader>Pipeline</TerminalPanelHeader>);
+    expect(screen.getByText('Pipeline').parentElement!.children).toHaveLength(2);
   });
 
   it('turns the mark into the indicator: live breathes, warning is gold, inactive is dim', () => {

@@ -3,6 +3,7 @@ import Page from '@/app/identities/dotcell/[identityId]/client-page';
 import { api, ApiRequestError, type ItemProtocol, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
@@ -112,7 +113,8 @@ it('shows exact sale price, named seller, and the current sale offer only when l
   };
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   const { unmount } = render(<Page identityId="alice" />);
-  expect(await screen.findByRole('heading', { name: 'For sale' })).toBeInTheDocument();
+  // Phase 5 (A2): one PromptHeading, no args (the price is the next line).
+  expectPrompt(await screen.findByRole('heading', { name: 'For sale' }), 'For sale');
   expect(screen.getByRole('link', { name: 'Sale offer cell' })).toHaveAttribute(
     'href',
     `/mainnet/cell/${item.sale.offerOutPoint!.txHash}-4`
@@ -267,7 +269,10 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   );
   render(<Page identityId="unknown" />);
   expect(
-    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+    await screen.findByRole('heading', {
+      level: 1,
+      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+    })
   ).toBeInTheDocument();
   expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();
 });
@@ -276,7 +281,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
 it('reads like the .cell board: records named, roles, a held-until bar with grace', async () => {
   render(<Page identityId="alice" />);
   expect(
-    await screen.findByRole('heading', { name: 'Held until 2030-03-18' }, { timeout: 4000 })
+    await screen.findByRole('heading', { name: 'Term held until 2030-03-18' }, { timeout: 4000 })
   ).toBeInTheDocument();
   expect(screen.getByText(/then 30 days of grace/)).toBeInTheDocument();
   expect(document.querySelector('[data-grace]')).not.toBeNull();

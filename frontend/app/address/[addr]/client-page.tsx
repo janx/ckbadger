@@ -245,6 +245,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               'address',
             ]}
             identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
+            // An address is its lock script; the seal is pressed from the lock script's hash (the
+            // address read already carries it; nothing else is fetched for the seal).
+            seal={{ hash: a.lockScriptHash, scale: 'object' }}
             status={
               <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">
                 {a.lockScript && (
@@ -397,7 +400,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             ) : (
               fiber.data &&
               fiber.data.length > 0 && (
-                <DetailSection title="Fiber channels">
+                <DetailSection
+                  title="Fiber channels"
+                  args={fiber.data.length.toLocaleString('en-US')}
+                >
                   <p className="text-text-dim text-small mb-3">
                     Up to 100 indexed channels associated with this address.
                   </p>

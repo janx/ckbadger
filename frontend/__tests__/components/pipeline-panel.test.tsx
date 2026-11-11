@@ -138,16 +138,19 @@ describe('the tip flares (material pass v2, move 4)', () => {
       </QueryClientProvider>
     );
     await screen.findByTestId('pipeline-svg');
-    const stats = screen.getByTestId('pipeline-stats');
-    expect(stats).toHaveTextContent(`Tip#${fmt(FIXTURE_TIP)}`);
-    expect(stats.querySelector('.phosphor-flare')).toBeNull();
+    const tip = screen.getByTestId('pipeline-tip');
+    expect(tip).toHaveTextContent(`--tip #${fmt(FIXTURE_TIP)}`);
+    expect(tip.querySelector('.phosphor-flare')).toBeNull();
     const s2 = mineNext(s1, { commit: [poolTxHash('w0')], propose: [] });
     act(() => {
       client.setQueryData(['pipeline'], s2);
     });
     // react-query notifies its observers on the next tick
-    await waitFor(() => expect(stats).toHaveTextContent(`Tip#${fmt(FIXTURE_TIP + 1)}`));
-    expect(stats.querySelector('.phosphor-flare')).toHaveTextContent(`#${fmt(FIXTURE_TIP + 1)}`);
+    await waitFor(() => expect(tip).toHaveTextContent(`--tip #${fmt(FIXTURE_TIP + 1)}`));
+    // the flare is on the tip's link itself (rubbing × Song print, phase 5, H1)
+    const flared = tip.querySelector('.phosphor-flare');
+    expect(flared).toHaveTextContent(`#${fmt(FIXTURE_TIP + 1)}`);
+    expect(flared?.tagName).toBe('A');
   });
 });
 
@@ -426,7 +429,7 @@ describe('PipelinePanel static render', () => {
     expect(count.textContent).toBe('+40');
     expect(count).toHaveAttribute('text-anchor', 'end');
     expect(Number(count.getAttribute('y'))).toBe(G.chainY + 3.5);
-    expect(screen.getByTestId('pipeline-stats')).not.toHaveTextContent('Next');
+    expect(screen.getByTestId('pipeline-tip')).not.toHaveTextContent('Next');
   });
 
   it('draws the window at rest as gold links and marks only: no label, ticks or gold numbers', async () => {
@@ -545,24 +548,56 @@ describe('PipelinePanel static render', () => {
     expect(title).toMatch(/Tap or hover a tx or a proposal.*a tap on a tx pins it/);
   });
 
-  it('keeps only the tip in the header stats: the pool counts are on the canvas', async () => {
+  // Rubbing × Song print, phase 5 (H1, the Main board): the frame head is the command line
+  // `■ pipeline --tip #20,969,560`, the "?" beside the command, "all blocks →" at the right.
+  it('heads the frame as a command: pipeline, the "?" beside it, then --tip and the tip', async () => {
     await renderPanel();
-    const stats = screen.getByTestId('pipeline-stats');
-    expect(stats).toHaveTextContent(`Tip#${fmt(T)}`);
+    const command = screen.getByText('pipeline');
+    expect(command.closest('.lowercase')).not.toBeNull();
+    // the help sits right after the command's name, before the args
+    const help = screen.getByText('?');
+    expect(command).toContainElement(help);
+    const head = command.closest('.prompt') as HTMLElement;
+    expect(head).toContainElement(screen.getByTestId('terminal-panel-mark'));
+    expect(head).toHaveTextContent(new RegExp(`^pipeline\\?--tip #${fmt(T)}$`));
+    expect(head).not.toHaveTextContent(/Transaction/i);
+    // the args: dim and regular, in the head after the command; the tip only — the pool counts
+    // are on the canvas
+    const tip = screen.getByTestId('pipeline-tip');
+    expect(head).toContainElement(tip);
+    expect(tip.parentElement).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    expect(help.compareDocumentPosition(tip)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(tip).toHaveTextContent(new RegExp(`^--tip #${fmt(T)}$`));
     // Lane L: the tip is a block, so it links to it.
-    expect(within(stats).getByRole('link', { name: `#${fmt(T)}` })).toHaveAttribute(
+    expect(within(tip).getByRole('link', { name: `#${fmt(T)}` })).toHaveAttribute(
       'href',
       `/mainnet/blocks/${T}`
     );
-    for (const gone of ['Mempool', 'Proposed', 'Next']) expect(stats).not.toHaveTextContent(gone);
+    for (const gone of ['Tip', 'Mempool', 'Proposed', 'Next']) {
+      expect(tip).not.toHaveTextContent(gone);
+    }
   });
 
-  it('links from the header, next to the tip, to the list of all blocks', async () => {
+  it('writes --tip with a dash, never a number, until the first snapshot', async () => {
+    server.use(http.get('/api/:network/v1/pipeline', () => new Promise<Response>(() => {})));
+    render(<PipelinePanel />);
+    expect(screen.getByTestId('pipeline-loading')).toBeInTheDocument();
+    const tip = screen.getByTestId('pipeline-tip');
+    expect(tip).toHaveTextContent(/^--tip —$/);
+    expect(within(tip).queryByRole('link')).toBeNull();
+  });
+
+  it('links from the head’s right end, outside the command, to the list of all blocks', async () => {
     await renderPanel();
-    const link = screen.getByRole('link', { name: 'All blocks →' });
+    const link = screen.getByRole('link', { name: 'all blocks →' });
     expect(link).toHaveAttribute('href', '/mainnet/blocks');
-    // Beside the tip, not inside the stats.
-    expect(link.previousElementSibling).toBe(screen.getByTestId('pipeline-stats'));
+    expect(screen.queryByRole('link', { name: /All blocks/ })).toBeNull();
+    // the only action: not inside the command line, and nothing else beside it
+    const head = screen.getByText('pipeline').closest('.prompt') as HTMLElement;
+    expect(head).not.toContainElement(link);
+    const actions = link.parentElement as HTMLElement;
+    expect(actions.children).toHaveLength(1);
+    expect(actions.parentElement).toBe(head.parentElement);
   });
 
   it('keeps drawing the chain when the pool tip differs from the synced tip', async () => {

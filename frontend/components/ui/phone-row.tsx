@@ -29,13 +29,19 @@ const TONE: Record<PhoneLineTone, string> = {
 /**
  * One designed phone row of a list (R7): two or three lines, each a left part that wraps (never
  * truncated) and an optional right part. Every column of the list's table is on one of the lines.
+ *
+ * `mark` (the row seal, rubbing × Song print phase 3) leads the row as its own column, top-aligned
+ * beside every line, so each line keeps one left edge after it (the Transaction board's cell rows);
+ * the lines stay the row's direct children.
  */
 export function PhoneRow({
   lines,
+  mark,
   className,
   testId,
 }: {
   lines: readonly (PhoneLine | null | false)[];
+  mark?: ReactNode;
   className?: string;
   testId?: string;
 }) {
@@ -45,8 +51,22 @@ export function PhoneRow({
     <div
       data-phone-row
       data-testid={testId}
-      className={cn('flex min-w-0 flex-col gap-[3px]', className)}
+      className={cn(
+        mark
+          ? 'grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-y-[3px]'
+          : 'flex min-w-0 flex-col gap-[3px]',
+        className
+      )}
     >
+      {mark && (
+        <span
+          data-part="mark"
+          className="col-start-1 self-start"
+          style={{ gridRow: `1 / span ${shown.length}` }}
+        >
+          {mark}
+        </span>
+      )}
       {shown.map((line) => (
         <div
           key={line.key}
@@ -54,6 +74,7 @@ export function PhoneRow({
           data-tone={line.tone}
           className={cn(
             'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5',
+            mark && 'col-start-2',
             TONE[line.tone]
           )}
         >

@@ -280,13 +280,14 @@ describe('ChartsPage', () => {
 
     expect(screen.getByText('Charts')).toBeInTheDocument();
 
-    // Each section name is also its jump link in the header nav (CH-10): read the headings.
+    // Each section name is also its jump link in the header nav (CH-10): read the headings. The
+    // command runs on the section's chart count (phase 5, D5).
     for (const name of [
-      'Proof of work',
-      'Nervos DAO & economics',
-      'Blocks',
-      'Activity',
-      'Common knowledge',
+      'Proof of work 4 charts',
+      'Nervos DAO & economics 6 charts',
+      'Blocks 4 charts',
+      'Activity 7 charts',
+      'Common knowledge 7 charts',
     ])
       expect(screen.getByRole('heading', { level: 2, name })).toBeInTheDocument();
     expect(screen.getAllByRole('article').length).toBe(28);
@@ -328,7 +329,9 @@ describe('ChartsPage', () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
     render(<ChartsPage />);
     expect(
-      screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)
+      screen
+        .getAllByRole('heading', { level: 2 })
+        .map((heading) => heading.firstElementChild!.textContent)
     ).toEqual([
       'Activity',
       'Nervos DAO & economics',

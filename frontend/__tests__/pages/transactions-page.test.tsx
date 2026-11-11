@@ -2,6 +2,7 @@ import { CHARTS } from '@/components/charts/chart-catalogue';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '@/__tests__/utils/test-utils';
@@ -184,6 +185,67 @@ describe('Transactions pool view', () => {
     expect(table.querySelectorAll('[data-ckb-amount]')).toHaveLength(2);
     for (const amount of table.querySelectorAll('[data-ckb-amount]'))
       expect(amount).toHaveClass('flex-wrap');
+    // Rubbing × Song print, phase 3: the row seal's 27 px come from the Cycles and Fee-rate
+    // columns' slack, so the table keeps its 1,200 px and the most cycles still fit.
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1200);
+    const cols = Array.from(table.querySelectorAll('col')).map(
+      (c) => (c as HTMLElement).style.width
+    );
+    expect([cols[0], cols[6], cols[8]]).toEqual(['207px', '123px', '94px']);
+  });
+
+  // Rubbing × Song print, phase 3: a pool transaction's row leads with its row seal (the seal its
+  // page will carry), before the hash, in the table and in the phone row.
+  it('leads each pool row with its transaction’s row seal, in the table and the phone row', async () => {
+    const hash = `0x${'cd'.repeat(32)}`;
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      data: [
+        {
+          hash,
+          status: 'pending',
+          value: null,
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
+          activity: null,
+        },
+      ],
+    });
+    const { unmount } = render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const [tr] = Array.from(table.querySelectorAll('tbody tr'));
+    const seal = expectOneRowSeal(tr, hash);
+    expect(tr.querySelector('td')).toContainElement(seal);
+    expect(seal).toHaveClass('-my-[5px]');
+    expectBefore(seal, within(tr as HTMLElement).getByTitle(hash));
+    unmount();
+
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const [card] = await screen.findAllByTestId('pool-row-mobile');
+    const phoneSeal = expectOneRowSeal(card, hash);
+    expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
+    expectBefore(phoneSeal, within(card).getByTitle(hash));
   });
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({

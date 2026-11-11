@@ -8,11 +8,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
 
-const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';
+const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const TYPE_CODE_HASH = '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075';
 let mockSearchParams = new URLSearchParams();
@@ -313,6 +314,62 @@ describe('Transaction board, tier 1', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
   });
 
+  // Rubbing × Song print, phase 3 (the Transaction board's one corner): the transaction's
+  // talisman, the 150 px page seal (96 on a phone, −4°), pressed beside the page's own header —
+  // the eyebrow, the action, the summary and the hash — never in the facts, cells or flows.
+  it('presses the transaction’s seal beside its header, outside the facts and the cells', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
+    const seal = expectOnePageSeal(container, TX_HASH, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    expect(head.closest('header')).toContainElement(h1);
+    expect(head).toContainElement(h1);
+    expect(head).toContainElement(screen.getByTestId('tx-summary'));
+    expect(head).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    expectBefore(seal, h1);
+    expect(head).not.toContainElement(
+      await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW)
+    );
+    expect(head).not.toContainElement(
+      await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' }, SLOW)
+    );
+  });
+
+  // Rubbing × Song print, phase 5 (T4): the board's comment under the sealed head, in the identity
+  // column: three lines from the figures the page draws — the cells heading's counts, the rail's
+  // fee and the evidence tier's common-knowledge delta (563 → 589 occupied bytes).
+  it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const first = await screen.findByText('1 cell became 1.', {}, SLOW);
+    const comment = first.closest('.comment') as HTMLElement;
+    expect(comment).not.toBeNull();
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
+    ).toEqual([
+      '1 cell became 1.',
+      '0.00064119 ckb to the miner.',
+      'common knowledge grew by 26 bytes.',
+    ]);
+    expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
+    expect(container.querySelectorAll('.comment')).toHaveLength(1);
+    // under the seal and the identity, in the identity column, inside the page's header
+    const head = container.querySelector('[data-sealed-head]') as HTMLElement;
+    const below = comment.parentElement!;
+    expect(below).toHaveAttribute('data-sealed-below');
+    expect(below.parentElement).toBe(head);
+    expect(below).toHaveClass('col-start-2');
+    expect(head.closest('header')).toContainElement(comment);
+    // reading order: the identity (the hash and its copy button), the comment, then the facts
+    expectBefore(screen.getByRole('button', { name: 'Copy transaction hash' }), comment);
+    expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
+    // the fee is the one the rail prints, digit for digit
+    expect(screen.getByRole('complementary', { name: 'Transaction facts' })).toHaveTextContent(
+      '0.00064119 CKB'
+    );
+    // the counts are the cells heading's
+    expect(screen.getByRole('heading', { name: 'Cells 1 in → 1 out' })).toBeInTheDocument();
+  });
+
   it('keeps the status, time, block and fee in a facts rail (TX-18)', async () => {
     render(<TransactionDetailPage />);
     const rail = await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW);
@@ -336,7 +393,7 @@ describe('Transaction board, tier 1', () => {
     const before = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     const hash = screen.getByRole('button', { name: 'Copy transaction hash' });
-    const cells = screen.getByRole('heading', { name: /consumed → .* created/ });
+    const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
     expect(before(hash, rail)).toBe(true);
     expect(before(rail, table)).toBe(true);
     expect(before(rail, cells)).toBe(true);
@@ -546,7 +603,21 @@ describe('Transaction variants (D4)', () => {
       fee: '0',
       feeRate: null,
       cycles: 0,
-      inputs: [],
+      // The one input of every cellbase as the detail endpoint serves it: the null out point,
+      // no cell behind it, every cell field null (a page that read `lock.codeHash` off it crashed).
+      inputs: [
+        {
+          previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+          since: '0x14023e7',
+          capacity: null,
+          commonKnowledgeSize: null,
+          lock: null,
+          type: null,
+          address: null,
+          cellType: null,
+          display: null,
+        } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+      ],
       inputsCapacity: '0',
       inputsCommonKnowledgeSize: '0',
       outputsCapacity: '55961739927',
@@ -591,6 +662,17 @@ describe('Transaction variants (D4)', () => {
       within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#101' })
     ).toHaveAttribute('href', '/mainnet/blocks/101');
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
+    // A cellbase consumes no cell: the cells command runs on 0 in (T1), and its comment says where
+    // its cells come from, with no fee line (T4).
+    expect(screen.getByRole('heading', { name: 'Cells 0 in → 1 out' })).toBeInTheDocument();
+    const comment = screen.getByText('1 cell from the block reward; none consumed.').closest('p')!;
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
+    ).toEqual([
+      '1 cell from the block reward; none consumed.',
+      'common knowledge grew by 61 bytes.',
+    ]);
+    expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(
       () =>
@@ -617,6 +699,9 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
     expect(screen.getByText('Pending since')).toBeInTheDocument();
+    // No comment while it waits: its cells and occupied bytes are read once it is indexed (T4).
+    expect(document.querySelector('.comment')).toBeNull();
+    expect(document.querySelector('[data-sealed-below]')).toBeNull();
   });
 
   // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the

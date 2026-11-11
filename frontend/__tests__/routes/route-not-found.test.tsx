@@ -48,7 +48,10 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     expect(
       await screen.findByRole(
         'heading',
-        { level: 1, name: 'all that is was worked for. this was not.' },
+        {
+          level: 1,
+          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        },
         // the route's page is a lazy chunk; under the full suite it can take over a second
         { timeout: 5000 }
       )
@@ -67,7 +70,10 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     expect(
       await screen.findByRole(
         'heading',
-        { level: 1, name: 'all that is was worked for. this was not.' },
+        {
+          level: 1,
+          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        },
         // the route's page is a lazy chunk; under the full suite it can take over a second
         { timeout: 5000 }
       )

@@ -86,7 +86,10 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
   it('draws the two branches with the dropped block dashed, the uncle link and ① ② tip marks (FF-D4)', async () => {
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     const { container } = render(<ForkDetailPage />);
-    expect(await screen.findByRole('heading', { name: 'The two branches' })).toBeInTheDocument();
+    // phase 5 (D7): the command runs on the switch's depth; the shape key stays the row's actions
+    const branches = await screen.findByRole('heading', { name: 'The two branches depth 1' });
+    expect(branches).not.toHaveTextContent('dashed: blocks that lost');
+    expect(branches.parentElement).toHaveTextContent('dashed: blocks that lost');
     const tree = container.querySelector('svg[data-fork-tree]')!;
     expect(tree.querySelectorAll('[data-tile]')).toHaveLength(4);
     expect(tree.querySelectorAll('[data-tile][data-dropped]')).toHaveLength(1);
@@ -116,6 +119,12 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
         .getAllByRole('columnheader')
         .map((h) => h.textContent)
     ).toEqual(['Height', 'Hash', 'Time (UTC+8)', 'Miner', 'Txs', 'Fate']);
+    // phase 5 (D8, D9): the commands run on the rows they list
+    // the dropped #11′ and the two main-chain blocks
+    expect(within(table).getAllByRole('row')).toHaveLength(1 + 3);
+    expect(screen.getByRole('heading', { name: 'Blocks 3' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Dropped transactions 1' })).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Dropped branch transactions' })).toBeInTheDocument();
     expect(within(table).getByText('#11′')).toBeInTheDocument();
     expect(within(table).getByText('uncle in #12')).toBeInTheDocument();
     expect(within(table).getAllByText('main chain')).toHaveLength(2);
@@ -231,6 +240,9 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(story).toHaveTextContent(
       'The dropped blocks held only their cellbases, so no transaction was undone.'
     );
+    // phase 5 (D7, D9): a two-block switch, and no dropped-transactions section (nothing to list)
+    expect(screen.getByRole('heading', { name: 'The two branches depth 2' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Dropped transactions/ })).toBeNull();
   });
 
   it('does not link an uncommitted orphan transaction to a nonexistent canonical page', async () => {

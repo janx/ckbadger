@@ -14,7 +14,11 @@ export interface CellVersionsProps {
   history: ItemCellVersions;
   subject: string;
   // ── F2 objects (round 2, OB-9 / OB-M7): the Object / Mnft board's "CKB held in its cell" ──
-  /** Section title; "Cell versions" by default. */
+  /**
+   * Section title. By default the section is the versions themselves, "Cell versions" run on
+   * their count (rubbing × Song print, phase 5, D13); a caller that names it otherwise (the
+   * boards' "CKB held") gives the whole heading.
+   */
   title?: string;
   actions?: ReactNode;
   intro?: ReactNode;
@@ -34,7 +38,7 @@ export interface CellVersionsProps {
 export function CellVersions({
   history,
   subject,
-  title = 'Cell versions',
+  title,
   actions,
   intro,
   life = false,
@@ -86,7 +90,8 @@ export function CellVersions({
       : `${i === 0 ? 'Minted cell' : `Version ${i + 1}`}${v.isLive ? ' · current' : ''}`;
   return (
     <DetailSection
-      title={title}
+      title={title ?? 'Cell versions'}
+      args={title === undefined ? history.total.toLocaleString('en-US') : undefined}
       actions={
         actions ?? (
           <span className="text-text-dim text-meta">

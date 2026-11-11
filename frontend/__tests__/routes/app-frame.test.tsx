@@ -108,12 +108,45 @@ describe('the header is part of the frame (visual finish V6)', () => {
     );
   });
 
+  // Rubbing × Song print, phase 2: the status line is part of the frame too — once, fixed at the
+  // foot of the window, last in reading order after the footer.
+  // The page ends on an empty prompt — the square and the block cursor — right under its last
+  // output, inside the page's wrapper, before the footer.
+  it('ends every page on one empty prompt, after the page and before the footer', async () => {
+    mount('/mainnet/dao');
+    const page = await screen.findByText('dao page', {}, LAZY);
+    const ends = screen.getAllByTestId('prompt-end');
+    expect(ends).toHaveLength(1);
+    const end = ends[0];
+    expect(end).toHaveAttribute('aria-hidden', 'true');
+    expect(end.querySelector('.prompt-square')).not.toBeNull();
+    expect(end.querySelector('.cursor')).not.toBeNull();
+    expect(end.previousElementSibling).toBe(page);
+    expect(page.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      end.compareDocumentPosition(screen.getByRole('contentinfo')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('closes the frame on one status line, after the footer', async () => {
+    mount('/mainnet/dao');
+    expect(await screen.findByText('dao page', {}, LAZY)).toBeInTheDocument();
+    const lines = screen.getAllByRole('status', { name: 'Status line' });
+    expect(lines).toHaveLength(1);
+    expect(
+      screen.getByRole('contentinfo').compareDocumentPosition(lines[0]) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(document.querySelector('[data-tint]')!.lastElementChild).toBe(lines[0]);
+  });
+
   it('renders the not-found route under the frame’s header, once', async () => {
     mount('/mainnet/no-such-page');
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: 'all that is was worked for. this was not.',
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
       })
     ).toBeInTheDocument();
     expect(screen.getAllByRole('banner')).toHaveLength(1);
@@ -125,7 +158,10 @@ describe('the header is part of the frame (visual finish V6)', () => {
     expect(
       await screen.findByRole(
         'heading',
-        { level: 1, name: 'all that is was worked for. this was not.' },
+        {
+          level: 1,
+          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        },
         LAZY
       )
     ).toBeInTheDocument();
@@ -184,11 +220,11 @@ describe('the page arrives (visual finish V7)', () => {
     expect(document.querySelector('.min-h-\\[60vh\\]')!.parentElement).toHaveClass('arrive');
   });
 
-  it('lets the not-found night fill what the header leaves: a flex column down to the shell', async () => {
+  it('lets the not-found page fill what the header leaves: a flex column down to the shell', async () => {
     mount('/mainnet/no-such-page');
     await screen.findByRole('heading', {
       level: 1,
-      name: 'all that is was worked for. this was not.',
+      name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
     });
     const shell = screen.getByRole('main').parentElement!;
     expect(shell).toHaveClass('flex-1');

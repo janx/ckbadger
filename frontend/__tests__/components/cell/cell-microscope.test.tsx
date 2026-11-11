@@ -6,6 +6,8 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
+import { DATA_COLOR } from '@/lib/design-tokens';
 
 const cell = {
   txHash: `0x${'01'.repeat(32)}`,
@@ -45,6 +47,17 @@ const cell = {
 } as Cell;
 
 describe('cell microscope', () => {
+  // Rubbing × Song print, phase 5 (A7): the bytes, run on the sum the map draws (its occupied total
+  // in the data ink); the room left is the note, outside the heading's name.
+  it('runs the bytes command on the occupied sum, the room left as its note', () => {
+    render(<CellMicroscope cell={cell} />);
+    const heading = screen.getByRole('heading', { name: 'Bytes 8 + 0 + 0 + 4 = 6' });
+    const { args } = expectPrompt(heading, 'Bytes', '8 + 0 + 0 + 4 = 6');
+    expect(within(args!).getByText('6')).toHaveStyle({ color: DATA_COLOR });
+    expect(promptNote(heading)).toHaveTextContent(/^room for 94 more$/);
+    expect(heading).not.toHaveTextContent('occupied bytes');
+  });
+
   it('sticks the field detail one gutter under the measured site header, not a fixed offset', () => {
     // A long hex dump scrolls far; the detail must stay visible below the header, never under it.
     render(<CellMicroscope cell={cell} />);
@@ -93,7 +106,9 @@ describe('cell microscope', () => {
     const box = screen.getByLabelText('Cell bytes');
     expect(box).toHaveAttribute('data-instrument-frame');
     expect(box).toHaveAttribute('data-cell-bytes');
-    expect(box).toHaveClass('neon-edge-top', 'rounded-lg', 'border', 'border-base-border');
+    // a flat tile since rubbing × Song print: no lit top edge
+    expect(box).toHaveClass('rounded-lg', 'border', 'border-base-border');
+    expect(box).not.toHaveClass('neon-edge-top');
     expect(box).not.toHaveClass('border-base-border-subtle');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
     expect(dump).toHaveClass('px-4', 'py-3');

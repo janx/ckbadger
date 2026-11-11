@@ -50,6 +50,15 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up; below `md` three
   groups on their own lines — block number with the live mark, the epoch with a bar that takes the
   free width, the three mining figures.
+- **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
+  row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
+  keeps 26 px of bottom padding so no page ends under it. From `md` up it is one row — the mode
+  block (`LIVE` / `SYNCING` / `OFFLINE`), the network, the tip, the release, the key hints, the
+  clock — and it must fit at 768 px (measured: 753 of 753 px with 26 px to spare, so a release
+  string five or more characters longer than `0.8.2` would clip the clock). Below `md` it is one
+  row of the mode, the network, the tip and the clock; the release and the hints are the wide
+  form's only (a touch screen has no keys; the release is in the `?` help) — designed, not
+  dropped. Never two rows, never a sideways scroller, never over the page's last prompt.
 - **Transaction pipeline** (homepage): one row down to a 589 px canvas (two whole blocks); below
   that a vertical timeline (mempool, proposed, NEXT, the tip, older blocks as rows; one vertical
   chain line in the gaps). Never scaled, never folded, cards never smaller than 89 px.

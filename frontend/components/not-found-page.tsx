@@ -2,44 +2,32 @@
 
 import Link from '@/components/ui/link';
 import { ErrorPageShell } from '@/components/error-page-shell';
-import type { SignLines } from '@/components/error-sign';
 import { usePathname } from '@/src/navigation';
-import { HASH32 } from '@/lib/night/bits';
 import { useNotFoundEvidence, type NotFoundEntity } from '@/lib/not-found-evidence';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const NOT_FOUND_TITLE = ['Not found'] as const;
 
-/** A route that names no page: existence is proof of work; this road never was. */
-const ROUTE_READINGS: readonly SignLines[] = [
-  ['all that is', 'was worked for.', 'this was not.'],
-  ['nothing is lost,', 'for nothing', 'was ever here.'],
-  ['emptiness', 'is capacity,', 'not loss.'],
-  ['time confirms.', 'it does not', 'invent.'],
-];
-/** An entity known as something else: the hash is a fact, the name it was asked by an opinion. */
-const NAMED_READINGS: readonly SignLines[] = [
-  ['a hash', 'is a fact.', 'a name, a guess.'],
-  ['what it is', 'outlasts', 'its name.'],
-  ['known', 'by what it is,', 'not by its name.'],
-  ['one hash', 'names one thing.', 'not this one.'],
-];
-/** An entity nothing answers: common knowledge is what all hold; absence here is not denial. */
-const UNANSWERED_READINGS: readonly SignLines[] = [
-  ['known to some,', 'perhaps.', 'to all, not yet.'],
-  ['the chain keeps', 'what was proven.', 'this, unproven.'],
-  ['unknown here', 'is not', 'untrue.'],
-  ['silence', 'is not', 'denial.'],
-];
+/**
+ * The 404's verse (rubbing × Song print, the voice): three comment lines, the last the only place
+ * the meme is quoted. A route that names no page asked nothing of the chain.
+ */
+export const ROUTE_VERSE = [
+  'no page at this path.',
+  'the chain was not asked; nothing on it is lost.',
+  "honey badger don't care.",
+] as const;
 
-const OUTPOINT = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/;
-
-/** The hash the page is about, for the night's first grid: a 32-byte hash, or an out point's. */
-export function entityHash(entity: NotFoundEntity | undefined): string | null {
-  if (!entity) return null;
-  if (HASH32.test(entity.identifier)) return entity.identifier.toLowerCase();
-  const outpoint = OUTPOINT.exec(entity.identifier);
-  return outpoint ? outpoint[1].toLowerCase() : null;
+/**
+ * An entity the page names but the local index does not hold: the index was asked (the facts say
+ * which endpoint answered 404), so the route's second line would not be true here.
+ */
+export function entityVerse(entity: NotFoundEntity): readonly string[] {
+  return [
+    `no ${entity.kind.replace('-', ' ')} at this address.`,
+    'the local index was asked; it holds none.',
+    ROUTE_VERSE[2],
+  ];
 }
 
 const RETURNS: Partial<Record<NotFoundEntity['kind'], { href: string; label: string }>> = {
@@ -68,32 +56,20 @@ export function NotFoundPage({ entity, errMessage, standalone = false }: NotFoun
   const pathname = usePathname();
   const lookup = useNotFoundEvidence(entity);
   useDocumentTitle(NOT_FOUND_TITLE);
-  const readings = entity
-    ? lookup.evidence?.alternative
-      ? NAMED_READINGS
-      : UNANSWERED_READINGS
-    : ROUTE_READINGS;
   const back = entity ? RETURNS[entity.kind] : undefined;
 
   return (
     <ErrorPageShell
       status="Not found · 404"
       path={pathname}
-      sign={readings[0]}
-      readings={readings}
-      hash={entityHash(entity)}
+      verse={entity ? entityVerse(entity) : ROUTE_VERSE}
       standalone={standalone}
     >
-      {entity ? (
-        <span className="min-w-0 break-all">
-          <span className="text-text">no {entity.kind.replace('-', ' ')} at this address.</span>{' '}
-          checked <span>{entity.checkedEndpoint}</span> → 404 · requested{' '}
+      {entity && (
+        // words wrap between words; the endpoint and the identifier, long tokens, anywhere
+        <span className="min-w-0 [overflow-wrap:anywhere]">
+          checked <span className="break-all">{entity.checkedEndpoint}</span> → 404 · requested{' '}
           <span className="break-all">{entity.identifier}</span>
-        </span>
-      ) : (
-        <span>
-          <span className="text-text">no page at this path.</span> the chain was not asked · nothing
-          on it is lost
         </span>
       )}
       {lookup.status === 'loading' && (

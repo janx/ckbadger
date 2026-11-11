@@ -118,6 +118,23 @@ describe('StatsCards', () => {
     expect(screen.getByText('9.8K')).toBeInTheDocument();
     expect(screen.getByText('txns/s')).toBeInTheDocument();
     expect(screen.getByText('ETA: 2h 30m')).toBeInTheDocument();
+
+    // Rubbing × Song print, phase 2: a plain well with the celadon live mark, no glowing card
+    const banner = screen.getByTestId('sync-banner');
+    expect(banner).toHaveClass('well');
+    expect(banner.className).not.toMatch(/terminal-card|terminal-border-glow/);
+    expect(screen.getByTestId('sync-banner-live')).toHaveClass('bg-jade');
+    expect(screen.getByTestId('sync-banner-live')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('sets each stat in a plain well: no glowing card, no flicker while it loads', async () => {
+    const { container } = render(<StatsCards />, { wrapper: createWrapper() });
+    const cards = screen.getAllByTestId('stats-card');
+    expect(cards).toHaveLength(6);
+    for (const card of cards) expect(card).toHaveClass('well');
+    expect(container.querySelector('.terminal-card, .terminal-border-glow')).toBeNull();
+    expect(container.querySelector('.animate-terminal-flicker')).toBeNull();
+    await waitFor(() => expect(screen.getByText('LATEST BLOCK')).toBeInTheDocument());
   });
 
   it('does not show sync banner during non-bulk syncing', async () => {

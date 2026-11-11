@@ -771,9 +771,14 @@ interface TransactionDetail extends Omit<
     commonKnowledgeSize?: string | null;
     cellType?: string | null;
     display: TransactionCellDisplay | null;
-    lock?: Script;
-    type?: Script;
-    address?: string;
+    /**
+     * The consumed cell's scripts and address: absent while a pool transaction's input is not
+     * resolved yet, and `null` (the API's `Option`) for a cellbase's one input, the null out point
+     * (`txHash` all zeros, `index` -1), which has no cell behind it.
+     */
+    lock?: Script | null;
+    type?: Script | null;
+    address?: string | null;
     /**
      * F2-tx (R2b-a 39): the lock args through the API's one decoder; null for other families.
      * Round 3 (contracts R-B · R-8) adds the registry field layouts, every field `0x`-hex in layout

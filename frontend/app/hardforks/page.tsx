@@ -4,6 +4,7 @@ import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { LANE_ORDER, VmLaneTimeline, dayStartMs } from '@/components/hardforks/vm-lane-timeline';
@@ -84,13 +85,15 @@ function EditionCard({
   const headingId = `edition-${event.id}`;
   return (
     <article aria-labelledby={headingId} className="flex min-w-0 flex-col gap-2">
-      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        <h3 id={headingId} className="text-text-bright text-section font-medium">
-          {event.name}
-        </h3>
-        {/* R11: no coloured words in tier 1 on a page without a figure. */}
-        <span className="text-text-dim text-small">{event.status}</span>
-      </div>
+      {/* Phase 5 (B13): the edition as a command, its status the args (dim: R11, no coloured
+          words in tier 1 on a page without a figure); the box its words, as the date line's. */}
+      <PromptHeading
+        as="h3"
+        id={headingId}
+        command={event.name}
+        args={event.status}
+        className="text-section self-start font-medium"
+      />
       <p className="text-text-dim text-meta self-start">
         epoch {event.activationEpoch.toLocaleString()} ·{' '}
         {event.activationBlock !== null && (
@@ -148,21 +151,25 @@ function EditionCard({
 
 /**
  * A tier-1 section (R6), as the DAO page heads its sections: the h2 at section size in its own row,
- * 18 px above the evidence.
+ * 18 px above the evidence — a command line (rubbing × Song print, phase 5), the title as the
+ * command and what it reads as the args. The section is named by its title.
  */
 function Section({
   title,
+  args,
   className,
   children,
 }: {
   title: string;
+  /** What the section is read from: `mainnet · epoch 15,265`. */
+  args?: ReactNode;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <section aria-label={title} className={cn('min-w-0', className)}>
       <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+        <PromptHeading command={title} args={args} />
       </div>
       {children}
     </section>
@@ -368,7 +375,13 @@ export default function HardforksPage() {
               </div>
             )}
             {ready && (
-              <Section title="As this node's consensus states it" className="mt-[72px]">
+              // Phase 5 (B14): the node's consensus, read on its network at the tip epoch, written
+              // as the title row writes them.
+              <Section
+                title="consensus"
+                args={`${ready.data.network} · epoch ${ready.data.tipEpoch.toLocaleString()}`}
+                className="mt-[72px]"
+              >
                 <p className="text-text-dim text-small mb-3 w-fit">
                   get_consensus · hardfork_features · {ready.data.network}
                 </p>

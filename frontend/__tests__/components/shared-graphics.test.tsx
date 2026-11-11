@@ -5,6 +5,7 @@ import { AlignedBar, AlignedBarFootnote } from '@/components/ui/aligned-bar';
 import { IciclePartition } from '@/components/ui/icicle-partition';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { TenureBar } from '@/components/ui/tenure-bar';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { SharedGraphicsDemo } from '@/__tests__/fixtures/shared-graphics-demo';
 
@@ -437,7 +438,12 @@ describe('TenureBar (ID-C7)', () => {
     const nowMark = container.querySelector('[data-role="tenure-now"]')!;
     expect(nowMark.lastChild!.textContent).toMatch(/^now · \d{4}-\d\d-\d\d$/);
     expect(nowMark.querySelector('title')).toHaveTextContent('116 days left');
-    expect(screen.getByRole('heading', { name: 'Held until 2027-02-19' })).toBeInTheDocument();
+    // Phase 5 (A1): the term is the command, its state and end date the args.
+    expectPrompt(
+      screen.getByRole('heading', { name: 'Term held until 2027-02-19' }),
+      'Term',
+      'held until 2027-02-19'
+    );
     expect(container.querySelector('[data-remaining]')).toHaveAttribute(
       'fill',
       CLASS_COLORS.identities
@@ -462,7 +468,11 @@ describe('TenureBar (ID-C7)', () => {
         now={reg + 549 * day}
       />
     );
-    expect(screen.getByRole('heading', { name: 'Expired on 2025-02-19' })).toBeInTheDocument();
+    expectPrompt(
+      screen.getByRole('heading', { name: 'Term expired on 2025-02-19' }),
+      'Term',
+      'expired on 2025-02-19'
+    );
     // Lane P: the now mark is dated; how long ago the term ended is its hover.
     const nowMark = container.querySelector('[data-role="tenure-now"]')!;
     expect(nowMark.lastChild!.textContent).toMatch(/^now · \d{4}-\d\d-\d\d$/);
@@ -482,8 +492,9 @@ describe('TenureBar (ID-C7)', () => {
         note="1 year paid at registration · not renewed"
       />
     );
-    const heading = screen.getByRole('heading', { name: 'Held until 2025-02-19' });
-    expect(heading.parentElement).toHaveTextContent('1 year paid at registration · not renewed');
+    const heading = screen.getByRole('heading', { name: 'Term held until 2025-02-19' });
+    // Phase 5 (A1): the caption is the right-prompt note, outside the heading's name.
+    expect(promptNote(heading)).toHaveTextContent(/^1 year paid at registration · not renewed$/);
   });
 });
 

@@ -160,7 +160,9 @@ describe('FiberNetworkGraph', () => {
       const frame = svg.closest('[data-instrument-frame]') as HTMLElement;
       expect(frame).not.toBeNull();
       expect(frame).toHaveAttribute('aria-label', 'The Fiber network on chain');
-      expect(frame).toHaveClass('glass', 'neon-edge-top', 'rounded-lg');
+      // a flat tile since rubbing × Song print: no lit top edge
+      expect(frame).toHaveClass('glass', 'rounded-lg');
+      expect(frame).not.toHaveClass('neon-edge-top');
       // the detail column stays outside the frame
       expect(frame.contains(panel())).toBe(false);
       // drawn 1:1 at the measured width, clipped to its box (no overflow-visible)

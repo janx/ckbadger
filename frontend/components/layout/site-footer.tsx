@@ -1,35 +1,21 @@
 'use client';
 
 import Link from '@/components/ui/link';
-import { resolveBuildVersion } from '@/lib/runtime-config';
 import { openKeyboardShortcuts } from '@/lib/search-focus';
 
 const LINK = 'text-text hover:text-jade py-1 transition-colors';
 
 /**
- * The release a build string names: its part before any semver build metadata ("+…") or commit
- * ("@…") — "0.8.2" for "0.8.2@f8947b8d3915". The whole build string stays in the title.
- */
-function releaseOf(buildVersion: string): string {
-  return buildVersion.split(/[+@]/)[0];
-}
-
-/**
- * The site footer (Main.dc.html, TX-04): "CKBadger <release>" as plain text, then Hardforks ·
- * Network · Fiber channels · Fiber dashboard · cknerv · Web5 · Keyboard shortcuts. Network and
- * Fiber channels (review 2026-11-03, item 4) are the chain's surroundings, not a section, so they
- * live here beside Hardforks rather than in the header. No always-on pulse: whether updates are
- * live is said only by the vitals strip, on a page that holds the realtime socket (TX-01).
+ * The site footer (Main.dc.html, TX-04): Hardforks · Network · Fiber channels · Fiber dashboard ·
+ * cknerv · Web5 · Keyboard shortcuts. Network and Fiber channels (review 2026-11-03, item 4) are
+ * the chain's surroundings, not a section, so they live here beside Hardforks rather than in the
+ * header. The release it used to name is said by the status line now, beside the session's mode
+ * (components/layout/status-line.tsx, rubbing × Song print phase 2).
  */
 export function SiteFooter() {
-  const buildVersion = resolveBuildVersion();
-
   return (
     <footer className="border-base-border bg-base-void/95 border-t">
-      <div className="text-small container mx-auto flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-[18px] font-mono leading-relaxed">
-        <span className="text-text-dim" title={`CKBadger ${buildVersion}`}>
-          CKBadger {releaseOf(buildVersion)}
-        </span>
+      <div className="text-small container mx-auto flex flex-wrap items-center gap-x-6 gap-y-2 py-[18px] font-mono leading-relaxed">
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-1">
           <Link href="/hardforks" className={LINK}>
             Hardforks

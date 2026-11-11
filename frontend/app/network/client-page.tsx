@@ -17,6 +17,7 @@ import {
 } from '@/app/network/network-map';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const PAGE_TITLE = 'Where the nodes are';
@@ -78,9 +79,12 @@ function PeersOnboarding({
       )}
 
       <div className="border-base-border bg-base-surface rounded border p-6">
-        <h2 className="text-text-bright text-section mb-2 font-mono font-bold">
-          The CKB peer crawler
-        </h2>
+        {/* Phase 5 (B9): the crawler as a command, its config state the args. */}
+        <PromptHeading
+          command="peer crawler"
+          args={enabled ? 'enabled' : 'disabled'}
+          className="mb-2 font-mono"
+        />
         <p className="text-text-dim text-body mb-4 leading-relaxed">
           The peer crawler performs whole-network CKB L1 node discovery: starting from bootnodes it
           dials outward across the p2p network and records each same-network peer this observer

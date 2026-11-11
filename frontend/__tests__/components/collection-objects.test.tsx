@@ -6,6 +6,7 @@ import { api, type CollectionInsights } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { nervape3xInsights, nervape3xOtherTraits } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import {
   collectionGalleryFilteredProducer,
   collectionInsightsPendingProducer,
@@ -155,8 +156,13 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
   );
   await screen.findByRole('table', { name: 'Newest objects' });
   const section = screen.getByRole('region', { name: 'Objects' });
-  // C9 / Main.dc.html: the heading counts the genes that vary (the ones with a lane).
-  expect(section).toHaveTextContent('Objects · 8 · one gene varies');
+  // C9 / Main.dc.html: the heading counts the genes that vary (the ones with a lane). Phase 5
+  // (A14): the count and the genes are the objects command's args, no longer inside its word.
+  const heading = within(section).getByRole('heading', {
+    name: 'Objects 8 live · one gene varies',
+  });
+  expectPrompt(heading, 'Objects', '8 live · one gene varies');
+  expect(heading).toHaveAttribute('id', 'h-objects');
   expect(container.querySelectorAll('[data-lane]')).toHaveLength(1);
   expect(container.querySelector('[data-lane="IMAGE"]')).toBeNull();
   expect(section).toHaveTextContent(

@@ -11,7 +11,8 @@ function required<T>(value: T | null | undefined, hash: string, field: string): 
   return value;
 }
 export function kindOf(cell: {
-  type?: { codeHash: string };
+  /** `null` is the API's: a cellbase's null-out-point input has no cell, so no type. */
+  type?: { codeHash: string } | null;
   cellType?: string | null;
   display?: TransactionCellDisplay | null;
 }): CellTileData['kind'] {
@@ -49,19 +50,22 @@ export function cellTiles(
 ): { inputs: CellTileData[]; outputs: CellTileData[] } {
   const inputs = required(tx.inputs, tx.hash, 'inputs');
   const outputs = required(tx.outputs, tx.hash, 'outputs');
-  const owner = (address: string | undefined, context: string) => (
-    <Link
-      href={`/address/${required(address, tx.hash, `${context}.address`)}`}
-      className="text-text hover:text-jade"
-    >
-      {truncateHash(address!, 10, 6)}
-    </Link>
-  );
+  // A tile is drawn for a cell: an input that is one (never the cellbase's null out point, whose
+  // address and lock the API serves as null and which gets no tile), so a missing address is an
+  // error with the input named, as before.
+  const owner = (address: string | null | undefined, context: string) => {
+    const a = required(address ?? undefined, tx.hash, `${context}.address`);
+    return (
+      <Link href={`/address/${a}`} className="text-text hover:text-jade">
+        {truncateHash(a, 10, 6)}
+      </Link>
+    );
+  };
   const lockKind = (codeHash: string | undefined) => {
     const name = codeHash ? lookup?.[codeHash]?.name : undefined;
     return name && name.toLowerCase() !== 'unknown' ? name : null;
   };
-  const content = (cell: { type?: { codeHash: string }; cellType?: string | null }) => {
+  const content = (cell: { type?: { codeHash: string } | null; cellType?: string | null }) => {
     const kind = kindOf(cell);
     const name = cell.type ? lookup?.[cell.type.codeHash]?.name : undefined;
     return name && name.toLowerCase() !== 'unknown'

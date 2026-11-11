@@ -17,6 +17,7 @@ import {
   dailyTransactionCountChart,
 } from '@/__tests__/msw/fixtures/home';
 import { ActivityStats, dailyActivityView } from '@/components/home/activity-stats';
+import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 
 const API = '/api/:network/v1';
 
@@ -27,15 +28,27 @@ describe('ActivityStats', () => {
     vi.restoreAllMocks();
   });
 
-  it('heads the column "Activity, last 24 h" with a link to the charts', () => {
+  // Rubbing × Song print, phase 5 (H5): `■ activity --24 h`, "charts →" as the note, in the
+  // feed's heading row (one class), so the two command lines stand on one line.
+  it('heads the column "activity --24 h" with a link to the charts as its note', () => {
     render(<ActivityStats />);
-    expect(
-      screen.getByRole('heading', { level: 2, name: 'Activity, last 24 h' })
-    ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Charts →' })).toHaveAttribute(
-      'href',
-      '/mainnet/charts'
-    );
+    const heading = screen.getByRole('heading', { level: 2, name: 'activity --24 h' });
+    expect(heading).toHaveClass('text-section');
+    const [command, args] = Array.from(heading.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^activity$/);
+    expect(args).toHaveTextContent(/^--24 h$/);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    const link = screen.getByRole('link', { name: 'charts →' });
+    expect(link).toHaveAttribute('href', '/mainnet/charts');
+    const note = link.closest('[data-prompt-note]') as HTMLElement;
+    expect(note).toHaveClass('ml-auto');
+    expect(note.parentElement).toBe(heading.parentElement);
+    expect(heading).not.toContainElement(link);
+    // the feed's heading row: the same class, no rule of its own
+    const row = screen.getByTestId('home-activity-stats').firstElementChild as HTMLElement;
+    expect(row).toContainElement(heading);
+    expect(row).toHaveClass(ACTIVITY_HEAD_CLASS);
+    expect(row).not.toHaveClass('border-b');
   });
 
   // Material pass v2 (move 4): a count flares (`.phosphor-flare`) when its served value changes.

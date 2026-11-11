@@ -9,17 +9,15 @@ import {
   OPEN_SHORTCUTS_EVENT,
 } from '@/lib/search-focus';
 import { resolveSearchRoute } from '@/lib/search-routing';
+import { localZone } from '@/lib/clock';
+import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
+import { SHORTCUT_HINTS } from '@/lib/shortcuts';
 
 interface CommandItem {
   id: string;
   label: string;
   keywords: string[];
   href: string;
-}
-
-interface ShortcutHint {
-  keys: string;
-  description: string;
 }
 
 const COMMANDS: CommandItem[] = [
@@ -96,21 +94,6 @@ const GOTO_SHORTCUTS: Record<string, { href?: string; focusSearch?: boolean }> =
   c: { href: '/charts' },
   p: { href: '/network' },
 };
-
-const SHORTCUT_HINTS: ShortcutHint[] = [
-  { keys: 'Ctrl/Cmd+K', description: 'Open command palette' },
-  { keys: '?', description: 'Open keyboard shortcuts help' },
-  { keys: '/', description: 'Focus global search bar' },
-  { keys: 'g b', description: 'Go to Blocks' },
-  { keys: 'g t', description: 'Go to Transactions' },
-  { keys: 'g d', description: 'Go to DAO' },
-  { keys: 'g i', description: 'Go to Inventory' },
-  { keys: 'g s', description: 'Go to Scripts' },
-  { keys: 'g c', description: 'Go to Charts' },
-  { keys: 'g p', description: 'Go to Peers' },
-  { keys: 'g h', description: 'Go to Home' },
-  { keys: 'Esc', description: 'Close panel' },
-];
 
 type PaletteMode = 'commands' | 'shortcuts';
 
@@ -407,6 +390,17 @@ export function CommandPalette() {
                 ))}
               </ul>
             </div>
+            {/* What the status line shows only from md up, for every width (a phone opens this
+                from the footer): the release, and which time its clock tells. */}
+            <p
+              data-testid="shortcuts-about"
+              className="border-base-border text-text-dim text-small border-t px-4 py-3 font-mono"
+            >
+              <span title={`ckbadger ${resolveBuildVersion()}`}>
+                {`ckbadger ${releaseOf(resolveBuildVersion())}`}
+              </span>
+              {` · the status line's clock is local time, ${localZone()}`}
+            </p>
           </>
         )}
       </div>

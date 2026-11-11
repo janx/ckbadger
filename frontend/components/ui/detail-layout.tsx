@@ -1,4 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { SealedHead, type PageSealScale } from '@/components/ui/page-seal';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 import {
   documentTitleParts,
@@ -17,11 +19,10 @@ export function useDetailTier(): 1 | 2 {
 /**
  * The developer-evidence tier (hierarchy plan R6): one visible boundary — 96 px, a hairline and the
  * "Evidence · for developers" eyebrow — and every section heading inside is quiet. `className`
- * lays out the tier's content (its sections), under the eyebrow. The hairline is a tube (Midnight,
- * continued, move 2): `.hairline-tube-border` paints the 1 px `border-t` as a jade line lit from
- * the left. The tier sits one step deeper (material pass v2, move 2): `.tier2-ground` bleeds
- * rgba(6,7,11,.9) through the page gutters under the tube, and the eyebrow is `.eyebrow` (500 at
- * .12 em, move 3).
+ * lays out the tier's content (its sections), under the eyebrow. The hairline (Midnight, continued,
+ * move 2; set flat in rubbing × Song print) is `.hairline-tube-border`, the 1 px `border-t` in the
+ * line ink. The tier sits one step deeper (material pass v2, move 2): `.tier2-ground` bleeds
+ * through the page gutters under the line, and the eyebrow is `.eyebrow` (500 at .12 em, move 3).
  */
 export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -44,6 +45,17 @@ export interface DetailFact {
 interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
   identity?: ReactNode;
+  /**
+   * The object's hash seal (rubbing × Song print, phase 3), pressed beside the title and identity:
+   * the 32-byte hash the page names its object by, at the object's scale (SealedHead).
+   */
+  seal?: { hash: string; scale: PageSealScale };
+  /**
+   * The page's opening sentence, read with its name (rubbing × Song print, phase 5): the last line
+   * of the head, after the identity — beside the seal when there is one, so the stamp's height
+   * holds the words instead of an empty gap.
+   */
+  lede?: ReactNode;
   status?: ReactNode;
   actions?: ReactNode;
   facts?: readonly DetailFact[];
@@ -66,6 +78,8 @@ export function DetailLayout({
   documentTitle,
   kind = 'entity',
   identity,
+  seal,
+  lede,
   status,
   actions,
   facts,
@@ -76,31 +90,49 @@ export function DetailLayout({
   className,
 }: DetailLayoutProps) {
   useDocumentTitle(documentTitleParts(title, documentTitle));
+  const head = (
+    <>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-3">
+          <h1
+            // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
+            className={cn(
+              'text-text-bright break-words',
+              kind === 'entity' ? 'text-entity' : 'text-index'
+            )}
+          >
+            {title}
+          </h1>
+          {status}
+        </div>
+        {actions}
+      </div>
+      {identity && (
+        <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
+          {identity}
+        </div>
+      )}
+      {lede && (
+        <div data-detail-lede="" className="mt-4 min-w-0">
+          {lede}
+        </div>
+      )}
+    </>
+  );
   return (
     // `.arrive` (visual finish V7): the content fades in when the data arrives and this mounts.
     <div className={cn('arrive text-body min-w-0 font-mono', className)}>
-      {/* An index page's title row closes on a tube (Midnight, continued, move 2; BlocksAfter):
-          h1 and legend, 14 px, the lit hairline, then the list. */}
+      {/* An index page's title row closes on a hairline (Midnight, continued, move 2; BlocksAfter):
+          h1 and legend, 14 px, the 1 px line, then the list. */}
       <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-3">
-            <h1
-              // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
-              className={cn(
-                'text-text-bright break-words',
-                kind === 'entity' ? 'text-entity' : 'text-index'
-              )}
-            >
-              {title}
-            </h1>
-            {status}
-          </div>
-          {actions}
-        </div>
-        {identity && (
-          <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
-            {identity}
-          </div>
+        {/* The seal is pressed beside the title, identity and lede, never in the content (the
+            facts and the sections run the full width under it). */}
+        {seal ? (
+          <SealedHead hash={seal.hash} scale={seal.scale}>
+            {head}
+          </SealedHead>
+        ) : (
+          head
         )}
         {facts && (
           // One column until md: at 640 a two-column grid wrapped labels into three lines.
@@ -140,11 +172,18 @@ export function DetailLayout({
 
 export function DetailSection({
   title,
+  args,
   actions,
   children,
   className,
 }: {
   title: ReactNode;
+  /**
+   * What the command runs on (rubbing × Song print, phase 5): a count, a status, a name, in the
+   * dim ink after the title — `cells 128 live`. Part of the heading's name in either tier.
+   */
+  args?: ReactNode;
+  /** The row's right end: a note, a link, or the section's controls (a legend, a range). */
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
@@ -153,15 +192,17 @@ export function DetailSection({
   return (
     <section className={cn('min-w-0', className)}>
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-        {/* A tier-1 h2 is 600 through h2.text-section (globals.css, move 3); a tier-2 h2 stays
-            the quiet 500. */}
-        <h2
-          className={
-            tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'
-          }
-        >
-          {title}
-        </h2>
+        {/* A tier-1 h2 is a command line (rubbing × Song print, phase 2: the prompt square, the
+            title as the command) at 600 through h2.text-section (globals.css, move 3); a tier-2
+            h2 stays the quiet 500, unmarked, its args in the same dim ink. */}
+        {tier === 2 ? (
+          <h2 className="text-body text-text font-medium">
+            {title}
+            {args !== undefined && <span className="text-text-dim ml-2.5 font-normal">{args}</span>}
+          </h2>
+        ) : (
+          <PromptHeading command={title} args={args} />
+        )}
         {actions}
       </div>
       {children}

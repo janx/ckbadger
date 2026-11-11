@@ -10,19 +10,18 @@ describe('SiteFooter', () => {
     };
   });
 
-  // TX-04 (Main.dc.html footer): "CKBadger 0.8.2" as text (the build string in its title), then
-  // Hardforks · Fiber dashboard · cknerv · Web5 · Keyboard shortcuts; no always-on pulse.
-  // Review 2026-11-03, item 4 (Nav.dc.html): Network and Fiber channels join Hardforks, before the
-  // external links — the chain's surroundings, which no header or footer link reached before.
-  it('names the release, lists the board links and opens the keyboard shortcuts (TX-04)', () => {
+  // TX-04 (Main.dc.html footer): Hardforks · Fiber dashboard · cknerv · Web5 · Keyboard
+  // shortcuts; no always-on pulse. Review 2026-11-03, item 4 (Nav.dc.html): Network and Fiber
+  // channels join Hardforks, before the external links — the chain's surroundings, which no header
+  // or footer link reached before. Rubbing × Song print, phase 2: the release ("CKBadger 0.8.2")
+  // moved to the status line at the foot of the window; the footer is its links alone.
+  it('lists the board links, opens the keyboard shortcuts, and names no release (TX-04)', () => {
     const opened = vi.fn();
     window.addEventListener(OPEN_SHORTCUTS_EVENT, opened);
     const { container } = render(<SiteFooter />);
 
     const footer = screen.getByRole('contentinfo');
-    const version = within(footer).getByText('CKBadger 0.1.0');
-    expect(version.tagName).not.toBe('A');
-    expect(version).toHaveAttribute('title', 'CKBadger 0.1.0+feature/foo@abcdef123456');
+    expect(footer).not.toHaveTextContent(/CKBadger|0\.1\.0/);
     expect(container.querySelector('.live-dot')).toBeNull();
 
     const navigation = within(footer).getByRole('navigation', { name: 'Footer' });

@@ -5,7 +5,13 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { BarChart, ChartFigure, type Bar } from '@/components/home/mini-chart';
 import { RankedBars, type RankedRow } from '@/components/home/ranked-bars';
-import { SECTION_HEADING_CLASS, bodyOf, derive, viewOf } from '@/components/home/section';
+import {
+  ACTIVITY_HEAD_CLASS,
+  SectionHeading,
+  bodyOf,
+  derive,
+  viewOf,
+} from '@/components/home/section';
 import {
   activityTypeShares,
   nonCellbaseCount,
@@ -26,7 +32,7 @@ import { cn, formatCkbCompact } from '@/lib/utils';
 
 const TYPE_BREAKDOWN = '/charts/activity-type-breakdown';
 
-/** "Activity, last 24 h": three KPIs, ranked types and scripts, and the daily activity chart. */
+/** `activity --24 h`: three KPIs, ranked types and scripts, and the daily activity chart. */
 export function ActivityStats() {
   const { data, error } = useQuery({
     queryKey: ['activity-summary-24h'],
@@ -37,14 +43,21 @@ export function ActivityStats() {
 
   return (
     <div data-testid="home-activity-stats" className="flex min-w-0 flex-col gap-[22px]">
-      <div className="border-base-border-subtle flex h-11 items-center justify-between gap-4 border-b">
-        <h2 className={SECTION_HEADING_CLASS}>Activity, last 24 h</h2>
-        <Link
-          href="/charts"
-          className="text-interactive hover:text-jade text-small transition-colors"
-        >
-          Charts →
-        </Link>
+      {/* Rubbing × Song print, phase 5 (H5): a command on its window, the charts its note; the
+          row is the feed's heading row, so the two command lines sit on one line. */}
+      <div className={ACTIVITY_HEAD_CLASS}>
+        <SectionHeading
+          command="activity"
+          args="--24 h"
+          note={
+            <Link
+              href="/charts"
+              className="text-interactive hover:text-jade text-small transition-colors"
+            >
+              charts →
+            </Link>
+          }
+        />
       </div>
       {d.state === 'loading' && (
         <div aria-hidden="true" className="bg-base-surface h-40 animate-pulse rounded" />

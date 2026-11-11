@@ -8,6 +8,7 @@ import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
+import { ROW_SEAL_FOOTPRINT_PX, RowSeal } from '@/components/ui/row-seal';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -47,7 +48,9 @@ export default function BlocksPage() {
     {
       key: 'block',
       label: 'Block',
-      minWidth: 200,
+      // The seal, "#20,879,198" (11 characters at 13 px, 85.8 px), a 12 px space and
+      // "0xd161...8fef" (13 at 11 px, 85.8 px): 205.8 px and the 16 px gap (was 200 without it).
+      minWidth: 195 + ROW_SEAL_FOOTPRINT_PX,
       render: (block) => <BlockIdentity block={block} />,
     },
     {
@@ -83,7 +86,10 @@ export default function BlocksPage() {
     {
       key: 'reward',
       label: 'Reward, CKB',
-      minWidth: 140,
+      // A reward of four integer digits, "1,917.80821917" (14 characters at 12 px, 100.8 px), and
+      // the 16 px gap: the column gave the row seal's 22 px from its 140 so the table keeps its
+      // 1,230 px minimum (the widest container is 1,232).
+      minWidth: 118,
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
@@ -245,29 +251,33 @@ function BlocksLegend() {
 }
 
 /**
- * "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. The number is the row's
- * one bright thing at body (table-rows T5), on an 18 px line so the row keeps its height.
+ * The row seal, then "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. The
+ * number is the row's one bright thing at body (table-rows T5), on an 18 px line so the row keeps
+ * its height (the seal overhangs that line, RowSeal).
  */
 function BlockIdentity({ block }: { block: Block }) {
   return (
-    <div className="space-y-1">
-      <div className="whitespace-nowrap">
-        <Link href={`/blocks/${block.number}`} className={KEY}>
-          {formatBlockNumber(block.number)}
-        </Link>{' '}
-        <Hash
-          hash={block.hash}
-          startChars={6}
-          endChars={4}
-          copyable={false}
-          className="text-text-dim text-meta"
-        />
+    <div className="flex items-start">
+      <RowSeal hash={block.hash} overhang />
+      <div className="min-w-0 space-y-1">
+        <div className="whitespace-nowrap">
+          <Link href={`/blocks/${block.number}`} className={KEY}>
+            {formatBlockNumber(block.number)}
+          </Link>{' '}
+          <Hash
+            hash={block.hash}
+            startChars={6}
+            endChars={4}
+            copyable={false}
+            className="text-text-dim text-meta"
+          />
+        </div>
+        {block.hardforkActivation && (
+          <Link href="/hardforks" className="text-text-dim text-meta block">
+            HF · {block.hardforkActivation.shortName.toUpperCase()}
+          </Link>
+        )}
       </div>
-      {block.hardforkActivation && (
-        <Link href="/hardforks" className="text-text-dim text-meta block">
-          HF · {block.hardforkActivation.shortName.toUpperCase()}
-        </Link>
-      )}
     </div>
   );
 }
@@ -346,13 +356,15 @@ function reward(block: Block) {
 }
 
 /**
- * A block on a phone (board L1): the height with its contents and age, who mined it and the fees,
- * then the quiet figures — hash, size, cycles and when the reward is paid.
+ * A block on a phone (board L1): its seal leading the row, the height with its contents and age,
+ * who mined it and the fees, then the quiet figures — hash, size, cycles and when the reward is
+ * paid.
  */
 function BlockPhoneRow({ block }: { block: Block }) {
   return (
     <PhoneRow
       testId="block-row-mobile"
+      mark={<RowSeal hash={block.hash} />}
       lines={[
         {
           key: 'identity',
@@ -418,25 +430,31 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'height',
     label: 'Height',
-    minWidth: 112,
+    // The seal beside the two lines ("#20,879,198" at 13 px and the hash at 11 px, 85.8 px each)
+    // and the 16 px gap: 128.8 px, with 2 px to spare (at 129 the cell's sub-pixel width broke the
+    // number); it was 112 without the seal.
+    minWidth: 104 + ROW_SEAL_FOOTPRINT_PX,
     render: (block) => (
-      <>
-        <Link href={`/blocks/${block.number}`} className={KEY}>
-          {formatBlockNumber(block.number)}
-        </Link>
-        <Hash
-          hash={block.hash}
-          startChars={6}
-          endChars={4}
-          copyable={false}
-          className="text-text-dim text-meta block whitespace-nowrap"
-        />
-        {block.hardforkActivation && (
-          <Link href="/hardforks" className="text-text-dim text-meta block">
-            HF · {block.hardforkActivation.shortName.toUpperCase()}
+      <div className="flex items-start">
+        <RowSeal hash={block.hash} />
+        <div className="min-w-0">
+          <Link href={`/blocks/${block.number}`} className={KEY}>
+            {formatBlockNumber(block.number)}
           </Link>
-        )}
-      </>
+          <Hash
+            hash={block.hash}
+            startChars={6}
+            endChars={4}
+            copyable={false}
+            className="text-text-dim text-meta block whitespace-nowrap"
+          />
+          {block.hardforkActivation && (
+            <Link href="/hardforks" className="text-text-dim text-meta block">
+              HF · {block.hardforkActivation.shortName.toUpperCase()}
+            </Link>
+          )}
+        </div>
+      </div>
     ),
   },
   {
@@ -480,7 +498,9 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'resources',
     label: 'Size · cycles',
-    minWidth: 120,
+    // The most cycles a block may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
+    // gap (the last column): it gave the row seal's 19 px from its 120, so the table keeps 608 px.
+    minWidth: 101,
     // The column that takes the free width (the board's 1fr).
     width: 'auto',
     numeric: true,

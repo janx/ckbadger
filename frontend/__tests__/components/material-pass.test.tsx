@@ -166,9 +166,21 @@ describe('the rules in globals.css', () => {
           `@font-face \\{\\s*font-family: 'JetBrains Mono';\\s*font-style: ${style};\\s*font-weight: ${weight};\\s*font-display: swap;\\s*src: url\\('/fonts/jetbrains-mono-${file}\\.woff2'\\) format\\('woff2'\\);`
         )
       );
-    // no second family: every @font-face is JetBrains Mono (the error pages' serif left with the vessels)
+    // exactly two families: JetBrains Mono, the UI's one mono, and Courier Prime, the voice of the
+    // comment lines (rubbing × Song print); the error pages' serif left with the vessels
     const families = [...css.matchAll(/@font-face \{\s*font-family: '([^']+)'/g)].map((m) => m[1]);
-    expect(families.filter((f) => f !== 'JetBrains Mono')).toEqual([]);
+    expect([...new Set(families)].sort()).toEqual(['Courier Prime', 'JetBrains Mono']);
+    expect(families.filter((f) => f === 'Courier Prime')).toHaveLength(3);
+    for (const [weight, style, file] of [
+      ['400', 'normal', 'regular'],
+      ['700', 'normal', 'bold'],
+      ['400', 'italic', 'italic'],
+    ])
+      expect(css).toMatch(
+        new RegExp(
+          `@font-face \\{\\s*font-family: 'Courier Prime';\\s*font-style: ${style};\\s*font-weight: ${weight};\\s*font-display: swap;\\s*src: url\\('/fonts/courier-prime-${file}\\.woff2'\\) format\\('woff2'\\);`
+        )
+      );
     // visual finish V12: the display figure sits tighter (−0.03 em), an entity / index h1 a
     // little (−0.02 em); size and weight unchanged, a tier-1 h2 untouched
     expect(css).toMatch(
@@ -187,6 +199,28 @@ describe('the rules in globals.css', () => {
     expect(css).toMatch(
       /\.eyebrow\s*\{\s*text-transform: uppercase;\s*letter-spacing: 0\.12em;\s*font-weight: 500;\s*\}/
     );
+  });
+
+  // Rubbing × Song print, phase 1: the voice is declared, not yet used — a variable, `.voice`, and
+  // `.comment` (the ghost `#` in the UI mono, then the lines at 14 / 1.55 in the dim ink).
+  it('the voice: Courier Prime behind --font-voice, `.voice` and the `.comment` row', () => {
+    expect(css).toMatch(/:root\s*\{[^}]*--font-voice: 'Courier Prime', 'Courier New', monospace;/);
+    // the UI mono stays JetBrains Mono: the voice never takes its place
+    expect(css).toMatch(/--font-mono: 'JetBrains Mono',/);
+    expect(css).not.toMatch(/--font-(mono|display):[^;]*Courier/);
+    expect(css).toMatch(/\n\.voice\s*\{\s*font-family: var\(--font-voice\);\s*\}/);
+    const comment = css.match(/\n\.comment\s*\{([^}]*)\}/)!;
+    expect(comment[1]).toContain('display: flex');
+    expect(comment[1]).toContain('align-items: baseline');
+    expect(comment[1]).toContain('font-family: var(--font-voice)');
+    expect(comment[1]).toContain('font-size: 14px');
+    expect(comment[1]).toContain('line-height: 1.55');
+    expect(comment[1]).toContain('color: var(--c-text-dim)');
+    const hash = css.match(/\n\.comment::before\s*\{([^}]*)\}/)!;
+    expect(hash[1]).toContain("content: '#' / '';");
+    expect(hash[1]).toContain('font-family: var(--font-mono)');
+    expect(hash[1]).toContain('color: var(--c-text-ghost)');
+    expect(hash[1]).toContain('flex: none');
   });
 
   it('move 4: the flare keyframes — only `from` is written, so the end state is the element’s own', () => {
@@ -305,18 +339,21 @@ describe('move 1 on the page root', () => {
 });
 
 describe('move 2 on the frame and the tier boundary', () => {
-  it('sets the frame on glass, with the eyebrow at 500 / .12 em', () => {
+  // Rubbing × Song print, phase 2: the frame's head is a command line, no longer an eyebrow.
+  it('sets the frame on glass, headed by its command at 500, untracked', () => {
     render(
       <TerminalPanel data-testid="frame">
         <TerminalPanelHeader>Cells</TerminalPanelHeader>
       </TerminalPanel>
     );
     const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('glass', 'border-base-border', 'neon-edge-top', 'rounded-lg');
+    expect(frame).toHaveClass('glass', 'border-base-border', 'rounded-lg');
+    // a flat tile since rubbing × Song print: no lit top edge
+    expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).not.toHaveClass('bg-base-surface');
-    const eyebrow = screen.getByText('Cells');
-    expect(eyebrow).toHaveClass('eyebrow', 'text-small', 'text-text-dim');
-    expect(eyebrow).not.toHaveClass('uppercase', 'tracking-[0.08em]');
+    const head = screen.getByText('Cells').parentElement!;
+    expect(head).toHaveClass('prompt', 'font-medium', 'text-body', 'text-text-bright');
+    expect(head).not.toHaveClass('eyebrow', 'uppercase', 'tracking-[0.08em]');
   });
 
   it('grounds tier 2 one step deeper, through the gutters, under its tube', () => {

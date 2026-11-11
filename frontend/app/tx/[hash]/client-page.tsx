@@ -6,6 +6,8 @@ import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
+import { SealedHead } from '@/components/ui/page-seal';
+import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -47,6 +49,8 @@ import {
   type TransactionFeePayer,
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { exactCkbText } from '@/lib/ckb-decimal';
+import { txComment } from '@/lib/tx-comment';
 import {
   getScriptDetailHref,
   getIdentityItemDetailHref,
@@ -1072,6 +1076,21 @@ export default function TransactionDetailPage() {
       );
   const knowledgeDelta =
     occupiedIn !== null && occupiedOut !== null ? occupiedOut - occupiedIn : null;
+  const feeShannons = exactUnsignedInteger(tx.fee, `${hash}: fee`);
+  // The comment (rubbing × Song print, phase 5, the Transaction board): written only when every
+  // figure it states is known, from the counts the cells heading draws, the fee as the facts rail
+  // prints it and the common-knowledge delta of the evidence tier. A pool transaction has no tiles
+  // and no occupied bytes yet, so it has no comment.
+  const comment =
+    tiles && knowledgeDelta !== null
+      ? txComment({
+          inputs: tiles.inputs.length,
+          outputs: tiles.outputs.length,
+          isCellbase: tx.isCellbase,
+          feeCkb: tx.isCellbase ? null : exactCkbText(feeShannons, false),
+          knowledgeDeltaBytes: knowledgeDelta,
+        })
+      : null;
 
   const inflow =
     tiles && tx.isCellbase
@@ -1193,15 +1212,30 @@ export default function TransactionDetailPage() {
         data-tier="1"
         className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-[auto_auto_1fr] lg:gap-x-14"
       >
-        <header className="flex min-w-0 flex-col gap-2 lg:col-start-1">
+        <header className="min-w-0 lg:col-start-1">
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
-          <span className="text-text-dim text-small">Transaction</span>
-          <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
-          {summary}
-          <div className="text-small flex min-w-0 items-center gap-0.5">
-            <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
-            <CopyHash hash={tx.hash} />
-          </div>
+          {/* The one corner (Transaction board): the transaction's seal pressed beside its
+              identity, never in the cells and flows below. */}
+          <SealedHead
+            hash={tx.hash}
+            scale="record"
+            // Under the seal and the identity, in the identity column (the board's comment).
+            below={
+              comment === null ? undefined : (
+                <Comment lines={comment} className="mt-4 max-w-[60ch]" />
+              )
+            }
+          >
+            <div className="flex min-w-0 flex-col gap-2">
+              <span className="text-text-dim text-small">Transaction</span>
+              <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
+              {summary}
+              <div className="text-small flex min-w-0 items-center gap-0.5">
+                <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
+                <CopyHash hash={tx.hash} />
+              </div>
+            </div>
+          </SealedHead>
         </header>
         <aside
           aria-label="Transaction facts"
@@ -1257,11 +1291,7 @@ export default function TransactionDetailPage() {
             <div className="flex flex-col gap-0.5">
               <dt className="text-text-dim text-small">Fee</dt>
               <dd className="text-body">
-                <ExactCkb
-                  shannons={exactUnsignedInteger(tx.fee, `${hash}: fee`)}
-                  signed={false}
-                  tone="plain"
-                />
+                <ExactCkb shannons={feeShannons} signed={false} tone="plain" />
               </dd>
               {feePaidBy.length > 0 && (
                 <dd className="text-text-dim text-small">
@@ -1325,8 +1355,11 @@ export default function TransactionDetailPage() {
         )}
         {tiles && (
           <div className="min-w-0 lg:col-start-1">
+            {/* The command and what it runs on (rubbing × Song print, phase 5, the Transaction
+                board): `cells 3 in → 2 out`; the legend stays the row's right end. */}
             <DetailSection
-              title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
+              title="Cells"
+              args={`${tiles.inputs.length.toLocaleString('en-US')} in → ${tiles.outputs.length.toLocaleString('en-US')} out`}
               actions={
                 legend.length > 0 && (
                   <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-3.5 gap-y-1">

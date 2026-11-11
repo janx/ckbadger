@@ -1,4 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import Page from '@/app/identities/bit-cell/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
@@ -159,7 +160,10 @@ it('reports missing identity and unavailable raw evidence without inventing a do
   );
   const { unmount } = render(<Page identityId={evidence.itemId} />);
   expect(
-    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+    await screen.findByRole('heading', {
+      level: 1,
+      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+    })
   ).toBeInTheDocument();
   expect(
     screen.getByText(`/assets/identities/bit-cell/items/${evidence.itemId}`)
@@ -181,7 +185,7 @@ it('shows an expired .bit Cell as expired, grey and dashed, while its cell remai
   expired.versions[0].decoded.expiredAt = String(Date.parse('2026-04-24T04:57:22Z') / 1000);
   vi.mocked(api.getItemProtocol).mockResolvedValue(expired);
   render(<Page identityId={evidence.itemId} />);
-  await screen.findByRole('heading', { name: 'Expired on 2026-04-24' }, { timeout: 4000 });
+  await screen.findByRole('heading', { name: 'Term expired on 2026-04-24' }, { timeout: 4000 });
   const badge = document.querySelector('[data-identity-state]')!;
   expect(badge).toHaveTextContent('Expired');
   expect(badge).toHaveAttribute('data-identity-state', 'expired');
@@ -195,7 +199,10 @@ it('shows an expired .bit Cell as expired, grey and dashed, while its cell remai
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('Expired');
   expect(screen.getByText('held from minting · not renewed')).toBeInTheDocument();
   // The cell itself is still live and holds CKB.
-  expect(screen.getByRole('region', { name: 'CKB held in its cell' })).toHaveTextContent(
-    'pay for its bytes'
-  );
+  const held = screen.getByRole('region', { name: 'CKB held in its cell' });
+  expect(held).toHaveTextContent('pay for its bytes');
+  // Phase 5 (A9): the command is what the cell holds; its rate is the note.
+  const heading = within(held).getByRole('heading', { name: 'CKB held' });
+  expectPrompt(heading, 'CKB held');
+  expect(promptNote(heading)).toHaveTextContent(/^1 CKB per byte$/);
 });

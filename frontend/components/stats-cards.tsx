@@ -25,11 +25,16 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
   const txnsSpeed = formatRate(syncStatus.emaTxsPerSecond ?? syncStatus.txsPerSecond ?? null);
   const hasExtraInfo = syncSpeed || txnsSpeed || syncStatus.estimatedTime || syncStatus.elapsedTime;
 
+  // A plain well (rubbing × Song print, phase 2) with the celadon live mark: no glowing card.
   return (
-    <div className="terminal-card border-base-border p-3">
-      <div className="relative z-10 flex items-center justify-between">
+    <div data-testid="sync-banner" className="well p-3">
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="bg-jade h-2 w-2 animate-pulse rounded-full" />
+          <span
+            aria-hidden="true"
+            data-testid="sync-banner-live"
+            className="bg-jade h-2 w-2 animate-pulse rounded-full"
+          />
           <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING...</span>
         </div>
         <span className="text-gold-dim text-body font-mono">
@@ -41,7 +46,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
         </span>
       </div>
       {hasExtraInfo && (
-        <div className="text-gold-dim text-small relative z-10 mt-1 flex items-center gap-3 font-mono">
+        <div className="text-gold-dim text-small mt-1 flex items-center gap-3 font-mono">
           {syncSpeed && (
             <span>
               <TerminalNumber value={syncSpeed} glowIntensity="subtle" /> blocks/s
@@ -56,7 +61,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}
-      <div className="bg-base-bg relative z-10 mt-2 h-1.5 w-full overflow-hidden rounded-full">
+      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden rounded-full">
         <div
           className="from-gold-dim via-gold-dim to-gold h-full rounded-full bg-gradient-to-r transition-all duration-500"
           style={{ width: `${syncStatus.progress}%` }}
@@ -91,13 +96,9 @@ export function StatsCards() {
       {stats && <SyncBanner stats={stats} />}
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => (
-          <div key={card.label} className="terminal-card terminal-border-glow p-4">
-            <div className="eyebrow text-text-dim text-small relative z-10 font-mono">
-              {card.label}
-            </div>
-            <div
-              className={`text-hero relative z-10 mt-1 font-semibold ${isLoading ? 'animate-terminal-flicker' : ''}`}
-            >
+          <div key={card.label} data-testid="stats-card" className="well p-4">
+            <div className="eyebrow text-text-dim text-small font-mono">{card.label}</div>
+            <div className="text-hero mt-1 font-semibold">
               <TerminalNumber value={card.value} glowIntensity={card.glow} animate={!isLoading} />
             </div>
           </div>

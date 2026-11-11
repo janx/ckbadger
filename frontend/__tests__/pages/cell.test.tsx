@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -101,6 +103,26 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
   });
+  // Rubbing × Song print, phase 3: the page seal (112 px, 80 on a phone, −4°) of the out point's
+  // 32-byte part, the hash of the transaction that made the cell, pressed beside the out point.
+  it('presses the seal of its out point’s transaction hash beside the out point', async () => {
+    getCell.mockResolvedValue({ ...base, outputIndex: 2 });
+    outpoint = `${hash}-2`;
+    const { container } = view();
+    const title = await screen.findByRole('heading', { level: 1 });
+    const seal = expectOnePageSeal(container, base.txHash, 'object');
+    const head = seal.closest('[data-sealed-head]')!;
+    expect(head).toContainElement(title);
+    expect(head).toHaveTextContent(`${base.txHash}:2`);
+    expectBefore(seal, title);
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
+  });
+  it('presses no seal when the out point cannot be read', () => {
+    outpoint = hash;
+    const { container } = view();
+    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
+  });
   it('shows loading and then exact live cell anatomy, chronology and byte map', async () => {
     let resolve!: (value: Cell) => void;
     getCell.mockReturnValue(
@@ -113,7 +135,10 @@ describe('CellDetailPage', () => {
     expect(screen.getByRole('status', { name: 'Loading …' }).children).toHaveLength(3);
     expect(screen.queryByText('Loading cell evidence…')).toBeNull();
     resolve(base);
-    expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
+    // Phase 5 (A7): the microscope's heading is the bytes command, run on the occupied sum.
+    expect(
+      await screen.findByRole('heading', { name: /^Bytes \d+ \+ \d+ \+ \d+ \+ \d+ = \d+$/ })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
     // Consistency plan C1: the tab names the page.
     // Lane U (U3): the tab names a cell — "Cell 0xabab…abab:0 · CKBadger".
@@ -176,13 +201,49 @@ describe('CellDetailPage', () => {
       },
     } as Cell);
     view();
-    expect(await screen.findByText('Nervos DAO')).toBeInTheDocument();
-    expect(screen.getByText(/deposited/)).toBeInTheDocument();
+    // Rubbing × Song print, phase 5 (D1): the command runs on the API's status.
+    const heading = await screen.findByRole('heading', { name: 'Nervos DAO deposited' });
+    expect(heading.lastElementChild).toHaveTextContent(/^deposited$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
+    // the heading says the status; the line under it does not say it again
+    const line = screen.getByText(/^deposit block/).closest('p') as HTMLElement;
+    expect(line).not.toHaveTextContent('deposited');
     // Exact CKB in the site's one amount form, thousands grouped (SC-C3, #16).
-    expect(screen.getByText(/deposited/).closest('p')).toHaveTextContent(
-      'compensation 12,345.23456789 CKB'
-    );
+    expect(line).toHaveTextContent('compensation 12,345.23456789 CKB');
     expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
+  });
+  // Rubbing × Song print, phase 5 (D2): the dep group's command runs on its member count.
+  it('counts a dep group’s members in its heading, one item or more', async () => {
+    const member = (index: number) => ({ txHash: `0x${'cd'.repeat(32)}`, outputIndex: index });
+    getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0), member(1)] });
+    const { unmount } = view();
+    const heading = await screen.findByRole('heading', { name: 'Dep group 2 items' });
+    expect(heading.parentElement!.parentElement!.querySelectorAll('li')).toHaveLength(2);
+    unmount();
+    getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0)] });
+    view();
+    expect(await screen.findByRole('heading', { name: 'Dep group 1 item' })).toBeInTheDocument();
+  });
+  it('refuses a dep group without its members rather than drawing an empty list', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      getCell.mockResolvedValue({ ...base, isDepGroup: true });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ErrorBoundary fallback={<p>page-level boundary</p>}>
+            <CellDetailPage />
+          </ErrorBoundary>
+        </QueryClientProvider>
+      );
+      expect(await screen.findByText('page-level boundary')).toBeInTheDocument();
+      expect(quiet.mock.calls.flat().map(String).join(' ')).toContain(
+        `Cell ${hash}:0 is a dep group without its members`
+      );
+      expect(screen.queryByRole('heading', { name: /^Dep group/ })).toBeNull();
+    } finally {
+      quiet.mockRestore();
+    }
   });
   it('links script code hash with its exact hash type, not the script instance hash', async () => {
     getCell.mockResolvedValue(base);
