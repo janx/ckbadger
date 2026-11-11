@@ -3,7 +3,7 @@
 // (`text-text-bright underline decoration-aqua/35 underline-offset-[3px]`) and carries no hover
 // colour of its own: the global `a:hover` (Move 1c, midnight-continued.test) turns it jade with
 // the glow. Aqua at rest is kept for the one call to action of a section (`text-interactive`,
-// "Charts →"), which sits outside every row. jsdom loads no Tailwind, so these pin the classes;
+// "charts →"), which sits outside every row. jsdom loads no Tailwind, so these pin the classes;
 // the gate script (`aquaAtRest`, computed colour) measures the built pages.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
@@ -255,7 +255,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
   it('a section CTA outside every row keeps its aqua (text-interactive) — untouched', () => {
     stubChartWidth(560);
     render(<ActivityStats />);
-    const cta = screen.getByRole('link', { name: 'Charts →' });
+    const cta = screen.getByRole('link', { name: 'charts →' });
     expect(cta).toHaveClass('text-interactive', 'hover:text-jade');
     expect(cta).not.toHaveClass('underline', 'decoration-aqua/35');
     expect(cta.closest('table, [role="row"], [data-feed-row]')).toBeNull();

@@ -37,13 +37,17 @@ import { cn } from '@/lib/utils';
 /** Daily charts show their last 14 points: complete days, by the endpoints' contract. */
 const DAYS = 14;
 
-/** The Network section: four same-size small multiples, one data hue. */
+/**
+ * The Network section: four same-size small multiples, one data hue, under the command line
+ * `■ network --days 14` (rubbing × Song print, phase 5, H2) — the flag is the window the daily
+ * figures show.
+ */
 export function NetworkSection() {
   return (
     <section aria-labelledby="home-network-heading" className="flex flex-col gap-[18px]">
       {/* C10: one "tap or hover" for the four figures, by the heading. */}
       <div className={SECTION_HEAD_CLASS}>
-        <SectionHeading id="home-network-heading" command="Network" />
+        <SectionHeading id="home-network-heading" command="network" args={`--days ${DAYS}`} />
         <TapOrHoverHint className={SECTION_HINT_CLASS} />
       </div>
       <div className={SMALL_MULTIPLES_CLASS}>

@@ -6,6 +6,7 @@ import { server } from '@/__tests__/msw/server';
 import { feedSamples, latestActivities } from '@/__tests__/msw/fixtures/home';
 import { MINUS } from '@/lib/chart-ticks';
 import { ActivityFeed, FEED_ROWS, formatOccupiedDelta } from '@/components/home/activity-feed';
+import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -52,24 +53,62 @@ describe('ActivityFeed', () => {
   beforeEach(() => usePipelineHoverStore.getState().clear());
   afterEach(() => usePipelineHoverStore.getState().clear());
 
-  it('opens on Latest activity with real tab buttons and a View all link', async () => {
+  it('opens on Latest activity with real tab buttons and a view all link', async () => {
     render(<ActivityFeed />);
     const tabs = screen.getByRole('group', { name: 'Feed' });
     const activity = within(tabs).getByRole('button', { name: 'Latest activity' });
     const transactions = within(tabs).getByRole('button', { name: 'Transactions' });
     expect(activity).toHaveAttribute('aria-pressed', 'true');
     expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11', 'whitespace-nowrap');
-    // 13 px (body) tabs on a phone so both tabs and View all fit one line.
-    expect(activity).toHaveClass('text-body', 'sm:text-section');
+    // Phase 5 (H4): the tabs are a smaller row under the feed's heading, 13 px (body) at every
+    // width — the heading is the section's name now, not the tabs.
+    expect(activity).toHaveClass('text-body');
+    expect(activity).not.toHaveClass('sm:text-section');
     expect(transactions).toHaveClass('whitespace-nowrap');
-    expect(screen.getByRole('link', { name: 'View all →' })).toHaveClass('whitespace-nowrap');
+    expect(screen.getByRole('link', { name: 'view all →' })).toHaveClass('whitespace-nowrap');
     expect(transactions).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('link', { name: 'View all →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
       'href',
       '/mainnet/activities'
     );
     expect(screen.getByTestId('feed-loading').children).toHaveLength(FEED_ROWS);
     await waitFor(() => expect(rows()).toHaveLength(FEED_ROWS));
+  });
+
+  // Rubbing × Song print, phase 5 (H4, the Main board's convention): the feed is a command on its
+  // row count, `■ feed --last 8`, with "view all →" — following the tab — as its note; the two
+  // tabs are a smaller row under it, keeping the rule and the jade underline of the active one.
+  it('heads the feed as a command: feed --last 8, view all as the note, the tabs under it', async () => {
+    const user = userEvent.setup();
+    render(<ActivityFeed />);
+    const heading = screen.getByRole('heading', { level: 2, name: `feed --last ${FEED_ROWS}` });
+    expect(heading).toHaveClass('text-section');
+    const [command, args] = Array.from(heading.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^feed$/);
+    expect(args).toHaveTextContent(/^--last 8$/);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    // the note: the view-all link, at the row's right end, outside the heading's name
+    const link = screen.getByRole('link', { name: 'view all →' });
+    const note = link.closest('[data-prompt-note]') as HTMLElement;
+    expect(note).toHaveClass('ml-auto');
+    expect(note.parentElement).toBe(heading.parentElement);
+    expect(heading).not.toContainElement(link);
+    expect(screen.queryByRole('link', { name: /View all/ })).toBeNull();
+    // the heading row first, then the tab row with its rule; no link left among the tabs
+    const feed = screen.getByTestId('home-feed');
+    const [headRow, tabRow] = Array.from(feed.children) as HTMLElement[];
+    expect(headRow).toHaveClass(ACTIVITY_HEAD_CLASS);
+    expect(headRow).toContainElement(heading);
+    expect(tabRow).toContainElement(screen.getByRole('group', { name: 'Feed' }));
+    expect(tabRow).toHaveClass('border-b', 'border-base-border-subtle');
+    expect(within(tabRow).queryByRole('link')).toBeNull();
+    // the note follows the tab; the heading stays the feed's
+    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+      'href',
+      '/mainnet/transactions'
+    );
+    expect(screen.getByRole('heading', { level: 2 })).toBe(heading);
   });
 
   it('shows 8 activities: the narrative left, the raw evidence quiet on the right', async () => {
@@ -329,7 +368,7 @@ describe('ActivityFeed', () => {
       'aria-pressed',
       'true'
     );
-    expect(screen.getByRole('link', { name: 'View all →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );

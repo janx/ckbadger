@@ -27,7 +27,9 @@ describe('NetworkSection', () => {
 
   it('draws block time, hash rate, uncle rate and transactions as same-size small multiples', async () => {
     render(<NetworkSection />);
-    expect(screen.getByRole('heading', { level: 2, name: 'Network' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'network --days 14' })
+    ).toBeInTheDocument();
 
     await waitFor(() =>
       expect(screen.getByTestId('home-block-time-headline')).toHaveTextContent('9.57')
@@ -54,8 +56,29 @@ describe('NetworkSection', () => {
     const hint = container.querySelector('[data-hint="tap-or-hover"]')!;
     expect(hint).toHaveTextContent(/^tap or hover$/);
     expect(hint.parentElement).toContainElement(
-      screen.getByRole('heading', { level: 2, name: 'Network' })
+      screen.getByRole('heading', { level: 2, name: 'network --days 14' })
     );
+  });
+
+  // Rubbing × Song print, phase 5 (H2, the Main board): `■ network --days 14` — the flag is the
+  // window of the daily figures, dim after the command; the hint stays the row's right end, not a
+  // note of the heading (it is the page's one hint, and registers in mount order).
+  it('heads the section as a command on its window: network --days 14, the hint at the right', () => {
+    const { container } = render(<NetworkSection />);
+    const heading = screen.getByRole('heading', { level: 2, name: 'network --days 14' });
+    expect(heading).toHaveClass('text-section');
+    const [command, args] = Array.from(heading.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^network$/);
+    expect(args).toHaveTextContent(/^--days 14$/);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    // the section is named by its command line
+    expect(screen.getByRole('region', { name: 'network --days 14' })).toBe(
+      container.querySelector('section')
+    );
+    const hint = container.querySelector('[data-hint="tap-or-hover"]') as HTMLElement;
+    expect(heading.parentElement).toBe(hint.parentElement);
+    expect(heading.nextElementSibling).toBe(hint);
+    expect(container.querySelector('[data-prompt-note]')).toBeNull();
   });
 
   // Lane U follow-up (user report): hovering a chart made "CKBytes in circulation" below jump — the

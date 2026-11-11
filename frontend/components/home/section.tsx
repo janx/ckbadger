@@ -9,23 +9,42 @@ export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-section';
 
 /**
  * A homepage section heading as a command line (rubbing × Song print, phase 2): the prompt square,
- * then the section's name as the command and, when it has them, its args.
+ * then the section's name as the command and, when it has them, its args; a note (phase 5: a
+ * link, the block a figure is read at) stands at the row's right end, outside the heading's name.
  */
 export function SectionHeading({
   id,
   command,
   args,
+  note,
 }: {
   id?: string;
   command: ReactNode;
   args?: ReactNode;
+  note?: ReactNode;
 }) {
-  return <PromptHeading id={id} command={command} args={args} className={SECTION_HEADING_CLASS} />;
+  return (
+    <PromptHeading
+      id={id}
+      command={command}
+      args={args}
+      note={note}
+      className={SECTION_HEADING_CLASS}
+    />
+  );
 }
 
 /** A heading row that states the section's one hint at its right (consistency C10). */
 export const SECTION_HEAD_CLASS = 'flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1';
 export const SECTION_HINT_CLASS = 'text-text-dim text-meta whitespace-nowrap';
+
+/**
+ * The Activity section's two heading rows, the feed's and the figures' (rubbing × Song print,
+ * phase 5, H4 / H5): one class, so where the columns stand side by side the two command lines sit
+ * on one line at one height. The heading, with its note, stretches the row's width (a column
+ * flex), so the note stands at the right end.
+ */
+export const ACTIVITY_HEAD_CLASS = 'flex min-h-11 flex-col justify-center';
 
 /** The small-multiples grid: same-size charts, as many per row as fit at 220 px. */
 export const SMALL_MULTIPLES_CLASS =

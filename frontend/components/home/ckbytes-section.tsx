@@ -23,11 +23,12 @@ import {
   bodyOf,
   derive,
   viewOf,
+  type Derived,
 } from '@/components/home/section';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { api, type ChartResponse, type CkbytesAllocation, type DaoStatistics } from '@/lib/api';
-import { formatCompactSigned } from '@/lib/chart-ticks';
+import { formatCompactSigned, MINUS } from '@/lib/chart-ticks';
 import {
   formatDecimalBytes,
   formatPercent,
@@ -49,52 +50,92 @@ import { Comment } from '@/components/ui/comment';
 /** Both change charts show the last 30 complete days. */
 const CHANGE_DAYS = 30;
 
-/** CKBytes in circulation: the exact total, where it sits, and how knowledge and the DAO move. */
+/**
+ * The supply: CKBytes in circulation, the exact total, where it sits, and how knowledge and the DAO
+ * move. Rubbing × Song print, phase 5 (H3, the Main board): the heading is `■ supply` with the
+ * block the allocation was read at as its note; from `lg` the body is the board's 7 / 3 grid — the
+ * figure, the bar, the legend and the change figures at the left, the comment and the formula as
+ * an aside at the right; below `lg` the aside follows the legend, as the comment did.
+ */
 export function CkbytesSection() {
-  // The number and the bar come from one response, so they describe one block.
+  // The number, the bar, the comment and the heading's block come from one response, so they
+  // describe one block.
   const allocation = useQuery({
     queryKey: ['ckbytes-allocation'],
     queryFn: () => api.getCkbytesAllocation(),
     staleTime: 0,
     refetchInterval: 10000,
   });
+  const d = useMemo(
+    () =>
+      derive({ data: allocation.data, error: allocation.error }, allocationOf, 'No allocation yet'),
+    [allocation.data, allocation.error]
+  );
+  // No note while the allocation loads or fails: the heading never names a block it has not read.
+  const view = viewOf(d);
   return (
     <section aria-labelledby="home-ckbytes-heading" className="flex flex-col gap-[18px]">
       {/* C10: one "tap or hover" for the two daily-change figures, by the heading. */}
       <div className={SECTION_HEAD_CLASS}>
-        <SectionHeading
-          id="home-ckbytes-heading"
-          command={
-            <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
-              CKBytes in circulation
-            </Link>
-          }
-        />
-        <TapOrHoverHint className={SECTION_HINT_CLASS} />
-      </div>
-      <Allocation data={allocation.data} error={allocation.error} />
-      <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-x-10 gap-y-8">
-        <div className={SMALL_MULTIPLES_CLASS}>
-          <ChangeFigure
-            testId="home-knowledge-change"
-            title="Knowledge size"
-            href="/charts/knowledge-size"
-            what="knowledge size"
-            queryKey="knowledge-size-chart"
-            queryFn={() => api.getKnowledgeSizeChart()}
-          />
-          <ChangeFigure
-            testId="home-dao-change"
-            title="DAO deposits"
-            href="/charts/total-deposit"
-            what="Nervos DAO deposits"
-            queryKey="dao-total-deposit-chart"
-            queryFn={() => api.getDaoTotalDepositChart()}
+        {/* grows, so the note stands at the row's right end */}
+        <div className="min-w-0 flex-1">
+          <SectionHeading
+            id="home-ckbytes-heading"
+            command={
+              <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
+                supply
+              </Link>
+            }
+            note={
+              view === null ? undefined : (
+                <span data-testid="ckbytes-block" className="tabular-nums">
+                  at <BlockLink number={view.blockNumber} />
+                </span>
+              )
+            }
           />
         </div>
-        <DaoBlock />
+        <TapOrHoverHint className={SECTION_HINT_CLASS} />
+      </div>
+      <div
+        data-testid="ckbytes-body"
+        className="grid grid-cols-1 gap-y-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] lg:gap-x-12"
+      >
+        <Allocation d={d} />
+        {view !== null && <SupplyNote view={view} />}
+        <ChangeFigures />
       </div>
     </section>
+  );
+}
+
+/**
+ * The two daily-change figures and the DAO block, under the allocation: in the left column from
+ * `lg`, the section's last row below it (32 px under the allocation or its note, as before).
+ */
+function ChangeFigures() {
+  return (
+    <div className="mt-[18px] grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-x-10 gap-y-8 lg:col-start-1 lg:row-start-2">
+      <div className={SMALL_MULTIPLES_CLASS}>
+        <ChangeFigure
+          testId="home-knowledge-change"
+          title="Knowledge size"
+          href="/charts/knowledge-size"
+          what="knowledge size"
+          queryKey="knowledge-size-chart"
+          queryFn={() => api.getKnowledgeSizeChart()}
+        />
+        <ChangeFigure
+          testId="home-dao-change"
+          title="DAO deposits"
+          href="/charts/total-deposit"
+          what="Nervos DAO deposits"
+          queryKey="dao-total-deposit-chart"
+          queryFn={() => api.getDaoTotalDepositChart()}
+        />
+      </div>
+      <DaoBlock />
+    </div>
   );
 }
 
@@ -154,14 +195,44 @@ export function supplyComment(view: AllocationView): string[] {
   ];
 }
 
+/**
+ * How the circulation is read: protocol circulation is the DAO header's C (total issuance) less
+ * the genesis burn and S (the unissued secondary pool), at the block the allocation was read at.
+ */
+export function supplyFormula(view: AllocationView): string {
+  return `C ${MINUS} burnt ${MINUS} S · from the DAO header of ${formatBlockNumber(view.blockNumber)}`;
+}
+
+/**
+ * The supply's note (the Main board's aside): the comment, then the formula line in the ghost ink,
+ * set in under the comment's words. Rendered only for a ready allocation.
+ */
+function SupplyNote({ view }: { view: AllocationView }) {
+  return (
+    <aside
+      aria-label="Note"
+      data-testid="ckbytes-note"
+      className="lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start lg:pt-1"
+    >
+      <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
+      <p
+        data-testid="ckbytes-formula"
+        className="text-text-ghost text-meta m-0 mt-3 pl-[18px] font-mono"
+      >
+        {supplyFormula(view)}
+      </p>
+    </aside>
+  );
+}
+
 /** Free CKB is plain CKB held: the neutral slate of a CKB mark. */
 const FREE_COLOR = CLASS_COLORS.ckb;
 
-function Allocation({ data, error }: { data: CkbytesAllocation | undefined; error: Error | null }) {
-  const d = derive({ data, error }, allocationOf, 'No allocation yet');
+/** The allocation's figure, bar and legend: the left column from `lg`. */
+function Allocation({ d }: { d: Derived<AllocationView> }) {
   if (d.state === 'loading') {
     return (
-      <div aria-hidden="true" className="flex flex-col gap-3.5">
+      <div aria-hidden="true" className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
         <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
         <div className="bg-base-surface h-2.5 animate-pulse rounded-full" />
       </div>
@@ -172,7 +243,10 @@ function Allocation({ data, error }: { data: CkbytesAllocation | undefined; erro
       <div
         role="alert"
         data-testid="ckbytes-allocation-error"
-        className="border-negative/40 text-negative text-small rounded border px-3 py-2"
+        className={cn(
+          ALLOCATION_CLASS,
+          'border-negative/40 text-negative text-small rounded border px-3 py-2'
+        )}
       >
         {d.message}
       </div>
@@ -180,6 +254,9 @@ function Allocation({ data, error }: { data: CkbytesAllocation | undefined; erro
   }
   return <AllocationReady view={d.view} />;
 }
+
+/** The allocation's place in the section's grid: the first row of the left column from `lg`. */
+const ALLOCATION_CLASS = 'lg:col-start-1 lg:row-start-1';
 
 type Part = 'knowledge' | 'free' | 'dao';
 
@@ -235,7 +312,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
     ...focusHandlers(part),
   });
   return (
-    <div className="flex flex-col gap-3.5">
+    <div className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
       <div
         data-testid="ckbytes-circulating"
         // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's
@@ -247,11 +324,15 @@ function AllocationReady({ view }: { view: AllocationView }) {
         {total.integer}
         <span className="text-text-dim">.{total.decimal}</span>
         <span className="text-text-dim text-[0.5em]"> CKB</span>
+        {/* what the figure is, now the heading says `supply` (the board's label); the block it
+            is read at is the heading's note, said once. One unit, so it moves under the figure
+            whole rather than break ('in' / 'circulation' at 1024), at its own tracking, not the
+            display figure's −0.03 em */}
         <span
-          data-testid="ckbytes-block"
-          className="text-text-dim text-small ml-3 align-middle font-normal"
+          data-testid="ckbytes-label"
+          className="text-text-dim text-small ml-3 whitespace-nowrap align-middle font-normal tracking-normal"
         >
-          at <BlockLink number={view.blockNumber} />
+          in circulation
         </span>
       </div>
       <div
@@ -304,7 +385,6 @@ function AllocationReady({ view }: { view: AllocationView }) {
           {...legend('dao')}
         />
       </div>
-      <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
     </div>
   );
 }

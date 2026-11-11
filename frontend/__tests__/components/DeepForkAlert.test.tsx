@@ -41,4 +41,20 @@ describe('DeepForkAlert', () => {
       '/mainnet/forks'
     );
   });
+
+  // Rubbing × Song print, phase 5 (H6): the alert's h2 is not a tier-1 section, so it is not
+  // `text-section` — whose CSS (h2.text-section) draws the cinnabar prompt square on the red
+  // banner and sets the words lowercase — but a plain bold h2 on the type scale's body step.
+  it('heads the alert with a plain bold h2: no section square, its words in their own case', () => {
+    render(<DeepForkAlert status={activeDeepFork} />);
+    const heading = screen.getByRole('heading', {
+      level: 2,
+      name: 'Chain Fork Detected - Sync Paused',
+    });
+    expect(heading).not.toHaveClass('text-section');
+    expect(heading).toHaveClass('text-body', 'font-bold');
+    expect(heading).not.toHaveClass('lowercase');
+    expect(heading.className).not.toMatch(/prompt|section-mark/);
+    expect(heading.querySelector('.section-mark, .prompt-square')).toBeNull();
+  });
 });

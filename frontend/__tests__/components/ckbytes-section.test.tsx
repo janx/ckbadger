@@ -39,17 +39,114 @@ describe('CkbytesSection', () => {
   it("prints the allocation's circulation exactly, decimals and unit dim, at its block", async () => {
     render(<CkbytesSection />);
     const total = await screen.findByTestId('ckbytes-circulating');
-    expect(total).toHaveTextContent('49,868,783,034.50933125 CKB');
+    expect(total).toHaveTextContent(/^49,868,783,034\.50933125 CKB/);
     expect(within(total).getByText('.50933125')).toHaveClass('text-text-dim');
+    // what the figure is, quiet beside it, where "at #N" stood (the board's label)
+    const label = within(total).getByTestId('ckbytes-label');
+    expect(label).toHaveTextContent(/^in circulation$/);
+    expect(label).toHaveClass('text-text-dim', 'text-small', 'ml-3');
+    // one unit, never broken inside, at its own tracking (not the display figure's)
+    expect(label).toHaveClass('whitespace-nowrap', 'tracking-normal');
+    expect(total.lastElementChild).toBe(label);
     expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
     // Lane L: the block the total is exact at is a link.
     expect(
       within(screen.getByTestId('ckbytes-block')).getByRole('link', { name: '#20,820,045' })
     ).toHaveAttribute('href', '/mainnet/blocks/20820045');
-    expect(screen.getByRole('link', { name: 'CKBytes in circulation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'supply' })).toHaveAttribute(
       'href',
       '/mainnet/charts/total-supply'
     );
+  });
+
+  // Rubbing × Song print, phase 5 (H3, the Main board): `■ supply`, the block the allocation was
+  // read at as the heading row's note — moved up from the figure, so the block is said once.
+  it('heads the section as supply, the block it is read at as the note, said once', async () => {
+    const { container } = render(<CkbytesSection />);
+    await screen.findByTestId('ckbytes-circulating');
+    const heading = screen.getByRole('heading', { level: 2, name: 'supply' });
+    expect(heading).toHaveAttribute('id', 'home-ckbytes-heading');
+    expect(screen.getByRole('region', { name: 'supply' })).toBe(container.querySelector('section'));
+    expect(within(heading).getByRole('link', { name: 'supply' })).toHaveAttribute(
+      'href',
+      '/mainnet/charts/total-supply'
+    );
+    // the note: at the heading row's right end, outside the heading's name
+    const note = container.querySelector('[data-prompt-note]') as HTMLElement;
+    expect(note).toHaveTextContent(/^at #20,820,045$/);
+    expect(note).toHaveClass('ml-auto');
+    expect(note).toContainElement(screen.getByTestId('ckbytes-block'));
+    expect(heading).not.toContainElement(note);
+    expect(note.parentElement).toBe(heading.parentElement);
+    // the heading and its note grow to fill the row, so the note reaches its right end
+    expect(heading.parentElement!.parentElement).toHaveClass('flex-1', 'min-w-0');
+    // said once: one link to the block in the whole section, the figure no longer carries it
+    const blockLinks = within(container).getAllByRole('link', { name: '#20,820,045' });
+    expect(blockLinks).toHaveLength(1);
+    expect(note).toContainElement(blockLinks[0]);
+    expect(screen.getByTestId('ckbytes-circulating')).not.toHaveTextContent('#');
+  });
+
+  it('names no block while the allocation loads or fails: no note, never a placeholder', async () => {
+    server.use(
+      http.get(`${API}/statistics/ckbytes-allocation`, () => new Promise<Response>(() => {}))
+    );
+    const { container, unmount } = render(<CkbytesSection />);
+    screen.getByRole('heading', { level: 2, name: 'supply' });
+    expect(container.querySelector('[data-prompt-note]')).toBeNull();
+    expect(screen.queryByTestId('ckbytes-block')).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Note' })).toBeNull();
+    unmount();
+    serveAllocation({ ...ckbytesAllocation, free: '4149940517307133424' });
+    const failed = render(<CkbytesSection />);
+    await screen.findByTestId('ckbytes-allocation-error');
+    expect(failed.container.querySelector('[data-prompt-note]')).toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'supply' })).toBeInTheDocument();
+  });
+
+  // The Main board's composition: from lg a 7 / 3 grid, 48 px apart — the figure, the bar, the
+  // legend and the change figures at the left, the note (the comment, then the formula) at the
+  // right; below lg one column in the order it always had: the note after the legend.
+  it('lays the body out as the board: the 7 / 3 grid from lg, the note after the legend below', async () => {
+    render(<CkbytesSection />);
+    await screen.findByTestId('ckbytes-circulating');
+    const body = screen.getByTestId('ckbytes-body');
+    expect(body).toHaveClass(
+      'grid',
+      'grid-cols-1',
+      'lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]',
+      'lg:gap-x-12'
+    );
+    const [allocation, note, changes] = Array.from(body.children) as HTMLElement[];
+    expect(body.children).toHaveLength(3);
+    expect(allocation).toContainElement(screen.getByTestId('ckbytes-circulating'));
+    expect(allocation).toContainElement(screen.getByRole('img', { name: /^Knowledge/ }));
+    expect(allocation).toContainElement(screen.getByRole('button', { name: /^Nervos DAO/ }));
+    expect(allocation).toHaveClass('lg:col-start-1', 'lg:row-start-1');
+    expect(note).toBe(screen.getByRole('complementary', { name: 'Note' }));
+    expect(note.tagName).toBe('ASIDE');
+    expect(note).toHaveClass('lg:col-start-2', 'lg:row-start-1', 'lg:row-span-2');
+    expect(changes).toContainElement(screen.getByTestId('home-knowledge-change'));
+    expect(changes).toContainElement(screen.getByTestId('home-dao-change'));
+    expect(changes).toContainElement(screen.getByTestId('home-dao'));
+    expect(changes).toHaveClass('lg:col-start-1', 'lg:row-start-2');
+  });
+
+  it('writes the formula under the comment: C − burnt − S from the DAO header of the block', async () => {
+    render(<CkbytesSection />);
+    await screen.findByTestId('ckbytes-circulating');
+    const note = screen.getByRole('complementary', { name: 'Note' });
+    const comment = note.querySelector('.comment') as HTMLElement;
+    const formula = screen.getByTestId('ckbytes-formula');
+    expect(note.firstElementChild).toBe(comment);
+    expect(comment.nextElementSibling).toBe(formula);
+    expect(comment).toHaveClass('max-w-[60ch]');
+    // the real minus sign, as the board writes it; the block as text, its link is the note's
+    expect(formula.textContent).toBe(
+      `C ${MINUS} burnt ${MINUS} S · from the DAO header of #20,820,045`
+    );
+    expect(formula).toHaveClass('text-text-ghost', 'text-meta', 'font-mono');
+    expect(within(formula).queryByRole('link')).toBeNull();
   });
 
   it('draws the three served parts, which partition circulation exactly', async () => {
@@ -136,9 +233,13 @@ describe('CkbytesSection', () => {
       // the served allocation's own block, never a figure the response does not carry
       'at #20,820,045 they add up to every ckbyte in circulation.',
     ]);
-    // it sits with the allocation it describes, after the legend
+    // it sits with the allocation it describes, after the legend: the first thing of the note
+    // that follows the allocation (phase 5, H3: the note is the board's aside)
     const legend = document.querySelector('[data-legend="Nervos DAO"]')!.parentElement!;
-    expect(legend.nextElementSibling).toBe(comment);
+    expect(legend.nextElementSibling).toBeNull();
+    const note = legend.parentElement!.nextElementSibling as HTMLElement;
+    expect(note).toHaveAttribute('aria-label', 'Note');
+    expect(note.firstElementChild).toBe(comment);
   });
 
   it('says nothing when the allocation fails: no comment on a figure that is not there', async () => {
@@ -146,6 +247,8 @@ describe('CkbytesSection', () => {
     render(<CkbytesSection />);
     await screen.findByTestId('ckbytes-allocation-error');
     expect(document.querySelector('.comment')).toBeNull();
+    expect(screen.queryByTestId('ckbytes-formula')).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Note' })).toBeNull();
   });
 
   it('fails fast when the served parts do not add up to the circulation', async () => {
