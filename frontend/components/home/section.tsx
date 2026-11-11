@@ -38,6 +38,14 @@ export function SectionHeading({
 export const SECTION_HEAD_CLASS = 'flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1';
 export const SECTION_HINT_CLASS = 'text-text-dim text-meta whitespace-nowrap';
 
+/**
+ * The Activity section's two heading rows, the feed's and the figures' (rubbing × Song print,
+ * phase 5, H4 / H5): one class, so where the columns stand side by side the two command lines sit
+ * on one line at one height. The heading, with its note, stretches the row's width (a column
+ * flex), so the note stands at the right end.
+ */
+export const ACTIVITY_HEAD_CLASS = 'flex min-h-11 flex-col justify-center';
+
 /** The small-multiples grid: same-size charts, as many per row as fit at 220 px. */
 export const SMALL_MULTIPLES_CLASS =
   'grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-10 gap-y-8';
