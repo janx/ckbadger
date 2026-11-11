@@ -58,6 +58,67 @@ describe('DetailLayout seal', () => {
   });
 });
 
+// Rubbing × Song print, phase 5 (Gate 3 note): the page's opening sentence reads with its name, the
+// head's last line after the identity — beside the seal, so the stamp's height holds the words.
+describe('DetailLayout lede', () => {
+  const HASH = `0x${'b2'.repeat(32)}`;
+
+  it('sets the lede in the sealed head’s column, after the identity, before the facts and content', () => {
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={<span data-testid="identity">Block {HASH}</span>}
+        seal={{ hash: HASH, scale: 'record' }}
+        lede={<p data-testid="lede">4 transactions, mined by a pool.</p>}
+        facts={[{ label: 'Epoch', value: '15,271' }]}
+      >
+        <p>content</p>
+      </DetailLayout>
+    );
+    const seal = expectOnePageSeal(container, HASH, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    const lede = screen.getByTestId('lede');
+    // The column beside the seal holds the title row, the identity and then the lede, last.
+    const column = seal.nextElementSibling as HTMLElement;
+    expect(column).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(column).toContainElement(lede);
+    const holder = lede.parentElement!;
+    expect(holder).toHaveAttribute('data-detail-lede');
+    expect(holder).toHaveClass('mt-4', 'min-w-0');
+    expect(column.lastElementChild).toBe(holder);
+    expect(holder.previousElementSibling).toContainElement(screen.getByTestId('identity'));
+    expect(head).not.toContainElement(screen.getByText('15,271'));
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(lede);
+  });
+
+  it('sets the lede after the identity in a head without a seal', () => {
+    const { container } = render(
+      <DetailLayout title="Transaction" identity="0xabc" lede={<p>Two cells became one.</p>}>
+        content
+      </DetailLayout>
+    );
+    const header = container.querySelector('header')!;
+    const lede = screen.getByText('Two cells became one.').parentElement!;
+    expect(header).toContainElement(lede);
+    expect(lede.previousElementSibling).toHaveTextContent(/^0xabc$/);
+  });
+
+  it('adds nothing to the head when it is given none', () => {
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={`Block ${HASH}`}
+        seal={{ hash: HASH, scale: 'record' }}
+      >
+        content
+      </DetailLayout>
+    );
+    expect(container.querySelector('[data-detail-lede]')).toBeNull();
+    const column = container.querySelector('[data-sealed-head]')!.lastElementChild!;
+    expect(column.lastElementChild).toHaveTextContent(`Block ${HASH}`);
+  });
+});
+
 describe('DetailLayout arrival (visual finish V7)', () => {
   it('carries the arrival fade on its root', () => {
     const { container } = render(<DetailLayout title="Transaction" children="tx" />);

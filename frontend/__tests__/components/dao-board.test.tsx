@@ -1355,8 +1355,8 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     ).toHaveClass('text-small');
     expect(issuance).not.toHaveClass('border-t');
     expect(within(issuance).getByRole('heading', { level: 2 })).toHaveClass(
-      'text-section',
-      'font-medium'
+      'prompt',
+      'text-section'
     );
   });
 
@@ -1473,5 +1473,66 @@ describe('DaoBoard 24 h counts (DAO-10, R2b-a 41)', () => {
         <DaoBoard statistics={{ ...stats, withdrawalRequests24h: null }} evidence={evidence} />
       )
     ).toThrow('DAO statistics at #5: 24 h deposits 12 without its withdrawal-request count');
+  });
+});
+
+// Rubbing × Song print, phase 5 (B2–B5): every tier-1 heading of the board is a command line, the
+// question it answers as the command and what it runs on as the args, dim, inside its name; the
+// sections keep their names, the one note stays beside its heading.
+describe('DaoBoard section commands (phase 5, B2–B5)', () => {
+  const headingOf = (region: string) =>
+    within(screen.getByRole('region', { name: region })).getByRole('heading', { level: 2 });
+  const argsOf = (heading: HTMLElement) => {
+    const args = heading.lastElementChild as HTMLElement;
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    return args;
+  };
+
+  it('runs each section on what it reads: the example deposit, the statistics block, the requests', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    // B2: the board's example deposit, from the one constant the reading uses.
+    const grows = headingOf('How a deposit grows');
+    expect(grows).toHaveAccessibleName('How a deposit grows 10,000 CKB');
+    expect(argsOf(grows)).toHaveTextContent(/^10,000 CKB$/);
+    // B3: the block the statistics are read at, a link to it as every written height is (lane L).
+    const issuance = headingOf('Where secondary issuance goes');
+    expect(issuance).toHaveAccessibleName('Where secondary issuance goes at #5');
+    expect(argsOf(issuance)).toHaveTextContent(/^at #5$/);
+    expect(within(issuance).getByRole('link', { name: '#5' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/5'
+    );
+    // B4: the requested withdrawals, ready by their epoch lock and still waiting (1 and 1 here).
+    const windows = headingOf('When deposits can leave');
+    expect(windows).toHaveAccessibleName('When deposits can leave 1 ready · 1 waiting');
+    expect(argsOf(windows)).toHaveTextContent(/^1 ready · 1 waiting$/);
+    // DaoGrows heads its own column: the heading the section's first child, 18 px above the plot.
+    expect(grows).toHaveClass('prompt', 'text-section', 'text-text-bright', 'mb-[18px]');
+    expect(grows.parentElement).toBe(screen.getByRole('region', { name: 'How a deposit grows' }));
+    for (const heading of [issuance, windows]) {
+      expect(heading).toHaveClass('prompt', 'text-section', 'text-text-bright', 'w-fit');
+      // No note: the heading stands alone in its 18 px row.
+      expect(heading.parentElement!.children).toHaveLength(1);
+      expect(heading.parentElement).toHaveClass('mb-[18px]');
+    }
+  });
+
+  it('keeps “Who deposits” bare, its link to every depositor the right-prompt note', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const who = headingOf('Who deposits');
+    expect(who).toHaveAccessibleName('Who deposits');
+    expect(who.children).toHaveLength(1);
+    const note = who.nextElementSibling as HTMLElement;
+    expect(note).toHaveAttribute('data-prompt-note');
+    expect(note).toHaveClass('ml-auto', 'text-meta');
+    expect(within(note).getByRole('link', { name: 'All 2 depositors →' })).toHaveAttribute(
+      'href',
+      '/mainnet/dao/depositors'
+    );
+    expect(who).not.toContainElement(note);
+    // The row sits 18 px above the evidence.
+    expect(who.parentElement!.parentElement).toHaveClass('mb-[18px]');
   });
 });

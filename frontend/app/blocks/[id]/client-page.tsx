@@ -9,6 +9,7 @@ import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -247,6 +248,33 @@ export default function BlockDetailPage() {
           }
           // The block's talisman, the stamp the chain put on it, beside its height and hash.
           seal={{ hash: block.hash, scale: 'record' }}
+          // The summary reads with the height and hash, beside the seal (phase 5, Gate 3 note): the
+          // 150 px stamp holds the sentence instead of an empty gap under the identity.
+          lede={
+            <p data-testid="block-summary" className="text-body max-w-[80ch] leading-relaxed">
+              {formatCount(block.transactionsCount, 'transaction')}
+              {block.minerAddress && (
+                <>
+                  , mined by{' '}
+                  <MinerLink
+                    address={block.minerAddress}
+                    pool={block.minerPool}
+                    unnamed={<Address address={block.minerAddress} />}
+                  />
+                </>
+              )}{' '}
+              on {formatUtc8Date(block.timestamp)} at {formatUtc8Time(block.timestamp)}.
+              {block.miningReward !== null ? (
+                <>
+                  {' '}
+                  The miner earns {amount(block.miningReward, 'reward')} for this block
+                  {paidIn !== null && <>, paid {formatCount(paidIn, 'block')} later</>}.
+                </>
+              ) : (
+                paidIn !== null && <> Its reward is paid {formatCount(paidIn, 'block')} later.</>
+              )}
+            </p>
+          }
           status={
             activation && (
               <Link href="/hardforks" className="text-text-dim text-small">
@@ -534,9 +562,11 @@ export default function BlockDetailPage() {
         >
           {activation && resources && (
             <section aria-label="Hardfork resources">
-              <h2 className="text-text-dim text-section mb-3">
-                HARDFORK RESOURCES · {activation.shortName.toUpperCase()}
-              </h2>
+              <PromptHeading
+                command="hardfork resources"
+                args={activation.shortName}
+                className="mb-3"
+              />
               <div className="flex flex-wrap gap-4">
                 {resources.map((resource) => (
                   <a
@@ -555,32 +585,6 @@ export default function BlockDetailPage() {
           )}
           <div className="grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]">
             <div className="min-w-0">
-              <p
-                data-testid="block-summary"
-                className="text-body mb-8 max-w-[80ch] leading-relaxed"
-              >
-                {formatCount(block.transactionsCount, 'transaction')}
-                {block.minerAddress && (
-                  <>
-                    , mined by{' '}
-                    <MinerLink
-                      address={block.minerAddress}
-                      pool={block.minerPool}
-                      unnamed={<Address address={block.minerAddress} />}
-                    />
-                  </>
-                )}{' '}
-                on {formatUtc8Date(block.timestamp)} at {formatUtc8Time(block.timestamp)}.
-                {block.miningReward !== null ? (
-                  <>
-                    {' '}
-                    The miner earns {amount(block.miningReward, 'reward')} for this block
-                    {paidIn !== null && <>, paid {formatCount(paidIn, 'block')} later</>}.
-                  </>
-                ) : (
-                  paidIn !== null && <> Its reward is paid {formatCount(paidIn, 'block')} later.</>
-                )}
-              </p>
               <div className="border-base-border-subtle mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
                 <div role="group" aria-label="Block contents" className="flex flex-wrap gap-6">
                   {(['activities', 'transactions'] as const).map((tab) => (

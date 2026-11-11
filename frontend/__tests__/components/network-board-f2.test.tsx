@@ -305,8 +305,9 @@ describe('Network board (F2 charts)', () => {
       )
     );
     render(wrap(<NetworkDistributions />));
+    // Phase 5 (B11): the list runs on every verified node it counts.
     expect(
-      await screen.findByRole('heading', { name: 'Which software they run' })
+      await screen.findByRole('heading', { name: 'Which software they run 7 nodes' })
     ).toBeInTheDocument();
     expect(screen.getByText('0.204.0')).toBeInTheDocument();
     expect(screen.queryByText('Countries')).toBeNull();

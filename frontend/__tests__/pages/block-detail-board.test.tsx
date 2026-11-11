@@ -243,8 +243,26 @@ describe('Block board · first tier', () => {
     expect(head).toContainElement(title);
     expect(head).toHaveTextContent(`Block${block.hash}`);
     expectBefore(seal, title);
-    expect(head).not.toContainElement(screen.getByTestId('block-summary'));
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
+    expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
+  });
+
+  // Phase 5 (Gate 3 note): the summary stands beside the 150 px seal with the height and hash,
+  // the head's last line, instead of opening the content under an empty gap.
+  it('reads the summary in the sealed head, after the hash, before the tab row', async () => {
+    const { container } = render(<BlockDetailPage />);
+    const summary = await screen.findByTestId('block-summary');
+    const seal = expectOnePageSeal(container, block.hash, 'record');
+    const head = seal.closest('[data-sealed-head]')!;
+    expect(head).toContainElement(summary);
+    expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
+    const column = seal.nextElementSibling!;
+    expect(column.lastElementChild).toContainElement(summary);
+    expect(summary.parentElement).toHaveAttribute('data-detail-lede');
+    expectBefore(screen.getByText(block.hash), summary);
+    expectBefore(summary, screen.getByRole('group', { name: 'Block contents' }));
+    // The header keeps the 32 px to the content; the summary carries no margin of its own.
+    expect(summary).not.toHaveClass('mb-8');
   });
 
   it('says which pool mined the block when pools.toml names it (R-12)', async () => {

@@ -146,8 +146,9 @@ describe('DaoPage', () => {
 
   it('renders the API-produced epoch, owner, AR and raw DAO evidence', async () => {
     render(<DaoPage />);
+    // Phase 5 (B4): the heading runs on the requested withdrawals, ready and waiting.
     expect(
-      await screen.findByRole('heading', { name: 'When deposits can leave' })
+      await screen.findByRole('heading', { name: 'When deposits can leave 1 ready · 1 waiting' })
     ).toBeInTheDocument();
     expect(screen.getByText(/the indexed epoch is 185\+2\/4/)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
@@ -166,7 +167,7 @@ describe('DaoPage', () => {
 
   it('opens with the title row and one short sentence that points to the evidence (D1, D8, R13)', async () => {
     const { container } = render(<DaoPage />);
-    await screen.findByRole('heading', { name: 'When deposits can leave' });
+    await screen.findByRole('heading', { name: 'When deposits can leave 1 ready · 1 waiting' });
     const hero = screen.getByRole('region', { name: 'Nervos DAO' });
     expect(within(hero).getByRole('heading', { level: 1 })).toHaveTextContent('Nervos DAO');
     // One h1 on the page: the hero's.
@@ -201,7 +202,7 @@ describe('DaoPage', () => {
       'missing canonical DAO header at block 4'
     );
     expect(
-      screen.queryByRole('heading', { name: 'When deposits can leave' })
+      screen.queryByRole('heading', { name: /^When deposits can leave/ })
     ).not.toBeInTheDocument();
   });
 

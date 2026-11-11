@@ -275,14 +275,14 @@ describe('HardforksPage', () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue(mockTimeline);
     render(<HardforksPage />);
-    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana' });
+    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana activated' });
     expect(mirana).toHaveTextContent(/Added CKB-VM version 1 and the hash type data1 to pin it/);
     expect(mirana).toHaveTextContent(
       'RFC 0028relative since by timestamp uses the median time of past blocks'
     );
     expect(mirana).toHaveTextContent('RFC 0032scripts choose their VM version through hash_type');
     expect(mirana).not.toHaveTextContent('RFC 0049');
-    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo' });
+    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo activated' });
     expect(meepo).toHaveTextContent(/with the Spawn syscalls/);
     // R-10: the tip time arrives with the timeline, so the story counts the days since Meepo (CH-42).
     expect(meepo).toHaveTextContent('No script CKBadger knows uses data2 yet, 486 days on.');
@@ -348,11 +348,11 @@ describe('HardforksPage', () => {
       ],
     });
     render(<HardforksPage />);
-    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana' });
+    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana activated' });
     expect(mirana).toHaveTextContent(
       'The first known script pinned with data1 came 608 days later: xUDT.'
     );
-    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo' });
+    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo activated' });
     // The days count waits for the tip block's header time.
     await waitFor(() =>
       expect(meepo).toHaveTextContent('No script CKBadger knows uses data2 yet, 486 days on.')
@@ -462,8 +462,8 @@ describe('HardforksPage', () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue(mockTimeline);
     const { container } = render(<HardforksPage />);
-    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana' });
-    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo' });
+    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana activated' });
+    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo activated' });
     const story = (card: HTMLElement, opening: RegExp) => {
       const p = within(card).getByText(opening);
       expect(p.tagName).toBe('P');
@@ -479,7 +479,14 @@ describe('HardforksPage', () => {
       /^Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2\. No script CKBadger knows uses data2 yet, 486 days on\.$/
     );
     for (const card of [mirana, meepo]) {
-      expect(within(card).getByRole('heading', { level: 3 })).toHaveClass('text-section');
+      // Phase 5 (B13): the edition as a command line, an h3 that draws its own square, the status
+      // its args in the dim ink; its box is its words, as the date line's.
+      const title = within(card).getByRole('heading', { level: 3 });
+      expect(title).toHaveClass('prompt', 'text-section', 'text-text-bright', 'self-start');
+      expect(title.firstElementChild).toHaveClass('section-mark');
+      expect(title.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+      expect(title.lastElementChild).toHaveTextContent(/^activated$/);
+      expect(card.firstElementChild).toBe(title);
       // The date line is meta; the status beside the title is plain ink, not jade (R11).
       expect(within(card).getByText(/^epoch [\d,]+ ·/)).toHaveClass(
         'text-meta',
@@ -506,13 +513,18 @@ describe('HardforksPage', () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue(mockTimeline);
     render(<HardforksPage />);
-    const consensus = await screen.findByRole('region', {
-      name: "As this node's consensus states it",
-    });
+    const consensus = await screen.findByRole('region', { name: 'consensus' });
     // The DAO page's section head: the h2 in its own row, 18 px above the evidence, so the
     // heading's box is its words, not the column (R6; the R16 text-area rule counts boxes).
-    const h2 = within(consensus).getByRole('heading', { level: 2 });
-    expect(h2).toHaveClass('text-section', 'text-text-bright');
+    // Phase 5 (B14): a command line, run on the network and the tip epoch the title row states.
+    const h2 = within(consensus).getByRole('heading', {
+      level: 2,
+      name: 'consensus mainnet · epoch 13,000',
+    });
+    expect(h2).toHaveClass('prompt', 'text-section', 'text-text-bright');
+    expect(h2.lastElementChild).toHaveTextContent(/^mainnet · epoch 13,000$/);
+    expect(h2.lastElementChild).toHaveClass('text-text-dim');
+    expect(screen.getByText('mainnet · tip epoch 13,000')).toBeInTheDocument();
     expect(h2.parentElement).toHaveClass('flex', 'mb-[18px]');
     expect(h2.parentElement!.parentElement).toBe(consensus);
     // One-line source label: as wide as its words.
@@ -532,7 +544,9 @@ describe('HardforksPage', () => {
     const hero = screen.getByRole('region', { name: 'Hardforks' });
     const caption = hero.nextElementSibling as HTMLElement;
     const editions = caption.nextElementSibling as HTMLElement;
-    expect(editions).toContainElement(screen.getByRole('article', { name: 'CKB Edition Mirana' }));
+    expect(editions).toContainElement(
+      screen.getByRole('article', { name: 'CKB Edition Mirana activated' })
+    );
     expect(editions).toHaveClass('mt-16');
     expect(editions.nextElementSibling).toBe(consensus);
     expect(consensus).toHaveClass('mt-[72px]');
@@ -586,7 +600,7 @@ describe('HardforksPage', () => {
       ],
     });
     const { container } = render(<HardforksPage />);
-    await screen.findByRole('article', { name: 'CKB Edition Mirana' });
+    await screen.findByRole('article', { name: 'CKB Edition Mirana activated' });
     expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 });

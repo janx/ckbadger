@@ -50,6 +50,12 @@ interface DetailLayoutBaseProps {
    * the 32-byte hash the page names its object by, at the object's scale (SealedHead).
    */
   seal?: { hash: string; scale: PageSealScale };
+  /**
+   * The page's opening sentence, read with its name (rubbing × Song print, phase 5): the last line
+   * of the head, after the identity — beside the seal when there is one, so the stamp's height
+   * holds the words instead of an empty gap.
+   */
+  lede?: ReactNode;
   status?: ReactNode;
   actions?: ReactNode;
   facts?: readonly DetailFact[];
@@ -73,6 +79,7 @@ export function DetailLayout({
   kind = 'entity',
   identity,
   seal,
+  lede,
   status,
   actions,
   facts,
@@ -105,6 +112,11 @@ export function DetailLayout({
           {identity}
         </div>
       )}
+      {lede && (
+        <div data-detail-lede="" className="mt-4 min-w-0">
+          {lede}
+        </div>
+      )}
     </>
   );
   return (
@@ -113,8 +125,8 @@ export function DetailLayout({
       {/* An index page's title row closes on a hairline (Midnight, continued, move 2; BlocksAfter):
           h1 and legend, 14 px, the 1 px line, then the list. */}
       <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>
-        {/* The seal is pressed beside the title and identity, never in the content (the facts and
-            the sections run the full width under it). */}
+        {/* The seal is pressed beside the title, identity and lede, never in the content (the
+            facts and the sections run the full width under it). */}
         {seal ? (
           <SealedHead hash={seal.hash} scale={seal.scale}>
             {head}
