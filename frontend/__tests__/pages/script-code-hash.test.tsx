@@ -160,6 +160,42 @@ describe('ScriptByCodeHashPage', () => {
     );
   });
 
+  // Rubbing × Song print, phase 5 (D6): an ambiguous reference's command runs on the number of
+  // bytecode versions live type resolution points to.
+  it('counts the conflicting bytecode versions of an ambiguous reference in its heading', async () => {
+    const versions = [`0x${'aa'.repeat(32)}`, `0x${'bb'.repeat(32)}`];
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [mockCodeHash]: {
+        referenceHash: mockCodeHash,
+        codeHash: mockCodeHash,
+        name: 'Unknown',
+        scriptKind: 'type',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: mockCodeHash,
+        deploymentDataHash: null,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        liveCellsCount: 0,
+        ownedCapacitySum: '0',
+        ownedKnowledgeSum: '0',
+        codeCellsLiveCount: 2,
+        codeCellsTotal: 2,
+        resolutionState: 'ambiguous',
+        ambiguity: { versionHashes: versions },
+      },
+    });
+
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Ambiguous script reference' })
+    ).toBeInTheDocument();
+    const heading = screen.getByRole('heading', { name: 'Conflicting live bytecode 2 versions' });
+    expect(heading.lastElementChild).toHaveTextContent(/^2 versions$/);
+    for (const version of versions) expect(screen.getByText(version)).toBeInTheDocument();
+  });
+
   it('redirects known script hash to the unified named script detail page', async () => {
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [mockCodeHash]: {
