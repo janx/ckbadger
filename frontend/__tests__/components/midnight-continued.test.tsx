@@ -273,15 +273,17 @@ describe('move 3 on the tx page’s cells diagram', () => {
       state,
     });
   // C11: the one frame became two sheets of one contract, each its own instrument frame, in a
-  // labelled group that keeps the frame's name; the prose under them stays flat.
-  it('sits on two instrument frames, the sheets; the prose under them stays flat', () => {
+  // labelled group that keeps the frame's name. Round 2: the "Capacity entering the pool" line
+  // under them is gone — it stated the consumed sheet's total again, and nothing is a pool now.
+  it('sits on two instrument frames, the sheets; the consumed head states the total once', () => {
     const { container } = render(
       <TxStructure
         txHash="0xtx"
         inputs={[tile('in:0', 'consumed')]}
         outputs={[tile('out:0', 'live')]}
         fee="1000"
-        poolCapacity="106200000000"
+        consumedCapacity="106200000000"
+        createdCapacity="106199999000"
       />
     );
     const frame = screen.getByTestId('tx-cells-frame');
@@ -299,7 +301,10 @@ describe('move 3 on the tx page’s cells diagram', () => {
     // the sheets' heads are their eyebrows
     expect(sheets[0]).toHaveTextContent('1 cell consumed');
     expect(sheets[1]).toHaveTextContent('1 cell created');
-    const pool = screen.getByText(/Capacity entering the pool/);
-    expect(frame).not.toContainElement(pool);
+    // the consumed capacity once, on its sheet's head, exact; no second line under the sheets
+    const total = sheets[0].querySelector('[data-sheet-total]');
+    expect(total).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    expect(container.querySelectorAll('[data-sheet-total]')).toHaveLength(2);
+    expect(container).not.toHaveTextContent(/entering the pool/i);
   });
 });

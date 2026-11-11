@@ -87,14 +87,16 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           (the round stone overhangs that line by 6 px, into the 12 px top padding; the owner's by
           1 px; the 16 px class mark sits 1 px down); the 10 px row gap keeps the round stone's
           drawn 5 px overhang 4 px clear of the owner's stone. Every row's text starts on the same
-          edge and ends with its right-end item (state, lock kind, capacity), which wraps under its
-          row's text when it does not fit and stays right. A row is a `contents` pair: its two
-          cells are the grid's. */}
+          edge; the rows after the first end with their right-end item (lock kind, capacity, the
+          cell's state beside the bar), which wraps under its row's text when it does not fit and
+          stays right. Row 1 is the label and the out point alone: with the state beside them it
+          wrapped on every tile of a 203 px text column (the sheets at 1024). A row is a
+          `contents` pair: its two cells are the grid's. */}
       <div data-tile-row="cell" className="contents">
         <span data-tile-mark className="flex items-start justify-center">
           <RowSeal id={cell.seal.id} state={cell.seal.state} overhang gap={false} />
         </span>
-        <TileText end={<span className="text-text-dim text-meta">{cell.state}</span>}>
+        <TileText>
           <span className="min-w-0">
             {cell.outPoint ? (
               <>
@@ -135,7 +137,12 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
-        <div data-tile-text className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {/* the bar, its bytes and the state: 56 + 6 + 79.2 ('occupied 231') + 6 + 52.8
+            ('consumed') = 200 px, inside the narrowest text column (203 px, the sheets at 1024) */}
+        <TileText
+          align="center"
+          end={<span className="text-text-dim text-meta">{cell.state}</span>}
+        >
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
           ) : (
@@ -150,7 +157,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           <span className="text-text-dim text-meta">
             occupied {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}
           </span>
-        </div>
+        </TileText>
       </div>
     </article>
   );
@@ -159,13 +166,25 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
 /**
  * A tile row's text cell (C11): the row's text from the text edge, its right-end item last,
  * pushed right; when the item does not fit beside the text it wraps under it and stays right
- * (`ml-auto`), and one wider than the whole column wraps inside itself, right-aligned.
+ * (`ml-auto`), and one wider than the whole column wraps inside itself, right-aligned. A text
+ * line sits on the baseline; the bar's line is centred, its gaps 6 px.
  */
-function TileText({ children, end }: { children: ReactNode; end?: ReactNode }) {
+function TileText({
+  children,
+  end,
+  align = 'baseline',
+}: {
+  children: ReactNode;
+  end?: ReactNode;
+  align?: 'baseline' | 'center';
+}) {
   return (
     <div
       data-tile-text
-      className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"
+      className={cn(
+        'flex min-w-0 flex-wrap justify-between',
+        align === 'baseline' ? 'items-baseline gap-x-2 gap-y-0.5' : 'items-center gap-x-1.5 gap-y-1'
+      )}
     >
       {children}
       {end && (

@@ -17,8 +17,10 @@ export type TxSealId = Extract<SealId, { kind: 'tx' }>;
 
 /**
  * The two sheets from lg up (seals by kind, C11): a transaction is two sheets of one contract,
- * what it consumed | what it created, side by side and equal, each its own frame, with a 4 px seam
- * between them through which the page ground shows; capacity crosses at the seam. Each sheet keeps
+ * what it consumed | what it created, side by side and one size (both stretch to the taller; a
+ * shorter list leaves blank paper), each its own frame with its seam-side corners square, so the
+ * pair reads as one frame cut by a 4 px seam through which the page ground shows; capacity crosses
+ * at the seam, which runs the whole height, so every connector meets it. Each sheet keeps
  * a lane on its seam side, from its tiles' edge to its own edge (35 px of padding and the 1 px
  * border), where the flows run: one overlay centred on the seam, lane + seam + lane wide.
  */
@@ -81,8 +83,6 @@ export interface TxStructureProps {
   inputs: readonly CellTileData[];
   outputs: readonly CellTileData[];
   fee: string;
-  /** Exact sum supplied by the API; never reconstructed from partially loaded cells. */
-  poolCapacity?: string;
   /**
    * The consumed sheet's total (C11): the exact shannons of the cells the transaction consumed,
    * as the API sums them (`inputsCapacity`), the head's third line; never summed from the tiles.
@@ -119,7 +119,7 @@ export interface TxStructureProps {
    * also lights its continuity partner.
    */
   linking?: 'continuity' | 'page';
-  /** Capacity entering the pool from no cell: DAO compensation (gold, dashed) or a block reward. */
+  /** Capacity entering from no cell: DAO compensation (gold, dashed) or a block reward. */
   inflow?: TxInflow;
   /** `false` when the page draws the continuity legend itself (in its section header). */
   continuityList?: boolean;
@@ -146,7 +146,6 @@ export function TxStructure({
   inputs,
   outputs,
   fee,
-  poolCapacity,
   consumedCapacity,
   createdCapacity,
   groups = [],
@@ -248,9 +247,14 @@ export function TxStructure({
     />
   );
   const sheet = (side: Side, cells: readonly CellTileData[], total: string | undefined) => (
-    <TerminalPanel data-sheet={side} className="min-w-0">
+    <TerminalPanel
+      data-sheet={side}
+      // from lg, square on the seam side; the panel's 8 px radius outside (and all round below lg)
+      className={cn('min-w-0', side === 'consumed' ? 'lg:rounded-r-none' : 'lg:rounded-l-none')}
+    >
       {/* the sheet's lane on its seam side (SHEETS.lane: 35 px and the 1 px border); 12 px on
-          the outer side, above and under its last row */}
+          the outer side, above and under its rows, which stay at the top (the fee directly under
+          the last created tile) when the sheet stretches to its pair */}
       <div
         data-sheet-content=""
         className={cn('p-3', side === 'consumed' ? 'lg:pr-[35px]' : 'lg:pl-[35px]')}
@@ -282,8 +286,9 @@ export function TxStructure({
     <div className="min-w-0 space-y-6" aria-label={`Transaction ${txHash} structure`}>
       {/* Two sheets and the seam (seals by kind, C11; the board's two sheets of one contract):
           each sheet an instrument frame, its head its eyebrow; the prose and lists under them
-          stay flat. From lg they lie side by side with the 4 px seam between, the flows drawn
-          over the seam and the sheets' lanes; below lg they stack, 12 px apart. */}
+          stay flat. From lg they lie side by side, one size (stretched to the taller), with the
+          4 px seam between, the flows drawn over the seam and the sheets' lanes; below lg they
+          stack, 12 px apart, each its own height. */}
       <div
         ref={canvas}
         data-tx-canvas=""
@@ -291,7 +296,7 @@ export function TxStructure({
         aria-label="Cells consumed and created"
         data-testid="tx-cells-frame"
         className={cn(
-          'relative grid min-w-0 grid-cols-1 gap-y-3 lg:items-start lg:gap-y-0',
+          'relative grid min-w-0 grid-cols-1 items-stretch gap-y-3 lg:gap-y-0',
           meOut === undefined
             ? 'lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]'
             : 'lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)_96px]'
@@ -396,16 +401,6 @@ export function TxStructure({
         </p>
       )}
       {meOut !== undefined && afterOnward}
-      {poolCapacity !== undefined && (
-        <p className="text-text-dim text-meta">
-          Capacity entering the pool{' '}
-          <ExactCkb
-            shannons={exactUnsignedInteger(poolCapacity, `${txHash}: pool capacity`)}
-            signed={false}
-            tone="plain"
-          />
-        </p>
-      )}
       {continuityList && continuity.length > 0 && (
         <ul
           aria-label="Cell continuity"

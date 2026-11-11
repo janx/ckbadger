@@ -156,7 +156,6 @@ export function FiberChannelStep({
             inputs={inputs}
             outputs={outputs}
             fee={tx.fee}
-            poolCapacity={tx.inputsCapacity ?? undefined}
             // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
             {...sheetTotals(tx)}
             continuity={continuity}

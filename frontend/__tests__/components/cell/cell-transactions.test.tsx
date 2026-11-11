@@ -162,7 +162,10 @@ describe('CellTransactions', () => {
     // Phase 5 (D11): a live cell's transactions are the one that created it.
     expectPrompt(screen.getByRole('heading', { name: 'Transactions 1' }), 'Transactions', '1');
   });
-  // C11: each transaction's two sheets end their heads with the API's exact sums, as read.
+  // C11: each transaction's two sheets end their heads with the API's exact sums, as read. Round
+  // 2: the "Capacity entering the pool" line that repeated inputsCapacity under the spending
+  // transaction (and was left out for the cellbase) is gone; the consumed head states it once, the
+  // cellbase's as the API's 0.
   it('heads the sheets with the API’s exact totals, a cellbase’s consumed 0 included', async () => {
     const cell = spentFixture as unknown as Cell;
     getTransactionDetail.mockImplementation(async (hash: string) => tx(hash, hash === cell.txHash));
@@ -175,6 +178,7 @@ describe('CellTransactions', () => {
     // the creating cellbase, then the spending transaction
     expect(totals('consumed')).toEqual(['0 CKB', '100.00000000 CKB']);
     expect(totals('created')).toEqual(['200.00000000 CKB', '200.00000000 CKB']);
+    expect(screen.queryByText(/entering the pool/i)).toBeNull();
   });
   it('uses the real Cell API spent producer and focuses its exact spending input', async () => {
     const cell = spentFixture as unknown as Cell;

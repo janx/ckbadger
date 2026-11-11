@@ -364,14 +364,7 @@ function tileRows(tile: HTMLElement) {
 
 /** A text cell's right-end item: last, pushed right, staying right when it wraps under the text. */
 function expectEnd(text: HTMLElement, content: RegExp) {
-  expect(text).toHaveClass(
-    'flex',
-    'min-w-0',
-    'flex-wrap',
-    'items-baseline',
-    'justify-between',
-    'gap-x-2'
-  );
+  expect(text).toHaveClass('flex', 'min-w-0', 'flex-wrap', 'justify-between');
   const end = text.lastElementChild as HTMLElement;
   expect(end).toHaveAttribute('data-tile-end');
   expect(end).toHaveClass('ml-auto', 'max-w-full', 'text-right');
@@ -420,7 +413,10 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(within(tile).getAllByRole('link')).toHaveLength(2);
   });
 
-  it('reads the label and the out point on the first row, the cell’s state at its right end', () => {
+  // Round 2 (the orchestrator's Chrome check): the state at row 1's right end wrapped on every tile
+  // between 1024 and about 1100 px (a 203 px text column: 'input 0 0x7bed...faac:0' 166 px and
+  // 'consumed' 53 px), costing each tile a line. Row 1 is the label and the out point alone.
+  it('reads the label and the out point alone on the first row', () => {
     const { outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
@@ -433,13 +429,10 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     });
     expect(outPoint).toHaveClass('whitespace-nowrap');
     expect(outPoint).toHaveAttribute('title', `${HASH}:0`);
-    expect(cell.text.firstElementChild).toHaveTextContent(
-      /^output 0 0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:0$/
-    );
-    const state = expectEnd(cell.text, /^live$/);
-    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text-dim');
-    // the state once in the tile (it was the last line's right end)
-    expect(within(tile).getAllByText('live')).toHaveLength(1);
+    expect(cell.text).toHaveClass('flex', 'min-w-0', 'flex-wrap', 'items-baseline', 'gap-x-2');
+    expect(cell.text.children).toHaveLength(1);
+    expect(cell.text).toHaveTextContent(/^output 0 0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:0$/);
+    expect(cell.text.querySelector('[data-tile-end]')).toBeNull();
   });
 
   it('reads the owner, never broken, on the second row, the lock’s kind at its right end', () => {
@@ -447,6 +440,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     render(<CellTile cell={outputs[0]} />);
     const [, owner] = tileRows(screen.getByTestId('tx-io-output-0'));
     expect(owner.row).toHaveAttribute('data-tile-owner');
+    expect(owner.text).toHaveClass('items-baseline', 'gap-x-2');
     expectOwnerSealOf(owner.mark, LOCK, IN_MARK_COLUMN);
     const name = owner.text.firstElementChild as HTMLElement;
     expect(name).toHaveClass('whitespace-nowrap');
@@ -469,6 +463,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     render(<CellTile cell={outputs[1]} />);
     const tile = screen.getByTestId('tx-io-output-1');
     const [, , content] = tileRows(tile);
+    expect(content.text).toHaveClass('items-baseline', 'gap-x-2');
     expect(content.mark.firstElementChild).toHaveAttribute('data-class', 'tokens');
     const what = content.text.firstElementChild as HTMLElement;
     expect(what).toHaveClass('text-text-bright', 'min-w-0', 'max-w-full');
@@ -478,17 +473,27 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(capacity.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
   });
 
-  it('draws the occupied bar and its bytes on one line, the fourth row, under the text edge', () => {
+  // Round 2: the cell's state is the last row's right end again, beside the bar and the bytes; the
+  // tile's right edge reads, top to bottom, nothing, the lock's kind, the capacity, the state.
+  it('draws the occupied bar and its bytes on the fourth row, the cell’s state at its right end', () => {
     const { outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[0]} />);
-    const [, , , occupied] = tileRows(screen.getByTestId('tx-io-output-0'));
-    expect(occupied.text).toHaveClass('flex', 'min-w-0', 'flex-wrap', 'items-center', 'gap-x-2');
-    expect(occupied.text.children).toHaveLength(2);
+    const tile = screen.getByTestId('tx-io-output-0');
+    const [, , , occupied] = tileRows(tile);
+    expect(occupied.text).toHaveClass('items-center', 'gap-x-1.5');
+    expect(occupied.text.children).toHaveLength(3);
     const [bar, bytes] = Array.from(occupied.text.children) as HTMLElement[];
     expect(bar).toHaveAttribute('aria-hidden', 'true');
     expect(bar).toHaveClass('h-1', 'w-14', 'shrink-0');
     expect(bytes).toHaveTextContent(/^occupied 61$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
+    const state = expectEnd(occupied.text, /^live$/);
+    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text-dim');
+    // the state once in the tile
+    expect(within(tile).getAllByText('live')).toHaveLength(1);
+    // the narrowest sheet's text column (1024: 203 px) holds the 56 px bar, 'occupied 231' and
+    // 'consumed' at 11 px (6.6 px a character) with the 6 px gaps: 200 px
+    expect(56 + 6 + 12 * 6.6 + 6 + 8 * 6.6).toBeLessThanOrEqual(203);
     // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
     cleanup();
     render(
@@ -510,7 +515,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       />
     );
     const [, , , anatomy] = tileRows(screen.getByTestId('tile'));
-    const [cellBar, words] = Array.from(anatomy.text.children) as HTMLElement[];
+    const [cellBar, words, end] = Array.from(anatomy.text.children) as HTMLElement[];
+    expect(end).toHaveTextContent(/^consumed$/);
     expect(within(cellBar).getByRole('img')).toHaveAttribute(
       'aria-label',
       'in:0: 61 occupied bytes'

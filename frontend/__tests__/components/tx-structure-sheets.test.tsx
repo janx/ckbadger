@@ -95,7 +95,7 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
       expect(sheet).toHaveClass('glass', 'rounded-lg', 'border', 'min-w-0');
     }
     expect(SHEETS.seam).toBe(4);
-    expect(root).toHaveClass('grid', 'grid-cols-1', 'gap-y-3', 'lg:items-start', 'lg:gap-y-0');
+    expect(root).toHaveClass('grid', 'grid-cols-1', 'gap-y-3', 'lg:gap-y-0');
     expect(root).toHaveClass('lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]');
     // the seam: empty ground, only the flows' overlay drawn over it; none below lg
     expect(seam).toHaveClass('relative', 'hidden', 'self-stretch', 'lg:block');
@@ -113,7 +113,7 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
         .map((a) => a.dataset.cellId)
     ).toEqual(['out:0', 'out:1']);
     // the pool is gone: no column, no bar, no label, no 112 px track
-    expect(container).not.toHaveTextContent(/capacity pool/i);
+    expect(container).not.toHaveTextContent(/pool/i);
     expect(seam.querySelector('rect')).toBeNull();
     expect(container.innerHTML).not.toContain('112px');
   });
@@ -185,6 +185,41 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     quiet.mockRestore();
   });
 
+  // Round 2 (the orchestrator's Chrome check of e20521ad): with lg:items-start the shorter sheet
+  // stopped early — on a 30-in-1-out transaction the created sheet ended after its tile and the
+  // fee, so 29 connectors met an edge with nothing beyond it and the seam ran 250 px. Two sheets
+  // of one contract are one size: from lg both stretch to the taller, the seam runs the whole
+  // height, and the inner corners are square so the pair reads as one frame cut by the seam.
+  it('makes the two sheets one size from lg, square on the seam side, round outside', () => {
+    const { container } = structure({
+      inputs: Array.from({ length: 30 }, (_, i) => tile(`in:${i}`)),
+      outputs: [tile('out:0', '599999990000')],
+    });
+    const { root, consumed, seam, created } = canvas(container);
+    // stretched, never top-aligned: every item fills the row (below lg each row is its own)
+    expect(root).toHaveClass('items-stretch');
+    expect(root.className).not.toMatch(/items-start/);
+    expect(seam).toHaveClass('self-stretch');
+    for (const sheet of [consumed, created])
+      expect(sheet.className).not.toMatch(/self-(start|center|end)/);
+    // the panel's 8 px radius outside; from lg the seam-side corners square
+    expect(consumed).toHaveClass('rounded-lg', 'lg:rounded-r-none');
+    expect(consumed.className).not.toMatch(/rounded-l-none/);
+    expect(created).toHaveClass('rounded-lg', 'lg:rounded-l-none');
+    expect(created.className).not.toMatch(/rounded-r-none/);
+    // below lg nothing squares a corner
+    for (const sheet of [consumed, created])
+      expect(sheet.className).not.toMatch(/(^|\s)rounded-[lr]-none/);
+    // the fee stays directly under the last created tile, not pushed to the sheet's floor
+    const rows = sheetRows(created);
+    expect(rows.map((r) => r.dataset.cellId ?? (r.dataset.fee !== undefined ? 'fee' : ''))).toEqual(
+      ['out:0', 'fee']
+    );
+    const list = created.querySelector<HTMLElement>('[data-sheet-rows]')!;
+    expect(list.className).not.toMatch(/flex|justify-|grow|h-full/);
+    expect(rows[1].className).not.toMatch(/mt-auto|self-end/);
+  });
+
   it('keeps a 36 px lane on each sheet’s seam side and pads the outer side as before', () => {
     expect(SHEETS.lane).toBe(36);
     const { container } = structure();
@@ -196,7 +231,7 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     expect(content(consumed).className).not.toContain('lg:pl-');
     expect(content(created)).toHaveClass('p-3', 'lg:pl-[35px]');
     expect(content(created).className).not.toContain('lg:pr-');
-    // no dead floor: the sheet ends 12 px under its last row
+    // the rows end 12 px above the sheet's padding edge; a shorter sheet's paper runs on below
     for (const sheet of [consumed, created])
       expect(content(sheet).className).not.toMatch(/(^|\s)(lg:)?pb-/);
   });

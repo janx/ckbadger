@@ -162,7 +162,6 @@ export function TransactionEvidence({
         inputs={tiles.inputs}
         outputs={tiles.outputs}
         fee={tx.fee}
-        poolCapacity={tx.isCellbase ? undefined : (tx.inputsCapacity ?? undefined)}
         // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
         {...sheetTotals(tx)}
         groups={groups}
