@@ -42,7 +42,8 @@ export interface FigureStroke {
   readonly weight?: number;
 }
 
-export interface Figure {
+/** A texture: how many bits it reads for a w × h box, the strokes it makes of them, its brush. */
+interface Figure {
   bits(w: number, h: number): number;
   make(b: Bits, w: number, h: number): FigureStroke[];
   readonly brush: BrushSpec;

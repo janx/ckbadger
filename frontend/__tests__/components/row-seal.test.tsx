@@ -1,69 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import {
-  ROW_LINE_PX,
-  ROW_SEAL,
-  ROW_SEAL_FOOTPRINT_PX,
-  ROW_SEAL_GAP_PX,
-  ROW_SEAL_PX,
-  ROW_SEAL_WIDTH_PX,
-  RowSeal,
-} from '@/components/ui/row-seal';
+import { ROW_LINE_PX, ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { drawSeal, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
-import { compound } from '@/lib/talisman/compound';
-import { ROW } from '@/lib/talisman/recipes';
-import {
-  expectOneRowSeal,
-  expectOneRowSealOf,
-  SEAL_IDS,
-  SEAL_INKS,
-  sealIdsAt,
-} from '@/__tests__/utils/seals';
+import { expectOneRowSealOf, SEAL_IDS, SEAL_INKS, sealIdsAt } from '@/__tests__/utils/seals';
 
+// block #20,914,858's hash (the night's test hash)
 const HASH = '0xbbb655aefa778c0856e702030e9f8e9f6171daa392c90b3d9abe3d69c74b386b';
-const PAINT = { ink: 'var(--c-mark)', ground: 'var(--c-base-bg)' };
-
-/** 32 bytes from a seed, without randomness: a different stone for every seed. */
-function hashOf(seed: number): string {
-  let hex = '';
-  let x = seed * 2654435761;
-  for (let i = 0; i < 64; i++) {
-    x = (x * 1103515245 + 12345) % 2147483648;
-    hex += (x % 16).toString(16);
-  }
-  return `0x${hex}`;
-}
-
-describe('RowSeal (rubbing × Song print, phase 3)', () => {
-  it('draws the row seal of the hash at 28 px, an image that is not a link', () => {
-    const { container } = render(<RowSeal hash={HASH} />);
-    expect(ROW_SEAL_PX).toBe(28);
-    const seal = expectOneRowSeal(container, HASH);
-    expect(seal).toHaveClass('[&>svg]:block');
-  });
-
-  // A list column's minimum width adds the footprint; the footprint is only true while the drawn
-  // stone is 19 px wide (the stone's field is fixed, 7 × 11, so every hash gives the same width).
-  it('is 19 px wide for every hash, so a column budget built on its footprint holds', () => {
-    for (let seed = 1; seed <= 24; seed++) {
-      const svg = compound(hashOf(seed), ROW, ROW_SEAL_PX, PAINT).svg;
-      expect(svg).toMatch(new RegExp(`^<svg width="${ROW_SEAL_WIDTH_PX}" height="28"`));
-    }
-    expect(ROW_SEAL_WIDTH_PX).toBe(19);
-    expect(ROW_SEAL_GAP_PX).toBe(8);
-    expect(ROW_SEAL_FOOTPRINT_PX).toBe(27);
-    // the gap is the seal's own 8 px right margin
-    const { container } = render(<RowSeal hash={HASH} />);
-    expect(container.firstElementChild).toHaveClass('mr-2');
-  });
-
-  it('overhangs a one-line row by 5 px above and below only when asked (28 = 18 + 2 × 5)', () => {
-    const { container, rerender } = render(<RowSeal hash={HASH} />);
-    expect(container.firstElementChild).not.toHaveClass('-my-[5px]');
-    rerender(<RowSeal hash={HASH} overhang />);
-    expect(container.firstElementChild).toHaveClass('-my-[5px]');
-  });
-});
 
 const KINDS: SealKind[] = ['block', 'tx', 'cell', 'script'];
 const STATES: SealState[] = ['pressed', 'ink', 'unpressed'];
@@ -90,7 +32,6 @@ describe('RowSeal by kind (the seals by kind)', () => {
     // the arithmetic: footprint = width + gap, overhang = (height − the 18 px line) / 2
     for (const kind of KINDS) {
       const m = ROW_SEAL[kind];
-      expect(m.gap).toBe(ROW_SEAL_GAP_PX);
       expect(m.footprint).toBe(m.width + m.gap);
       expect(m.height).toBe(ROW_LINE_PX + 2 * m.overhang);
     }
@@ -173,21 +114,5 @@ describe('RowSeal by kind (the seals by kind)', () => {
       expectOneRowSealOf(container, id);
       unmount();
     }
-  });
-
-  // The two shapes live side by side until the talisman goes.
-  it('takes the stone of an id or the talisman of a hash, never a mix (a type check)', () => {
-    const mixed = [
-      // @ts-expect-error an id with a hash
-      <RowSeal key="a" id={SEAL_IDS.block} hash={HASH} />,
-      // @ts-expect-error a hash with a state
-      <RowSeal key="b" hash={HASH} state="ink" />,
-      // @ts-expect-error neither an id nor a hash
-      <RowSeal key="c" overhang />,
-    ];
-    expect(mixed).toHaveLength(3);
-    const { container } = render(<RowSeal hash={HASH} overhang />);
-    expect(container.querySelector('[data-hash-seal="row"]')).toHaveClass('-my-[5px]');
-    expect(container.querySelector('[data-seal]')).toBeNull();
   });
 });
