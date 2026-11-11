@@ -84,7 +84,7 @@ export default function BlocksPage() {
       label: 'Miner',
       minWidth: 160,
       className: 'whitespace-nowrap',
-      render: miner,
+      render: (block) => miner(block, 'address'),
     },
     {
       key: 'reward',
@@ -303,19 +303,33 @@ function BlockIdentity({ block }: { block: Block }) {
 /** The key cell of a block row (table-rows T5): 13 px, bright, on the row's 18 px line. */
 const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
 
-function miner(block: Block) {
-  return block.minerAddress ? (
+/**
+ * Who mined the block, linked to its address: the pool `pools.toml` names, else the address. The
+ * tables write the address as `ckb1qzda0c...93hhsj`; a phone row writes its tail, `…93hhsj`
+ * (`minerName`, the site's one short form of a miner). A full address begins with its lock's code
+ * hash — `ckb1qzda0c` for every default-lock miner, the same on every row — and its last six
+ * characters are the bech32m checksum of the whole address, so the tail is what tells two miners
+ * apart. Genesis is mined by no one.
+ */
+function miner(block: Block, unnamed: 'address' | 'tail') {
+  if (!block.minerAddress) return <span className="text-text-dim">Genesis</span>;
+  return (
     <MinerLink
       address={block.minerAddress}
       pool={block.minerPool}
       // T5: the block number is the row's one bright thing; a named pool reads in body ink.
       className="text-text"
       unnamed={
-        <Address address={block.minerAddress} startChars={10} endChars={6} className="text-small" />
+        unnamed === 'address' ? (
+          <Address
+            address={block.minerAddress}
+            startChars={10}
+            endChars={6}
+            className="text-small"
+          />
+        ) : undefined
       }
     />
-  ) : (
-    <span className="text-text-dim">Genesis</span>
   );
 }
 
@@ -377,6 +391,13 @@ function reward(block: Block) {
  * A block on a phone (board L1): its seal leading the row, the height with its contents and age,
  * who mined it and the fees, then the quiet figures — hash, size, cycles and when the reward is
  * paid.
+ *
+ * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 294 px beside the
+ * stone; 12 px Courier Prime, 7.2 px a character, the unit 11 px, 6.6): "miner …93hhsj" (13
+ * characters, 93.6 px), the 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15, 108)
+ * and " CKB" (26.4), make 240 px. With the address's head, "miner ckb1qzda0c...93hhsj" (180 px),
+ * it was 326.4 and the fees dropped to a line of their own at both widths. A larger fee or a long
+ * pool name still drops the fees under the miner whole, right-aligned (PhoneRow's rule).
  */
 function BlockPhoneRow({ block }: { block: Block }) {
   return (
@@ -400,7 +421,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
           left: (
             <>
               <span className="text-text-dim">miner </span>
-              {miner(block)}
+              {miner(block, 'tail')}
             </>
           ),
           right: <span className="whitespace-nowrap">fees {fees(block, true)}</span>,
@@ -508,7 +529,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     // 138 px holds 19.2), so the column gave 2 of the block stone's 7 px from its 156.
     minWidth: 154,
     className: 'whitespace-nowrap',
-    render: miner,
+    render: (block) => miner(block, 'address'),
   },
   {
     key: 'fees',

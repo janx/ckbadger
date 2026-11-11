@@ -1,5 +1,6 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+import { genesisNeighbours, genesisNeighboursPage } from '@/__tests__/msw/fixtures/genesis-block';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -167,6 +168,55 @@ describe('BlocksPage', () => {
     expect(screen.getByText('Blocks')).toBeInTheDocument();
     expect(screen.getAllByText('#8,775,638').length).toBeGreaterThan(0);
     expect(screen.getAllByText('HF · MIRANA')[0]).toBeInTheDocument();
+  });
+});
+
+// The chain's first page as the API lists it (GET /blocks?cursor=3&limit=50: blocks 2, 1, 0).
+// Genesis has no miner and no reward, the zero epoch, and 1,236,271 bytes against the 597,000-byte
+// limit; every form of the list writes it as what it is.
+describe('BlocksPage · the genesis row', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      ...genesisNeighboursPage,
+      data: genesisNeighbours,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('writes genesis as mined by no one and paid no reward, in the wide table', async () => {
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const [, , genesis] = Array.from(table.querySelectorAll('tbody tr')) as HTMLElement[];
+    expect(within(genesis).getByRole('link', { name: '#0' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/0'
+    );
+    expect(within(genesis).getAllByText('Genesis')).toHaveLength(2); // the miner and the reward
+    expect(within(genesis).getByRole('img', { name: /^Size, bytes: 1,236,271/ })).toBeVisible();
+    // consensus never checks genesis against the block limit: its share is stated exactly
+    expect(screen.getByText(/^Size and cycles · Fullest of these 3/)).toHaveTextContent(
+      /^Size and cycles · Fullest of these 3: 1,236,271 bytes, 207\.08% of the 597,000-byte limit/
+    );
+  });
+
+  it('writes genesis as mined by no one in the 608 px table and on a phone', async () => {
+    atContainerWidth(608);
+    const { unmount } = render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const [, , genesis] = Array.from(table.querySelectorAll('tbody tr')) as HTMLElement[];
+    expect(genesis).toHaveTextContent('Genesis');
+    unmount();
+    atContainerWidth(358);
+    render(<BlocksPage />);
+    const cards = await screen.findAllByTestId('block-row-mobile');
+    const lines = phoneLines(cards[2]).map((l) => [l.key, l.left, l.right]);
+    expect(lines[0]).toEqual(['identity', '#0', expect.stringMatching(/^2 txs · .+ ago$/)]);
+    expect(lines[1]).toEqual(['miner', 'miner Genesis', 'fees 0 CKB']);
+    expect(lines[2][1]).toMatch(/· 1,236,271 B, 1,235,678 B overhead · 0 cycles · Genesis$/);
   });
 });
 
@@ -488,7 +538,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(screen.queryByRole('table')).toBeNull();
       expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
         ['identity', '#20,828,894', expect.stringMatching(/^5 txs · 4 proposals · .+ ago$/)],
-        ['miner', 'miner ckb1qzda0c...93hhsj', 'fees 0.05060000 CKB'],
+        ['miner', 'miner …93hhsj', 'fees 0.05060000 CKB'],
         [
           'figures',
           // Every desktop column: hash, size with its overhead, cycles, the reward.
@@ -498,6 +548,57 @@ describe('BlocksPage · Blocks v3 board', () => {
       ]);
       // A reward not yet paid says where it will be.
       expect(phoneLines(cards[1])[2].left).toMatch(/· reward pays at #20,828,904$/);
+    });
+
+    // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)
+    // missed the 324 px text column by a few px with the 12 px gap, so the fees dropped to a line
+    // of their own and rows took different shapes by their fee. The phone row names an unnamed
+    // miner by its tail (minerName: the address's head is its lock's code hash, the same for every
+    // default-lock miner), so the miner and any fee below 10 CKB (always eight decimals) hold one
+    // line at 390 and at 360 (294 px). jsdom cannot measure: the characters are the measure, 12 px
+    // Courier Prime at 7.2 px each, the unit at 11 px.
+    it('keeps the miner and a fee below 10 CKB on one line at 390 and 360 px', async () => {
+      atContainerWidth(358);
+      vi.mocked(api.getBlocks).mockResolvedValue({
+        ...page,
+        data: [
+          { ...page.data[0], totalFees: '999999999' },
+          { ...page.data[1], minerPool: 'Example Pool', totalFees: '1935' },
+        ],
+      });
+      render(<BlocksPage />);
+      const cards = await screen.findAllByTestId('block-row-mobile');
+      const [unnamed, pooled] = cards.map((card) => phoneLines(card)[1]);
+      expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
+        'miner',
+        'miner …93hhsj',
+        'fees 9.99999999 CKB',
+      ]);
+      expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
+      // the miner stays a link to its address, the full address its title
+      for (const [card, name] of [
+        [cards[0], '…93hhsj'],
+        [cards[1], 'Example Pool'],
+      ] as const) {
+        const line = card.querySelector('[data-line="miner"]') as HTMLElement;
+        const link = within(line).getByRole('link', { name });
+        expect(link).toHaveAttribute('href', `/mainnet/address/${miner}`);
+        expect(link).toHaveAttribute('title', miner);
+        // one flex line: the miner on the left, the fees as its right part
+        expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
+        expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
+      }
+      const width = (text: string) =>
+        chars(text.length - ' CKB'.length, 12) + (text.endsWith(' CKB') ? chars(4, 11) : 0);
+      const lineWidth = (left: string, right: string) => chars(left.length, 12) + 12 + width(right);
+      // the widest fee below 10 CKB with the tail: 93.6 + 12 + 134.4 = 240 px
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(240, 6);
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
+      // with the address's head it was 180 + 12 + 134.4 = 326.4 px, past both columns
+      expect(lineWidth('miner ckb1qzda0c...93hhsj', unnamed.right!)).toBeGreaterThan(324);
+      // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
+      expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
+      expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
     });
 
     // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own

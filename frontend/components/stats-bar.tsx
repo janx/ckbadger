@@ -6,7 +6,7 @@ import { usePhosphor } from '@/hooks/usePhosphor';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import type { NetworkStats } from '@/lib/api';
 import { BAR_EMPTY, BAR_FULL, blockBarCells } from '@/lib/blocks-text';
-import { parseEpoch, type EpochInfo } from '@/lib/epoch';
+import { isGenesisEpoch, parseEpoch, type EpochInfo } from '@/lib/epoch';
 import { formatBlockNumber } from '@/lib/format-block';
 import { cn } from '@/lib/utils';
 
@@ -122,7 +122,11 @@ function Vitals({ stats }: { stats: NetworkStats }) {
         layout="block"
         value={formatBlockNumber(stats.latestBlock)}
       />
-      <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
+      <EpochVital
+        raw={stats.epoch}
+        block={stats.latestBlock}
+        estimatedLeft={stats.estimatedEpochTime}
+      />
       <BlockTime value={stats.avgBlockTime} />
       <Vital
         label="Hash rate"
@@ -140,9 +144,10 @@ function Vitals({ stats }: { stats: NetworkStats }) {
   );
 }
 
-function readEpoch(raw: string): { epoch: EpochInfo } | { error: string } {
+/** The tip header's epoch, block `block`'s (`latestBlock`, read with it), or why it can't be. */
+function readEpoch(raw: string, block: number): { epoch: EpochInfo } | { error: string } {
   try {
-    return { epoch: parseEpoch(raw) };
+    return { epoch: parseEpoch(raw, block) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -150,10 +155,20 @@ function readEpoch(raw: string): { epoch: EpochInfo } | { error: string } {
 
 /**
  * Epoch number, its progress in block characters, `index / length` and the time left — or why it
- * can't. Its text never wraps: the parts never stack into a column.
+ * can't. Its text never wraps: the parts never stack into a column. With the tip at genesis (a
+ * fresh chain that has mined nothing) the header states the zero epoch, `0 / 0`: no length, so no
+ * bar, and in the bar's place the reason.
  */
-function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string | null }) {
-  const read = readEpoch(raw);
+function EpochVital({
+  raw,
+  block,
+  estimatedLeft,
+}: {
+  raw: string;
+  block: number;
+  estimatedLeft: string | null;
+}) {
+  const read = readEpoch(raw, block);
   const flare = usePhosphor('error' in read ? null : read.epoch.number);
   if ('error' in read) {
     return (
@@ -168,18 +183,28 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
     );
   }
   const { epoch } = read;
+  const genesis = isGenesisEpoch(epoch);
   const index = epoch.index.toLocaleString('en-US');
   const length = epoch.length.toLocaleString('en-US');
+  const position = genesis
+    ? 'the genesis block: its header states no epoch length'
+    : `block ${index} of ${length}`;
   return (
     <Link
       href="/charts/epoch-time-length"
       data-testid="vitals-epoch"
-      aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, block ${index} of ${length}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
+      aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, ${position}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
       className={`group flex items-center gap-x-1.5 whitespace-nowrap md:gap-x-2 ${PLACE.line}`}
     >
       <span className={LABEL}>Epoch</span>
       <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
-      <EpochBar fraction={epoch.index / epoch.length} />
+      {genesis ? (
+        <span data-testid="vitals-epoch-genesis" className={LABEL}>
+          genesis: no length
+        </span>
+      ) : (
+        <EpochBar fraction={epoch.index / epoch.length} />
+      )}
       <span className="text-text text-meta md:text-small tabular-nums">
         {index} / {length}
       </span>
