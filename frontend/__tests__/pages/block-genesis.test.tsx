@@ -115,6 +115,21 @@ describe('the genesis block page', () => {
     expect(reward).toHaveTextContent('Genesis has no mining reward.');
   });
 
+  // The API serves no cellbase message for block 0 alone (it reads no miner witness for genesis;
+  // CKB builds genesis's cellbase witness with the bootstrap lock and an empty message). The page
+  // said "Miner client: Genesis" captioned "decoded from the cellbase message", and "Cellbase
+  // message bytes: Genesis": nothing was decoded and there are no message bytes.
+  it('says genesis has no miner client and no miner message, decoding nothing', async () => {
+    render(<BlockDetailPage />);
+    const facts = await screen.findByTestId('block-tier2-facts');
+    const client = within(facts).getByText('Miner client').parentElement as HTMLElement;
+    expect(client).toHaveTextContent(/^Miner clientNone: genesis has no miner$/);
+    expect(facts).not.toHaveTextContent('decoded from the cellbase message');
+    fireEvent.click(screen.getByText('Raw data'));
+    const bytes = screen.getByText('Cellbase message bytes').parentElement as HTMLElement;
+    expect(bytes).toHaveTextContent(/^Cellbase message bytesNone: genesis has no miner message$/);
+  });
+
   // 1,236,271 bytes against the 597,000-byte block limit: consensus never checks genesis against
   // it. The share is stated exactly and the bar is on the neighbours' scale, which holds it.
   it('states the genesis size beyond the block limit exactly', async () => {
