@@ -7,26 +7,39 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { render } from '../utils/test-utils';
 import BlocksPage from '@/app/blocks/page';
-import { api } from '@/lib/api';
-import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+import { api, type Block } from '@/lib/api';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import type { SealId } from '@/lib/seal/stones';
+import { expectBefore, expectOneRowSealOf } from '@/__tests__/utils/seals';
 
 // Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
 // function: the phone describe's restoreAllMocks would reset one).
-const drawn = vi.hoisted(() => ({ ms: 0, hashes: [] as string[] }));
-vi.mock('@/lib/talisman/compound', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/talisman/compound')>();
+const drawn = vi.hoisted(() => ({ ms: 0, ids: [] as unknown[] }));
+vi.mock('@/lib/seal/stones', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/seal/stones')>();
   return {
     ...actual,
-    compound: (...args: Parameters<typeof actual.compound>) => {
+    drawSeal: (...args: Parameters<typeof actual.drawSeal>) => {
       const started = performance.now();
       try {
-        return actual.compound(...args);
+        return actual.drawSeal(...args);
       } finally {
         drawn.ms += performance.now() - started;
-        drawn.hashes.push(args[0]);
+        drawn.ids.push(args[0]);
       }
     },
   };
+});
+
+/** The width of `n` characters of the monospace face (0.6 em each) at `size` px. */
+const chars = (n: number, size: number) => n * 0.6 * size;
+
+/** A block's seal: its hash and its transaction count, as the API serves them. */
+const sealOf = (block: { hash: string; transactionsCount: number }): SealId => ({
+  kind: 'block',
+  hash: block.hash,
+  txs: block.transactionsCount,
 });
 
 vi.mock('@/lib/api', () => ({
@@ -160,7 +173,9 @@ describe('BlocksPage', () => {
 // F2 blocks (BA-01/02/03/04/05/06/46): the approved Blocks v3 board.
 describe('BlocksPage · Blocks v3 board', () => {
   const miner = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq4s93hhsj';
-  const row = (number: number, over: Record<string, unknown>) => ({
+  // The API counts a block's transactions as it lists their sizes (the cellbase first), so a row's
+  // `transactionsCount` is its `transactionSizes`' length: the count its seal carries.
+  const row = (number: number, over: { transactionSizes: number[] } & Record<string, unknown>) => ({
     ...mockBlocksResponse.data[0],
     number,
     hash: `0x${number.toString(16).padStart(64, '0')}`,
@@ -170,7 +185,19 @@ describe('BlocksPage · Blocks v3 board', () => {
     miningReward: '68432120795',
     totalFees: '5060000',
     ...over,
+    transactionsCount: over.transactionSizes.length,
   });
+  // Blocks of 1, 7 and 12 transactions: a row stone writes 1 and 7 in rods, past nine a full block.
+  const counted = [1, 7, 12].map((n, i) =>
+    row(20_828_894 - i, {
+      size: 641 + 355 * (n - 1),
+      overheadSize: 641,
+      userTransactionsSize: 355 * (n - 1),
+      cycles: String(n * 1000),
+      transactionSizes: [355, ...Array<number>(n - 1).fill(355)],
+      proposalsCount: 0,
+    })
+  );
   const page = {
     data: [
       row(20_828_894, {
@@ -297,7 +324,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     const [blockCell, , contentsCell] = Array.from(first.querySelectorAll('td'));
     // Rubbing × Song print, phase 3: the row seal leads the cell, the height and hash beside it.
     const [seal, identity] = Array.from(blockCell.firstElementChild!.children);
-    expect(seal).toHaveAttribute('data-hash-seal', 'row');
+    expect(seal).toHaveAttribute('data-seal', 'block');
+    expect(seal).toHaveAttribute('data-seal-form', 'row');
     expect(identity.firstElementChild).toHaveClass('whitespace-nowrap');
     expect(blockCell).toHaveTextContent(/^#20,828,894 0x/);
     expect(contentsCell.querySelector('[data-contents-line]')).toHaveClass('whitespace-nowrap');
@@ -321,8 +349,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(contentsCell.querySelector('[data-contents-line]')).toBeInTheDocument();
   });
 
-  // Rubbing × Song print, phase 3: each row leads with its block's row seal (28 px, the fold of the
-  // block page's seal), before the height; the height stays the row's link, the seal is an image.
+  // Seals by kind (phase C1): each row leads with its block's stone (26 px, its hash and its
+  // transaction count), before the height; the height stays the row's link, the seal is an image.
   it('leads every row with its block’s row seal, before the height link', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
@@ -330,10 +358,11 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(rows).toHaveLength(page.data.length);
     rows.forEach((tr, i) => {
       const cell = tr.querySelector('td')!;
-      const seal = expectOneRowSeal(tr, page.data[i].hash);
+      const seal = expectOneRowSealOf(tr, sealOf(page.data[i]));
       expect(cell).toContainElement(seal);
-      // one 18 px line keeps the row's height: the seal overhangs it
-      expect(seal).toHaveClass('-my-[5px]');
+      // one 18 px line keeps the row's height: the 26 px stone overhangs it by 4 px above and below
+      expect(ROW_SEAL.block.overhang).toBe(4);
+      expect(seal).toHaveClass('-my-[4px]');
       const height = within(cell).getByRole('link', {
         name: `#${page.data[i].number.toLocaleString('en-US')}`,
       });
@@ -342,9 +371,10 @@ describe('BlocksPage · Blocks v3 board', () => {
     });
   });
 
-  // The seal's 27 px come out of other columns' slack, so each table keeps the minimum width it
-  // switches form at: the full table 1,230 px (Reward gave 22), the 608 px table (Size · cycles
-  // gave 19, Height took 2 px of room so its number never breaks).
+  // The seal's footprint comes out of other columns' slack, so each table keeps the minimum width
+  // it switches form at: the full table 1,230 px (Reward gave the talisman 22; Fees gives the
+  // block stone's 7 more, 34 against 27), the 608 px table (Size · cycles gave 19 and gives 5,
+  // Miner 2; Height keeps its 2 px of room so its number never breaks).
   it('budgets the seal in the Block column and keeps the table at 1,230 px', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
@@ -352,11 +382,60 @@ describe('BlocksPage · Blocks v3 board', () => {
     const cols = Array.from(table.querySelectorAll('col')).map(
       (c) => (c as HTMLElement).style.width
     );
-    expect(cols).toEqual(['222px', '70px', '170px', '160px', '118px', '112px', '182px', '196px']);
+    expect(cols).toEqual(['229px', '70px', '170px', '160px', '118px', '105px', '182px', '196px']);
+    // the Block column: 195 px of text and gap, and the stone's footprint, 26 + 8
+    expect(ROW_SEAL.block.footprint).toBe(34);
+    expect(cols[0]).toBe(`${195 + ROW_SEAL.block.footprint}px`);
+    // what the column with the stone and the column it took from hold, at 0.6 em a character
+    // (monospace) and the 16 px gap: Block, the stone, "#20,879,198" at 13 px, a space at 12 px
+    // and "0xd161...8fef" at 11 px; Fees, "999.99999999" at 12 px (every fee under 1,000 CKB)
+    const px = cols.map((w) => Number.parseFloat(w));
+    expect(
+      ROW_SEAL.block.footprint + chars(11, 13) + chars(1, 12) + chars(13, 11) + 16
+    ).toBeLessThanOrEqual(px[0]);
+    expect(chars(12, 12) + 16).toBeLessThanOrEqual(px[5]);
   });
 
-  // 50 rows, 50 seals: each drawn once (HashSeal memoises per hash), the time printed for the
-  // record (phase 3 placement, step D).
+  // The stone carries the block's transaction count (`transactionsCount`, as the API serves it):
+  // 1 and 7 in rods, past nine a full block; the same stone in the table, the 608 px table and the
+  // phone rows.
+  it('writes each block’s transaction count on its stone: 1, 7 and 12 transactions', async () => {
+    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    expect(
+      rows.map((tr) => tr.querySelector('[data-seal] svg')!.getAttribute('aria-label'))
+    ).toEqual(
+      counted.map(
+        (b, i) =>
+          `Block seal ${b.hash.slice(0, 10)}, ${['1 transaction', '7 transactions', '12 transactions'][i]}`
+      )
+    );
+    rows.forEach((tr, i) => expectOneRowSealOf(tr, sealOf(counted[i])));
+    // three counts, three stones: the count changes the drawing, not only its name
+    expect(new Set(rows.map((tr) => tr.querySelector('[data-seal]')!.innerHTML)).size).toBe(3);
+  });
+
+  // No default count: a block the API served without `transactionsCount` is refused by its seal,
+  // naming the block, instead of a stone with a guessed count.
+  it('refuses a block served without its transaction count, naming the block', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => spy.mockRestore());
+    const uncounted = { ...page.data[0], transactionsCount: undefined } as unknown as Block;
+    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: [uncounted, page.data[1]] });
+    render(
+      <ErrorBoundary fallbackRender={(error) => <p data-testid="refused">{error.message}</p>}>
+        <BlocksPage />
+      </ErrorBoundary>
+    );
+    expect(await screen.findByTestId('refused')).toHaveTextContent(
+      `seal: block ${page.data[0].hash}: the transaction count must be a whole number ≥ 0, got undefined`
+    );
+  });
+
+  // 50 rows, 50 seals: each drawn once (Seal memoises per id), the time printed for the record
+  // (phase 3 placement, step D; seals by kind, C1).
   it('draws fifty row seals once each in one render', async () => {
     const fifty = Array.from({ length: 50 }, (_, i) =>
       row(20_828_894 - i, {
@@ -370,13 +449,17 @@ describe('BlocksPage · Blocks v3 board', () => {
     );
     vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: fifty, hasMore: false });
     drawn.ms = 0;
-    drawn.hashes = [];
+    drawn.ids = [];
     const started = performance.now();
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const elapsed = performance.now() - started;
-    expect(table.querySelectorAll('tbody [data-hash-seal="row"]')).toHaveLength(50);
-    expect([...drawn.hashes].sort()).toEqual(fifty.map((b) => b.hash).sort());
+    expect(table.querySelectorAll('tbody [data-seal="block"][data-seal-form="row"]')).toHaveLength(
+      50
+    );
+    const byHash = (a: unknown, b: unknown) =>
+      (a as { hash: string }).hash.localeCompare((b as { hash: string }).hash);
+    expect([...drawn.ids].sort(byHash)).toEqual(fifty.map(sealOf).sort(byHash));
     console.info(
       `[seal timing] blocks list, 50 rows: rendered in ${elapsed.toFixed(0)} ms, ` +
         `${drawn.ms.toFixed(1)} ms of it drawing the 50 row seals`
@@ -418,18 +501,29 @@ describe('BlocksPage · Blocks v3 board', () => {
     });
 
     // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own
-    // column, before the height; the height is still the row's link.
+    // column, before the height; the height is still the row's link. Seals by kind: the column
+    // is the 26 px stone and its 8 px gap.
     it('leads each phone row with its block’s row seal, before the height', async () => {
       atContainerWidth(358);
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       cards.forEach((card, i) => {
-        const seal = expectOneRowSeal(card, page.data[i].hash);
+        const seal = expectOneRowSealOf(card, sealOf(page.data[i]));
         expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
         expect(card.firstElementChild).toContainElement(seal);
-        expect(seal).not.toHaveClass('-my-[5px]');
+        // three lines hold the stone; no overhang
+        expect(seal.className).not.toMatch(/-my-/);
         expectBefore(seal, within(card).getByRole('link', { name: /^#20,828,89/ }));
       });
+    });
+
+    it('writes the transaction count on each phone row’s stone: 1, 7 and 12 transactions', async () => {
+      atContainerWidth(358);
+      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+      render(<BlocksPage />);
+      const cards = await screen.findAllByTestId('block-row-mobile');
+      expect(cards).toHaveLength(3);
+      cards.forEach((card, i) => expectOneRowSealOf(card, sealOf(counted[i])));
     });
 
     it('leads each row of the 608 px table with its block’s row seal, beside the height and hash', async () => {
@@ -437,18 +531,42 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       Array.from(table.querySelectorAll('tbody tr')).forEach((tr, i) => {
-        const seal = expectOneRowSeal(tr, page.data[i].hash);
+        const seal = expectOneRowSealOf(tr, sealOf(page.data[i]));
         expect(tr.querySelector('td')).toContainElement(seal);
         // two lines (height, hash) hold the stone; no overhang
-        expect(seal).not.toHaveClass('-my-[5px]');
+        expect(seal.className).not.toMatch(/-my-/);
         expectBefore(seal, within(tr as HTMLElement).getAllByRole('link')[0]);
       });
       expect(Number.parseFloat(table.style.minWidth)).toBe(608);
-      const [height, , , , , resources] = Array.from(table.querySelectorAll('col')).map(
-        (c) => (c as HTMLElement).style
-      );
-      expect(height.width).toBe('131px');
-      expect(resources.minWidth).toBe('101px');
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      // Height takes the stone's 7 px more than the talisman's; Miner gives 2, Size · cycles 5
+      expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '154px', '96px', 'auto']);
+      expect(cols.map((c) => c.minWidth)).toEqual([
+        '138px',
+        '76px',
+        '48px',
+        '154px',
+        '96px',
+        '96px',
+      ]);
+      expect(cols[0].width).toBe(`${104 + ROW_SEAL.block.footprint}px`);
+      // what each column holds at 0.6 em a character: Height, the stone, "#20,879,198" at 13 px
+      // and the gap, with 2 px of room; Miner, "ckb1qzda0c...93hhsj" at 12 px and the gap; Size ·
+      // cycles, "3,500,000,000" at 12 px (the last column, no gap)
+      const px = cols.map((c) => Number.parseFloat(c.minWidth));
+      expect(ROW_SEAL.block.footprint + chars(11, 13) + 16 + 2).toBeLessThanOrEqual(px[0]);
+      expect(chars(19, 12) + 16).toBeLessThanOrEqual(px[3]);
+      expect(chars(13, 12)).toBeLessThanOrEqual(px[5]);
+    });
+
+    it('writes the transaction count on each stone of the 608 px table: 1, 7 and 12 transactions', async () => {
+      atContainerWidth(608);
+      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const rows = Array.from(table.querySelectorAll('tbody tr'));
+      expect(rows).toHaveLength(3);
+      rows.forEach((tr, i) => expectOneRowSealOf(tr, sealOf(counted[i])));
     });
 
     it('draws the six-column table of board L1 in the 608 px band, without the reward', async () => {

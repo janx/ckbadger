@@ -4,10 +4,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
-import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSealOf } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
-import { api, type GlobalActivity, type Transaction } from '@/lib/api';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { PAGE_SEAL_HEIGHTS } from '@/components/ui/page-seal';
+import { api, type Block, type GlobalActivity, type Transaction } from '@/lib/api';
+import type { SealId } from '@/lib/seal/stones';
+
+/** A block's seal: its hash and its transaction count, as the API serves them. */
+const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
+  kind: 'block',
+  hash: b.hash,
+  txs: b.transactionsCount,
+});
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -233,12 +243,18 @@ describe('Block board · first tier', () => {
     );
   });
 
-  // Rubbing × Song print, phase 3: the block's talisman (the 150 px page seal, 96 on a phone, −4°)
-  // pressed beside its height and hash, as a collector's stamp; never inside the content.
+  // Seals by kind (phase C1): the block's stone (the 104 px page seal, 80 below md, −4°), its hash
+  // and its transaction count, pressed beside its height and hash, as a collector's stamp; never
+  // inside the content.
   it('presses the block’s seal beside its height and hash, outside the content', async () => {
     const { container } = render(<BlockDetailPage />);
     const title = await screen.findByRole('heading', { level: 1 });
-    const seal = expectOnePageSeal(container, block.hash, 'record');
+    const seal = expectOnePageSealOf(container, sealOf(block));
+    expect(PAGE_SEAL_HEIGHTS.block).toEqual({ wide: 104, narrow: 80 });
+    expect(seal.querySelector('svg')).toHaveAttribute(
+      'aria-label',
+      `Block seal ${block.hash.slice(0, 10)}, 4 transactions`
+    );
     const head = seal.closest('[data-sealed-head]')!;
     expect(head).toContainElement(title);
     expect(head).toHaveTextContent(`Block${block.hash}`);
@@ -247,12 +263,12 @@ describe('Block board · first tier', () => {
     expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
   });
 
-  // Phase 5 (Gate 3 note): the summary stands beside the 150 px seal with the height and hash,
-  // the head's last line, instead of opening the content under an empty gap.
+  // Phase 5 (Gate 3 note): the summary stands beside the seal with the height and hash, the
+  // head's last line, instead of opening the content under an empty gap.
   it('reads the summary in the sealed head, after the hash, before the tab row', async () => {
     const { container } = render(<BlockDetailPage />);
     const summary = await screen.findByTestId('block-summary');
-    const seal = expectOnePageSeal(container, block.hash, 'record');
+    const seal = expectOnePageSealOf(container, sealOf(block));
     const head = seal.closest('[data-sealed-head]')!;
     expect(head).toContainElement(summary);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
@@ -263,6 +279,48 @@ describe('Block board · first tier', () => {
     expectBefore(summary, screen.getByRole('group', { name: 'Block contents' }));
     // The header keeps the 32 px to the content; the summary carries no margin of its own.
     expect(summary).not.toHaveClass('mb-8');
+  });
+
+  // The stone's count is the block's `transactionsCount` as the API serves it: a block of 1, of 7
+  // and of 248 transactions (past nine, the page seal writes three digits in rods).
+  it.each([1, 7, 248])('writes the block’s %i transaction(s) on its seal', async (count) => {
+    const counted = {
+      ...block,
+      transactionsCount: count,
+      transactionSizes: Array<number>(count).fill(355),
+    };
+    vi.mocked(api.getBlock).mockResolvedValue(counted);
+    const { container } = render(<BlockDetailPage />);
+    await screen.findByRole('heading', { level: 1 });
+    const seal = expectOnePageSealOf(container, sealOf(counted));
+    expect(seal.querySelector('svg')).toHaveAttribute(
+      'aria-label',
+      `Block seal ${block.hash.slice(0, 10)}, ${count} transaction${count === 1 ? '' : 's'}`
+    );
+  });
+
+  // No default count: a block served without `transactionsCount` is refused, never pressed with a
+  // guessed count. On this page the summary's count ("4 transactions", formatCount) is read before
+  // the head draws its seal, so its refusal is the one shown; no stone is drawn.
+  it('refuses a block served without its transaction count, and draws no seal', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      vi.mocked(api.getBlock).mockResolvedValue({
+        ...block,
+        transactionsCount: undefined,
+      } as unknown as Block);
+      const { container } = render(
+        <ErrorBoundary fallbackRender={(error) => <p data-testid="refused">{error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByTestId('refused')).toHaveTextContent(
+        /^Invalid count undefined for transaction$/
+      );
+      expect(container.querySelector('[data-seal]')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('says which pool mined the block when pools.toml names it (R-12)', async () => {
