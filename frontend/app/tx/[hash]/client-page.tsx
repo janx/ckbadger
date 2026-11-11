@@ -1237,6 +1237,14 @@ export default function TransactionDetailPage() {
             id={seal.id}
             state={seal.state}
             kind="Transaction"
+            // the id line, in the plate's quiet voice (the plate sets it); the copy button keeps
+            // its own classes
+            identity={
+              <div className="flex min-w-0 items-center gap-0.5">
+                <span className="min-w-0">{tx.hash}</span>
+                <CopyHash hash={tx.hash} />
+              </div>
+            }
             below={
               <>
                 {summary}
@@ -1247,10 +1255,6 @@ export default function TransactionDetailPage() {
             <h1 className="text-text-bright text-entity max-md:text-index break-words font-medium">
               {headline}
             </h1>
-            <div className="text-small flex min-w-0 items-center gap-0.5">
-              <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
-              <CopyHash hash={tx.hash} />
-            </div>
           </SealedHead>
         </header>
         <aside

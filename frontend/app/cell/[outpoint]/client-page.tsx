@@ -416,14 +416,12 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <CodeCellOf cell={cell} />
           </span>
         }
-        // the id line: the full out point and its copy
+        // The id line: the full out point and its copy, in the plate's quiet voice (C10 round 2:
+        // it was text-body in the bright ink, competing with the h1 above it), its colon in the
+        // same ink; it wraps anywhere, as the line does.
         identity={
           <div className="flex flex-wrap items-center gap-2.5">
-            <span className="text-text-bright text-body [overflow-wrap:anywhere]">
-              {cell.txHash}
-              <span className="text-text-dim">:</span>
-              {cell.outputIndex}
-            </span>
+            <span className="min-w-0">{outpoint}</span>
             <CopyOutpoint value={outpoint} />
           </div>
         }

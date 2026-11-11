@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
+import { HexCode } from '@/components/ui/hex-code';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -248,8 +249,9 @@ export default function BlockDetailPage() {
               </span>
             </span>
           }
-          // The id line: the full hash alone (the kind line says "Block").
-          identity={<Hash hash={block.hash} truncate={false} />}
+          // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
+          // voice (C10 round 2: `inherit` writes no ink or size), click to copy as before.
+          identity={<HexCode value={block.hash} truncate={false} variant="inherit" />}
           // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
           // hash, and the transactions it holds in rods. A count the API did not serve is refused
           // (the summary below reads it first), never filled in.

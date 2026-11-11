@@ -47,7 +47,7 @@ describe('DetailLayout seal', () => {
       </DetailLayout>
     );
     const seal = expectOnePageSeal(container, block);
-    const { head, kindLine, nameBox, title, below } = expectNamePlate(container, 'Block');
+    const { head, kindLine, nameBox, title, idLine, below } = expectNamePlate(container, 'Block');
     const header = container.querySelector('header')!;
     expect(head.parentElement).toBe(header);
     expect(header.firstElementChild).toBe(head);
@@ -56,19 +56,16 @@ describe('DetailLayout seal', () => {
     expect(kindLine.children).toHaveLength(2);
     expect(kindLine.lastElementChild).toBe(screen.getByRole('link'));
     expect(kindLine).toHaveTextContent(/^BlockHARDFORK ACTIVATION · MIRANA$/);
-    // the name and the identity, nothing else: the h1 (no status beside it) and the id line
+    // the name and the identity, nothing else: the h1 (no status beside it) and the id line, in
+    // the plate's one quiet voice (C10 round 2), set by the plate around `identity`
     expect(title).toHaveTextContent(/^#20,914,858$/);
     expect(nameBox.children).toHaveLength(2);
-    const identity = nameBox.lastElementChild as HTMLElement;
-    expect(identity.firstElementChild).toBe(screen.getByTestId('identity'));
-    expect(identity).toHaveClass(
-      'text-text-dim',
-      'text-small',
-      'min-w-0',
-      '[overflow-wrap:anywhere]'
-    );
+    expect(nameBox.lastElementChild).toBe(idLine);
+    expect(idLine.children).toHaveLength(1);
+    expect(idLine.firstElementChild).toBe(screen.getByTestId('identity'));
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
     // the plate's gap spaces it, so the identity carries no margin of its own
-    expect(identity).not.toHaveClass('mt-2');
+    expect(idLine).not.toHaveClass('mt-2');
     // the lede is what is below, with no holder of its own
     expect(below!.children).toHaveLength(1);
     expect(below!.firstElementChild).toBe(screen.getByTestId('lede'));
@@ -85,7 +82,11 @@ describe('DetailLayout seal', () => {
   // (21, 365.4 px) are wider than the 328 px line at 360; at 26 px, 286.5 and 316.7.
   it('sets a sealed entity’s name one type step smaller below md, and only a sealed one', () => {
     const { rerender } = render(
-      <DetailLayout title="0xbe1b9761…936cd8:1" seal={{ id: SEAL_IDS.cell, kind: 'Cell' }}>
+      <DetailLayout
+        title="0xbe1b9761…936cd8:1"
+        identity={`${SEAL_IDS.cell.tx}:1`}
+        seal={{ id: SEAL_IDS.cell, kind: 'Cell' }}
+      >
         content
       </DetailLayout>
     );
@@ -105,7 +106,11 @@ describe('DetailLayout seal', () => {
 
   it('presses it in the state it is given: a consumed cell in the dead ink, a pool transaction unpressed', () => {
     const { container, unmount } = render(
-      <DetailLayout title="Cell" seal={{ id: SEAL_IDS.cell, state: 'ink', kind: 'Cell' }}>
+      <DetailLayout
+        title="Cell"
+        identity={`${SEAL_IDS.cell.tx}:1`}
+        seal={{ id: SEAL_IDS.cell, state: 'ink', kind: 'Cell' }}
+      >
         content
       </DetailLayout>
     );
@@ -114,6 +119,7 @@ describe('DetailLayout seal', () => {
     const pool = render(
       <DetailLayout
         title="Transaction"
+        identity={SEAL_IDS.tx.hash}
         seal={{ id: SEAL_IDS.tx, state: 'unpressed', kind: 'Transaction' }}
       >
         content
@@ -131,10 +137,12 @@ describe('DetailLayout seal', () => {
     );
   });
 
-  // A sealed head is the plate, which has no actions slot; every other page keeps its title row.
-  it('refuses actions on a sealed head at compile time', () => {
+  // A sealed head is the plate, which has no actions slot and always its id line; every other page
+  // keeps its title row.
+  it('refuses actions, or no identity, on a sealed head at compile time', () => {
     const withActions = {
       title: '#1',
+      identity: SEAL_IDS.block.hash,
       seal: { id: SEAL_IDS.block, kind: 'Block' },
       actions: <span>legend</span>,
       children: 'content',
@@ -148,8 +156,13 @@ describe('DetailLayout seal', () => {
     expect(plain.props.seal.kind).toBe('Block');
     // @ts-expect-error a sealed head says its kind word
     const unnamed = <DetailLayout title="#1" seal={{ id: SEAL_IDS.block }} children="content" />;
+    const { identity: _identity, ...withoutIdentity } = withoutActions;
+    void _identity;
+    // @ts-expect-error a sealed head has its id line
+    const unidentified = <DetailLayout {...withoutIdentity} />;
     expect(sealed.props.seal.kind).toBe('Block');
     expect(unnamed.props.seal).toEqual({ id: SEAL_IDS.block });
+    expect(unidentified.props.identity).toBeUndefined();
   });
 
   // Every page without a seal (indexes, topics, the entity pages that press none) keeps the head as
@@ -260,6 +273,7 @@ describe('DetailLayout lede', () => {
     expect(below).toBeNull();
     expect(head.lastElementChild).toBe(plate);
     expect(nameBox.lastElementChild).toHaveTextContent(new RegExp(`^${HASH}$`));
+    expect(nameBox.lastElementChild).toHaveAttribute('data-sealed-id');
   });
 });
 

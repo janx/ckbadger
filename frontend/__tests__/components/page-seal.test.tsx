@@ -30,7 +30,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
       for (const kind of KINDS) {
         const id = i ? sealIdsAt(i)[kind] : SEAL_IDS[kind];
         const { container, unmount } = render(
-          <SealedHead id={id} kind={kind}>
+          <SealedHead id={id} kind={kind} identity={id.kind}>
             <h1>{kind}</h1>
           </SealedHead>
         );
@@ -76,7 +76,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
       for (const state of STATES) {
         const id = SEAL_IDS[kind];
         const { container, unmount } = render(
-          <SealedHead id={id} state={state} kind={kind}>
+          <SealedHead id={id} state={state} kind={kind} identity={id.kind}>
             <h1>{kind}</h1>
           </SealedHead>
         );
@@ -101,10 +101,10 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
         id={SEAL_IDS.tx}
         kind="Transaction"
         status={<span data-testid="status">committed</span>}
+        identity={<span>{SEAL_IDS.tx.hash}</span>}
         below={<p>2 cells became 3.</p>}
       >
         <h1>Transfer</h1>
-        <p>{SEAL_IDS.tx.hash}</p>
       </SealedHead>
     );
     const title = screen.getByRole('heading', { level: 1 });
@@ -143,9 +143,8 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
 
   it('adds nothing under the head when it is given nothing below, and no status when given none', () => {
     const { container } = render(
-      <SealedHead id={SEAL_IDS.block} kind="Block">
+      <SealedHead id={SEAL_IDS.block} kind="Block" identity={SEAL_IDS.block.hash}>
         <h1>#20,914,858</h1>
-        <p>{SEAL_IDS.block.hash}</p>
       </SealedHead>
     );
     const { head, kindLine, nameBox, below } = expectNamePlate(container, 'Block');
@@ -157,12 +156,58 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
     expect(nameBox).toHaveTextContent(`#20,914,858${SEAL_IDS.block.hash}`);
   });
 
+  // C10 round 2: the id line speaks in one voice on every plate, the kind line's — text-small in
+  // text-text-dim — set once here around what the page gives, so the page's own pieces carry no
+  // size or ink (the cell's full out point was text-body in the bright ink, competing with the h1
+  // above it; the block's hash and the address were text-body in their own inks).
+  it('sets the id line in the kind line’s quiet voice, once, around what the page gives', () => {
+    const { container } = render(
+      <SealedHead
+        id={SEAL_IDS.cell}
+        kind="Cell"
+        identity={
+          <span className="flex items-center">
+            <span data-testid="outpoint">{SEAL_IDS.cell.tx}:1</span>
+            <button type="button" className="text-text-dim text-meta">
+              copy
+            </button>
+          </span>
+        }
+      >
+        <h1>0xabcdef01…234567:1</h1>
+      </SealedHead>
+    );
+    const { kindLine, nameBox, idLine } = expectNamePlate(container, 'Cell');
+    expect(nameBox.lastElementChild).toBe(idLine);
+    expect(idLine).toHaveAttribute('data-sealed-id');
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // the kind word's own voice
+    expect(kindLine.firstElementChild).toHaveClass('text-text-dim', 'text-small');
+    expect(idLine.firstElementChild!.firstElementChild).toBe(screen.getByTestId('outpoint'));
+    // a copy control keeps its own classes
+    expect(screen.getByRole('button', { name: 'copy' })).toHaveClass('text-text-dim', 'text-meta');
+  });
+
+  // The page's piece may not speak in a voice of its own: the check refuses it, by its markup.
+  it('refuses an id line whose piece sets a size or an ink of its own', () => {
+    const { container } = render(
+      <SealedHead
+        id={SEAL_IDS.cell}
+        kind="Cell"
+        identity={<span className="text-text-bright text-body">{SEAL_IDS.cell.tx}:1</span>}
+      >
+        <h1>0xabcdef01…234567:1</h1>
+      </SealedHead>
+    );
+    expect(() => expectNamePlate(container, 'Cell')).toThrow(/text-text-bright text-body/);
+  });
+
   // The plate's 8 px line gaps keep a one-line plate no taller than the stone on every page (kind
-  // 18 + name 34.5, the block's 36 + id line 20 to 26 + 16: 88.5 to 94.5 px beside 94 to 112):
+  // 18 + name 34.5, the block's 36 + id line 18 to 26 + 16: 86.5 to 94.5 px beside 94 to 112):
   // pinned as the classes that set them, with the rows' 16 px (20 from md).
   it('spaces the plate’s lines 8 px apart and the head’s rows 16 px, 20 from md', () => {
     const { container } = render(
-      <SealedHead id={SEAL_IDS.cell} kind="Cell" below={<p>the rest</p>}>
+      <SealedHead id={SEAL_IDS.cell} kind="Cell" identity="0xabcdef01:1" below={<p>the rest</p>}>
         <h1>0xabcdef01…234567:1</h1>
       </SealedHead>
     );
@@ -187,7 +232,11 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
     );
     expect(() =>
       render(
-        <SealedHead id={{ ...SEAL_IDS.tx, consumed: 100000 }} kind="Transaction">
+        <SealedHead
+          id={{ ...SEAL_IDS.tx, consumed: 100000 }}
+          kind="Transaction"
+          identity={SEAL_IDS.tx.hash}
+        >
           <h1>Transfer</h1>
         </SealedHead>
       )

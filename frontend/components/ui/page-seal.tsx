@@ -72,9 +72,15 @@ export interface SealedHeadOf extends PageSealOf {
 export interface SealedHeadProps extends SealedHeadOf {
   /** The page's status chips, after the kind word on the kind line. */
   status?: ReactNode;
-  /** The name (the h1), then the id line: in the plate from md up, under the stone below md. */
+  /** The name: the page's h1. In the plate from md up, under the stone below md, as the id line. */
   children: ReactNode;
-  /** The rest of the head: under the stone and the plate, from the page's left edge at every width. */
+  /**
+   * The id line: the full hash, out point or address, with its copy control. The plate sets its
+   * voice once, the kind line's (text-small in text-text-dim), so what the page gives carries no
+   * size or ink of its own (a copy control keeps its own).
+   */
+  identity: ReactNode;
+  /** The rest of the head: under the stone and the plate, from the page's left edge. */
   below?: ReactNode;
   className?: string;
 }
@@ -83,21 +89,23 @@ export interface SealedHeadProps extends SealedHeadOf {
  * A page's head with its seal pressed beside the object's name plate, the boards' one corner (the
  * seals by kind, C10). Beside the stone stands only the plate, three short lines on one left edge:
  * the kind line (the kind word in the dim small voice, then the page's status chips), the name
- * (the h1) and the id line (the full hash, out point or address, with its copy control).
- * Everything else of the head is `below`: under the stone and the plate, from the page's left edge
- * at every width, so the head's prose starts where every section under the head starts.
+ * (the h1) and the id line (the full hash, out point or address, with its copy control), the id
+ * line in the kind line's voice too, set here once (C10 round 2: the four pages' id lines spoke in
+ * three sizes and inks, the cell's full out point bright under its h1). Everything else of the
+ * head is `below`: under the stone and the plate, from the page's left edge at every width, so the
+ * head's prose starts where every section under the head starts.
  *
  * From md up the plate is one column beside the stone, centred on it (`items-center`): its lines 8
  * px apart keep a plate with a one-line name no taller than the stone on every page (kind line 18
- * + name 34.5, the block's 36 + id line 20 to 26, + 16: 88.5 to 94.5 px beside stones of 94 to
- * 112). Below md the stone's row carries the kind line alone, centred on the stone; the plate's
- * wrapper is `contents` there, so its name-and-id box is the grid's next item and spans both
- * columns under the stone, at the full width. One DOM in reading order (the stone, the kind line,
- * the name, the id line, below), nothing hidden, the stone at its kind's fixed height (never a
- * fluid scale); the rows 16 px apart below md, 20 from md.
+ * + name 34.5, the block's 36 + id line 18, or 20 to 26 with a copy button, + 16: 88 to 94.5 px
+ * beside stones of 94 to 112). Below md the stone's row carries the kind line alone, centred on
+ * the stone; the plate's wrapper is `contents` there, so its name-and-id box is the grid's next
+ * item and spans both columns under the stone, at the full width. One DOM in reading order (the
+ * stone, the kind line, the name, the id line, below), nothing hidden, the stone at its kind's
+ * fixed height (never a fluid scale); the rows 16 px apart below md, 20 from md.
  *
  * `data-sealed-head` names the stone's kind; `data-sealed-plate`, `data-sealed-kind`,
- * `data-sealed-name` and `data-sealed-below` name the parts.
+ * `data-sealed-name`, `data-sealed-id` and `data-sealed-below` name the parts.
  */
 export function SealedHead({
   id,
@@ -105,6 +113,7 @@ export function SealedHead({
   kind,
   status,
   children,
+  identity,
   below,
   className,
 }: SealedHeadProps) {
@@ -124,6 +133,12 @@ export function SealedHead({
         </div>
         <div data-sealed-name="" className="flex min-w-0 flex-col gap-2 max-md:col-span-2">
           {children}
+          <div
+            data-sealed-id=""
+            className="text-text-dim text-small min-w-0 [overflow-wrap:anywhere]"
+          >
+            {identity}
+          </div>
         </div>
       </div>
       {below !== undefined && (

@@ -249,6 +249,18 @@ describe('Address v3', () => {
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${addressText}$`));
     expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy address' }));
+    // C10 round 2: the id line in the plate's one quiet voice, set by the plate: the full address
+    // (it was text-body in the text ink) takes it; the copy button keeps its own classes
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    const full = within(idLine).getByText(addressText);
+    expect(full.className).toBe('font-mono min-w-0');
+    expect(full).toHaveAttribute('title', addressText);
+    expect(full.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
+    expect(screen.getByRole('button', { name: 'Copy address' })).toHaveClass(
+      'hover:text-jade',
+      'shrink-0',
+      'p-1'
+    );
   });
 
   // The seals by kind (C3 for the address's cells): the Live cells tab leads every row with the

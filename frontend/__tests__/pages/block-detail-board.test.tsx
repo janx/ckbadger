@@ -357,7 +357,13 @@ describe('Block board · first tier', () => {
     expect(nameBox.firstElementChild).toBe(title);
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${block.hash}$`));
-    expect(within(idLine).getByText(block.hash)).toHaveClass('text-body');
+    // C10 round 2: the id line in the plate's one quiet voice, the hash taking it (it was text-body
+    // in the text ink); its click-to-copy, the block's copy control, stays as it was
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    const hash = within(idLine).getByText(block.hash);
+    expect(hash.parentElement).toBe(idLine);
+    expect(hash.className).toBe('font-mono hover-lit cursor-pointer transition-colors');
+    expect(hash).toHaveAttribute('title', 'Click to copy');
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);

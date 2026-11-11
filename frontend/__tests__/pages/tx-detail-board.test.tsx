@@ -402,6 +402,20 @@ describe('Transaction board, tier 1', () => {
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${TX_HASH}$`));
     expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    // C10 round 2: the id line in the plate's one quiet voice, set by the plate; the hash and its
+    // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
+    // the copy button keeps its own classes
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    const hash = within(idLine).getByText(TX_HASH);
+    expect(hash.className).toBe('min-w-0');
+    expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
+    expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
+      'text-text-dim',
+      'hover:text-jade',
+      '-my-3',
+      'h-11',
+      'w-11'
+    );
     // under both: the summary first
     expect(below!.firstElementChild).toBe(screen.getByTestId('tx-summary'));
     expect(nameBox).not.toContainElement(screen.getByTestId('tx-summary'));

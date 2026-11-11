@@ -64,11 +64,12 @@ interface DetailLayoutBaseProps {
  * Without a seal the head is the title row (the h1 and `status`, then `actions`), the identity and
  * the lede. With one it is the name plate (SealedHead, the seals by kind C10): the stone of
  * `seal.id` in its state, the kind line (`seal.kind`, the kind word, then `status`), the h1 and the
- * identity beside the stone, the lede below both. The plate has no place for actions.
+ * identity — the id line, which the plate sets in its quiet voice — beside the stone, the lede
+ * below both. The plate always has its id line, and no place for actions.
  */
 type DetailHeadProps =
   | { seal?: undefined; actions?: ReactNode }
-  | { seal: SealedHeadOf; actions?: never };
+  | { seal: SealedHeadOf; identity: ReactNode; actions?: never };
 
 /**
  * `title` is the h1; `documentTitle` (C1) names the browser tab when the h1 is not the page's name
@@ -111,13 +112,10 @@ export function DetailLayout({
     </h1>
   );
   const head = seal ? (
-    // The name plate: the kind word and the status on the kind line, the h1 and the identity
-    // beside the stone, the lede under both from the page's left edge.
-    <SealedHead {...seal} status={status} below={lede}>
+    // The name plate: the kind word and the status on the kind line, the h1 and the identity (the
+    // id line, in the plate's own voice) beside the stone, the lede under both from the left edge.
+    <SealedHead {...seal} status={status} identity={identity} below={lede}>
       {h1}
-      {identity && (
-        <div className="text-text-dim text-small min-w-0 [overflow-wrap:anywhere]">{identity}</div>
-      )}
     </SealedHead>
   ) : (
     <>
