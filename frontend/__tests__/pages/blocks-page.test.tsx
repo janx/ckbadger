@@ -538,7 +538,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(screen.queryByRole('table')).toBeNull();
       expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
         ['identity', '#20,828,894', expect.stringMatching(/^5 txs · 4 proposals · .+ ago$/)],
-        ['miner', 'miner …93hhsj', 'fees 0.05060000 CKB'],
+        ['miner', 'miner ckb1...93hhsj', 'fees 0.05060000 CKB'],
         [
           'figures',
           // Every desktop column: hash, size with its overhead, cycles, the reward.
@@ -552,38 +552,49 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)
     // missed the 324 px text column by a few px with the 12 px gap, so the fees dropped to a line
-    // of their own and rows took different shapes by their fee. The phone row names an unnamed
-    // miner by its tail (minerName: the address's head is its lock's code hash, the same for every
-    // default-lock miner), so the miner and any fee below 10 CKB (always eight decimals) hold one
-    // line at 390 and at 360 (294 px). jsdom cannot measure: the characters are the measure, 12 px
-    // Courier Prime at 7.2 px each, the unit at 11 px.
+    // of their own and rows took different shapes by their fee. The phone row writes an unnamed
+    // miner head-and-tail like every shortened identifier, with a 4-character head: the address's
+    // head after `ckb1` is its lock's code hash, the same for every default-lock miner, and the
+    // tail (the checksum of the whole address) tells miners apart. So the miner and any fee below
+    // 10 CKB (always eight decimals) hold one line at 390 and at 360 (294 px). jsdom cannot
+    // measure: the characters are the measure, 12 px Courier Prime at 7.2 px each, the unit at
+    // 11 px.
     it('keeps the miner and a fee below 10 CKB on one line at 390 and 360 px', async () => {
       atContainerWidth(358);
+      const testnetMiner = 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgx3ze7p';
       vi.mocked(api.getBlocks).mockResolvedValue({
         ...page,
         data: [
           { ...page.data[0], totalFees: '999999999' },
           { ...page.data[1], minerPool: 'Example Pool', totalFees: '1935' },
+          {
+            ...page.data[1],
+            number: 20_828_892,
+            hash: `0x${'7c'.repeat(32)}`,
+            minerAddress: testnetMiner,
+          },
         ],
       });
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
-      const [unnamed, pooled] = cards.map((card) => phoneLines(card)[1]);
+      const [unnamed, pooled, testnet] = cards.map((card) => phoneLines(card)[1]);
       expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
         'miner',
-        'miner …93hhsj',
+        'miner ckb1...93hhsj',
         'fees 9.99999999 CKB',
       ]);
       expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
+      expect(testnet.left).toBe('miner ckt1...x3ze7p'); // testnet's prefix, same form
       // the miner stays a link to its address, the full address its title
-      for (const [card, name] of [
-        [cards[0], '…93hhsj'],
-        [cards[1], 'Example Pool'],
+      for (const [card, name, address] of [
+        [cards[0], 'ckb1...93hhsj', miner],
+        [cards[1], 'Example Pool', miner],
+        [cards[2], 'ckt1...x3ze7p', testnetMiner],
       ] as const) {
         const line = card.querySelector('[data-line="miner"]') as HTMLElement;
         const link = within(line).getByRole('link', { name });
-        expect(link).toHaveAttribute('href', `/mainnet/address/${miner}`);
-        expect(link).toHaveAttribute('title', miner);
+        expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
+        expect(link).toHaveAttribute('title', address);
         // one flex line: the miner on the left, the fees as its right part
         expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
         expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
@@ -591,10 +602,17 @@ describe('BlocksPage · Blocks v3 board', () => {
       const width = (text: string) =>
         chars(text.length - ' CKB'.length, 12) + (text.endsWith(' CKB') ? chars(4, 11) : 0);
       const lineWidth = (left: string, right: string) => chars(left.length, 12) + 12 + width(right);
-      // the widest fee below 10 CKB with the tail: 93.6 + 12 + 134.4 = 240 px
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(240, 6);
+      // the widest fee below 10 CKB with "miner ckb1...93hhsj": 136.8 + 12 + 134.4 = 283.2 px,
+      // 10.8 to spare at 360 and 40.8 at 390
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(283.2, 6);
       expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
-      // with the address's head it was 180 + 12 + 134.4 = 326.4 px, past both columns
+      // a fee of 10–99 CKB adds a digit and still fits at 360; from 100 CKB it drops under the
+      // miner at 360 (PhoneRow's rule) and still fits at 390
+      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeCloseTo(290.4, 6);
+      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeLessThanOrEqual(294);
+      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeGreaterThan(294);
+      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeLessThanOrEqual(324);
+      // with the tables' 10-character head it was 180 + 12 + 134.4 = 326.4 px, past both columns
       expect(lineWidth('miner ckb1qzda0c...93hhsj', unnamed.right!)).toBeGreaterThan(324);
       // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
       expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
