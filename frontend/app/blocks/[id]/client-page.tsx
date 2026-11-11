@@ -246,10 +246,12 @@ export default function BlockDetailPage() {
               <Hash hash={block.hash} truncate={false} />
             </span>
           }
-          // The block's talisman, the stamp the chain put on it, beside its height and hash.
-          seal={{ hash: block.hash, scale: 'record' }}
+          // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its height and hash:
+          // its hash, and the transactions it holds in rods. A count the API did not serve is
+          // refused (the summary below reads it first), never filled in.
+          seal={{ id: { kind: 'block', hash: block.hash, txs: block.transactionsCount } }}
           // The summary reads with the height and hash, beside the seal (phase 5, Gate 3 note): the
-          // 150 px stamp holds the sentence instead of an empty gap under the identity.
+          // stone's height holds the sentence instead of an empty gap under the identity.
           lede={
             <p data-testid="block-summary" className="text-body max-w-[80ch] leading-relaxed">
               {formatCount(block.transactionsCount, 'transaction')}
