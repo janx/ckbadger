@@ -91,7 +91,7 @@ impl CatchUpOutcome {
 
 /// Advances every secondary view this process reads, together.
 pub trait SecondaryCatchUp: Send + Sync {
-    /// One catch-up round: every present secondary, append-only first, one
+    /// One catch-up round: every present secondary, domain first, one
     /// outcome each. Blocking — the refresh loop runs it on its own thread,
     /// never inside a pinned read view.
     fn catch_up_round(&self) -> Vec<CatchUpOutcome>;
@@ -117,43 +117,70 @@ impl ProcessSecondaries {
     }
 }
 
-impl SecondaryCatchUp for ProcessSecondaries {
-    fn catch_up_round(&self) -> Vec<CatchUpOutcome> {
+impl ProcessSecondaries {
+    /// One catch-up round, calling `after_each` with each store as soon as
+    /// that store's catch-up has returned.
+    ///
+    /// The indexer keeps committing while a round runs, so a commit can land
+    /// between two of the round's catch-ups; `after_each` is where a test
+    /// lands one. Production passes a no-op ([`SecondaryCatchUp::catch_up_round`]).
+    pub fn catch_up_round_observed(
+        &self,
+        after_each: &mut dyn FnMut(SecondaryStore),
+    ) -> Vec<CatchUpOutcome> {
         // The opt-in network secondary may attach between rounds.
         let network = self.network.load_full();
         // One exclusive window for every secondary this process reads. It
         // waits for in-flight requests (each pins the view for its whole
         // lifetime) and blocks new ones, so no response can mix a
-        // pre-catch-up index row with a post-catch-up entry, and no
-        // cross-store read can see domain advanced past append-only. Refresh
-        // order inside the window is therefore invisible to readers;
-        // append-only stays first to match the indexer's own commit order.
+        // pre-catch-up index row with a post-catch-up entry.
+        //
+        // The window does not stop the writers. The indexer keeps
+        // committing during the round, and each catch-up takes the primary
+        // as of its own moment, so the order of the catch-ups decides which
+        // store can come out ahead. Domain goes first, and every store whose
+        // rows domain rows point at goes after it:
+        // - append-only: the indexer commits a batch's cell payloads (synced)
+        //   before the domain batch that points at them, so a domain row in
+        //   the domain view had its payload committed before the domain
+        //   catch-up, hence before the append-only catch-up that follows.
+        //   Caught up the other way round, a batch committed between the two
+        //   catch-ups leaves domain rows without their payloads (mainnet,
+        //   2026-11-11: `/transactions` answered 500 `missing canonical
+        //   output payload`). An append-only view ahead of domain is
+        //   harmless: payloads are write-once and nothing reads one without
+        //   the domain row that names it.
+        // - the CKB node: the indexer indexes a block only after the node
+        //   has committed it.
         let window = read_view::catch_up_window();
-        let mut outcomes = vec![
-            CatchUpOutcome::new(
-                SecondaryStore::AppendOnly,
-                self.append_only.catch_up_in_window(&window),
-            ),
-            CatchUpOutcome::new(
-                SecondaryStore::Domain,
-                self.domain.catch_up_in_window(&window),
-            ),
-        ];
+        let mut outcomes = Vec::with_capacity(4);
+        let mut advance = |store: SecondaryStore, result: anyhow::Result<()>| {
+            outcomes.push(CatchUpOutcome::new(store, result));
+            after_each(store);
+        };
+        advance(
+            SecondaryStore::Domain,
+            self.domain.catch_up_in_window(&window),
+        );
+        advance(
+            SecondaryStore::AppendOnly,
+            self.append_only.catch_up_in_window(&window),
+        );
         if let Some(ckb_node) = &self.ckb_node {
             // Owned by ckb-store-reader, which has no window type; it is
             // already inside ours.
-            outcomes.push(CatchUpOutcome::new(
-                SecondaryStore::CkbNode,
-                ckb_node.refresh(),
-            ));
+            advance(SecondaryStore::CkbNode, ckb_node.refresh());
         }
         if let Some(network) = &network {
-            outcomes.push(CatchUpOutcome::new(
-                SecondaryStore::Network,
-                network.catch_up_in_window(&window),
-            ));
+            advance(SecondaryStore::Network, network.catch_up_in_window(&window));
         }
         outcomes
+    }
+}
+
+impl SecondaryCatchUp for ProcessSecondaries {
+    fn catch_up_round(&self) -> Vec<CatchUpOutcome> {
+        self.catch_up_round_observed(&mut |_| {})
     }
 }
 
@@ -682,8 +709,11 @@ mod tests {
         readiness.check().expect("a completed round clears it");
     }
 
+    /// Domain first, then the stores its rows point at (see
+    /// `catch_up_round_observed`); the outcomes come in the order the stores
+    /// advanced.
     #[test]
-    fn process_secondaries_advance_every_present_store_append_only_first() {
+    fn process_secondaries_advance_every_present_store_domain_first() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let network_dir = tempfile::tempdir().unwrap();
@@ -698,15 +728,15 @@ mod tests {
 
         assert_eq!(
             secondaries.catch_up_round(),
-            vec![ok(SecondaryStore::AppendOnly), ok(SecondaryStore::Domain)]
+            vec![ok(SecondaryStore::Domain), ok(SecondaryStore::AppendOnly)]
         );
         // The network secondary joins the round once it is attached.
         slot.store(Some(network));
         assert_eq!(
             secondaries.catch_up_round(),
             vec![
-                ok(SecondaryStore::AppendOnly),
                 ok(SecondaryStore::Domain),
+                ok(SecondaryStore::AppendOnly),
                 ok(SecondaryStore::Network)
             ]
         );

@@ -10,8 +10,12 @@
 
 use crate::common::*;
 
-use ckbadger_api::store_readiness::{CatchUpOutcome, SecondaryCatchUp, SecondaryStore};
+use ckbadger_api::store_readiness::{
+    CatchUpOutcome, ProcessSecondaries, SecondaryCatchUp, SecondaryStore,
+};
 use ckbadger_api::try_create_app;
+use ckbadger_store::types::SyncStatus;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -237,4 +241,201 @@ async fn three_consecutive_failed_catch_ups_turn_data_endpoints_into_503() {
         StatusCode::OK,
         "the store's next success must serve again: {json}"
     );
+}
+
+/// The fixture chain's block `number`: one cellbase with one output.
+fn fixture_cellbase(number: i64) -> [u8; 32] {
+    let mut hash = [0xCB; 32];
+    hash[24..].copy_from_slice(&number.to_be_bytes());
+    hash
+}
+
+fn fixture_block_hash(number: i64) -> Vec<u8> {
+    let mut hash = vec![0xB1; 32];
+    hash[24..].copy_from_slice(&number.to_be_bytes());
+    hash
+}
+
+fn fixture_output_capacity(number: i64) -> i64 {
+    6_100_000_000 + number
+}
+
+/// The indexer's two primaries, written the way its live writer
+/// (`sync/batch.rs`) commits a batch, reduced to what `/transactions` reads:
+/// the cell payloads to the append-only store in a synced commit first, then
+/// the header, transaction index and sync status to the domain store in one
+/// batch. Payloads must be durable before the domain rows that point at them
+/// (crash safety), so this order is the writer's, and every reader has to
+/// live with it.
+struct IndexerPrimaries {
+    domain: CkbadgerStore,
+    append_only: CkbadgerStore,
+}
+
+impl IndexerPrimaries {
+    /// Production's layout under `root`: `domain/` and `append-only/`.
+    fn open(root: &Path) -> Self {
+        Self {
+            domain: CkbadgerStore::open_domain(root.join("domain")).unwrap(),
+            append_only: CkbadgerStore::open_append_only(root.join("append-only")).unwrap(),
+        }
+    }
+
+    fn commit_block(&self, number: i64) {
+        let tx_hash = fixture_cellbase(number);
+        let timestamp = 1_700_000_000_000 + number * 8_000;
+
+        let mut payloads = StoreBatch::new(&self.append_only);
+        payloads
+            .put_cell_payload_by_outpoint(
+                &tx_hash,
+                0,
+                &LiveCellInfo {
+                    capacity: fixture_output_capacity(number),
+                    lock_code_hash: [0x21; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0x22; 20],
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+            )
+            .unwrap();
+        payloads.commit_synced().unwrap();
+
+        let mut rows = StoreBatch::new(&self.domain);
+        put_test_block_header(&mut rows, number, &fixture_block_hash(number), timestamp);
+        rows.put_tx_hash_map(&tx_hash, number, 0);
+        rows.put_tx_index(
+            number,
+            0,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase: true,
+                timestamp,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        rows.put_sync_status(&SyncStatus {
+            tip_block_number: number,
+            tip_block_hash: fixture_block_hash(number),
+            total_transactions: number,
+            ..Default::default()
+        })
+        .unwrap();
+        rows.commit().unwrap();
+    }
+
+    /// The API's two secondaries of these primaries, as production opens them.
+    fn api_secondaries(&self, root: &Path) -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
+        (
+            Arc::new(
+                CkbadgerStore::open_domain_secondary(
+                    root.join("domain").as_path(),
+                    root.join("domain-secondary").as_path(),
+                )
+                .unwrap(),
+            ),
+            Arc::new(
+                CkbadgerStore::open_append_only_secondary(
+                    root.join("append-only").as_path(),
+                    root.join("append-only-secondary").as_path(),
+                )
+                .unwrap(),
+            ),
+        )
+    }
+}
+
+/// The blocks whose cellbases `GET /transactions?limit=20` serves, newest
+/// first, each row's hash and output capacity checked against the fixture and
+/// the page's total against its rows: one coherent view.
+async fn served_cellbases(app: &axum::Router, context: &str) -> Vec<i64> {
+    let (status, json) = get_json(app, "/transactions?limit=20").await;
+    assert_eq!(status, StatusCode::OK, "{context}: {json}");
+    let rows = json["data"].as_array().expect("data");
+    assert_eq!(
+        json["total"].as_u64(),
+        Some(rows.len() as u64),
+        "{context}: the count and the rows come from one view: {json}"
+    );
+    rows.iter()
+        .map(|row| {
+            let number = row["blockNumber"].as_i64().expect("blockNumber");
+            assert_eq!(
+                row["hash"],
+                format!("0x{}", hex::encode(fixture_cellbase(number))),
+                "{context}: {row}"
+            );
+            assert_eq!(
+                row["outputCapacity"],
+                fixture_output_capacity(number).to_string(),
+                "{context}: {row}"
+            );
+            number
+        })
+        .collect()
+}
+
+/// The indexer keeps committing while the API's refresh round runs, and it
+/// commits a block's payloads (append-only) before the domain rows that point
+/// at them. Whichever two of the round's catch-ups a commit lands between,
+/// the view the round leaves must never hold a domain row whose payload the
+/// append-only view lacks.
+///
+/// Mainnet, 2026-11-11 08:34:26: block 20983950 committed while a round ran;
+/// the round had advanced append-only just before the block's payload commit
+/// and domain just after its domain commit, so for the second until the next
+/// round the domain view held the block's transactions and the append-only
+/// view not their outputs, and `GET /transactions?limit=20` answered 500
+/// (`missing canonical output payload`) once in that second.
+#[tokio::test]
+async fn a_block_committed_during_a_catch_up_round_never_serves_rows_without_their_payloads() {
+    // The test state opens no node reader and no network store: a round
+    // advances the domain and append-only secondaries, so a commit can land
+    // after either one.
+    for gap in 0..2 {
+        let root = tempfile::tempdir().unwrap();
+        let indexer = IndexerPrimaries::open(root.path());
+        indexer.commit_block(1);
+        let (domain, append_only) = indexer.api_secondaries(root.path());
+        // Its first round catches block 1 up.
+        let state = test_app_state(test_config_with_append_only(domain, append_only));
+        let app = router_from_state(state.clone());
+        assert_eq!(served_cellbases(&app, "after the first round").await, [1]);
+
+        let mut steps = 0;
+        let mut landed_after = None;
+        let outcomes = ProcessSecondaries::of(&state).catch_up_round_observed(&mut |store| {
+            if steps == gap {
+                indexer.commit_block(2);
+                landed_after = Some(store);
+            }
+            steps += 1;
+        });
+        assert_eq!(steps, 2, "{outcomes:?}");
+        assert!(
+            outcomes.iter().all(|outcome| outcome.result.is_ok()),
+            "{outcomes:?}"
+        );
+        let context = format!(
+            "block 2 committed after the round advanced the {} store",
+            landed_after.expect("the commit landed").name()
+        );
+        // Block 2 is served only once its payload is in the view too.
+        let served = served_cellbases(&app, &context).await;
+        assert!(served == [1] || served == [2, 1], "{context}: {served:?}");
+
+        // The next round sees everything the indexer committed.
+        ProcessSecondaries::of(&state).catch_up_round();
+        assert_eq!(served_cellbases(&app, "after the next round").await, [2, 1]);
+    }
 }
