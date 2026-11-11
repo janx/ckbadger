@@ -1,8 +1,20 @@
 import { createHash } from 'node:crypto';
 import { expect } from 'vitest';
-import { PAGE_SEAL_SIZES, PAGE_SEAL_TILT, type PageSealScale } from '@/components/ui/page-seal';
+import {
+  PAGE_SEAL_HEIGHTS,
+  PAGE_SEAL_SIZES,
+  PAGE_SEAL_TILT,
+  type PageSealScale,
+} from '@/components/ui/page-seal';
 import { ROW_SEAL_PX } from '@/components/ui/row-seal';
-import type { CellClass, SealId, SealKind } from '@/lib/seal/stones';
+import {
+  drawSeal,
+  sealLabel,
+  type CellClass,
+  type SealId,
+  type SealKind,
+  type SealState,
+} from '@/lib/seal/stones';
 import { compound } from '@/lib/talisman/compound';
 import { RECIPES } from '@/lib/talisman/recipes';
 
@@ -118,6 +130,42 @@ export function expectOneRowSeal(row: Element, hash: string): HTMLElement {
   expect(seal.innerHTML).toBe(parsed(compound(hash, RECIPES.row, ROW_SEAL_PX, PAINT).svg));
   expect(seal.closest('a')).toBeNull();
   expect(seal.querySelector('a')).toBeNull();
+  return seal;
+}
+
+/**
+ * `root` holds exactly one page seal of the seals by kind, the stone of `id` in `state` (pressed
+ * when not given): the drawing of that id (compared as markup with `drawSeal`'s, so it is this
+ * id's seal, with these counts, this class, this capacity), at its kind's wide height, tilted,
+ * with its narrow height below md, leading a SealedHead of its kind. Returns the seal's holder.
+ * Row seals in `root` (a page's lists) are not counted.
+ */
+export function expectOnePageSealOf(
+  root: ParentNode,
+  id: SealId,
+  state: SealState = 'pressed'
+): HTMLElement {
+  const seals = root.querySelectorAll<HTMLElement>('[data-seal][data-seal-form="page"]');
+  expect(seals).toHaveLength(1);
+  const [seal] = Array.from(seals);
+  expect(seal).toHaveAttribute('data-seal', id.kind);
+  expect(seal).toHaveAttribute('data-seal-state', state);
+  const { wide, narrow } = PAGE_SEAL_HEIGHTS[id.kind];
+  const svg = seal.querySelector('svg');
+  expect(svg).toHaveAttribute('role', 'img');
+  expect(svg).toHaveAttribute('aria-label', sealLabel(id));
+  expect(svg).toHaveAttribute('height', String(wide));
+  expect(svg?.getAttribute('style')).toBe(`transform: rotate(${PAGE_SEAL_TILT}deg)`);
+  expect(seal.innerHTML).toBe(
+    parsed(
+      drawSeal(id, { form: 'page', height: wide, state, ...SEAL_INKS, tilt: PAGE_SEAL_TILT }).svg
+    )
+  );
+  expect(seal).toHaveClass(`max-md:[&>svg]:h-[${narrow}px]`, 'max-md:[&>svg]:w-auto');
+  const head = seal.closest('[data-sealed-head]');
+  expect(head).toHaveAttribute('data-sealed-head', id.kind);
+  // The seal leads its head: the stamp first, the identity beside it.
+  expect(head?.firstElementChild).toBe(seal);
   return seal;
 }
 

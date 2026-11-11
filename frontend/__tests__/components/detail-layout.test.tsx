@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectOnePageSeal, expectOnePageSealOf, SEAL_IDS } from '@/__tests__/utils/seals';
 
 describe('DetailLayout identity', () => {
   it('keeps prose words intact while allowing an unbroken identifier to wrap', () => {
@@ -55,6 +55,53 @@ describe('DetailLayout seal', () => {
     expect(container.querySelector('header')!.firstElementChild).toContainElement(
       screen.getByRole('heading', { level: 1 })
     );
+  });
+});
+
+// The seals by kind: an object page presses the stone of its id (a block, a transaction, a cell, a
+// script) in its state, in the same place the talisman stood.
+describe('DetailLayout seal by kind (the seals by kind)', () => {
+  it('presses the stone of the id beside the title and identity, not the facts or the content', () => {
+    const block = SEAL_IDS.block;
+    const { container } = render(
+      <DetailLayout
+        title="#20,914,858"
+        identity={<span>Block {block.hash}</span>}
+        seal={{ id: block }}
+        lede={<p data-testid="lede">248 transactions.</p>}
+        facts={[{ label: 'Epoch', value: '15,271' }]}
+      >
+        <p>content</p>
+      </DetailLayout>
+    );
+    const seal = expectOnePageSealOf(container, block);
+    const head = seal.closest('[data-sealed-head]')!;
+    const header = container.querySelector('header')!;
+    expect(head.parentElement).toBe(header);
+    const column = seal.nextElementSibling as HTMLElement;
+    expect(column).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(column).toHaveTextContent(`Block ${block.hash}`);
+    expect(column.lastElementChild).toContainElement(screen.getByTestId('lede'));
+    expect(head).not.toContainElement(screen.getByText('15,271'));
+    expect(header).toContainElement(screen.getByText('15,271'));
+    expect(header).not.toContainElement(screen.getByText('content'));
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
+  });
+
+  it('presses it in the state it is given: a consumed cell in the dead ink, a pool transaction unpressed', () => {
+    const { container, unmount } = render(
+      <DetailLayout title="Cell" seal={{ id: SEAL_IDS.cell, state: 'ink' }}>
+        content
+      </DetailLayout>
+    );
+    expectOnePageSealOf(container, SEAL_IDS.cell, 'ink');
+    unmount();
+    const pool = render(
+      <DetailLayout title="Transaction" seal={{ id: SEAL_IDS.tx, state: 'unpressed' }}>
+        content
+      </DetailLayout>
+    );
+    expectOnePageSealOf(pool.container, SEAL_IDS.tx, 'unpressed');
   });
 });
 
