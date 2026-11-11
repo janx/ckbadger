@@ -25,15 +25,26 @@ import { formatCount } from '@/lib/format-count';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 
-const TRACK = 80;
+/**
+ * The Cycles bar's track: its head's tick row for any scale under a billion cycles, "0" …
+ * "200,000,000" (12 characters at 11 px, 79.2 px), fits it.
+ */
+const CYCLES_TRACK = 80;
 
 /**
- * The hash in the table's Transaction column: "0x" and 6 digits, the ellipsis, 4 digits (15
- * characters at 13 px, 117 px). It gave 4 characters (31.2 px) to the transaction's row stone,
- * 29.5 px wider than the 27 px of the seal it replaced. The phone row keeps 10 + 6: its hash has
- * a line.
+ * The Size bar's track, shorter than the Cycles one: its head's widest tick row, "0" … "600,000"
+ * (a transaction is no larger than a block's 597,000 bytes, whose scale is 600,000; 8 characters
+ * at 11 px, 52.8 px), fits it with 3.2 px between the two ticks. It was 80; its 24 px went to the
+ * transaction's hash (old issue C): the developer figures give way before the columns every
+ * reader reads.
  */
-const TABLE_HASH_CHARS = { start: 8, end: 4 } as const;
+const SIZE_TRACK = 56;
+
+/**
+ * The hash of a committed transaction, in the table and the phone row alike: "0x" and 8 digits,
+ * the ellipsis, 6 digits (19 characters; at 13 px 148.2 px).
+ */
+const HASH_CHARS = { start: 10, end: 6 } as const;
 
 /** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
 function consumedCells(tx: Transaction): number {
@@ -171,8 +182,8 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
             <Link href={`/tx/${tx.hash}`} className="hover:underline">
               <Hash
                 hash={tx.hash}
-                startChars={10}
-                endChars={6}
+                startChars={HASH_CHARS.start}
+                endChars={HASH_CHARS.end}
                 copyable={false}
                 className="text-body"
               />
@@ -250,11 +261,12 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 15 characters at
-      // 13 px (117 px) and the 16 px gap: 189.5 of its 192 px. The stone is 29.5 px wider than the
-      // seal it replaced (27); the hash gave 4 characters (31.2 px), so no other column moves and
-      // the table keeps its 1,230 px (was 27 + 148.2 for 19 characters + 16).
-      minWidth: 192,
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 19 characters at
+      // 13 px (148.2 px) and the 16 px gap: 220.7 of its 221 px. The 29 px it gained over 192 came
+      // from the Size bar's track (24, SIZE_TRACK) and What it did's note (5), so the table keeps
+      // its 1,230 px and changes form where it did (old issue C: the stone had taken them from
+      // the hash, 10 + 6 → 8 + 4).
+      minWidth: 221,
       // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
       // row keeps its dim row class); its stone leads it, overhanging that line (RowSeal).
       render: (tx) => (
@@ -263,8 +275,8 @@ export function TransactionListTable({
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
             <Hash
               hash={tx.hash}
-              startChars={TABLE_HASH_CHARS.start}
-              endChars={TABLE_HASH_CHARS.end}
+              startChars={HASH_CHARS.start}
+              endChars={HASH_CHARS.end}
               copyable={false}
               className="text-body text-text-bright leading-[18px]"
             />
@@ -291,7 +303,10 @@ export function TransactionListTable({
     {
       key: 'what',
       label: 'What it did',
-      minWidth: 220,
+      // The mark (16), two 8 px gaps and the 16 px gap leave the headline and its note 167 px:
+      // the longest DAO headline, "DAO Withdraw Complete" (21 characters at 12 px, 151.2 px),
+      // stays whole and the note, which truncates, takes the rest. It gave 5 px to the hash.
+      minWidth: 215,
       render: (tx) => {
         const mark = tx.activity ? activityClassMark(tx.activity) : null;
         return (
@@ -371,14 +386,19 @@ export function TransactionListTable({
     {
       key: 'size',
       label: 'Size, bytes',
-      minWidth: 145,
-      // The shared head at this table's own geometry: an 80 px tick row 2 px under the name.
-      header: <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={TRACK} tickGap={2} />,
+      // The track (SIZE_TRACK, 56), the bar's 10 px gap, a 5-digit scale's figure ("2,000", 36 px)
+      // and the 16 px gap, with 3 px to spare, as at the 80 px track's 145 (it gave 24 to the hash).
+      minWidth: 121,
+      // The shared head at this table's own geometry: a tick row as long as the track, 2 px under
+      // the name.
+      header: (
+        <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={SIZE_TRACK} tickGap={2} />
+      ),
       render: (tx) => (
         <AlignedBar
           label="Size, bytes"
           scale={sizeScale}
-          trackWidth={TRACK}
+          trackWidth={SIZE_TRACK}
           segments={[
             {
               key: 'value',
@@ -394,7 +414,9 @@ export function TransactionListTable({
       key: 'cycles',
       label: 'Cycles',
       minWidth: 180,
-      header: <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={TRACK} tickGap={2} />,
+      header: (
+        <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={CYCLES_TRACK} tickGap={2} />
+      ),
       render: (tx) =>
         tx.cycles === null ? (
           <span className="text-text-dim text-small">
@@ -404,7 +426,7 @@ export function TransactionListTable({
           <AlignedBar
             label="Cycles"
             scale={cycleScale}
-            trackWidth={TRACK}
+            trackWidth={CYCLES_TRACK}
             segments={[{ key: 'value', label: 'Cycles', value: tx.cycles, tone: 'data' }]}
           />
         ),

@@ -87,12 +87,11 @@ function poolSealId(tx: PoolRow): SealId {
 }
 
 /**
- * The hash in the pool table's Transaction column: "0x" and 8 digits, the ellipsis, 4 digits (17
- * characters at 13 px, 132.6 px). It gave 4 characters (31.2 px) to the transaction's row stone,
- * 29.5 px wider than the 27 px of the seal it replaced. The phone row keeps 10 + 6: its hash has
- * a line.
+ * The hash in the pool table's Transaction column: "0x" and 10 digits, the ellipsis, 6 digits (21
+ * characters at 13 px, 163.8 px), as before the transaction's row stone (old issue C). The phone
+ * row's identity line, which shares its line with the status and the wait, keeps 10 + 6.
  */
-const POOL_HASH_CHARS = { start: 10, end: 4 } as const;
+const POOL_HASH_CHARS = { start: 12, end: 6 } as const;
 
 /**
  * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
@@ -285,11 +284,13 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 17 characters at
-      // 13 px (132.6 px) and the 16 px gap: 205.1 of its 207 px. The stone is 29.5 px wider than
-      // the seal it replaced (27); the hash gave 4 characters (31.2 px), so no other column moves
-      // and the table keeps its 1,200 px (was 27 + 163.8 for 21 characters + 16).
-      minWidth: 207,
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 21 characters at
+      // 13 px (163.8 px) and the 16 px gap: 236.3 of its 237 px. The 30 px it gained over 207 are
+      // the widest container's own (1,232 px from 1280; the columns took 1,200 of it), so no
+      // other column moves; the table is 1,230 px, the committed table's width, and both of the
+      // page's lists change form at the same width (old issue C: the stone had taken the 30 from
+      // the hash, 12 + 6 → 10 + 4).
+      minWidth: 237,
       render: (tx) => (
         <div className="flex items-start">
           <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
@@ -392,7 +393,7 @@ export default function TransactionsPage() {
       key: 'cycles',
       label: 'Cycles',
       // The most a transaction may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
-      // gap (the last column); 16 px went to the row seal, so the table keeps its 1,200 px.
+      // gap (the last column); 16 px went to the row seal.
       minWidth: 94,
       numeric: true,
       render: (tx) => BigInt(tx.cycles).toLocaleString('en-US'),

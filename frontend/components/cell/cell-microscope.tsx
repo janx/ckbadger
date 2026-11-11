@@ -91,6 +91,25 @@ function rawHex(bytes: readonly string[], part: CellPart): string {
   return n > 48 ? `${grouped} … (${n.toLocaleString('en-US')} B)` : grouped;
 }
 
+/**
+ * The field detail's head: the name of what it shows and its figure (a byte range and size, or a
+ * count). The figure is one unit, never broken; it stands beside the name when both fit the
+ * rail's line and wraps under it when they do not, the name wrapping between its words (a word
+ * longer than the line breaks). Neither ever runs past the rail (old issue B: at 1024 px the
+ * figure's unbroken line ran 27–47 px past the page beside a 106 px rail).
+ */
+function DetailHead({ name, figure }: { name: ReactNode; figure: ReactNode }) {
+  return (
+    <div
+      data-detail-head=""
+      className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"
+    >
+      <span className="text-text-bright text-body min-w-0 break-words">{name}</span>
+      <span className="text-text-dim text-meta whitespace-nowrap">{figure}</span>
+    </div>
+  );
+}
+
 function DetailRows({ rows }: { rows: readonly [string, ReactNode, string?][] }) {
   return (
     <div className="mt-2">
@@ -419,12 +438,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     const part = byId.get(active.id)!;
     detail = (
       <div data-detail={part.id}>
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-body">{part.label}</span>
-          <span className="text-text-dim text-meta whitespace-nowrap">
-            [{fmt(part.start)}..{fmt(part.end)}) · {fmt(part.end - part.start)} B
-          </span>
-        </div>
+        <DetailHead name={part.label} figure={span(part.start, part.end)} />
         <p className="text-small text-text mt-1.5 leading-relaxed">{part.meaning}</p>
         <DetailRows
           rows={[
@@ -463,15 +477,10 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
     detail = (
       <div data-detail={`group:${g}`}>
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-body">
-            {g}
-            {name ? ` · ${name}` : ''}
-          </span>
-          <span className="text-text-dim text-meta whitespace-nowrap">
-            {fmt(groupBytes[g])} B occupied
-          </span>
-        </div>
+        <DetailHead
+          name={`${g}${name ? ` · ${name}` : ''}`}
+          figure={`${fmt(groupBytes[g])} B occupied`}
+        />
         <p className="text-small text-text mt-1.5 leading-relaxed">
           {g === 'capacity'
             ? 'The capacity field takes 8 bytes of the capacity it states.'
@@ -502,13 +511,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   } else if (activeRegion) {
     detail = (
       <div data-detail={activeRegion.id}>
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-body">{activeRegion.label}</span>
-          <span className="text-text-dim text-meta whitespace-nowrap">
-            [{fmt(activeRegion.start)}..{fmt(activeRegion.end)}) ·{' '}
-            {fmt(activeRegion.end - activeRegion.start)} B
-          </span>
-        </div>
+        <DetailHead name={activeRegion.label} figure={span(activeRegion.start, activeRegion.end)} />
         <p className="text-small text-text mt-1.5 leading-relaxed">
           {activeRegion.partIds.length > 1
             ? `${activeRegion.partIds.length} parts: ${activeRegion.partIds.map((id) => byId.get(id)!.label).join(' · ')}.`
@@ -519,13 +522,11 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   } else {
     detail = (
       <div data-detail="default">
-        <div className="flex items-baseline justify-between gap-2">
-          {/* C10: the readout row under the bytes is the section's one "tap or hover". */}
-          <span className="text-text-bright text-body">Where each byte belongs</span>
-          <span className="text-text-dim text-meta whitespace-nowrap">
-            {fmt(outBytes.length)} + {fmt(dataBytes.length)} bytes
-          </span>
-        </div>
+        {/* C10: the readout row under the bytes is the section's one "tap or hover". */}
+        <DetailHead
+          name="Where each byte belongs"
+          figure={`${fmt(outBytes.length)} + ${fmt(dataBytes.length)} bytes`}
+        />
         <p className="text-small text-text mt-1.5 leading-relaxed">
           Each byte belongs to exactly one {elf ? 'part' : 'field'}. Colours follow the four parts
           of the cell; grey bytes are CellOutput framing that the cell does not pay for.
@@ -658,7 +659,13 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           </div>
         </div>
       )}
-      <div className="grid items-start gap-6 pt-2 lg:grid-cols-[minmax(0,846px)_minmax(0,1fr)]">
+      {/* From lg the bytes and the field detail stand side by side. The bytes take up to 846 px
+          (a 24-byte row); the detail rail keeps at least 320 px (290 of text inside its border
+          and padding) and takes the rest. With a 0 minimum the rail got only what the bytes
+          left: at 1024 px (976 of content, 24 of gap) 976 − 24 − 846 = 106 px, 76 of text, and
+          its head's unbroken figure ran past the page. At 1024 now: bytes 632 (a 16-byte row
+          is 584.6 with the dump's frame), rail 320; from 1280 (1,232): 846 and 362 as before. */}
+      <div className="grid items-start gap-6 pt-2 lg:grid-cols-[minmax(0,846px)_minmax(320px,1fr)]">
         <div className="min-w-0 space-y-4">
           <div
             aria-label="Field index"
