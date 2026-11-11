@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
-import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSealOf } from '@/__tests__/utils/seals';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -51,6 +51,9 @@ const base = {
   liveAgeAtBlock: 125,
   lock: { codeHash: `0x${'22'.repeat(32)}`, hashType: 'type', args: `0x${'33'.repeat(20)}` },
   type: undefined,
+  // The cell detail's class fields (cell_type() and the tile display): no type script, plain.
+  typeCellType: 'plain',
+  display: null,
   // The cell detail always carries the registry slugs (null = not a registered protocol).
   protocolScript: { lock: null, type: null },
   data: '0x',
@@ -103,24 +106,133 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
   });
-  // Rubbing × Song print, phase 3: the page seal (112 px, 80 on a phone, −4°) of the out point's
-  // 32-byte part, the hash of the transaction that made the cell, pressed beside the out point.
-  it('presses the seal of its out point’s transaction hash beside the out point', async () => {
+  // The seals by kind (C3): the cell's own page seal (112 px, 88 below md, −4°) — its
+  // transaction's rim and border, its index in rods, its owner's stone, a bead per digit of its
+  // capacity; no type script, so no window and no glyph — pressed beside the out point.
+  it('presses the cell’s own seal beside the out point', async () => {
     getCell.mockResolvedValue({ ...base, outputIndex: 2 });
     outpoint = `${hash}-2`;
     const { container } = view();
     const title = await screen.findByRole('heading', { level: 1 });
-    const seal = expectOnePageSeal(container, base.txHash, 'object');
+    const seal = expectOnePageSealOf(
+      container,
+      {
+        kind: 'cell',
+        tx: base.txHash,
+        index: 2,
+        lock: base.lockScriptHash,
+        type: null,
+        capacity: BigInt(10000000000),
+      },
+      'pressed'
+    );
+    expect(seal.querySelector('svg')).toHaveAttribute(
+      'aria-label',
+      `Cell seal ${base.txHash.slice(0, 10)}:2, ckb, 100.00000000 CKB`
+    );
     const head = seal.closest('[data-sealed-head]')!;
     expect(head).toContainElement(title);
     expect(head).toHaveTextContent(`${base.txHash}:2`);
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
+    // the cell's stone, not its transaction's talisman
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
+  });
+  it('presses a spent cell’s seal in the dead ink', async () => {
+    getCell.mockResolvedValue({
+      ...base,
+      status: 'dead',
+      consumedAtBlock: 125,
+      consumedByTx: `0x${'cd'.repeat(32)}`,
+      consumingInputIndex: 2,
+    });
+    const { container } = view();
+    await screen.findByRole('heading', { level: 1 });
+    expectOnePageSealOf(
+      container,
+      {
+        kind: 'cell',
+        tx: base.txHash,
+        index: 0,
+        lock: base.lockScriptHash,
+        type: null,
+        capacity: BigInt(10000000000),
+      },
+      'ink'
+    );
+  });
+  it('classes a typed cell as its transaction page does: a token, its window and glyph', async () => {
+    const typeHash = '0x3b02b7c0d2d8abe06500d473edc9956a11ef5601c58361d4c3048df3f15902ee';
+    getCell.mockResolvedValue({
+      ...base,
+      type: {
+        codeHash: '0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212',
+        hashType: 'type',
+        args: `0x${'30'.repeat(32)}`,
+      },
+      typeScriptHash: typeHash,
+      typeCellType: 'sudt',
+      display: {
+        kind: 'token',
+        standard: 'sudt',
+        id: typeHash,
+        name: 'Exact sudt',
+        collectionId: null,
+        collectionName: null,
+        symbol: 'SUDT',
+        decimals: 8,
+        amount: '5',
+        noAmountReason: null,
+        compositionTier: null,
+      },
+    });
+    const { container } = view();
+    await screen.findByRole('heading', { level: 1 });
+    const seal = expectOnePageSealOf(container, {
+      kind: 'cell',
+      tx: base.txHash,
+      index: 0,
+      lock: base.lockScriptHash,
+      type: { class: 'tokens', hash: typeHash },
+      capacity: BigInt(10000000000),
+    });
+    // the tokens' window, a square
+    expect(seal.querySelector('rect[fill="none"]')).not.toBeNull();
+  });
+  it('refuses a cell response without its class fields rather than pressing a plain stone', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { typeCellType: _drop, ...withoutClass } = base;
+      void _drop;
+      getCell.mockResolvedValue(withoutClass as Cell);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ErrorBoundary fallback={<p>page-level boundary</p>}>
+            <CellDetailPage />
+          </ErrorBoundary>
+        </QueryClientProvider>
+      );
+      expect(await screen.findByText('page-level boundary')).toBeInTheDocument();
+      expect(quiet.mock.calls.flat().map(String).join(' ')).toContain(
+        `Cell ${hash}:0: no typeCellType`
+      );
+    } finally {
+      quiet.mockRestore();
+    }
   });
   it('presses no seal when the out point cannot be read', () => {
     outpoint = hash;
     const { container } = view();
     expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(container.querySelector('[data-seal]')).toBeNull();
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
+  });
+  it('presses no seal when the cell cannot be read', async () => {
+    getCell.mockRejectedValue(new Error('node unavailable'));
+    const { container } = view();
+    expect(await screen.findByText('Cell data unavailable')).toBeInTheDocument();
+    expect(container.querySelector('[data-seal]')).toBeNull();
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
   it('shows loading and then exact live cell anatomy, chronology and byte map', async () => {
