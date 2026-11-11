@@ -67,6 +67,19 @@ function Line({
   );
 }
 
+/**
+ * A token's amount and unit (or its unit alone) as one atomic box capped at the line: whole, on a
+ * line of its own, when it fits there; wrapping inside itself (at its spaces, or anywhere for one
+ * word longer than the line) only when it is wider. A unit is the token's own text with no length
+ * bound, so it is never `whitespace-nowrap` (seals by kind, C8: "5,913.45087427 LP-UTXOSwap V1" is
+ * 296 px; beside the 88 px cell stone the line is 254 px at 390 and 224 px at 360). The default
+ * baseline sets the box's last line on the sentence's, and the link's colour and glow reach it by
+ * inheritance. A short id (19 characters at most) stays `whitespace-nowrap`: its length is bounded.
+ */
+function TokenName({ children }: { children: string }) {
+  return <span className="inline-block max-w-full [overflow-wrap:anywhere]">{children}</span>;
+}
+
 /** "Nervape Mask 0x7e3bc1bc…216539" with the cluster's name; "a Spore object 0x…" before it. */
 function SporeLine({ item }: { item: Extract<CellInventoryItem, { kind: 'spore' }> }) {
   const object = useQuery({
@@ -243,7 +256,7 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           mark="tokens"
           lead="This cell holds"
           href={item.href}
-          name={<span className="whitespace-nowrap">{`${item.amount} ${item.unit}`}</span>}
+          name={<TokenName>{`${item.amount} ${item.unit}`}</TokenName>}
         />
       );
     case 'token-without-amount':
@@ -252,7 +265,7 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           mark="tokens"
           lead="This cell holds no readable amount of"
           href={item.href}
-          name={<span className="whitespace-nowrap">{item.unit}</span>}
+          name={<TokenName>{item.unit}</TokenName>}
           tail={
             <span data-testid="cell-inventory-no-amount" className="text-text-dim text-small">
               {' '}

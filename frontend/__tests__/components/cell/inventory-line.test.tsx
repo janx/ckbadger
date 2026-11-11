@@ -105,6 +105,55 @@ describe('CellInventoryLine (lane U, U6)', () => {
     expect(screen.queryByTestId('cell-inventory-error')).toBeNull();
   });
 
+  // Seals by kind (C8): a token's unit is the token's own text, with no length bound. "5,913.45087427
+  // LP-UTXOSwap V1" is 296 px, and beside the 88 px cell stone the line is 254 px at 390 and 224 px
+  // at 360, so a whitespace-nowrap name scrolled the page sideways. The amount and unit are one
+  // atomic box capped at the line: whole on a line of its own when the pair fits there, wrapping
+  // inside itself (at its spaces, or anywhere for one word longer than the line) only when it is
+  // wider. jsdom has no layout, so the classes that make this are what is pinned; no vertical-align
+  // of its own, so the box's last line sits on the sentence's baseline.
+  const LP_UNIT = 'LP-UTXOSwap V1';
+  const expectNameThatWrapsInside = (line: HTMLElement, text: string) => {
+    const name = within(line).getByText(text);
+    expect(name.tagName).toBe('SPAN');
+    expect(name.parentElement).toBe(within(line).getByRole('link', { name: text }));
+    expect(name).toHaveClass('inline-block', 'max-w-full', '[overflow-wrap:anywhere]');
+    expect(name.closest('.whitespace-nowrap')).toBeNull();
+    expect(name.className).not.toMatch(/(^|\s)align-/);
+  };
+
+  it('keeps a token’s amount and unbounded unit in one box that wraps inside itself, never past the line', () => {
+    view({
+      ...xudt,
+      dataAnalysis: {
+        ...xudt.dataAnalysis,
+        token: {
+          ...xudt.dataAnalysis.token,
+          name: LP_UNIT,
+          symbol: LP_UNIT,
+          rawAmount: '591345087427',
+          formattedAmount: '5913.45087427',
+        },
+      },
+    });
+    const line = screen.getByTestId('cell-inventory');
+    expect(line).toHaveTextContent(/^This cell holds 5,913\.45087427 LP-UTXOSwap V1$/);
+    expectNameThatWrapsInside(line, '5,913.45087427 LP-UTXOSwap V1');
+  });
+
+  it('caps an unbounded unit with no readable amount at the line the same way', () => {
+    view({
+      ...xudtNoAmount,
+      dataAnalysis: {
+        ...xudtNoAmount.dataAnalysis,
+        token: { ...xudtNoAmount.dataAnalysis.token, name: LP_UNIT, symbol: LP_UNIT },
+      },
+    });
+    const line = screen.getByTestId('cell-inventory');
+    expect(line).toHaveTextContent(/^This cell holds no readable amount of LP-UTXOSwap V1 · /);
+    expectNameThatWrapsInside(line, LP_UNIT);
+  });
+
   it('names a DAO deposit and a withdrawal request with their exact CKB', () => {
     const deposit = view(dao);
     const line = screen.getByTestId('cell-inventory');
