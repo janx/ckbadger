@@ -2,7 +2,8 @@ import { CHARTS } from '@/components/charts/chart-catalogue';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+import { expectBefore, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { ROW_SEAL } from '@/components/ui/row-seal';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '@/__tests__/utils/test-utils';
@@ -185,19 +186,43 @@ describe('Transactions pool view', () => {
     expect(table.querySelectorAll('[data-ckb-amount]')).toHaveLength(2);
     for (const amount of table.querySelectorAll('[data-ckb-amount]'))
       expect(amount).toHaveClass('flex-wrap');
-    // Rubbing × Song print, phase 3: the row seal's 27 px come from the Cycles and Fee-rate
-    // columns' slack, so the table keeps its 1,200 px and the most cycles still fit.
+    // The seals by kind (C2): the transaction's row stone's footprint (56.5 px) is 29.5 px more
+    // than the seal it replaced (27); the hash gave 4 characters (21 → 17 at 13 px, 31.2 px), so every
+    // column keeps its width, the table its 1,200 px and the most cycles still fit.
     expect(Number.parseFloat(table.style.minWidth)).toBe(1200);
     const cols = Array.from(table.querySelectorAll('col')).map(
       (c) => (c as HTMLElement).style.width
     );
-    expect([cols[0], cols[6], cols[8]]).toEqual(['207px', '123px', '94px']);
+    expect(cols).toEqual([
+      '207px',
+      '180px',
+      '150px',
+      '64px',
+      '164px',
+      '128px',
+      '123px',
+      '90px',
+      '94px',
+    ]);
+    // "0x" and 8 digits, the ellipsis, 4 digits: 17 characters of JetBrains Mono at 13 px (7.8)
+    const shown = within(table).getByTitle(`0x${'ab'.repeat(32)}`);
+    expect(shown).toHaveTextContent(/^0xabababab\.\.\.abab$/);
+    const chars = shown.textContent!.length;
+    expect(chars).toBe(17);
+    // the stone, the hash and the 16 px gap fit the 207 px; one more character would not
+    const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
+    expect(used).toBeCloseTo(205.1, 6);
+    expect(used).toBeLessThanOrEqual(207);
+    expect(used + 7.8).toBeGreaterThan(207);
   });
 
-  // Rubbing × Song print, phase 3: a pool transaction's row leads with its row seal (the seal its
-  // page will carry), before the hash, in the table and in the phone row.
-  it('leads each pool row with its transaction’s row seal, in the table and the phone row', async () => {
+  // The seals by kind (C2): a pool transaction's row leads with its stone (the stone its page
+  // presses), dashed — it is not in a block yet — before the hash, in the table and the phone row.
+  it('leads each pool row with its transaction’s stone, dashed, in the table and the phone row', async () => {
     const hash = `0x${'cd'.repeat(32)}`;
+    // the pool never holds a cellbase, but a row the API marks one consumes no cell, as its Cells
+    // column already reads
+    const cellbaseHash = `0x${'ce'.repeat(32)}`;
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -206,8 +231,8 @@ describe('Transactions pool view', () => {
     });
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
-      total: 1,
-      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      total: 2,
+      totals: { pending: 2, proposed: 0, awaitingIndex: 0 },
       data: [
         {
           hash,
@@ -223,16 +248,38 @@ describe('Transactions pool view', () => {
           interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
           activity: null,
         },
+        {
+          hash: cellbaseHash,
+          status: 'pending',
+          value: '0',
+          fee: '0',
+          feeRate: '0',
+          txSize: 226,
+          cycles: '0',
+          inputsCount: 1,
+          outputsCount: 1,
+          timestamp: '1792886400000',
+          interpretation: { status: 'complete', reasons: [] },
+          activity: { ...feedSamples.eightParties, isCellbase: true },
+        },
       ],
     });
+    const ids = [
+      { kind: 'tx', hash, consumed: 2, created: 3 },
+      { kind: 'tx', hash: cellbaseHash, consumed: 0, created: 1 },
+    ] as const;
     const { unmount } = render(<TransactionsPage />);
     fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
-    const [tr] = Array.from(table.querySelectorAll('tbody tr'));
-    const seal = expectOneRowSeal(tr, hash);
-    expect(tr.querySelector('td')).toContainElement(seal);
-    expect(seal).toHaveClass('-my-[5px]');
-    expectBefore(seal, within(tr as HTMLElement).getByTitle(hash));
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    expect(rows).toHaveLength(2);
+    rows.forEach((tr, i) => {
+      const seal = expectOneRowSealOf(tr, ids[i], 'unpressed');
+      expect(tr.querySelector('td')).toContainElement(seal);
+      expect(seal).toHaveClass('-my-[3px]');
+      expectBefore(seal, within(tr as HTMLElement).getByTitle(ids[i].hash));
+    });
+    expect(rows[1]).toHaveTextContent('0 → 1');
     unmount();
 
     atContainerWidth(358);
@@ -242,10 +289,16 @@ describe('Transactions pool view', () => {
     });
     render(<TransactionsPage />);
     fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
-    const [card] = await screen.findAllByTestId('pool-row-mobile');
-    const phoneSeal = expectOneRowSeal(card, hash);
-    expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
-    expectBefore(phoneSeal, within(card).getByTitle(hash));
+    const cards = await screen.findAllByTestId('pool-row-mobile');
+    expect(cards).toHaveLength(2);
+    cards.forEach((card, i) => {
+      const phoneSeal = expectOneRowSealOf(card, ids[i], 'unpressed');
+      expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
+      expect(card.firstElementChild).toContainElement(phoneSeal);
+      expect(phoneSeal).not.toHaveClass('-my-[3px]');
+      expectBefore(phoneSeal, within(card).getByTitle(ids[i].hash));
+    });
+    expect(cards[1]).toHaveTextContent('0 → 1 cells');
   });
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
@@ -321,7 +374,8 @@ describe('Transactions pool view', () => {
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
       expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
       expect(hash).not.toHaveClass('text-small');
-      expect(hash).toHaveTextContent('0xababababab...ababab');
+      // the table's 17 characters (the stone took 4: see the width budget above)
+      expect(hash).toHaveTextContent(/^0xabababab\.\.\.abab$/);
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);
     }

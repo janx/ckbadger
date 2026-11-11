@@ -4,10 +4,36 @@ import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { ExactCkb } from '@/components/activity-event-row';
 import Link from '@/components/ui/link';
+import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
+import { Seal } from '@/components/ui/seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import type { SealId, SealState } from '@/lib/seal/stones';
 import { cn } from '@/lib/utils';
 import { CELL_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+
+/** A transaction's stone (the seals by kind): its hash and the cells it consumed and created. */
+export type TxSealId = Extract<SealId, { kind: 'tx' }>;
+
+/**
+ * The seam seal, from lg up (the seals by kind, C2): the transaction's stone at its narrow page
+ * height, 64 px (104.5 wide), tilted as the page's head presses it (−4°), at the head of the
+ * 112 px capacity-pool column, centred: its consumed rods toward the consumed cells, its created
+ * rods toward the created ones. Tilted, it covers 108.7 × 71.1 px — 1.6 px inside the column at
+ * either side, 3.6 px past its box above (into the panel's 12 px padding) and below, to 67.6 px.
+ * The column's "Capacity pool" label moves under it, to 72 px (a 16.5 px line, to 88.5); both side
+ * columns' heads hold the band to 88 px, so the first cell's middle is at least 88 + 27 (half the
+ * 54 px shortest tile) = 115 px and the pool, 16 px above it, starts under the label: every flow
+ * stays below the stone and the label. Below lg, where the cells stack, there is none.
+ */
+export const SEAM_SEAL = {
+  /** The stone's height, px: the transaction's narrow page height. */
+  height: PAGE_SEAL_HEIGHTS.tx.narrow,
+  /** The label's top in the pool column, px. */
+  labelTop: 72,
+  /** Where the cells start in the side columns, px (their heads' height). */
+  band: 88,
+} as const;
 
 export interface TxStructureGroup {
   id: string;
@@ -80,6 +106,12 @@ export interface TxStructureProps {
   // group scripts (F2-5): what the bridge leads to (Cell page "Not spent yet" box), drawn right
   // under the bridge legend instead of after the script groups.
   afterOnward?: ReactNode;
+  /**
+   * The transaction page's seam seal (`SEAM_SEAL`): the same stone its head presses, in the same
+   * state, pressed again between what it consumed and what it created, from lg up. Every other
+   * page leaves it out (a list's seal is whole).
+   */
+  seamSeal?: { id: TxSealId; state?: SealState };
 }
 /** F2-tx (D4): a source that is not a consumed cell. */
 export interface TxInflow {
@@ -110,6 +142,7 @@ export function TxStructure({
   inflow,
   continuityList = true,
   afterOnward,
+  seamSeal,
 }: TxStructureProps) {
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
@@ -174,7 +207,13 @@ export function TxStructure({
   const poolBottom = ys.length ? Math.max(...ys) + 16 : 0;
   const column = (cells: readonly CellTileData[], label: string) => (
     <div className="min-w-0">
-      <h3 className="text-text-dim text-small mb-3">
+      <h3
+        className={cn(
+          'text-text-dim text-small mb-3',
+          // the seam seal's band (SEAM_SEAL.band): the cells start under the stone and its label
+          seamSeal && 'lg:mb-0 lg:min-h-[88px]'
+        )}
+      >
         {formatCount(cells.length, 'cell')} {label}
       </h3>
       <div className="space-y-3">
@@ -218,7 +257,33 @@ export function TxStructure({
           >
             {column(inputs, 'consumed')}
             <div className="text-text-dim text-meta relative flex flex-wrap items-center justify-center gap-2 py-3 text-center lg:block lg:min-h-[180px] lg:p-0">
-              <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
+              {seamSeal && (
+                // The head's own stone is the page's image for a screen reader; this second
+                // impression is hidden from it.
+                <span
+                  data-seam-seal=""
+                  aria-hidden="true"
+                  className="absolute inset-x-0 top-0 hidden justify-center lg:flex"
+                >
+                  <Seal
+                    id={seamSeal.id}
+                    form="page"
+                    height={SEAM_SEAL.height}
+                    state={seamSeal.state}
+                    tilt={PAGE_SEAL_TILT}
+                    className="[&>svg]:block"
+                  />
+                </span>
+              )}
+              <span
+                className={cn(
+                  'lg:absolute lg:inset-x-0',
+                  // under the seam seal (SEAM_SEAL.labelTop), else at the column's head
+                  seamSeal ? 'lg:top-[72px]' : 'lg:top-0'
+                )}
+              >
+                Capacity pool
+              </span>
               <span aria-hidden="true" className="lg:hidden">
                 ↓
               </span>

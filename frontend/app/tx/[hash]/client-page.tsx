@@ -24,7 +24,7 @@ import {
 } from '@/components/activity-event-row';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { TxStructure, continuityColor } from '@/components/transaction/tx-structure';
+import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
@@ -75,6 +75,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
+import type { SealState } from '@/lib/seal/stones';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section...</p>,
@@ -738,6 +739,19 @@ export default function TransactionDetailPage() {
       </DetailLayout>
     );
   }
+  // The transaction's stone (the seals by kind), pressed on the head and, from lg, across the cells:
+  // its hash, the cells it consumed — the API's count, as its row in a list, but none for a
+  // cellbase (the API counts its one null input) — and the cells it created; dashed while it is
+  // not yet indexed in a block.
+  const seal: { id: TxSealId; state?: SealState } = {
+    id: {
+      kind: 'tx',
+      hash: tx.hash,
+      consumed: tx.isCellbase ? 0 : tx.inputsCount,
+      created: tx.outputsCount,
+    },
+    state: isProvisional ? 'unpressed' : undefined,
+  };
   const status =
     tx.poolStatus === 'committed_awaiting_index'
       ? poolStatusLabel(tx.poolStatus)
@@ -1214,11 +1228,11 @@ export default function TransactionDetailPage() {
       >
         <header className="min-w-0 lg:col-start-1">
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
-          {/* The one corner (Transaction board): the transaction's seal pressed beside its
-              identity, never in the cells and flows below. */}
+          {/* The one corner (Transaction board): the transaction's long stone pressed beside its
+              identity; from lg its seam seal is pressed again between the cells below. */}
           <SealedHead
-            hash={tx.hash}
-            scale="record"
+            id={seal.id}
+            state={seal.state}
             // Under the seal and the identity, in the identity column (the board's comment).
             below={
               comment === null ? undefined : (
@@ -1411,6 +1425,7 @@ export default function TransactionDetailPage() {
                 focusedCellIds={lit ? [...lit.cells] : []}
                 onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
                 continuity={continuity}
+                seamSeal={seal}
                 // A lit tile clears the selection on click only while there is one: a tile lit
                 // by hover alone has no clearing click (review 2026-11-03 — the clearing replace
                 // used to cancel the out point link's navigation to the cell page).

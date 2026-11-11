@@ -8,6 +8,22 @@ import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 import { CELL_COLORS } from '@/lib/design-tokens';
+import { expectOnePageSealOf } from '@/__tests__/utils/seals';
+import type { SealState } from '@/lib/seal/stones';
+
+/** No seal on the page. */
+function expectNoSeal() {
+  expect(document.querySelectorAll('[data-seal]')).toHaveLength(0);
+}
+
+/** The header presses the transaction's one stone, 1 → 1 (the fixtures' counts), in `state`. */
+function expectHeadStone(state: SealState) {
+  expectOnePageSealOf(
+    document.querySelector('header')!,
+    { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
+    state
+  );
+}
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -409,11 +425,13 @@ describe('TransactionDetailPage', () => {
     const skeleton = screen.getByRole('status', { name: 'Loading …' });
     expect(skeleton.children).toHaveLength(3);
     expect(document.querySelector('.h-72')).toBeNull();
-    // No comment while loading: none of its figures is known yet (T4).
+    // No comment while loading: none of its figures is known yet (T4); no seal either (C2).
     expect(document.querySelector('.comment')).toBeNull();
+    expectNoSeal();
     resolve(createCommittedTransactionDetail());
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
+    expectHeadStone('pressed');
     // Then the comment, from the fixture's figures: 94 occupied bytes in and out (T4).
     expect(
       Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
@@ -666,6 +684,9 @@ describe('TransactionDetailPage', () => {
     expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
     expect(screen.queryByText(/confirmations?$/i)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
+    // C2: in a block the store has not indexed yet, its stone is dashed; no cells, no seam seal.
+    expectHeadStone('unpressed');
+    expect(document.querySelector('[data-seam-seal]')).toBeNull();
 
     // Still provisional: the page keeps asking until the store has it.
     await act(() => vi.advanceTimersByTimeAsync(3000));
@@ -677,6 +698,11 @@ describe('TransactionDetailPage', () => {
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
     expect(await screen.findByText(/4\s+confirmations/)).toBeInTheDocument();
     expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
+    // Indexed: the same stone, pressed, and pressed again across its cells.
+    expectHeadStone('pressed');
+    expect(document.querySelectorAll('[data-seam-seal] [data-seal-state="pressed"]')).toHaveLength(
+      1
+    );
 
     await act(() => vi.advanceTimersByTimeAsync(9000));
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(3);
@@ -694,6 +720,8 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByTestId('tx-inputs-not-yet-resolvable')).toBeInTheDocument();
     expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
     expect(document.querySelector('.comment')).toBeNull();
+    // C2: no transaction yet, so no stone.
+    expectNoSeal();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
 
@@ -703,6 +731,8 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByText('Pending since')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+    // Then the pool transaction: its stone, dashed.
+    expectHeadStone('unpressed');
   });
 
   it('keeps showing a pending transaction when a later poll answers 503 for its inputs', async () => {
@@ -735,6 +765,8 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(document.querySelector('.comment')).toBeNull();
+    // C2: nothing was read, so no stone.
+    expectNoSeal();
   });
 
   it('links unknown type script to code-hash detail page', async () => {
