@@ -1217,6 +1217,12 @@ export interface AddressCell {
   typeScriptHash: string | null;
   typeCodeHash: string | null;
   typeHashType: string | null;
+  /**
+   * What the type script is, in a transaction-detail cell's `cellType` vocabulary (`plain` with
+   * no type script; `sudt`, `xudt`, a registry slug, or `typed`): the class `kindOf()` reads, so
+   * the cell's seal is the one the transaction page and the cell page press.
+   */
+  typeCellType: string;
   dataSize: number;
   createdAtBlock: number;
   class: AddressCellClass;

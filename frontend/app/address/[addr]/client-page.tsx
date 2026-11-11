@@ -245,9 +245,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               'address',
             ]}
             identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
-            // An address is its lock script; the seal is pressed from the lock script's hash (the
-            // address read already carries it; nothing else is fetched for the seal).
-            seal={{ hash: a.lockScriptHash, scale: 'object' }}
+            // An address is its lock script: the page presses the script's stone (the tall rounded
+            // one) of the lock script's hash, which the address read already carries; nothing else
+            // is fetched for the seal.
+            seal={{ id: { kind: 'script', hash: a.lockScriptHash } }}
             status={
               <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">
                 {a.lockScript && (
