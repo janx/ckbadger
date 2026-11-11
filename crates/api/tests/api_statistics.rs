@@ -170,6 +170,58 @@ async fn test_network_stats_reports_unknown_averages_with_one_header() {
     assert!(json["transactionsPerDay"].is_null(), "{json}");
 }
 
+/// The tip's header with its epoch set to `(number, index, length)`, as the indexer stores it.
+fn set_epoch(store: &CkbadgerStore, block: i64, (number, index, length): (i64, i32, i32)) {
+    let mut header = store.get_block_header(block).unwrap().unwrap();
+    header.compact_target = 0x190d_f964;
+    header.epoch_number = number;
+    header.epoch_index = index;
+    header.epoch_length = length;
+    let mut batch = StoreBatch::new(store);
+    batch.put_block_header(block, &header);
+    batch.commit().unwrap();
+}
+
+/// Regression: a chain whose tip is genesis (a fresh local chain that has mined nothing) answered
+/// 500 "invalid epoch progress on block 0: index=0, length=0". CKB builds the genesis header with
+/// the zero epoch (`build_genesis`: `EpochNumberWithFraction::new_unchecked(0, 0, 0)`): the
+/// handler serves what the header states and no estimate (the header states no length).
+#[tokio::test]
+async fn network_stats_serves_the_genesis_tips_zero_epoch() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_573_852_190_812)]);
+    set_epoch(&store, 0, (0, 0, 0));
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/statistics/network").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["latestBlock"], 0);
+    assert_eq!(json["epoch"], "0(0/0)");
+    assert!(json["estimatedEpochTime"].is_null(), "{json}");
+}
+
+/// The zero epoch is the genesis header's alone: on any later tip it is a decode or write bug.
+#[tokio::test]
+async fn network_stats_refuses_the_zero_epoch_after_genesis() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_573_852_190_812), (1, 1_573_852_285_428)]);
+    set_epoch(&store, 0, (0, 0, 0));
+    set_epoch(&store, 1, (0, 0, 0));
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/statistics/network").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("block 1: epoch 0(0/0) is the genesis header's alone"),
+        "{json}"
+    );
+}
+
 #[tokio::test]
 async fn test_network_stats_rejects_corrupt_sync_progress() {
     let store = test_store();

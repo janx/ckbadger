@@ -4577,3 +4577,65 @@ async fn transaction_list_pages_read_their_actions_once_per_page() {
         );
     }
 }
+
+/// A 500 leaves its cause in the API log, on the request's own line. On
+/// mainnet (2026-11-11 08:34:26, `GET /transactions?limit=20`) the log held
+/// only `status=500` and tower-http's "response failed": the message existed
+/// only in the response body. The fixture is the state that request read: the
+/// newest transaction's index row without its output payload.
+#[tokio::test]
+async fn an_internal_error_logs_its_message_with_the_request() {
+    let store = test_store();
+    let tx_hash = [0x7E; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    put_test_block_header(&mut batch, 5, &[0x55; 32], 1_700_000_040_000);
+    batch.put_tx_hash_map(&tx_hash, 5, 0);
+    batch.put_tx_index(
+        5,
+        0,
+        &TxIndexEntry {
+            tx_hash,
+            is_cellbase: true,
+            timestamp: 1_700_000_040_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let logs = LogCapture::start();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/transactions?limit=20")
+                .header("accept-encoding", "gzip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // The client still gets the error compressed: the log read it before.
+    assert_eq!(response.headers()["content-encoding"], "gzip");
+
+    let message = format!(
+        "missing canonical output payload 0x{}:0",
+        hex::encode(tx_hash)
+    );
+    let lines = logs.lines_with(&[
+        "path=\"/api/v1/transactions\"",
+        "query=\"limit=20\"",
+        "status=500",
+    ]);
+    assert_eq!(lines.len(), 1, "one line per request: {lines:#?}");
+    let line = &lines[0];
+    assert!(line.contains(" ERROR "), "{line}");
+    assert!(line.contains(" failed "), "{line}");
+    assert!(line.contains("error_kind=\"internal_error\""), "{line}");
+    assert!(line.contains(&format!("error=\"{message}\"")), "{line}");
+}

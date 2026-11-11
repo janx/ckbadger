@@ -37,7 +37,7 @@ import {
 } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { formatEpochPosition } from '@/lib/epoch';
+import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -169,7 +169,15 @@ export default function BlockDetailPage() {
   const resources = activation?.resources?.length
     ? activation.resources
     : hardforkTimeline?.events.find((event) => event.id === activation?.id)?.resources;
-  const epochStart = block.number - block.epochIndex;
+  // The epoch the header states, by the one header-epoch rule: genesis's is the zero epoch, which
+  // states no length, so it has no bar (a fraction the header does not state).
+  const epoch = checkHeaderEpoch(
+    { number: block.epochNumber, index: block.epochIndex, length: block.epochLength },
+    block.number
+  );
+  const genesisEpoch = isGenesisEpoch(epoch);
+  const client = minerClient(block);
+  const epochStart = block.number - epoch.index;
   const amount = (value: string, field: string) => (
     <ExactCkb
       shannons={parseShannons(value, `block ${block.number} ${field}`)}
@@ -305,18 +313,27 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim mb-1">Epoch</dt>
                   <dd className="flex items-center gap-2">
                     <Link href={`/blocks/${epochStart}`} className="text-text-bright">
-                      {block.epochNumber.toLocaleString('en-US')}
+                      {epoch.number.toLocaleString('en-US')}
                     </Link>
-                    <EpochBar index={block.epochIndex} length={block.epochLength}>
-                      Epoch {block.epochNumber.toLocaleString('en-US')}:{' '}
-                      {block.epochIndex.toLocaleString('en-US')} of{' '}
-                      {block.epochLength.toLocaleString('en-US')}
-                    </EpochBar>
+                    {!genesisEpoch && (
+                      <EpochBar index={epoch.index} length={epoch.length}>
+                        Epoch {epoch.number.toLocaleString('en-US')}:{' '}
+                        {epoch.index.toLocaleString('en-US')} of{' '}
+                        {epoch.length.toLocaleString('en-US')}
+                      </EpochBar>
+                    )}
                     <span>
-                      {block.epochIndex.toLocaleString('en-US')} /{' '}
-                      {block.epochLength.toLocaleString('en-US')}
+                      {epoch.index.toLocaleString('en-US')} / {epoch.length.toLocaleString('en-US')}
                     </span>
                   </dd>
+                  {genesisEpoch && (
+                    // What the header says, and why it reads 0 / 0: no length is invented for it.
+                    <dd data-testid="block-epoch-genesis" className="text-text-dim mt-1">
+                      the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
+                      epoch length; <Link href="/blocks/1">{formatBlockNumber(1)}</Link> is the
+                      first header to state epoch 0’s
+                    </dd>
+                  )}
                 </div>
                 <div>
                   <dt className="text-text-dim mb-1">Difficulty</dt>
@@ -375,14 +392,10 @@ export default function BlockDetailPage() {
                 </div>
                 <div className="min-w-0">
                   <dt className="text-text-dim mb-1">Miner client</dt>
-                  <dd className="text-text-bright break-all">
-                    {block.minerMessage === null
-                      ? 'Genesis'
-                      : block.minerMessageText === null
-                        ? 'Non-UTF-8 message; see raw bytes below'
-                        : block.minerMessageText}
-                  </dd>
-                  <dd className="text-text-dim">decoded from the cellbase message</dd>
+                  <dd className="text-text-bright break-all">{client.line}</dd>
+                  {client.decoded && (
+                    <dd className="text-text-dim">decoded from the cellbase message</dd>
+                  )}
                 </div>
               </dl>
               <DetailSection title="Position in the chain">
@@ -546,12 +559,7 @@ export default function BlockDetailPage() {
                     {key === 'epoch' && (
                       <span className="text-text-dim">
                         {' '}
-                        ={' '}
-                        {formatEpochPosition({
-                          number: block.epochNumber,
-                          index: block.epochIndex,
-                          length: block.epochLength,
-                        })}
+                        = {formatEpochPosition(epoch, block.number)}
                       </span>
                     )}
                     {key === 'dao' && <DaoHeaderFields dao={dao} />}
@@ -566,7 +574,7 @@ export default function BlockDetailPage() {
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
                 <dd className="break-all">
-                  {block.minerMessage === null ? 'Genesis' : block.minerMessage}
+                  {block.minerMessage ?? 'None: genesis has no miner message'}
                 </dd>
               </div>
             </dl>
@@ -727,9 +735,12 @@ export default function BlockDetailPage() {
                 <div>
                   <dt className="text-text-dim mb-1">Miner reward</dt>
                   <dd>
+                    {/* genesis is mined by no one: its reward is not pending, there is none */}
                     {block.miningReward !== null
                       ? amount(block.miningReward, 'reward')
-                      : 'Not finalized yet'}
+                      : block.number === 0
+                        ? 'None: genesis has no miner'
+                        : 'Not finalized yet'}
                   </dd>
                   {block.rewardPaidAtBlock !== null && (
                     <dd className="text-text-dim mt-1">
@@ -813,6 +824,31 @@ function ScalePending({ error, value }: { error: Error | null; value: number }) 
       </span>
     </span>
   );
+}
+
+/**
+ * The miner client a block's cellbase message names, as the API decoded it. The API serves no
+ * message for block 0 alone: it reads no miner witness for genesis (CKB builds genesis's cellbase
+ * witness with the bootstrap lock and an empty message, and nobody mined it); a later block with
+ * none is a contract violation. Every later block's message is its bytes, `0x` when empty, and its
+ * text is null when the bytes hold no readable text (padding only, not UTF-8, or control
+ * characters). Only a decoded text is `decoded`.
+ */
+function minerClient(block: Pick<Block, 'number' | 'minerMessage' | 'minerMessageText'>): {
+  line: string;
+  decoded: boolean;
+} {
+  if (block.minerMessage === null) {
+    if (block.number !== 0)
+      throw new Error(
+        `Block ${block.number}: the API served no cellbase message; only genesis has none`
+      );
+    return { line: 'None: genesis has no miner', decoded: false };
+  }
+  if (block.minerMessageText !== null) return { line: block.minerMessageText, decoded: true };
+  if (block.minerMessage === '0x')
+    return { line: 'None: the cellbase message is empty', decoded: false };
+  return { line: 'No readable text; see the raw bytes below', decoded: false };
 }
 
 /** "2 · both committed": the block's own proposals and how many a later block committed. */

@@ -450,7 +450,8 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
     let slow_threshold = std::time::Duration::from_millis(config.slow_request_threshold_ms);
 
     // The span every request's log lines carry; `request_log::log_request`
-    // (just inside it) writes the one line per finished request.
+    // (inside it and the compression layer) writes the one line per finished
+    // request, a server error's cause included.
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|request: &axum::http::Request<_>| {
             tracing::info_span!(
@@ -473,11 +474,13 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
         .layer(axum::middleware::from_fn(pin_read_view))
         .layer(rate_limit_layer)
         .layer(cors)
-        .layer(CompressionLayer::new())
+        // Inside compression: a server error's body is logged as the
+        // handler wrote it, not gzipped.
         .layer(axum::middleware::from_fn_with_state(
             slow_threshold,
             request_log::log_request,
         ))
+        .layer(CompressionLayer::new())
         .layer(trace_layer)
         .with_state(state.clone());
     Ok((state, router))

@@ -30,14 +30,16 @@ export function epochDelayWords(delay: FiberEpochDelay): string {
   return `${amount} epoch${epochs === 1 && index === 0 ? '' : 's'}`;
 }
 
-/** An evidence stage's epoch (`number+index/length`) on the site's one epoch form. */
-export function stageEpoch(epoch: string): string {
-  const match = /^(0|[1-9]\d*)\+(0|[1-9]\d*)\/([1-9]\d*)$/.exec(epoch);
+/**
+ * An evidence stage's epoch (`number+index/length`), the header epoch of the stage's block, on the
+ * site's one epoch form. The header-epoch rule judges it against that block.
+ */
+export function stageEpoch(epoch: string, block: number): string {
+  const match = /^(0|[1-9]\d*)\+(0|[1-9]\d*)\/(0|[1-9]\d*)$/.exec(epoch);
   if (!match)
     throw new Error(`Fiber stage epoch ${JSON.stringify(epoch)} is not number+index/length`);
-  return formatEpochPosition({
-    number: Number(match[1]),
-    index: Number(match[2]),
-    length: Number(match[3]),
-  });
+  return formatEpochPosition(
+    { number: Number(match[1]), index: Number(match[2]), length: Number(match[3]) },
+    block
+  );
 }

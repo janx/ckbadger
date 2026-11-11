@@ -879,8 +879,18 @@ view — exclusive with pinned read scopes, restoring per process the guarantee 
 a primary, which every multi-CF read path already assumes:
 
 - `CkbadgerStore::refresh` runs inside a `CatchUpWindow`; `catch_up_in_window()` takes that window
-  by reference, so "all secondaries advance together" is checked at compile time. Refresh order
-  between the domain and append-only stores is therefore invisible to readers.
+  by reference, so "all secondaries advance together" is checked at compile time.
+- The window keeps readers out, not the writers: the indexer keeps committing while a round runs,
+  and each catch-up takes its primary as of its own moment, so the order of the catch-ups decides
+  which store can come out ahead. The API's round (`store_readiness::ProcessSecondaries`) advances
+  domain first, then append-only and the CKB node reader, the reverse of the order the rows are
+  written in (the node commits a block before the indexer reads it; the indexer commits a batch's
+  cell payloads, synced, before the domain batch that points at them). Every row the domain view
+  holds then has its payload and its block in the views caught up after it; an append-only view
+  ahead of domain is harmless (payloads are write-once and read only through a domain row).
+  Append-only first served, until the next round, domain rows whose payloads were missing whenever
+  a batch committed between the two catch-ups (mainnet 2026-11-11: `GET /transactions` answered 500
+  `missing canonical output payload`).
 - The API pins one read view per HTTP request (innermost middleware), so a response can never mix
   two views.
 - Deliberately **not** pinned: handlers that wait for the indexer to write new data (the cycles

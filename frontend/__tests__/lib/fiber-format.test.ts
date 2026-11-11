@@ -40,8 +40,16 @@ describe('epochDelayWords', () => {
 describe('stageEpoch', () => {
   it('reads an evidence stage epoch on the site’s one epoch form (R2b-b-16)', async () => {
     const { stageEpoch } = await import('@/lib/fiber-format');
-    expect(stageEpoch('11639+836/1434')).toBe('11,639 · 836 / 1,434');
-    expect(() => stageEpoch('11639 836/1434')).toThrow('Fiber stage epoch');
-    expect(() => stageEpoch('1+5/5')).toThrow();
+    expect(stageEpoch('11639+836/1434', 17_268_391)).toBe('11,639 · 836 / 1,434');
+    expect(() => stageEpoch('11639 836/1434', 17_268_391)).toThrow('Fiber stage epoch');
+    expect(() => stageEpoch('1+5/5', 1805)).toThrow();
+  });
+
+  // The stage's block is the header the epoch comes from: the zero epoch is genesis's alone.
+  it('judges the stage epoch by the header rule against the stage’s block', async () => {
+    const { stageEpoch } = await import('@/lib/fiber-format');
+    expect(() => stageEpoch('0+0/0', 17_268_391)).toThrow(
+      'block 17268391: epoch 0(0/0) is the genesis header’s alone'
+    );
   });
 });

@@ -103,21 +103,51 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     ]);
   });
 
-  // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
-  // drawn (an 80 px tick row 2 px under the name), so the lift changes no pixel.
-  it('heads its bars with the shared ScaleHeader: 80 px ticks, 2 px under the name', () => {
+  // Table-rows R2: the bar heads are the shared ScaleHeader, 2 px under the name, the tick row as
+  // long as the bar's track. Old issue C: the Size track is 56 px (was 80, as the Cycles one
+  // still is); its 24 px went to the transaction's hash.
+  it('heads its bars with the shared ScaleHeader: Size 56 px and Cycles 80 px ticks, 2 px under the name', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
-    const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
-    for (const [i, end] of [
-      [6, '1,000'],
-      [7, '2,000,000'],
+    const table = screen.getByRole('table');
+    const heads = within(table).getAllByRole('columnheader');
+    for (const [i, end, track] of [
+      [6, '1,000', '56px'],
+      [7, '2,000,000', '80px'],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
       expect(ticks).toHaveAttribute('aria-hidden', 'true');
       expect(ticks).toHaveClass('text-meta', 'flex', 'justify-between');
-      expect(ticks.style.width).toBe('80px');
+      expect(ticks.style.width).toBe(track);
       expect((ticks.parentElement as HTMLElement).style.gap).toBe('2px');
       expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', end]);
+      // every row's bar runs on the same track as its head's ticks
+      for (const tr of within(table).getAllByRole('row').slice(1))
+        expect(
+          (tr.querySelectorAll('td')[i].querySelector('[data-track]') as HTMLElement).style.width
+        ).toBe(track);
+    }
+  });
+
+  // Old issue C: each track holds its head's widest tick row (11 px, 6.6 px a character). A
+  // transaction is no larger than a block (597,000 bytes), so a page's size scale is at most
+  // 600,000: "0" … "600,000" in 52.8 of the 56 px. Any cycles scale under a billion (a page whose
+  // largest transaction takes up to 750,000,000 cycles), "0" … "750,000,000", in 79.2 of the 80.
+  it('holds the widest tick row of each bar head inside its track', () => {
+    render(
+      <TransactionListTable
+        transactions={[{ ...transfer, txSize: 597000, cycles: 750_000_000 }, scriptCall]}
+      />
+    );
+    const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
+    for (const [i, end, used] of [
+      [6, '600,000', 52.8],
+      [7, '750,000,000', 79.2],
+    ] as const) {
+      const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
+      const text = Array.from(ticks.children).map((t) => t.textContent!);
+      expect(text).toEqual(['0', end]);
+      expect(text.join('').length * 6.6).toBeCloseTo(used, 6);
+      expect(used).toBeLessThan(Number.parseFloat(ticks.style.width));
     }
   });
 
@@ -305,29 +335,49 @@ describe('TransactionListTable row stones', () => {
     }
   });
 
-  // The stone's footprint (56.5 px: 48.5 and the 8 px gap) is 29.5 px more than the 27 of the seal it replaced.
-  // The table had none to spare (its 1,230 px in the widest 1,232 px container; every other column
-  // at its longest content), so the hash gave 4 characters: 19 → 15 at 13 px is 31.2 px.
-  it('budgets the stone in the Transaction column from the hash, every column and the 1,230 px unchanged', () => {
+  // The stone's footprint (56.5 px: 48.5 and the 8 px gap) is 29.5 px more than the 27 of the seal
+  // it replaced. Old issue C: the hash keeps its 19 characters, 10 + 6 as in the phone row; the
+  // Transaction column's 29 px come from the Size bar's track (80 → 56, 24 px) and What it did
+  // (220 → 215, 5 px), so the table keeps its 1,230 px in the widest 1,232 px container.
+  it('budgets the stone and the 19-character hash in the Transaction column inside the 1,230 px', () => {
     render(<TransactionListTable transactions={txs} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
-    const widths = Array.from(table.querySelectorAll('col')).map(
-      (c) => (c as HTMLElement).style.width
+    const widths = Array.from(table.querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.width)
     );
-    expect(widths).toEqual(['192px', '175px', '220px', '160px', '96px', '62px', '145px', '180px']);
+    expect(widths).toEqual([221, 175, 215, 160, 96, 62, 121, 180]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
-    // "0x" and 6 digits, the ellipsis, 4 digits: 15 characters of JetBrains Mono at 13 px (7.8)
+    // "0x" and 8 digits, the ellipsis, 6 digits: 19 characters of JetBrains Mono at 13 px (7.8)
     const [, row] = within(table).getAllByRole('row');
     const shown = within(row).getByTitle(scriptCall.hash);
-    expect(shown).toHaveTextContent(/^0x00de30\.\.\.cbbc$/);
+    expect(shown).toHaveTextContent(/^0x00de304b\.\.\.25cbbc$/);
     const chars = shown.textContent!.length;
-    expect(chars).toBe(15);
-    // the stone, the hash and the 16 px gap fit the 192 px; one more character would not
+    expect(chars).toBe(19);
+    // the stone, the hash and the 16 px gap fit the 221 px; one more character would not
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(189.5, 6);
-    expect(used).toBeLessThanOrEqual(192);
-    expect(used + 7.8).toBeGreaterThan(192);
+    expect(used).toBeCloseTo(220.7, 6);
+    expect(used).toBeLessThanOrEqual(221);
+    expect(used + 7.8).toBeGreaterThan(221);
+    // What it did keeps the longest DAO headline whole beside its 16 px mark and two 8 px gaps
+    expect(16 + 8 + 'DAO Withdraw Complete'.length * 7.2 + 8 + 16).toBeLessThanOrEqual(widths[2]);
+    // Size: its 56 px track, the bar's 10 px gap, a 5-digit scale's figure (5 ch at 12 px) and the
+    // 16 px gap, 3 px to spare as at the 80 px track's 145
+    expect(widths[6] - (56 + 10 + 5 * 7.2 + 16)).toBeCloseTo(3, 6);
+  });
+
+  // Old issue C: the table and the phone row show the same 19 characters of the hash.
+  it('shows the hash 10 + 6 in the table and in the phone row alike', () => {
+    for (const width of [1232, 608, 358]) {
+      atContainerWidth(width);
+      const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
+      expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(/^0x00de304b\.\.\.25cbbc$/);
+      expect(screen.queryByRole('table') === null).toBe(width < 1230);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   // The form changes where it did: a table from 1,230 px, the phone rows below.

@@ -159,6 +159,39 @@ describe('VitalsStrip', () => {
     expect(screen.queryByTestId('vitals-epoch-bar')).not.toBeInTheDocument();
   });
 
+  // Regression: with the tip at genesis (a fresh local chain that has mined nothing) the tip
+  // header's epoch is the zero epoch, `0(0/0)`: CKB builds the genesis header with it. The strip
+  // says what the header says, draws no bar for a fraction the header does not state, and says why.
+  it('reads the genesis tip’s zero epoch as what its header states, with no bar', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(
+      stats({
+        latestBlock: 0,
+        epoch: '0(0/0)',
+        avgBlockTime: null,
+        hashRate: null,
+        estimatedEpochTime: null,
+      })
+    );
+    render(<VitalsStrip />);
+    const epoch = await screen.findByRole('link', {
+      name: 'Epoch 0, the genesis block: its header states no epoch length, remaining time unavailable',
+    });
+    expect(epoch).toHaveAttribute('data-testid', 'vitals-epoch');
+    expect(epoch).toHaveTextContent(/^Epoch0genesis: no length0 \/ 0—$/);
+    expect(screen.getByTestId('vitals-epoch-genesis')).toHaveClass('text-text-dim');
+    expect(screen.queryByTestId('vitals-epoch-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vitals-epoch-error')).not.toBeInTheDocument();
+  });
+
+  it('refuses the zero epoch on a tip after genesis', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats({ latestBlock: 5, epoch: '0(0/0)' }));
+    render(<VitalsStrip />);
+    expect(await screen.findByTestId('vitals-epoch-error')).toHaveTextContent(
+      'unreadable: block 5: epoch 0(0/0) is the genesis header’s alone'
+    );
+    expect(screen.queryByTestId('vitals-epoch-bar')).not.toBeInTheDocument();
+  });
+
   // TX-01 (Main.dc.html vitals): "● Live" closes the strip, pushed to its right end, and only on
   // a page that holds the realtime socket; elsewhere nothing claims or denies a live feed.
   it('says nothing about live updates on a page that never opens the realtime socket (TX-01)', async () => {

@@ -407,9 +407,10 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
       : undefined);
   const settlement = stageOf(evidence, STAGE_KEYS.settle);
   const waitParts = [
-    commitmentStage && `commitment at epoch ${stageEpoch(commitmentStage.epoch)}`,
+    commitmentStage &&
+      `commitment at epoch ${stageEpoch(commitmentStage.epoch, commitmentStage.blockNumber)}`,
     tracked?.readyEpoch && `earliest payout at epoch ${tracked.readyEpoch}`,
-    settlement && `settled at epoch ${stageEpoch(settlement.epoch)}`,
+    settlement && `settled at epoch ${stageEpoch(settlement.epoch, settlement.blockNumber)}`,
   ].filter((part): part is string => Boolean(part));
   const steps = channelSteps(channel, evidence);
   const [first, second] = channel.observedParties;

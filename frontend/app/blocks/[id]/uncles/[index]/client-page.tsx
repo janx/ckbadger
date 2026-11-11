@@ -86,11 +86,12 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         ? `${uncle.msAfterSibling.toLocaleString('en-US')} ms after`
         : `${(-uncle.msAfterSibling).toLocaleString('en-US')} ms before`;
   const dao = decodeDaoHeader(uncle.dao.raw, context);
-  const epoch = formatEpochPosition({
-    number: uncle.epochNumber,
-    index: uncle.epochIndex,
-    length: uncle.epochLength,
-  });
+  // An uncle is never genesis (its number is at least 1), so the header-epoch rule refuses the
+  // zero epoch here.
+  const epoch = formatEpochPosition(
+    { number: uncle.epochNumber, index: uncle.epochIndex, length: uncle.epochLength },
+    uncle.number
+  );
   const decoded = { c: dao.C, ar: dao.AR, s: dao.S, u: dao.U };
   for (const [field, value] of Object.entries(decoded))
     if (uncle.dao[field as keyof typeof decoded] !== value.toString())

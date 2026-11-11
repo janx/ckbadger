@@ -283,7 +283,9 @@ describe('Block board · first tier', () => {
   });
 
   it('stands the genesis block’s height first, its lone next link after it', async () => {
-    // Genesis as the API serves it: no parent, no miner, no reward, epoch 0's first block.
+    // Genesis as the API serves it: no parent, no miner, no reward, and the zero epoch its header
+    // states (number, index and length 0, packed 0x0; it said 0/1743, a length the header does not
+    // state, and so missed the page's crash on it).
     const genesis = {
       ...block,
       number: 0,
@@ -296,10 +298,11 @@ describe('Block board · first tier', () => {
       proposalsCount: 0,
       unclesCount: 0,
       uncles: [],
-      epoch: '0/1743',
+      epoch: '0/0',
       epochNumber: 0,
       epochIndex: 0,
-      epochLength: 1743,
+      epochLength: 0,
+      rawHeader: { ...block.rawHeader, epoch: '0x0' },
       minerAddress: null,
       minerMessage: null,
       minerMessageText: null,
@@ -551,6 +554,48 @@ describe('Block board · second tier', () => {
     expect(facts).toHaveTextContent('0.54% of 597,000 · overhead 883 · transactions 2,322');
     expect(facts).toHaveTextContent('Miner client');
     expect(facts).toHaveTextContent('decoded from the cellbase message');
+  });
+
+  // A later block's cellbase message is always served as its bytes (`0x` when empty); its text is
+  // null when the bytes hold no readable text. Only a decoded text is captioned as decoded.
+  it.each([
+    ['0x', 'None: the cellbase message is empty'],
+    ['0xff00fe', 'No readable text; see the raw bytes below'],
+  ])(
+    'writes a cellbase message %s with no text as what it is, decoding nothing',
+    async (bytes, line) => {
+      vi.mocked(api.getBlock).mockResolvedValue({
+        ...block,
+        minerMessage: bytes,
+        minerMessageText: null,
+      });
+      render(<BlockDetailPage />);
+      const facts = await screen.findByTestId('block-tier2-facts');
+      const client = within(facts).getByText('Miner client').parentElement as HTMLElement;
+      expect(client).toHaveTextContent(new RegExp(`^Miner client${line}$`));
+      expect(facts).not.toHaveTextContent('decoded from the cellbase message');
+      fireEvent.click(screen.getByText('Raw data'));
+      const raw = screen.getByText('Cellbase message bytes').parentElement as HTMLElement;
+      expect(raw).toHaveTextContent(new RegExp(`^Cellbase message bytes${bytes}$`));
+    }
+  );
+
+  // The API serves no message for genesis alone: on any later block it is a contract violation.
+  it('refuses a later block served with no cellbase message', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      vi.mocked(api.getBlock).mockResolvedValue({ ...block, minerMessage: null });
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p data-testid="refused">{error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByTestId('refused')).toHaveTextContent(
+        'Block 20827932: the API served no cellbase message; only genesis has none'
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('names the uncle as a sibling with the same parent and its delay; counts committed proposals (BA-18)', async () => {
