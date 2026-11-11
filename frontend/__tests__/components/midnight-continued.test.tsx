@@ -9,6 +9,7 @@ import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 import { Hash } from '@/components/ui/hash';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { CellTileData } from '@/components/ui/cell-tile';
+import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
 
 // Midnight, continued (review 2026-11-03, item 5): five moves, each one rule on a shared piece.
@@ -258,18 +259,19 @@ describe('move 5 on the chart lines', () => {
 });
 
 describe('move 3 on the tx page’s cells diagram', () => {
-  const tile = (id: string, state: string): CellTileData => ({
-    id,
-    href: `/cell/0xabc:${id}`,
-    label: id,
-    owner: 'Alice',
-    lockKind: 'JoyID',
-    kind: 'ckb',
-    content: 'CKB',
-    capacity: '106200000000',
-    occupied: '6100000000',
-    state,
-  });
+  const tile = (id: string, state: string): CellTileData =>
+    sealedTile({
+      id,
+      href: `/cell/0xabc:${id}`,
+      label: id,
+      owner: 'Alice',
+      lockKind: 'JoyID',
+      kind: 'ckb',
+      content: 'CKB',
+      capacity: '106200000000',
+      occupied: '6100000000',
+      state,
+    });
   it('sits in the one instrument frame; the prose under it stays flat', () => {
     const { container } = render(
       <TxStructure

@@ -3,6 +3,12 @@ import Link from '@/components/ui/link';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import type { TransactionDetail, TransactionCellDisplay, ScriptLookupResponse } from '@/lib/api';
+import {
+  inputSealState,
+  outputSealState,
+  transactionCellSealId,
+  transactionScriptHashes,
+} from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { truncateHash } from '@/lib/utils';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
@@ -50,6 +56,12 @@ export function cellTiles(
 ): { inputs: CellTileData[]; outputs: CellTileData[] } {
   const inputs = required(tx.inputs, tx.hash, 'inputs');
   const outputs = required(tx.outputs, tx.hash, 'outputs');
+  // A cell's seal (the seals by kind): its lock and type hash from the transaction's script
+  // groups, read once here (the API always sends them, the groups that did not run too).
+  const scripts = transactionScriptHashes(
+    tx.hash,
+    required(tx.scriptGroups, tx.hash, 'scriptGroups')
+  );
   // A tile is drawn for a cell: an input that is one (never the cellbase's null out point, whose
   // address and lock the API serves as null and which gets no tile), so a missing address is an
   // error with the input named, as before.
@@ -87,6 +99,8 @@ export function cellTiles(
       ? []
       : inputs.map((cell, i) => {
           const out = required(cell.previousOutput, tx.hash, `input ${i} outpoint`);
+          const kind = kindOf(cell);
+          const capacity = required(cell.capacity, tx.hash, `input ${i} capacity`);
           return {
             id: `in:${i}`,
             testId: `tx-io-input-${i}`,
@@ -95,7 +109,15 @@ export function cellTiles(
             label: `input ${i}`,
             owner: owner(cell.address, `input ${i}`),
             lockKind: lockKind(cell.lock?.codeHash),
-            kind: kindOf(cell),
+            kind,
+            seal: {
+              id: transactionCellSealId(scripts, 'input', i, {
+                outPoint: out,
+                cls: kind,
+                capacity,
+              }),
+              state: inputSealState(tx.status),
+            },
             content: cell.display ? (
               <TransactionCellContent
                 display={cell.display}
@@ -104,7 +126,7 @@ export function cellTiles(
             ) : (
               content(cell)
             ),
-            capacity: required(cell.capacity, tx.hash, `input ${i} capacity`),
+            capacity,
             occupied: (
               exactUnsignedInteger(
                 required(cell.commonKnowledgeSize, tx.hash, `input ${i} occupied`),
@@ -114,30 +136,43 @@ export function cellTiles(
             state: 'consumed',
           };
         }),
-    outputs: outputs.map((cell, i) => ({
-      id: `out:${i}`,
-      testId: `tx-io-output-${i}`,
-      href: `/cell/${tx.hash}-${i}`,
-      outPoint: { txHash: tx.hash, index: i },
-      label: `output ${i}`,
-      owner: owner(cell.address, `output ${i}`),
-      // F2-tx (R2b-a 40, TX-22): the API marks change outputs; the tile says so beside the lock.
-      lockKind: changeMarked(lockKind(cell.lock?.codeHash), cell.isChange),
-      kind: kindOf(cell),
-      content: cell.display ? (
-        <TransactionCellContent display={cell.display} cellHref={`/cell/${tx.hash}-${i}`} />
-      ) : cell.codeCell ? (
-        <CodeCellContent codeCell={cell.codeCell} />
-      ) : (
-        content(cell)
-      ),
-      capacity: cell.capacity,
-      occupied: (
-        exactUnsignedInteger(cell.commonKnowledgeSize, `${tx.hash}: output ${i} occupied bytes`) *
-        BigInt(100000000)
-      ).toString(),
-      state: required(cell.status, tx.hash, `output ${i} status`),
-    })),
+    outputs: outputs.map((cell, i) => {
+      const outPoint = { txHash: tx.hash, index: i };
+      const kind = kindOf(cell);
+      const status = required(cell.status, tx.hash, `output ${i} status`);
+      return {
+        id: `out:${i}`,
+        testId: `tx-io-output-${i}`,
+        href: `/cell/${tx.hash}-${i}`,
+        outPoint,
+        label: `output ${i}`,
+        owner: owner(cell.address, `output ${i}`),
+        // F2-tx (R2b-a 40, TX-22): the API marks change outputs; the tile says so beside the lock.
+        lockKind: changeMarked(lockKind(cell.lock?.codeHash), cell.isChange),
+        kind,
+        seal: {
+          id: transactionCellSealId(scripts, 'output', i, {
+            outPoint,
+            cls: kind,
+            capacity: cell.capacity,
+          }),
+          state: outputSealState(status),
+        },
+        content: cell.display ? (
+          <TransactionCellContent display={cell.display} cellHref={`/cell/${tx.hash}-${i}`} />
+        ) : cell.codeCell ? (
+          <CodeCellContent codeCell={cell.codeCell} />
+        ) : (
+          content(cell)
+        ),
+        capacity: cell.capacity,
+        occupied: (
+          exactUnsignedInteger(cell.commonKnowledgeSize, `${tx.hash}: output ${i} occupied bytes`) *
+          BigInt(100000000)
+        ).toString(),
+        state: status,
+      };
+    }),
   };
 }
 

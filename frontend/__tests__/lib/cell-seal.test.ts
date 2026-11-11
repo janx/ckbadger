@@ -1,8 +1,13 @@
 // The seals by kind, C3: a cell's seal id and ink, from the API's own fields only — a transaction
 // detail's cell (its script hashes from the transaction's script groups) and the cell page's Cell.
 import { describe, expect, it } from 'vitest';
-import { kindOf } from '@/components/transaction/transaction-cell-tiles';
-import type { Cell, TransactionCellDisplay, TransactionScriptGroup } from '@/lib/api';
+import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
+import type {
+  Cell,
+  TransactionCellDisplay,
+  TransactionDetail,
+  TransactionScriptGroup,
+} from '@/lib/api';
 import {
   cellPageSeal,
   cellPageSealState,
@@ -374,5 +379,60 @@ describe('cellPageSeal: the cell /cells/{tx}/{index} serves', () => {
     expect(() =>
       cellPageSeal({ ...tokenCell, type: undefined, typeCellType: 'plain', display: null }, kindOf)
     ).toThrow(`Cell ${TX}:1: class ckb (no type script) but a type script hash ${TOKEN}`);
+  });
+
+  it('gives a cell the same seal id on its transaction’s page and on its own page', () => {
+    const output = (lock: string, over: Record<string, unknown> = {}) => ({
+      capacity: '6100000000',
+      commonKnowledgeSize: '61',
+      address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgjk5zhk',
+      lock: script(`lock ${lock}`),
+      cellType: 'plain',
+      display: null,
+      status: 'live',
+      isChange: false,
+      ...over,
+    });
+    const tx = {
+      hash: TX,
+      status: 'committed',
+      isCellbase: false,
+      inputs: [],
+      outputs: [
+        output(LOCK_A),
+        output(LOCK_B, {
+          capacity: '14200000000',
+          commonKnowledgeSize: '142',
+          type: tokenCell.type,
+          cellType: 'xudt',
+          display: tokenDisplay,
+        }),
+        output(LOCK_C, { status: 'consumed' }),
+      ],
+      scriptGroups: [
+        group('type', true, TOKEN, [], [1]),
+        group('lock', false, LOCK_A, [], [0]),
+        group('lock', false, LOCK_B, [], [1]),
+        group('lock', false, LOCK_C, [], [2]),
+      ],
+    } as unknown as TransactionDetail;
+    const { outputs } = cellTiles(tx, undefined);
+    expect(outputs[1].seal).toEqual(cellPageSeal(tokenCell, kindOf));
+    expect(outputs[2].seal).toEqual(
+      cellPageSeal(
+        {
+          ...tokenCell,
+          outputIndex: 2,
+          capacity: '6100000000',
+          lockScriptHash: LOCK_C,
+          type: undefined,
+          typeScriptHash: undefined,
+          typeCellType: 'plain',
+          display: null,
+          status: 'dead',
+        },
+        kindOf
+      )
+    );
   });
 });

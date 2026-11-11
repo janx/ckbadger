@@ -8,6 +8,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
+import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import { HexMap } from '@/components/ui/hex-map';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
@@ -22,18 +23,21 @@ vi.mock('@/components/error-vessels', () => ({
   VesselsCaption: () => <span>Bounded live cell sample</span>,
 }));
 
-const cell: CellTileData = {
-  id: 'in:0',
-  href: '/cell/0xabc:0',
-  label: 'input 0',
-  owner: 'Alice',
-  lockKind: 'JoyID',
-  kind: 'tokens',
-  content: 'USDI',
-  capacity: '10000000000',
-  occupied: '6100000000',
-  state: 'consumed',
-};
+const cell: CellTileData = sealedTile(
+  {
+    id: 'in:0',
+    href: '/cell/0xabc:0',
+    label: 'input 0',
+    owner: 'Alice',
+    lockKind: 'JoyID',
+    kind: 'tokens',
+    content: 'USDI',
+    capacity: '10000000000',
+    occupied: '6100000000',
+    state: 'consumed',
+  },
+  'ink'
+);
 
 describe('detail and list foundations', () => {
   it('keeps domain content above a 96 px evidence boundary and raw data collapsed', () => {
