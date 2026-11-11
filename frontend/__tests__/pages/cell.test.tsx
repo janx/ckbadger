@@ -134,7 +134,10 @@ describe('CellDetailPage', () => {
     expect(screen.getByRole('status', { name: 'Loading …' }).children).toHaveLength(3);
     expect(screen.queryByText('Loading cell evidence…')).toBeNull();
     resolve(base);
-    expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
+    // Phase 5 (A7): the microscope's heading is the bytes command, run on the occupied sum.
+    expect(
+      await screen.findByRole('heading', { name: /^Bytes \d+ \+ \d+ \+ \d+ \+ \d+ = \d+$/ })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
     // Consistency plan C1: the tab names the page.
     // Lane U (U3): the tab names a cell — "Cell 0xabab…abab:0 · CKBadger".

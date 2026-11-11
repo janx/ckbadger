@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { elfParts } from '@/lib/cell-parts';
 import type { Cell } from '@/lib/api';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
 const txA = `0x${'11'.repeat(32)}`;
 const txB = `0x${'22'.repeat(32)}`;
@@ -111,6 +112,20 @@ const cell = {
 } as Cell;
 
 describe('CodeCellBoard', () => {
+  // Rubbing × Song print, phase 5 (A8): the code, run on the script name(s) it is; the section is
+  // named by the heading, args and all.
+  it('runs the code command on the scripts it is, and on nothing when no script names it', () => {
+    const script = (name: string) => ({ name, codeHash: reference, hashType: 'type' });
+    const { unmount } = render(
+      <CodeCellBoard cell={{ ...cell, codeCellOf: [script('JoyID'), script('Omnilock')] }} />
+    );
+    const heading = screen.getByRole('heading', { name: 'Code JoyID · Omnilock' });
+    expectPrompt(heading, 'Code', 'JoyID · Omnilock');
+    expect(screen.getByRole('region', { name: 'Code JoyID · Omnilock' })).toContainElement(heading);
+    unmount();
+    render(<CodeCellBoard cell={{ ...cell, codeCellOf: [] }} />);
+    expectPrompt(screen.getByRole('heading', { name: 'Code' }), 'Code');
+  });
   it('identifies this binary by canonical Type ID version ordinal and keeps reactivation at its original ordinal', () => {
     render(<CodeCellBoard cell={cell} />);
     expect(screen.getByText(/Version 2 · these bytes/)).toBeInTheDocument();
