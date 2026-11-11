@@ -213,7 +213,7 @@ describe('Address v3', () => {
     expect(addressFixture.lockScriptHash).toBe(addressHash);
     const seal = expectOnePageSealOf(container, { kind: 'script', hash: addressHash });
     expect(seal).toHaveAttribute('data-seal-form', 'page');
-    // the talisman is gone from the head
+    // the old hash seal is gone from the head
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
     const head = seal.closest('[data-sealed-head]')!;
     expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));

@@ -135,7 +135,7 @@ describe('CellDetailPage', () => {
     expect(head).toHaveTextContent(`${base.txHash}:2`);
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
-    // the cell's stone, not its transaction's talisman
+    // the cell's stone, not its transaction's old hash seal
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
   it('presses a spent cell’s seal in the dead ink', async () => {

@@ -51,8 +51,8 @@ export default function BlocksPage() {
       label: 'Block',
       // The block's stone and its gap (26 + 8, ROW_SEAL.block.footprint), "#20,879,198" (11
       // characters at 13 px, 85.8 px), a 12 px space (7.2 px) and "0xd161...8fef" (13 at 11 px,
-      // 85.8 px): 212.8 px and the 16 px gap, 228.8 (was 200 without a seal, 222 with the
-      // talisman's 27).
+      // 85.8 px): 212.8 px and the 16 px gap, 228.8 (was 200 without a seal, 222 with the old
+      // hash seal's 27).
       minWidth: 195 + ROW_SEAL.block.footprint,
       render: (block) => <BlockIdentity block={block} />,
     },
@@ -123,8 +123,8 @@ export default function BlocksPage() {
       // Fees under 1,000 CKB, "999.99999999" (12 characters at 12 px, 86.4 px), and the 16 px
       // gap: 102.4 px. Every amount has its eight decimals, so no fee is 13 characters and the
       // next is 14 ("1,000.00000000", 116.8 px), which 112 did not hold either: the column gave
-      // the block stone's 7 px more than the talisman's from its 112 and keeps 2.6 to spare, so
-      // the table keeps its 1,230 px minimum (the widest container is 1,232).
+      // the block stone's 7 px more than the old hash seal's from its 112 and keeps 2.6 to spare,
+      // so the table keeps its 1,230 px minimum (the widest container is 1,232).
       minWidth: 105,
       numeric: true,
       render: (block) => (
@@ -450,8 +450,8 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     label: 'Height',
     // The block's stone and its gap (26 + 8) beside the two lines ("#20,879,198" at 13 px and the
     // hash at 11 px, 85.8 px each) and the 16 px gap: 135.8 px, with 2.2 px to spare (the number
-    // may break between characters, and with the talisman at 0.2 px to spare the cell's sub-pixel
-    // width broke it); it was 112 without a seal, 131 with the talisman's 27.
+    // may break between characters, and with the old hash seal at 0.2 px to spare the cell's
+    // sub-pixel width broke it); it was 112 without a seal, 131 with the old hash seal's 27.
     minWidth: 104 + ROW_SEAL.block.footprint,
     render: (block) => (
       <div className="flex items-start">
@@ -521,8 +521,8 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     key: 'resources',
     label: 'Size · cycles',
     // The most cycles a block may take, "3,500,000,000" (13 characters at 12 px, 93.6 px; "replay
-    // failed" is as long), and no gap (the last column): 96 keeps 2.4 to spare. It gave the
-    // talisman's 19 px from its 120, then 5 of the block stone's 7, so the table keeps 608 px.
+    // failed" is as long), and no gap (the last column): 96 keeps 2.4 to spare. It gave the old
+    // hash seal's 19 px from its 120, then 5 of the block stone's 7, so the table keeps 608 px.
     minWidth: 96,
     // The column that takes the free width (the board's 1fr).
     width: 'auto',

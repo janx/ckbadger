@@ -372,7 +372,7 @@ describe('BlocksPage · Blocks v3 board', () => {
   });
 
   // The seal's footprint comes out of other columns' slack, so each table keeps the minimum width
-  // it switches form at: the full table 1,230 px (Reward gave the talisman 22; Fees gives the
+  // it switches form at: the full table 1,230 px (Reward gave the old hash seal 22; Fees gives the
   // block stone's 7 more, 34 against 27), the 608 px table (Size · cycles gave 19 and gives 5,
   // Miner 2; Height keeps its 2 px of room so its number never breaks).
   it('budgets the seal in the Block column and keeps the table at 1,230 px', async () => {
@@ -539,7 +539,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       });
       expect(Number.parseFloat(table.style.minWidth)).toBe(608);
       const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-      // Height takes the stone's 7 px more than the talisman's; Miner gives 2, Size · cycles 5
+      // Height takes the stone's 7 px more than the old hash seal's; Miner gives 2, Size · cycles 5
       expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '154px', '96px', 'auto']);
       expect(cols.map((c) => c.minWidth)).toEqual([
         '138px',

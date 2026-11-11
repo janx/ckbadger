@@ -1,16 +1,15 @@
 /**
- * The brush of the hash seal: a polyline becomes a filled shape with the width of a loaded
+ * The brush of the seals: a polyline becomes a filled shape with the width of a loaded
  * brush — an entry (a hidden, round tip or an exposed point), a press at the turns, a lift at the
  * end (the tip drawn out) or a blunt stop, horizontals a little thinner than verticals.
  *
  * A port of the parts of the design prototype's `brush.js` (2026-11-10 rubbing × Song print,
  * `docs/superpowers/design/2026-11-10-rubbing-song/src/brush.js`) that the seals use: `sample`,
  * `stroke`, `shape`, `chainSegs` (with seal3's `paths`), `orderStrokes`. Every expression keeps
- * the prototype's order of operations, so the same numbers come out; the fidelity tests
- * (`__tests__/lib/seal-fidelity.test.ts`, and the talisman's while it stands) hold the port to
- * the prototype.
+ * the prototype's order of operations, so the same numbers come out; the fidelity test
+ * (`__tests__/lib/seal-fidelity.test.ts`) holds the port to the prototype.
  *
- * Not ported, because no recipe reaches it: the trembling line (tremor), per-unit pressure
+ * Not ported, because no seal reaches it: the trembling line (tremor), per-unit pressure
  * (press / lift), mid-stroke thinning (thin), the random "life" of the width (mod, and with it
  * the prototype's `rng` — its phase only ever multiplies `mod`, which the seal sets to 0), and the
  * knot and point exits of the Song hands.

@@ -1,11 +1,11 @@
 /**
  * The compact encoding of a seal's strokes, for the seals drawn many times on a page (the row
- * seal, 28 px in every list row). The prototype's markup writes every sample of every outline
- * (a point every quarter unit) in absolute coordinates: ~10 KB for a 28 px seal. Here the outline
- * keeps only the points that matter at the size it is drawn (Ramer–Douglas–Peucker at a fraction
- * of a pixel), each point rounded to a tenth of a unit and written relative to the last, the
- * numbers in their shortest form; the strokes share one fill on a group. The geometry is the
- * same outline the prototype's markup writes, to within the tolerance plus 0.05 units.
+ * seals, 20–30 px, in every list row). The prototype's markup writes every sample of every
+ * outline (a point every quarter unit) in absolute coordinates. Here the outline keeps only the
+ * points that matter at the size it is drawn (Ramer–Douglas–Peucker at a fraction of a pixel),
+ * each point rounded to a tenth of a unit and written relative to the last, the numbers in their
+ * shortest form; the strokes share one fill on a group. The geometry is the same outline the
+ * prototype's markup writes, to within the tolerance plus 0.05 units.
  */
 
 import type { Cap, Pt } from '@/lib/seal/brush';
