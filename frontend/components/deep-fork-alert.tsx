@@ -26,7 +26,10 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
               ⚠️
             </div>
             <div>
-              <h2 className="text-section font-bold">Chain Fork Detected - Sync Paused</h2>
+              {/* The alert is not a section (rubbing × Song print, phase 5, H6): a plain bold h2
+                  at the body step, so h2.text-section's cinnabar square and lowercase stay off
+                  the red banner. */}
+              <h2 className="text-body font-bold">Chain Fork Detected - Sync Paused</h2>
               <p className="text-body text-white/80">
                 The local database is on a forked chain. Syncing has been paused to prevent data
                 corruption.
