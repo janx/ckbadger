@@ -6,6 +6,7 @@ import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 
@@ -147,6 +148,12 @@ describe('JoyID script page against the ScriptJoyid board', () => {
   it('shows who can change the code as three multisigs on one timeline, keys in the titles (SC-S4, L1-3)', async () => {
     await renderJoyid();
     const section = screen.getByRole('region', { name: 'Who can change its code' });
+    // Phase 5 (A17): the question runs on the holders the timeline draws.
+    expectPrompt(
+      within(section).getByRole('heading', { level: 2 }),
+      'Who can change its code',
+      '3 owners'
+    );
     expect(within(section).queryByRole('list', { name: 'Code cell holders' })).toBeNull();
     const bar = within(section).getByRole('group', { name: /^Who held JoyID's code cell/ });
     const segments = [...bar.querySelectorAll<HTMLElement>('[data-holder]')];
@@ -519,8 +526,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     await renderJoyid();
     const versions = screen.getByRole('table', { name: 'Code versions' });
     expect(tier1()).toContainElement(versions);
-    const h2 = within(tier1()).getByRole('heading', { name: 'Code versions', level: 2 });
+    const h2 = within(tier1()).getByRole('heading', { name: 'Versions 5', level: 2 });
     expect(h2).toHaveClass('text-section');
+    expect(promptNote(h2)).toHaveTextContent(/^newest first$/);
     // The heading row holds the h2 and the board's quiet order note only (L1-4).
     expect(h2.parentElement!.children).toHaveLength(2);
     expect(h2.nextElementSibling).toHaveTextContent(/^newest first$/);
@@ -549,11 +557,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
     const custody = screen.getByRole('region', { name: 'Who can change its code' });
     expect(custody).toHaveClass('mt-[72px]');
-    for (const name of ['Code versions', 'Its cells']) {
+    // Phase 5: the versions and the cells run on their counts (A18, A19).
+    for (const name of ['Versions 5', 'Cells 161,049 live']) {
       const h2 = within(tier1()).getByRole('heading', { name, level: 2 });
       expect(h2.closest('section')).toHaveClass('mt-[72px]');
-      // The heading row is a flex row, as the DAO page's: the h2 is as wide as its words.
-      expect(h2.parentElement).toHaveClass('mb-[18px]', 'flex', 'items-baseline');
+      // The heading row is a flex row, as the DAO page's: the h2 is as wide as its words; the
+      // row (or, for a heading with a note, the note's row) sits 18 px above its evidence.
+      expect(h2.parentElement).toHaveClass('flex', 'items-baseline');
+      expect(h2.closest('section')!.firstElementChild).toHaveClass('mb-[18px]');
+      expect(h2.closest('section')!.firstElementChild).toContainElement(h2);
     }
     expect(within(custody).getByRole('heading', { level: 2 }).parentElement).toHaveClass(
       'mb-[18px]',

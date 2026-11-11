@@ -15,6 +15,7 @@ import {
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import {
   api,
   ApiRequestError,
@@ -218,6 +219,11 @@ describe('Mnft board (F2 objects)', () => {
     const rows = within(cell).getAllByRole('article');
     expect(rows.map((r) => r.querySelector('a')!.textContent)).toEqual(['Issued', 'Moved', 'Now']);
     expect(cell).toHaveTextContent('1 CKB per byte');
+    // Phase 5 (D12): the section's heading is 'CKB held', its rate and split beside it.
+    const heading = within(cell).getByRole('heading', { name: 'CKB held' });
+    expectPrompt(heading, 'CKB held');
+    expect(heading).not.toHaveTextContent('1 CKB per byte');
+    expect(heading.parentElement).toHaveTextContent('1 CKB per byte');
   });
 
   it('lists the board facts as the metrics row (OB-M8, C7) and the class block (OB-M9)', async () => {
@@ -232,6 +238,12 @@ describe('Mnft board (F2 objects)', () => {
     expect(rail).toHaveTextContent('2 transfers since issue');
     const cls = screen.getByRole('region', { name: 'In Class A' });
     expect(cls).toHaveTextContent('200 issued of 1,000 · 198 live');
+    // Phase 5 (A15): the class, run on its name; the link to it is the note, outside the name.
+    const heading = within(cls).getByRole('heading', { name: 'Class Class A' });
+    expectPrompt(heading, 'Class', 'Class A');
+    expect(promptNote(heading)).toContainElement(
+      within(cls).getByRole('link', { name: 'Open the class →' })
+    );
     expect(cls).toHaveTextContent('150 holders');
     expect(cls).toHaveTextContent('0 of 198 fully on-chain');
     expect(cls).toHaveTextContent('issued by Issuer A');

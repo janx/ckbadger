@@ -18,8 +18,11 @@ it('keeps object capacity primary, one versions heading and exact occupied value
   render(<SporeDetailView object={sporeDetailProducer} error={null} />);
   // F2 objects (OB-9): the versions are the board's "CKB held in its cell" — one heading for both.
   expect(await screen.findByLabelText(/cell versions$/)).toBeInTheDocument();
-  expect(screen.queryByRole('heading', { name: 'Cell versions' })).not.toBeInTheDocument();
-  expect(screen.getAllByRole('heading', { name: 'CKB held in its cell' })).toHaveLength(1);
+  expect(screen.queryByRole('heading', { name: /^Cell versions/ })).not.toBeInTheDocument();
+  // Phase 5 (D12): the board's heading is "CKB held", its rate and split the note beside it.
+  const held = screen.getAllByRole('heading', { name: 'CKB held' });
+  expect(held).toHaveLength(1);
+  expect(held[0].parentElement).toHaveTextContent('1 CKB per byte');
   expect(
     screen.getByLabelText(`Object ${sporeDetailProducer.sporeId} capacity partition`)
   ).toHaveTextContent('229');
@@ -129,7 +132,8 @@ it('separates physical cell ownership from protocol-named .cell parties', async 
     />
   );
   const facts = await screen.findByRole('region', { name: 'Metrics' });
-  await screen.findByRole('heading', { name: 'Cell versions' });
+  // Phase 5 (D13): the identity's versions run on their count.
+  await screen.findByRole('heading', { name: `Cell versions ${p.versions.length}` });
   // F2 identities (round 2, ID-DC4 / ID-DC7): the rail names the protocol owner and manager;
   // the physical lock every name shares is tier-2 evidence, explained there.
   expect(facts).toHaveTextContent(p.versions[0].decoded.owner.hashPrefix);

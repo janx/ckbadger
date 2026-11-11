@@ -5,13 +5,14 @@ import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { api, type Cell, type ScriptFamilyDetail } from '@/lib/api';
 import { cellInventoryItem, type CellInventoryItem } from '@/lib/cell-inventory';
 import { readErrorText } from '@/lib/read-error';
 import { retryTransientOnly } from '@/lib/query-client';
 import { scriptActivityLink } from '@/lib/script-activity-link';
 import { shortHex } from '@/lib/script-lineage';
-import type { NewestCellsKind } from '@/lib/script-newest-cells';
+import { NEWEST_CELLS_COUNT, type NewestCellsKind } from '@/lib/script-newest-cells';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
 
@@ -283,7 +284,9 @@ export function ScriptNewestCells({
   return (
     <section aria-label="Newest cells" className={`min-w-0 ${className}`}>
       <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">Newest cells</h2>
+        {/* Rubbing × Song print, phase 5 (A20): the same command as the family's cells, run on
+            the newest few the list reads. */}
+        <PromptHeading command="Cells" args={`--newest ${NEWEST_CELLS_COUNT}`} />
       </div>
       {newest.kind === null ? (
         <p role="alert" className="text-negative text-small">

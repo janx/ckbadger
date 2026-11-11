@@ -61,10 +61,11 @@ describe('code cell page against the CellCode board', () => {
     );
   });
 
-  it('puts "This cell is code" before the microscope: by type hash, by data hash, built with (SC-K3)', async () => {
+  it('puts "code" before the microscope: by type hash, by data hash, built with (SC-K3)', async () => {
     view();
-    const code = await screen.findByRole('heading', { name: 'This cell is code' }, wait);
-    const microscope = screen.getByRole('heading', { name: 'The cell, byte by byte' });
+    // Phase 5 (A8, A7): the code runs on the script it is; the microscope is the bytes command.
+    const code = await screen.findByRole('heading', { name: 'Code JoyID' }, wait);
+    const microscope = screen.getByRole('heading', { name: /^Bytes / });
     expect(
       code.compareDocumentPosition(microscope) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();

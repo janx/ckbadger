@@ -2,6 +2,7 @@
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
 import { fade } from '@/lib/palette';
@@ -561,14 +562,18 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   return (
     <section aria-label="Cell byte microscope" className="min-w-0 space-y-3.5">
       <style>{highlightCss(litIds)}</style>
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-text-bright text-section font-medium">The cell, byte by byte</h2>
-        <span className="text-text-dim text-small">
-          {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
-          <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span> occupied bytes ·
-          room for {room.toLocaleString('en-US')} more
-        </span>
-      </div>
+      {/* Rubbing × Song print, phase 5 (A7): the bytes, run on the sum the map draws (its
+          occupied total in the data ink); the room left is the right-prompt note. */}
+      <PromptHeading
+        command="Bytes"
+        args={
+          <>
+            {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
+            <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span>
+          </>
+        }
+        note={`room for ${room.toLocaleString('en-US')} more`}
+      />
       {/* A flex row: basis 0, growth by bytes, each part's minimum holds its label. */}
       <div
         role="group"

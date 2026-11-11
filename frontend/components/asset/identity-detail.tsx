@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type DotbitBitCellRef, type DotCellItem } from '@/lib/api';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { CellVersions } from '@/components/asset/cell-versions';
@@ -356,10 +357,7 @@ export function CanonicalIdentityDetail({
       )}
       {children}
       <section aria-label="CKB held in its cell" className="space-y-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 className="text-text-bright text-section font-medium">CKB held in its cell</h2>
-          <span className="text-text-dim text-small">1 CKB per byte</span>
-        </div>
+        <PromptHeading command="CKB held" note="1 CKB per byte" />
         {held !== null && occupied !== null && current?.isLive && (
           <p>
             The cell holds{' '}

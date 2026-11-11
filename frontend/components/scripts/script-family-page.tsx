@@ -8,6 +8,7 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   ScriptCustodyEvidence,
@@ -408,24 +409,36 @@ function Head({ label }: { label: string }) {
   return <span className="text-meta">{label}</span>;
 }
 
-/** A tier-1 section (hierarchy R6): h2 at section size, 18 px above its evidence. */
+/** A tier-1 heading row: the h2 as wide as its words, 18 px above its evidence (R6). */
+const HEAD_ROW = 'mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1';
+
+/**
+ * A tier-1 section (hierarchy R6): a command line (rubbing × Song print, phase 5) at section size,
+ * 18 px above its evidence. The section keeps its own name (`label`) for the region.
+ */
 function Section({
-  title,
+  label,
+  command,
+  args,
   note,
   className,
   children,
 }: {
-  title: string;
+  label: string;
+  command: string;
+  /** What the command runs on: a count, a state. */
+  args?: ReactNode;
   /** A quiet word on the heading's row, right (the board's "newest first"). */
   note?: string;
   className: string;
   children: ReactNode;
 }) {
   return (
-    <section aria-label={title} className={`min-w-0 ${className}`}>
-      <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">{title}</h2>
-        {note && <span className="text-text-dim text-small">{note}</span>}
+    <section aria-label={label} className={`min-w-0 ${className}`}>
+      {/* A note brings PromptHeading's own row (the note at its right end), so the wrapper
+          only spaces it. */}
+      <div className={note === undefined ? HEAD_ROW : 'mb-[18px]'}>
+        <PromptHeading command={command} args={args} note={note} />
       </div>
       {children}
     </section>
@@ -964,7 +977,22 @@ export function ScriptFamilyPage({
             <ScriptHeroMetrics family={family} lineage={lineage} />
             {/* Lane S: what the script holds now, before how its code can change. */}
             <ScriptNewestCells family={family} newest={newest} className="mt-16" />
-            <Section title="Who can change its code" className="mt-[72px]">
+            {/* A17: the holders the timeline draws (each run of the lineage's code cell, a
+                holder that comes back counting again, as the timeline's own count does), or
+                code no one can replace; several references with no single lineage run on
+                nothing (the figure says it in words). */}
+            <Section
+              label="Who can change its code"
+              command="Who can change its code"
+              args={
+                immutable
+                  ? 'immutable'
+                  : lineage && holders.length
+                    ? formatCount(holders.length, 'owner')
+                    : undefined
+              }
+              className="mt-[72px]"
+            >
               {lineage && holders.length && !immutable ? (
                 // T8: one Type ID lineage is a holder timeline.
                 <HolderTimeline
@@ -979,7 +1007,13 @@ export function ScriptFamilyPage({
                 <ScriptCustodyFigure family={family} lineage={null} holders={[]} />
               )}
             </Section>
-            <Section title="Code versions" note="newest first" className="mt-[72px]">
+            <Section
+              label="Code versions"
+              command="Versions"
+              args={rows.length.toLocaleString('en-US')}
+              note="newest first"
+              className="mt-[72px]"
+            >
               <ListTable
                 label="Code versions"
                 rows={rows}
@@ -998,8 +1032,11 @@ export function ScriptFamilyPage({
               aria-label="Its cells"
               className="mt-[72px] min-w-0 scroll-mt-4"
             >
-              <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                <h2 className="text-text-bright text-section font-medium">Its cells</h2>
+              <div className={HEAD_ROW}>
+                <PromptHeading
+                  command="Cells"
+                  args={`${family.liveCellsCount.toLocaleString('en-US')} live`}
+                />
               </div>
               <div className="text-text-dim text-meta mb-3 flex flex-wrap gap-x-4 gap-y-1">
                 {ANATOMY_LEGEND.map(([name, color]) => (

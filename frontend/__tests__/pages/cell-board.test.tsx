@@ -86,7 +86,7 @@ describe('Cell page against the Cell board', () => {
 
   it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
     view();
-    await screen.findByText('The cell, byte by byte', undefined, { timeout: 5000 });
+    await screen.findByRole('heading', { name: /^Bytes / }, { timeout: 5000 });
     // Lane U (U3): the page presents a CELL, not a transaction output — no "Transaction … /
     // output 1" breadcrumb; the transaction and the index are one line under the full out point.
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();

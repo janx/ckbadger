@@ -516,11 +516,14 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </DetailSection>
           )}
 
+          {/* Rubbing × Song print, phase 5 (D14): on chain, run on its steps - so far, while the
+              channel can still take another. */}
           <DetailSection
-            title={
+            title="On chain"
+            args={
               channel.state === 'open' || channel.state === 'forceClosed'
-                ? `On chain, so far in ${STEP_WORDS[steps.length]} step${steps.length === 1 ? '' : 's'}`
-                : `On chain, in ${STEP_WORDS[steps.length]} steps`
+                ? `${STEP_WORDS[steps.length]} step${steps.length === 1 ? '' : 's'} so far`
+                : `${STEP_WORDS[steps.length]} steps`
             }
           >
             <div className="flex flex-col gap-[22px]">

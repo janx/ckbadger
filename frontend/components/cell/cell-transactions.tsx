@@ -276,7 +276,9 @@ export function CellTransactions({
     throw new Error(`Consumed cell ${cell.txHash}:${cell.outputIndex} lacks exact spending input`);
   const spent = cell.status === 'dead';
   return (
-    <DetailSection title="Its transactions">
+    // Rubbing × Song print, phase 5 (D11): the transactions it shows — the one that created it,
+    // and the one that spent it once it is spent (its consumedByTx, required above).
+    <DetailSection title="Transactions" args={spent ? '2' : '1'}>
       <div className="space-y-8">
         <TransactionEvidence
           hash={cell.txHash}

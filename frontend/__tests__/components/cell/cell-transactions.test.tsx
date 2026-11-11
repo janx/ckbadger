@@ -5,6 +5,7 @@ import { CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
 import liveFixture from '@/__tests__/fixtures/d5/cell-live.json';
 import spentFixture from '@/__tests__/fixtures/d5/cell-spent.json';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -117,6 +118,8 @@ describe('CellTransactions', () => {
     );
     expect(screen.getByText(/Built-in Type ID/)).toBeInTheDocument();
     expect(screen.queryByText(/Spent transaction/)).not.toBeInTheDocument();
+    // Phase 5 (D11): a live cell's transactions are the one that created it.
+    expectPrompt(screen.getByRole('heading', { name: 'Transactions 1' }), 'Transactions', '1');
   });
   it('uses the real Cell API spent producer and focuses its exact spending input', async () => {
     const cell = spentFixture as unknown as Cell;
@@ -126,6 +129,8 @@ describe('CellTransactions', () => {
     expect(screen.getByText(/42 bytes/)).toBeInTheDocument();
     expect(screen.getByText(/Cellbase group: no script execution/)).toBeInTheDocument();
     expect(getTransactionDetail).toHaveBeenCalledWith(cell.consumedByTx);
+    // Phase 5 (D11): a spent cell's are two, the one that created it and the one that spent it.
+    expectPrompt(screen.getByRole('heading', { name: 'Transactions 2' }), 'Transactions', '2');
   });
   // Lane U follow-up (user report: "two Script groups sections"): a spent cell shows its creating
   // and its spending transaction, and each listed its groups under the same bare "Script groups".

@@ -3,6 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { render, screen, within } from '../utils/test-utils';
 import { FiberChannelBoard, formatEpochDelay } from '@/components/fiber/fiber-channel-board';
+import { expectPrompt } from '../utils/prompt-heading';
 import forceClosed from '../fixtures/fiber-force-closed.json';
 import type { FiberChannelDetail, FiberChannelEvidence } from '@/lib/api';
 import producerDetail from '../fixtures/fiber-open-detail.json';
@@ -233,7 +234,12 @@ describe('FiberChannelBoard', () => {
 
   it('tells the chain story in three steps: timeline, then open → force close → settle (FF-C4)', () => {
     render(<FiberChannelBoard channel={channel} evidence={evidence} />);
-    expect(screen.getByRole('heading', { name: 'On chain, in three steps' })).toBeInTheDocument();
+    // Phase 5 (D14): on chain, run on its steps.
+    expectPrompt(
+      screen.getByRole('heading', { name: 'On chain three steps' }),
+      'On chain',
+      'three steps'
+    );
     expect(
       screen.getByRole('img', { name: /^Opened, force-closed 8 d 3 h later/ })
     ).toBeInTheDocument();
@@ -305,9 +311,12 @@ describe('FiberChannelBoard', () => {
       `3 · Updated commitment ${waitingEvidence.currentCommitment!.txHash}`
     );
     expect(screen.getByTestId('step-3')).toHaveAttribute('data-carries', '1');
-    expect(
-      screen.getByRole('heading', { name: 'On chain, so far in three steps' })
-    ).toBeInTheDocument();
+    // Phase 5 (D14): a force-closed channel can take another step, so its steps are so far.
+    expectPrompt(
+      screen.getByRole('heading', { name: 'On chain three steps so far' }),
+      'On chain',
+      'three steps so far'
+    );
     expect(
       screen.getByText(/Subsequent settlement cell: original delay is not reapplied/)
     ).toBeInTheDocument();
@@ -360,9 +369,12 @@ describe('FiberChannelBoard', () => {
         evidence={producerEvidence as FiberChannelEvidence}
       />
     );
-    expect(
-      screen.getByRole('heading', { name: 'On chain, so far in one step' })
-    ).toBeInTheDocument();
+    // Phase 5 (D14): an open channel's one step, singular, so far.
+    expectPrompt(
+      screen.getByRole('heading', { name: 'On chain one step so far' }),
+      'On chain',
+      'one step so far'
+    );
     expect(screen.getByTestId('step-1')).toHaveTextContent(/Still open after/);
     const amounts = Array.from(document.querySelectorAll('[data-ckb-amount]')).map(
       (el) => el.textContent

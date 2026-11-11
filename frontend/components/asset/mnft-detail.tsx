@@ -18,6 +18,7 @@ import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
@@ -431,7 +432,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             subject="m-NFT"
             life
             firstLabel="Issued"
-            title="CKB held in its cell"
+            title="CKB held"
             actions={
               current && (
                 <span className="text-text-dim text-small">
@@ -457,12 +458,13 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         </div>
       )}
       <section aria-label={`In ${className}`} className="space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 className="text-text-bright text-section">In {className}</h2>
-          <AppLink className="text-small" href={classHref}>
-            Open the class →
-          </AppLink>
-        </div>
+        {/* Rubbing × Song print, phase 5 (A15): the class, run on its name; the link to it is the
+            right-prompt note. */}
+        <PromptHeading
+          command="Class"
+          args={className}
+          note={<AppLink href={classHref}>Open the class →</AppLink>}
+        />
         {collection.data ? (
           <>
             <AssetReadState error={collection.error} label="class totals" retained />

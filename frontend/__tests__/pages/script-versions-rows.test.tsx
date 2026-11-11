@@ -6,6 +6,7 @@ import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -89,8 +90,10 @@ describe('Code versions rows (table-rows L1-4)', () => {
       expect(td).toHaveClass('py-[9px]', 'align-middle');
       expect(td.querySelector('.block, br')).toBeNull();
     }
-    const heading = screen.getByRole('heading', { name: 'Code versions', level: 2 });
-    expect(heading.parentElement).toHaveTextContent(/^Code versions\s*newest first$/);
+    // Phase 5 (A18): the versions command runs on their count; "newest first" is its note.
+    const heading = screen.getByRole('heading', { name: 'Versions 5', level: 2 });
+    expectPrompt(heading, 'Versions', '5');
+    expect(promptNote(heading)).toHaveTextContent(/^newest first$/);
   });
 
   it('writes v5 as the board: bright version linking its code cell, date, block, outpoint, holder, live · current', async () => {

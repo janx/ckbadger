@@ -7,6 +7,7 @@ import {
   didProtocolProducer,
   dotcellProtocolProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 
 const rec = (key: string, valueUtf8: string | null, valueHex = '0x00') => ({
   key,
@@ -46,6 +47,11 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
     expect(section).toHaveTextContent('20,184 bytes, not text');
     expect(section).not.toHaveTextContent('abababab');
     expect(section).toHaveTextContent('6 records · each cached for 300 s');
+    // Phase 5 (A5): the records, run on the name and their count; no note beside them.
+    const heading = within(section).getByRole('heading', { name: 'Records apt.cell · 6' });
+    expectPrompt(heading, 'Records', 'apt.cell · 6');
+    expect(heading.parentElement).toBe(section);
+    expect(section).not.toHaveTextContent('its records');
   });
 
   it("marks a CKB address that is the manager's own lock (ID-DC5)", () => {
@@ -74,6 +80,7 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
     expect(screen.getByRole('region', { name: 'What valar.bit points to' })).toHaveTextContent(
       'No records are set.'
     );
+    expect(screen.getByRole('heading', { name: 'Records valar.bit · 0' })).toBeInTheDocument();
   });
 });
 
@@ -133,6 +140,12 @@ describe('DotcellRoles (ID-DC4)', () => {
   it('shows owner and manager cards and every owner so far, newest last', () => {
     render(<DotcellRoles protocol={dotcellHistory()} ownerNameCount={1} />);
     const section = screen.getByRole('region', { name: 'Owner and manager' });
+    // Phase 5 (A6): the roles, run on the two it names; the storage note stays beside.
+    const heading = within(section).getByRole('heading', { name: 'Roles owner · manager' });
+    expectPrompt(heading, 'Roles', 'owner · manager');
+    expect(promptNote(heading)).toHaveTextContent(
+      "stored as 20-byte lock-hash prefixes in the name's cell"
+    );
     const owner = within(section).getByLabelText('Owner · holds the name');
     expect(owner).toHaveTextContent('since 2026-09-23');
     // An unresolved owner prefix stays a prefix; it is never shown as an address.
@@ -238,7 +251,10 @@ describe('DidDocumentReadout (ID-D2 / ID-D4)', () => {
   it('reads the handle with its history, the server and the signing key', () => {
     render(<DidDocumentReadout protocol={jler()} />);
     const section = screen.getByRole('region', { name: 'DID document' });
-    expect(section).toHaveTextContent('read from the cell · version 2 of 2');
+    // Phase 5 (A3): the version is the command's args; where it is read from is the note.
+    const heading = within(section).getByRole('heading', { name: 'DID document version 2 of 2' });
+    expectPrompt(heading, 'DID document', 'version 2 of 2');
+    expect(promptNote(heading)).toHaveTextContent(/^read from the cell$/);
     expect(section).toHaveTextContent('at://jler.web5.bbs.fans');
     expect(section).toHaveTextContent('was at://JLer.web5.bbs.fans until 2025-12-10');
     expect(within(section).getByRole('link', { name: 'https://web5.bbs.fans ↗' })).toHaveAttribute(
@@ -296,6 +312,12 @@ describe('AmongDidCkb (ID-D3)', () => {
     expect(within(section).getByRole('link', { name: 'All 114 →' })).toHaveAttribute(
       'href',
       '/mainnet/identities/did:ckb'
+    );
+    // Phase 5 (A4): the link to the collection is the heading's note, outside its name.
+    const heading = within(section).getByRole('heading', { name: 'Among did:ckb' });
+    expectPrompt(heading, 'Among did:ckb');
+    expect(promptNote(heading)).toContainElement(
+      within(section).getByRole('link', { name: 'All 114 →' })
     );
     const mine = within(section).getByText('web5.bbs.fans').closest('li')!;
     expect(mine).toHaveTextContent('99');

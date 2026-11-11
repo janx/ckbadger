@@ -21,6 +21,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
@@ -399,28 +400,33 @@ function RecentAssetFeed({
   });
   return (
     <section aria-label="Recent activity" className="min-w-0">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-        <h2 className="text-text-bright text-section font-medium">Recent activity</h2>
-        <span className="text-small">
-          <button
-            type="button"
-            onClick={() => onOpen('activities')}
-            className="text-text hover:text-text-bright"
-          >
-            All activity →
-          </button>
-          <span className="text-text-ghost"> · </span>
-          <button
-            type="button"
-            onClick={() => onOpen('transactions')}
-            className="text-text hover:text-text-bright tabular-nums"
-          >
-            {recent.transactions === null
-              ? 'All transactions →'
-              : `${recent.transactions.toLocaleString('en-US')} transactions →`}
-          </button>
-        </span>
-      </div>
+      {/* Rubbing × Song print, phase 5 (A10): the activity, run on the rows it shows; the two
+          links that open the full feed are the right-prompt note. */}
+      <PromptHeading
+        command="Activity"
+        args={`--last ${recent.rows}`}
+        note={
+          <>
+            <button
+              type="button"
+              onClick={() => onOpen('activities')}
+              className="text-text hover:text-text-bright"
+            >
+              All activity →
+            </button>
+            <span className="text-text-ghost"> · </span>
+            <button
+              type="button"
+              onClick={() => onOpen('transactions')}
+              className="text-text hover:text-text-bright tabular-nums"
+            >
+              {recent.transactions === null
+                ? 'All transactions →'
+                : `${recent.transactions.toLocaleString('en-US')} transactions →`}
+            </button>
+          </>
+        }
+      />
       <div className="mt-3.5">
         {acts.data ? (
           <>

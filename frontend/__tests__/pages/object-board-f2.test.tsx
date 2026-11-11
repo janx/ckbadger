@@ -7,6 +7,7 @@ import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
+import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import {
@@ -182,8 +183,8 @@ it('keeps tier 1 within the prose budget: one lede and captions under the eviden
 
 it('draws the sequencing gel and the collection allele gel with "this one" (OB-4, OB-7)', async () => {
   const { container } = await page();
-  const dna = screen.getByRole('region', { name: 'DNA' });
-  expect(dna).toHaveTextContent('53 bytes · 6 genes');
+  // Phase 5 (A13): the size and the genes are the DNA command's args, and name its section.
+  const dna = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
   // the hint is the readout line's "tap or hover" under the map (R6), not a header suffix
   expect(dna).not.toHaveTextContent('6 genes · hover a gene');
   expect(within(dna).getByRole('status', { name: 'Gene readout' })).toHaveTextContent(
@@ -285,6 +286,12 @@ it('shows its cell at minting and now, to scale, with what changed (OB-9)', asyn
 it('places it in its collection with the composition count and cluster cell (OB-10)', async () => {
   await page();
   const coll = await screen.findByRole('region', { name: 'In Nervape 3x' }, { timeout: 5000 });
+  // Phase 5 (A11): the collection, run on its name; the link to it is the note.
+  const heading = within(coll).getByRole('heading', { name: 'Collection Nervape 3x' });
+  expectPrompt(heading, 'Collection', 'Nervape 3x');
+  expect(promptNote(heading)).toContainElement(
+    within(coll).getByRole('link', { name: 'Open the collection →' })
+  );
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');
   expect(coll).toHaveTextContent('90 of 90');

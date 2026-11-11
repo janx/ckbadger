@@ -5,6 +5,7 @@ import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/newest-cells.json';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -94,7 +95,8 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     const section = await renderPage();
     const tier1 = document.querySelector('[data-tier="1"]') as HTMLElement;
     expect(tier1).toContainElement(section);
-    expect(within(section).getByRole('heading', { level: 2 })).toHaveTextContent('Newest cells');
+    // Phase 5 (A20): the family's cells command, run on the newest few the list reads.
+    expectPrompt(within(section).getByRole('heading', { level: 2 }), 'Cells', '--newest 5');
     const order = ['Default Lock', 'Newest cells', 'Who can change its code', 'Its cells'].map(
       (name) => screen.getByRole('region', { name })
     );
