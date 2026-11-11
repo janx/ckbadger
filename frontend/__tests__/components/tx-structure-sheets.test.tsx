@@ -4,10 +4,11 @@
 // the old single frame of three columns, the middle one a 112 px "Capacity pool" bar. The sheets
 // replace the frame and the pool: the seam is where capacity crosses.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
-import { SHEETS, TxStructure } from '@/components/transaction/tx-structure';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { continuityColor, SHEETS, TxStructure } from '@/components/transaction/tx-structure';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
+import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 
 const TX = `0x${'5e'.repeat(32)}`;
 
@@ -97,10 +98,10 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     expect(SHEETS.seam).toBe(4);
     expect(root).toHaveClass('grid', 'grid-cols-1', 'gap-y-3', 'lg:gap-y-0');
     expect(root).toHaveClass('lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]');
-    // the seam: empty ground, only the flows' overlay drawn over it; none below lg
+    // the seam: empty ground (round 3: with no continuity link, not even an overlay); none below lg
     expect(seam).toHaveClass('relative', 'hidden', 'self-stretch', 'lg:block');
     expect(seam).not.toHaveAttribute('data-instrument-frame');
-    expect(seam.children).toHaveLength(1);
+    expect(seam.children).toHaveLength(0);
     // the cells on their sheets
     expect(
       within(consumed)
@@ -268,7 +269,13 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     quiet.mockRestore();
   });
 
-  it('draws every flow in one overlay centred on the seam: connectors, inflow, fee and continuity', () => {
+  // Round 3 (the user on tx 0x8f86…17ea, 5 in → 5 out: "这些 ins/outs 真的是 1:1 对应的吗?"): with
+  // the pool bar gone, the solid stubs tile → seam and seam → tile read as one line joining input
+  // N to output N where the tiles stood level, and as a broken line where they did not. A
+  // transaction pools capacity: no input is any output's source, and that transaction's real
+  // correspondences crossed the rows. A line across the seam now says one thing only — this
+  // consumed cell continues as that created cell — so a transaction with no continuity draws none.
+  it('draws no overlay and no line between the sheets when no cell continues', () => {
     layout({
       inflow: [13, 54],
       'in:0': [79, 98],
@@ -278,12 +285,46 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     });
     const { container } = structure({
       inflow: { tone: 'dao', label: 'Nervos DAO compensation', amount: '2572859558410' },
-      continuity: [{ from: 'in:0', to: 'out:1', label: 'USDI', kind: 'tokens' }],
+    });
+    const { consumed, seam, created } = canvas(container);
+    // the seam is bare ground: no image, no path, no label
+    expect(seam.children).toHaveLength(0);
+    expect(seamOverlay(container)).toBeNull();
+    expect(canvasLines(container)).toHaveLength(0);
+    expect(screen.queryByLabelText(/continue|flow/i)).toBeNull();
+    // no connector anywhere: not from the tiles, not from the inflow source, not to the fee
+    expect(container.querySelectorAll('path[data-continuity-kind]')).toHaveLength(0);
+    expect(container.querySelector('[data-inflow-path], [data-fee-path]')).toBeNull();
+    // the rows themselves stay as they were
+    expect(sheetRows(consumed)[0]).toBe(screen.getByTestId('tx-inflow'));
+    expect(screen.getByTestId('tx-inflow')).toHaveClass('border-dashed', 'border-gold/60');
+    expect(sheetRows(created).at(-1)).toBe(screen.getByTestId('tx-fee'));
+    expect(screen.getByTestId('tx-fee')).toHaveClass('border-dashed', 'border-text-dim/60');
+    // the lanes stay: a tile's width never depends on whether the transaction has a link
+    expect(consumed.querySelector('[data-sheet-content]')).toHaveClass('lg:pr-[35px]');
+    expect(created.querySelector('[data-sheet-content]')).toHaveClass('lg:pl-[35px]');
+  });
+
+  it('draws one dashed path per continuity link, tile edge to tile edge, and nothing else', () => {
+    layout({
+      inflow: [13, 54],
+      'in:0': [79, 98],
+      'in:1': [189, 98],
+      'out:0': [13, 98],
+      'out:1': [123, 98],
+      fee: [233, 54],
+    });
+    const { container } = structure({
+      inputs: [tile('in:0'), tile('in:1')],
+      inflow: { tone: 'dao', label: 'Nervos DAO compensation', amount: '2572859558410' },
+      continuity: [
+        { from: 'in:0', to: 'out:1', label: 'USDI', kind: 'tokens' },
+        { from: 'in:1', to: 'out:0', label: 'same type id continues', kind: 'type-id' },
+      ],
     });
     const { seam } = canvas(container);
-    const overlay = within(seam).getByLabelText(
-      'Capacity flows from the consumed cells to the created ones'
-    );
+    expect(seam.children).toHaveLength(1);
+    const overlay = within(seam).getByLabelText('Cells that continue from consumed to created');
     expect(overlay.tagName.toLowerCase()).toBe('svg');
     // 36 + 4 + 36 px, from the consumed tiles' edge to the created tiles' edge, over the cells
     expect(overlay).toHaveClass(
@@ -296,52 +337,52 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
       'overflow-visible',
       'z-20'
     );
-    const d = (path: Element) => path.getAttribute('d');
+    // exactly one path per link, in the links' order, crossing both lanes and the seam
     const paths = Array.from(overlay.querySelectorAll('path'));
-    // the consumed tile to its sheet's edge (0 → 36); the created sheet's edge to its tiles (40 → 76)
-    const solid = paths.filter((p) => !p.hasAttribute('stroke-dasharray'));
-    expect(solid.map(d)).toEqual(['M0 128H36', 'M40 62H76', 'M40 172H76']);
-    for (const path of solid) {
-      expect(path).toHaveAttribute('stroke', 'var(--c-ink-quiet)');
-      expect(path).toHaveAttribute('stroke-width', '1.5');
+    expect(paths.map((p) => [p.getAttribute('data-continuity-kind'), p.getAttribute('d')])).toEqual(
+      [
+        ['tokens', 'M0 128C30 128 46 172 76 172'],
+        ['type-id', 'M0 238C30 238 46 62 76 62'],
+      ]
+    );
+    expect(paths[0]).toHaveAttribute('stroke', continuityColor('tokens'));
+    expect(paths[1]).toHaveAttribute('stroke', continuityColor('type-id'));
+    for (const path of paths) {
+      expect(path).toHaveAttribute('stroke-dasharray', '4 3');
+      expect(path).toHaveAttribute('fill', 'none');
+      expect(path).toHaveAttribute('stroke-width', '1.3');
     }
-    // the inflow joins from its source, dashed gold; the fee leaves to its row, dashed dim
-    const inflow = overlay.querySelector('[data-inflow-path]')!;
-    expect(inflow).toHaveAttribute('data-inflow-path', 'dao');
-    expect(d(inflow)).toBe('M0 40H36');
-    expect(inflow).toHaveClass('stroke-gold');
-    expect(inflow).toHaveAttribute('stroke-dasharray', '4 3');
-    const fee = overlay.querySelector('[data-fee-path]')!;
-    expect(d(fee)).toBe('M40 260H76');
-    expect(fee).toHaveClass('stroke-text-dim');
-    expect(fee).toHaveAttribute('stroke-dasharray', '4 3');
-    // the continuity link crosses both lanes and the seam, tile edge to tile edge
-    const link = overlay.querySelector('[data-continuity-kind]')!;
-    expect(link).toHaveAttribute('data-continuity-kind', 'tokens');
-    expect(d(link)).toBe('M0 128C30 128 46 172 76 172');
-    expect(link).toHaveAttribute('stroke-dasharray', '4 3');
-    expect(link).toHaveAttribute('fill', 'none');
-    // nothing else: no pool, no stub under it
-    expect(paths).toHaveLength(6);
-    expect(overlay.querySelector('rect')).toBeNull();
+    // nothing else in the overlay or anywhere between the sheets; no connector to the inflow or fee
+    expect(overlay.children).toHaveLength(2);
+    expect(canvasLines(container)).toEqual(paths);
+    expect(container.querySelector('[data-inflow-path], [data-fee-path]')).toBeNull();
   });
 
-  it('draws a reward inflow dim and lights a linked cell’s connector', () => {
-    layout({ inflow: [13, 54], 'out:0': [13, 98], 'out:1': [123, 98], fee: [233, 54] });
+  it('lights a link and both its tiles when either tile is hovered or focused', () => {
+    layout({ 'in:0': [79, 98], 'in:1': [189, 98], 'out:0': [13, 98], 'out:1': [123, 98] });
     const { container } = structure({
-      inputs: [],
-      inflow: { tone: 'reward', label: 'block reward', amount: '55961739927' },
-      focusedCellIds: ['out:1'],
+      inputs: [tile('in:0'), tile('in:1')],
+      continuity: [{ from: 'in:0', to: 'out:1', label: 'USDI', kind: 'tokens' }],
     });
-    const { consumed, seam } = canvas(container);
-    // the source is the consumed sheet's first row
-    expect(sheetRows(consumed)[0]).toBe(screen.getByTestId('tx-inflow'));
-    const overlay = seam.querySelector('svg')!;
-    expect(overlay.querySelector('[data-inflow-path="reward"]')).toHaveClass('stroke-text-dim');
-    const lit = Array.from(overlay.querySelectorAll('path')).find(
-      (p) => p.getAttribute('d') === 'M40 172H76'
-    );
-    expect(lit).toHaveAttribute('stroke', 'var(--c-text-bright)');
+    const [link] = seamLines(container);
+    const article = (id: string) => container.querySelector(`[data-cell-id="${id}"]`)!;
+    fireEvent.mouseEnter(article('in:0'));
+    expect(link).toHaveAttribute('stroke-width', '2');
+    expect(article('in:0')).toHaveAttribute('data-highlighted', 'true');
+    expect(article('out:1')).toHaveAttribute('data-highlighted', 'true');
+    expect(article('in:1')).toHaveClass('opacity-30');
+    fireEvent.mouseLeave(article('in:0'));
+    expect(link).toHaveAttribute('stroke-width', '1.3');
+    expect(article('out:1')).toHaveAttribute('data-highlighted', 'false');
+    fireEvent.focus(article('out:1'));
+    expect(link).toHaveAttribute('stroke-width', '2');
+    expect(article('in:0')).toHaveAttribute('data-highlighted', 'true');
+    // a tile with no link lights alone and draws nothing
+    fireEvent.blur(article('out:1'));
+    fireEvent.mouseEnter(article('out:0'));
+    expect(article('out:0')).toHaveAttribute('data-highlighted', 'true');
+    expect(link).toHaveAttribute('stroke-width', '1.3');
+    expect(seamLines(container)).toHaveLength(1);
   });
 });
 
@@ -373,10 +414,9 @@ describe('TxStructure onward bridge on the sheets (C11)', () => {
       'data-highlighted',
       'true'
     );
-    // its connector stays lit
-    const lit = Array.from(container.querySelectorAll('[data-seam] path')).find(
-      (p) => p.getAttribute('d') === 'M40 172H76'
-    );
-    expect(lit).toHaveAttribute('stroke', 'var(--c-text-bright)');
+    // round 3: no connector stub to the followed tile (none to any tile); with no continuity the
+    // bridge is the canvas's only line
+    expect(seamOverlay(container)).toBeNull();
+    expect(canvasLines(container)).toEqual([path]);
   });
 });

@@ -19,10 +19,15 @@ export type TxSealId = Extract<SealId, { kind: 'tx' }>;
  * The two sheets from lg up (seals by kind, C11): a transaction is two sheets of one contract,
  * what it consumed | what it created, side by side and one size (both stretch to the taller; a
  * shorter list leaves blank paper), each its own frame with its seam-side corners square, so the
- * pair reads as one frame cut by a 4 px seam through which the page ground shows; capacity crosses
- * at the seam, which runs the whole height, so every connector meets it. Each sheet keeps
+ * pair reads as one frame cut by a 4 px seam through which the page ground shows. Each sheet keeps
  * a lane on its seam side, from its tiles' edge to its own edge (35 px of padding and the 1 px
- * border), where the flows run: one overlay centred on the seam, lane + seam + lane wide.
+ * border), wider than its outer margin as a bound book's gutter is, at every transaction, so a
+ * tile's width never depends on what is drawn there. A line across the seam says one thing only:
+ * this consumed cell continues as that created cell (the continuity links, dashed in their
+ * kind's colour, in one overlay centred on the seam, lane + seam + lane wide). A transaction
+ * pools capacity — no consumed cell is any created cell's source — so nothing else crosses: no
+ * connector from a tile, the inflow source or to the fee (round 3: row-aligned stubs read as a
+ * false 1:1 pairing of inputs and outputs), and with no continuity link no overlay at all.
  */
 export const SHEETS = {
   /** The seam between the sheets, px. */
@@ -171,22 +176,13 @@ export function TxStructure({
   useLayoutEffect(() => {
     const root = canvas.current;
     if (!root) return;
+    // the tiles' middles, for the continuity links and the onward bridge
     const measure = () => {
       const top = root.getBoundingClientRect().top;
       const next: Record<string, number> = {};
       root.querySelectorAll<HTMLElement>('[data-cell-id]').forEach((cell) => {
         const bounds = cell.getBoundingClientRect();
         next[cell.dataset.cellId!] = bounds.top - top + bounds.height / 2;
-      });
-      // F2-tx (D4): the inflow source joins the flows like a consumed cell; C11: the fee row
-      // leaves them like a created one.
-      root.querySelectorAll<HTMLElement>('[data-inflow]').forEach((source) => {
-        const bounds = source.getBoundingClientRect();
-        next[INFLOW_ID] = bounds.top - top + bounds.height / 2;
-      });
-      root.querySelectorAll<HTMLElement>('[data-fee]').forEach((row) => {
-        const bounds = row.getBoundingClientRect();
-        next[FEE_ID] = bounds.top - top + bounds.height / 2;
       });
       setCenters((previous) =>
         JSON.stringify(previous) === JSON.stringify(next) ? previous : next
@@ -200,6 +196,7 @@ export function TxStructure({
       observer?.disconnect();
       window.removeEventListener('resize', measure);
     };
+    // (the inflow source's row moves the consumed tiles)
   }, [inputs, outputs, inflow]);
   const ids = new Set([...inputs, ...outputs].map((c) => c.id));
   if (ids.size !== inputs.length + outputs.length)
@@ -274,21 +271,15 @@ export function TxStructure({
       </div>
     </TerminalPanel>
   );
-  // The overlay's x, px: the consumed tiles' edge, the consumed sheet's edge, the created sheet's
-  // edge, the created tiles' edge (lane, seam, lane).
-  const [tilesIn, edgeIn, edgeOut, tilesOut] = [
-    0,
-    SHEETS.lane,
-    SHEETS.lane + SHEETS.seam,
-    2 * SHEETS.lane + SHEETS.seam,
-  ];
+  // The overlay's x, px: the consumed tiles' edge and the created tiles' edge (lane, seam, lane).
+  const [tilesIn, tilesOut] = [0, 2 * SHEETS.lane + SHEETS.seam];
   return (
     <div className="min-w-0 space-y-6" aria-label={`Transaction ${txHash} structure`}>
       {/* Two sheets and the seam (seals by kind, C11; the board's two sheets of one contract):
           each sheet an instrument frame, its head its eyebrow; the prose and lists under them
           stay flat. From lg they lie side by side, one size (stretched to the taller), with the
-          4 px seam between, the flows drawn over the seam and the sheets' lanes; below lg they
-          stack, 12 px apart, each its own height. */}
+          4 px seam between, the continuity links drawn over the seam and the sheets' lanes; below
+          lg they stack, 12 px apart, each its own height. */}
       <div
         ref={canvas}
         data-tx-canvas=""
@@ -304,51 +295,15 @@ export function TxStructure({
       >
         {sheet('consumed', inputs, consumedCapacity)}
         <div data-seam="" className="relative hidden self-stretch lg:block">
-          <svg
-            aria-label="Capacity flows from the consumed cells to the created ones"
-            className="pointer-events-none absolute inset-y-0 -left-9 z-20 h-full w-[76px] overflow-visible"
-          >
-            {ys.length > 0 && (
-              <>
-                {inputs.map((cell) => (
-                  <path
-                    key={cell.id}
-                    d={`M${tilesIn} ${centers[cell.id]}H${edgeIn}`}
-                    stroke={linked.has(cell.id) ? 'var(--c-text-bright)' : 'var(--c-ink-quiet)'}
-                    strokeWidth="1.5"
-                  />
-                ))}
-                {inflow && centers[INFLOW_ID] !== undefined && (
-                  <path
-                    data-inflow-path={inflow.tone}
-                    d={`M${tilesIn} ${centers[INFLOW_ID]}H${edgeIn}`}
-                    className={inflow.tone === 'dao' ? 'stroke-gold' : 'stroke-text-dim'}
-                    strokeWidth="1.5"
-                    strokeDasharray="4 3"
-                  />
-                )}
-                {outputs.map((cell) => (
-                  <path
-                    key={cell.id}
-                    d={`M${edgeOut} ${centers[cell.id]}H${tilesOut}`}
-                    stroke={
-                      linked.has(cell.id) || cell.id === meOut
-                        ? 'var(--c-text-bright)'
-                        : 'var(--c-ink-quiet)'
-                    }
-                    strokeWidth="1.5"
-                  />
-                ))}
-                {centers[FEE_ID] !== undefined && (
-                  <path
-                    data-fee-path=""
-                    d={`M${edgeOut} ${centers[FEE_ID]}H${tilesOut}`}
-                    className="stroke-text-dim"
-                    strokeWidth="1.5"
-                    strokeDasharray="4 3"
-                  />
-                )}
-                {continuity.map((link) => (
+          {continuity.length > 0 && (
+            // Only the cells that continue (round 3): each link from its consumed tile's edge
+            // across both lanes and the seam to its created tile's edge.
+            <svg
+              aria-label="Cells that continue from consumed to created"
+              className="pointer-events-none absolute inset-y-0 -left-9 z-20 h-full w-[76px] overflow-visible"
+            >
+              {ys.length > 0 &&
+                continuity.map((link) => (
                   <path
                     key={`${link.from}:${link.to}`}
                     data-continuity-kind={link.kind}
@@ -359,9 +314,8 @@ export function TxStructure({
                     strokeDasharray="4 3"
                   />
                 ))}
-              </>
-            )}
-          </svg>
+            </svg>
+          )}
           {seamSeal && <SeamSeal id={seamSeal.id} state={seamSeal.state} />}
         </div>
         {sheet('created', outputs, createdCapacity)}
@@ -604,13 +558,10 @@ function SeamSeal({ id, state }: { id: TxSealId; state?: SealState }) {
   );
 }
 
-// F2-tx (D4): the inflow source tile and its measurement key; C11: the fee row's.
-const INFLOW_ID = '__inflow';
-const FEE_ID = '__fee';
-
 /**
  * The fee (C11): the created sheet's last row, the mirror of the inflow source on the consumed
- * side — capacity that leaves the transaction without becoming a cell. Dashed, in the dim tone.
+ * side — capacity that leaves the transaction without becoming a cell. Dashed, in the dim tone;
+ * no line reaches it across the seam (round 3).
  */
 function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
   return (
@@ -628,6 +579,10 @@ function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
     </div>
   );
 }
+/**
+ * F2-tx (D4): a source that is not a consumed cell, the consumed sheet's first row; like the fee
+ * row, nothing connects it across the seam (round 3).
+ */
 function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) {
   return (
     <div

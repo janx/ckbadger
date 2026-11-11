@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
+import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -192,6 +193,15 @@ describe('Its transactions against the Cell board', () => {
     expect(continuity).toHaveTextContent('in:0 → out:0 · same file cell continues');
     expect(structure.querySelector('[data-continuity-kind="objects"]')).not.toBeNull();
     expect(structure.querySelector('[data-continuity-kind="file"]')).not.toBeNull();
+    // C11 round 3: those two links are the only lines between the sheets (no row-aligned
+    // connector suggests that input N became output N)
+    expect(seamLines(structure)).toHaveLength(2);
+    // and beyond the created sheet, the onward bridge that carries the board's live cell on
+    expect(canvasLines(structure)).toEqual([
+      ...seamLines(structure),
+      ...Array.from(structure.querySelectorAll('[data-onward-bridge] path')),
+    ]);
+    expect(structure.querySelectorAll('[data-onward-bridge] path')).toHaveLength(1);
     const out1 = structure.querySelector('[data-cell-id="out:1"]') as HTMLElement;
     await within(out1).findByText('Nervape Shadow Lock');
     expect(

@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { FiberChannelStep } from '@/components/fiber/fiber-channel-step';
 import fixture from '../fixtures/fiber-channel-c07e.json';
+import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
@@ -67,6 +68,14 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
       'out:0'
     );
     expect(screen.getByText(/in:0 → out:0 · the channel continues/)).toBeInTheDocument();
+    // C11 round 3: across the seam, only that link (the funding cell continuing as the
+    // commitment); the bridge carries the channel on past the sheet
+    const links = seamLines(container);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('data-continuity-kind', 'file');
+    const bridge = Array.from(container.querySelectorAll('[data-onward-bridge] path'));
+    expect(bridge).toHaveLength(1);
+    expect(canvasLines(container)).toEqual([...links, ...bridge]);
     // C11: the step's two sheets end their heads with the API's exact totals (inputsCapacity,
     // outputsCapacity), and the fee closes the created sheet; round 2: the consumed total is no
     // longer repeated as a "Capacity entering the pool" line under the sheets

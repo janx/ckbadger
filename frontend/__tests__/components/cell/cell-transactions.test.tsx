@@ -6,6 +6,7 @@ import type { Cell, TransactionDetail } from '@/lib/api';
 import liveFixture from '@/__tests__/fixtures/d5/cell-live.json';
 import spentFixture from '@/__tests__/fixtures/d5/cell-spent.json';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -179,6 +180,16 @@ describe('CellTransactions', () => {
     expect(totals('consumed')).toEqual(['0 CKB', '100.00000000 CKB']);
     expect(totals('created')).toEqual(['200.00000000 CKB', '200.00000000 CKB']);
     expect(screen.queryByText(/entering the pool/i)).toBeNull();
+    // C11 round 3: a line across a seam only where a cell continues: none in the cellbase (it
+    // consumes nothing), the Type ID's one in the spending transaction
+    const structures = Array.from(document.querySelectorAll<HTMLElement>('[data-tx-canvas]'));
+    expect(structures.map((s) => seamLines(s).length)).toEqual([0, 1]);
+    expect(seamOverlay(structures[0])).toBeNull();
+    expect(seamLines(structures[1])[0]).toHaveAttribute('data-continuity-kind', 'type-id');
+    // beyond them, only the onward bridge that carries the cell from its creating cellbase on
+    const bridge = structures[0].querySelector('[data-onward-bridge] path');
+    expect(canvasLines(structures[0].parentElement!)).toEqual([bridge]);
+    expect(canvasLines(structures[1].parentElement!)).toEqual(seamLines(structures[1]));
   });
   it('uses the real Cell API spent producer and focuses its exact spending input', async () => {
     const cell = spentFixture as unknown as Cell;

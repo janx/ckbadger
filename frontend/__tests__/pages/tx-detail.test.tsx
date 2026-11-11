@@ -9,6 +9,7 @@ import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 import { CELL_COLORS } from '@/lib/design-tokens';
 import { expectOnePageSeal } from '@/__tests__/utils/seals';
+import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 import type { SealState } from '@/lib/seal/stones';
 
 /** No seal on the page. */
@@ -872,10 +873,12 @@ describe('TransactionDetailPage', () => {
   it('shows canonical cell structure first and loads the raw cell graph only when opened', async () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
-    // C11: the flows run over the seam between the two sheets (was: through the capacity pool)
-    expect(
-      screen.getByLabelText('Capacity flows from the consumed cells to the created ones')
-    ).toBeInTheDocument();
+    // C11 round 3: a line across the seam means only that a consumed cell continues as a created
+    // one; this transaction's cells do not (its row-aligned connectors read as false 1:1 pairs),
+    // so the seam between the two sheets is bare
+    expect(document.querySelector('[data-seam]')).toBeInTheDocument();
+    expect(seamOverlay(document)).toBeNull();
+    expect(canvasLines(document)).toHaveLength(0);
     expect(api.getTransactionGraph).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Raw data'));
     fireEvent.click(screen.getByText('Cell graph'));
@@ -1193,6 +1196,12 @@ describe('TransactionDetailPage', () => {
       'stroke',
       'var(--c-text)'
     );
+    // C11 round 3: the link is the one line across the seam
+    expect(screen.getByLabelText('Cells that continue from consumed to created')).toBe(
+      seamOverlay(document)
+    );
+    expect(seamLines(document)).toHaveLength(1);
+    expect(canvasLines(document)).toEqual(seamLines(document));
     expect(document.querySelector(`[data-group-row="type:run:${TYPE_SCRIPT}"]`)).toHaveAttribute(
       'data-lit',
       'true'
@@ -1224,6 +1233,9 @@ describe('TransactionDetailPage', () => {
       'stroke',
       CELL_COLORS.type
     );
+    // C11 round 3: the link is the one line across the seam
+    expect(canvasLines(document)).toEqual(seamLines(document));
+    expect(seamLines(document)).toHaveLength(1);
     expect(continuity.querySelector('path')).toHaveAttribute('stroke', CELL_COLORS.type);
     fireEvent.mouseEnter(continuity);
     expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
@@ -1263,6 +1275,9 @@ describe('TransactionDetailPage', () => {
       // The page draws its legend itself (continuityList={false}), so check its buttons too.
       expect(screen.queryByRole('button', { name: /continues$/ })).not.toBeInTheDocument();
       expect(document.querySelector('path[data-continuity-kind]')).toBeNull();
+      // C11 round 3: and so no line at all between the sheets
+      expect(seamOverlay(document)).toBeNull();
+      expect(canvasLines(document)).toHaveLength(0);
     }
   );
 
