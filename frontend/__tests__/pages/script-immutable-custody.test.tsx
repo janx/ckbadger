@@ -6,6 +6,7 @@ import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -111,6 +112,12 @@ describe('Script page · who can change immutable code (table-rows L1-3)', () =>
     await renderJoyid();
     const section = screen.getByRole('region', { name: 'Who can change its code' });
     expect(within(section).queryByTestId('holder-timeline')).toBeNull();
+    // Phase 5 (A17): code no one can replace runs the question on 'immutable'.
+    expectPrompt(
+      within(section).getByRole('heading', { level: 2 }),
+      'Who can change its code',
+      'immutable'
+    );
     expect(section.querySelector('[data-role="caption"]')).toHaveTextContent(
       /^No one\. JoyID cells name their code by its data hash, or through a code cell that can never be spent/
     );

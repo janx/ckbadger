@@ -7,6 +7,7 @@ import { api, type Cell } from '@/lib/api';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -506,12 +507,21 @@ describe('ScriptDetailPage', () => {
         'script-history'
       )
     ).toBeInTheDocument();
+    // Phase 5 (A18, A19): the versions run on their count, the cells on the live count.
     expect(
-      within(tier1 as HTMLElement).getByRole('heading', { name: 'Code versions' })
+      within(tier1 as HTMLElement).getByRole('heading', { name: 'Versions 2' })
     ).toBeInTheDocument();
     expect(
-      within(tier1 as HTMLElement).getByRole('heading', { name: 'Its cells' })
+      within(tier1 as HTMLElement).getByRole('heading', { name: 'Cells 8 live' })
     ).toBeInTheDocument();
+    // A17: no single lineage and no immutable code: the question runs on nothing (the custody
+    // figure says it in words).
+    expectPrompt(
+      within(screen.getByRole('region', { name: 'Who can change its code' })).getByRole('heading', {
+        level: 2,
+      }),
+      'Who can change its code'
+    );
     // Table-rows L1-5: the registered references are tier 2's "The script" facts.
     expect(
       within(tier2 as HTMLElement).getByRole('heading', { name: 'The script' })
