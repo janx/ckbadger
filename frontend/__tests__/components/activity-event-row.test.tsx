@@ -15,6 +15,7 @@ import {
   readable,
 } from '@/components/activity-event-row';
 import { MINUS } from '@/lib/chart-ticks';
+import { exactCkbText } from '@/lib/ckb-decimal';
 import type { Activity, GlobalActivity } from '@/lib/api';
 
 // Spread the overrides rather than `??`-ing each field: a pool row's
@@ -751,6 +752,23 @@ describe('ExactCkb', () => {
     const unit = feed.lastElementChild;
     expect(unit).toHaveTextContent(/^CKB$/);
     expect(unit).toHaveClass('text-text-dim', 'text-meta');
+  });
+
+  // Rubbing × Song print, phase 5 (T4): a sentence that names an amount the page draws (the
+  // transaction comment's fee) takes its digits from exactCkbText; it must read as ExactCkb does.
+  it('prints the same digits as exactCkbText, signed or not, zero included', () => {
+    const amounts = ['0', '1647', '64119', '100000', '100000000', '75000000000', '-30000'];
+    for (const signed of [true, false])
+      for (const raw of amounts) {
+        const shannons = BigInt(raw);
+        const { container, unmount } = render(
+          <ExactCkb shannons={shannons} signed={signed} tone="plain" />
+        );
+        expect(container.querySelector('[data-ckb-amount]')!.textContent).toBe(
+          `${exactCkbText(shannons, signed)} CKB`
+        );
+        unmount();
+      }
   });
 });
 

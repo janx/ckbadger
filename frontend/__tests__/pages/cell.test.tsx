@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 
@@ -200,13 +201,49 @@ describe('CellDetailPage', () => {
       },
     } as Cell);
     view();
-    expect(await screen.findByText('Nervos DAO')).toBeInTheDocument();
-    expect(screen.getByText(/deposited/)).toBeInTheDocument();
+    // Rubbing × Song print, phase 5 (D1): the command runs on the API's status.
+    const heading = await screen.findByRole('heading', { name: 'Nervos DAO deposited' });
+    expect(heading.lastElementChild).toHaveTextContent(/^deposited$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
+    expect(screen.getByText(/deposited · deposit block/)).toBeInTheDocument();
     // Exact CKB in the site's one amount form, thousands grouped (SC-C3, #16).
-    expect(screen.getByText(/deposited/).closest('p')).toHaveTextContent(
+    expect(screen.getByText(/deposited · deposit block/).closest('p')).toHaveTextContent(
       'compensation 12,345.23456789 CKB'
     );
     expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
+  });
+  // Rubbing × Song print, phase 5 (D2): the dep group's command runs on its member count.
+  it('counts a dep group’s members in its heading, one item or more', async () => {
+    const member = (index: number) => ({ txHash: `0x${'cd'.repeat(32)}`, outputIndex: index });
+    getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0), member(1)] });
+    const { unmount } = view();
+    const heading = await screen.findByRole('heading', { name: 'Dep group 2 items' });
+    expect(heading.parentElement!.parentElement!.querySelectorAll('li')).toHaveLength(2);
+    unmount();
+    getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0)] });
+    view();
+    expect(await screen.findByRole('heading', { name: 'Dep group 1 item' })).toBeInTheDocument();
+  });
+  it('refuses a dep group without its members rather than drawing an empty list', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      getCell.mockResolvedValue({ ...base, isDepGroup: true });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ErrorBoundary fallback={<p>page-level boundary</p>}>
+            <CellDetailPage />
+          </ErrorBoundary>
+        </QueryClientProvider>
+      );
+      expect(await screen.findByText('page-level boundary')).toBeInTheDocument();
+      expect(quiet.mock.calls.flat().map(String).join(' ')).toContain(
+        `Cell ${hash}:0 is a dep group without its members`
+      );
+      expect(screen.queryByRole('heading', { name: /^Dep group/ })).toBeNull();
+    } finally {
+      quiet.mockRestore();
+    }
   });
   it('links script code hash with its exact hash type, not the script instance hash', async () => {
     getCell.mockResolvedValue(base);

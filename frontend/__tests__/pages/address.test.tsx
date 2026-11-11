@@ -160,7 +160,7 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressFiberChannels).mockResolvedValue([]);
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.queryByRole('heading', { name: 'Fiber channels' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Fiber channels/ })).not.toBeInTheDocument();
     // Consistency plan C1: the tab names the page.
     expect(document.title).toMatch(/^ck[bt]1[0-9a-z]{4}…[0-9a-z]{6} · address · CKBadger$/);
   });
@@ -169,7 +169,8 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressFiberChannels).mockResolvedValue([fiberOpenDetail] as never);
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByRole('heading', { name: 'Fiber channels' })).toBeInTheDocument();
+    // phase 5 (D4): the command runs on the channels listed
+    expect(await screen.findByRole('heading', { name: 'Fiber channels 1' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /0xf0f0f0/i })).toHaveAttribute(
       'href',
       `/mainnet/fiber/channels/${fiberOpenDetail.channelId}`

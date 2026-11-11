@@ -31,6 +31,7 @@ import {
 import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
 import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { NEWEST_CELLS_COUNT, mergeNewestFirst, newestCellsKind } from '@/lib/script-newest-cells';
 
@@ -1064,7 +1065,10 @@ export default function ScriptDetailPage({
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
           <DetailLayout title="Ambiguous script reference" identity={normalizedCodeHash}>
-            <DetailSection title="Conflicting live bytecode">
+            <DetailSection
+              title="Conflicting live bytecode"
+              args={formatCount(codeHashAmbiguity.versionHashes.length, 'version')}
+            >
               <p className="text-text-dim text-small mb-4">
                 Current live type resolution points to more than one bytecode version.
               </p>

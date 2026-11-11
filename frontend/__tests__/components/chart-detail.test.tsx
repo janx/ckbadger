@@ -211,6 +211,9 @@ describe('shared chart detail', () => {
     });
     render(<ChartDetail slug="miner-address-distribution" />);
     const label = await screen.findByText('Leading miner: ckb1qzda0c…93hhsj (62.7931%)');
+    // A ranked chart counts no points: its command has no args (phase 5, D10).
+    const heading = screen.getByRole('heading', { name: 'Distribution' });
+    expect(heading.children).toHaveLength(1);
     expect(label).toHaveClass('min-w-0', 'break-words');
     expect(label.parentElement).toHaveClass('grid-cols-1');
     expect(screen.getByRole('link', { name: address })).toHaveAttribute(
@@ -333,8 +336,11 @@ describe('shared chart detail', () => {
       ],
     });
     render(<ChartDetail slug="epoch-time-distribution" />);
-    expect(await screen.findByRole('heading', { name: 'Distribution' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Full history' })).toBeNull();
+    // phase 5 (D10): the bucket count, which stood at the row's right end, is the command's args
+    const heading = await screen.findByRole('heading', { name: 'Distribution 3 buckets' });
+    expect(heading.lastElementChild).toHaveTextContent(/^3 buckets$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
+    expect(screen.queryByRole('heading', { name: /^Full history/ })).toBeNull();
     const props = lastChart('Epoch durations');
     expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
     expect(props.subtitle).toBe('Completed epochs by hours taken · 3 buckets');
@@ -356,7 +362,7 @@ describe('shared chart detail', () => {
       data: labels.map((date, i) => ({ date, value: String(1000 - i) })),
     });
     render(<ChartDetail slug="cell-size-distribution" />);
-    await screen.findByRole('heading', { name: 'Distribution' });
+    await screen.findByRole('heading', { name: 'Distribution 6 buckets' });
     const props = lastChart('Cell size');
     expect(props.categoricalX).toBe(true);
     expect(props.xTicks).toEqual(labels.map((label, index) => ({ index, label })));
@@ -396,6 +402,8 @@ describe('shared chart detail', () => {
     render(<ChartDetail slug="epoch-time-length" />);
     const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
     expect(readings).toHaveTextContent('peak, #14,004');
+    // the count is the command's args (phase 5, D10): 'full history 1,201 epochs'
+    expect(screen.getByRole('heading', { name: 'Full history 1,201 epochs' })).toBeInTheDocument();
     expect(screen.getByText('1,201 epochs')).toBeInTheDocument();
     const main = lastChart('Epoch length');
     expect(main.hideCaption).toBe(true);

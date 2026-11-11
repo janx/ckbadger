@@ -409,9 +409,17 @@ describe('TransactionDetailPage', () => {
     const skeleton = screen.getByRole('status', { name: 'Loading …' });
     expect(skeleton.children).toHaveLength(3);
     expect(document.querySelector('.h-72')).toBeNull();
+    // No comment while loading: none of its figures is known yet (T4).
+    expect(document.querySelector('.comment')).toBeNull();
     resolve(createCommittedTransactionDetail());
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
+    // Then the comment, from the fixture's figures: 94 occupied bytes in and out (T4).
+    expect(
+      Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
+        (l) => l.textContent
+      )
+    ).toEqual(['1 cell became 1.', '0.00064119 ckb to the miner.', 'common knowledge unchanged.']);
   });
 
   it('requests missing executed-group cycles without discarding the measured transaction total', async () => {
@@ -454,10 +462,17 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
   });
 
-  it('agrees nouns with counts in the cell heading and the confirmations (TX-34)', async () => {
+  // Rubbing × Song print, phase 5 (T1): the cells heading is a command and its args, `cells 1 in →
+  // 1 out` (plain counts, no nouns to agree); the confirmations still agree with their count.
+  it('runs the cells command on its counts and agrees nouns with counts in the confirmations (TX-34)', async () => {
     render(<TransactionDetailPage />);
-    const heading = await screen.findByRole('heading', { name: /consumed → .* created$/ });
-    expect(heading.textContent).toMatch(/^1 cell consumed → (1 cell|\d+ cells) created$/);
+    const heading = await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' });
+    expect(heading).toHaveClass('prompt', 'text-section');
+    const [command, args] = Array.from(heading.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^Cells$/);
+    expect(command).toHaveClass('lowercase');
+    expect(args).toHaveTextContent(/^1 in → 1 out$/);
+    expect(args).toHaveClass('text-text-dim');
     // Consistency plan C1: the tab names the page.
     expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/);
     expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
@@ -544,6 +559,17 @@ describe('TransactionDetailPage', () => {
     expect(net).toHaveTextContent('no fee: nothing paid to the miner');
     expect(net).not.toHaveTextContent(/fee, paid|genesis|issued/);
     expect(screen.queryByText(/issued in the genesis block/)).toBeNull();
+    // Its comment: not a cellbase, so a fee line, the rail's zero (T4).
+    expect(
+      Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
+        (l) => l.textContent
+      )
+    ).toEqual([
+      '1 cell became 2.',
+      '0 ckb to the miner.',
+      // 61 occupied bytes in, 117 + 117 out
+      'common knowledge grew by 173 bytes.',
+    ]);
   });
 
   // Review 45fd finding 7 (ruling D7): an activity value the page cannot read fails in its own
@@ -667,6 +693,7 @@ describe('TransactionDetailPage', () => {
     // Provisional, not failed: a placeholder that says what it waits for.
     expect(await screen.findByTestId('tx-inputs-not-yet-resolvable')).toBeInTheDocument();
     expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
+    expect(document.querySelector('.comment')).toBeNull();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
 
@@ -707,6 +734,7 @@ describe('TransactionDetailPage', () => {
 
     expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
+    expect(document.querySelector('.comment')).toBeNull();
   });
 
   it('links unknown type script to code-hash detail page', async () => {
@@ -1145,6 +1173,10 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     const continuity = await screen.findByRole('button', { name: 'same type id continues' });
+    // The legend stays the cells row's actions, beside the command and outside its name (T1).
+    const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
+    expect(cells).not.toContainElement(continuity);
+    expect(cells.parentElement).toContainElement(continuity);
     expect(document.querySelector('path[data-continuity-kind="type-id"]')).toHaveAttribute(
       'stroke',
       CELL_COLORS.type

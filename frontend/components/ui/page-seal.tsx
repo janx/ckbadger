@@ -47,25 +47,40 @@ export function PageSeal({ hash, scale }: { hash: string; scale: PageSealScale }
  * title and identity lines in the column beside it, top-aligned. The same arrangement at every
  * width; a phone takes the narrow seal, so the identity keeps its lines and the page's first data
  * stays where it was (the seal stands beside lines that were there, not above them).
+ *
+ * `below` (the Transaction board's comment) sits under the seal and the identity, set in the
+ * identity column: a second grid row, so its left edge is the column's at every width and for
+ * either seal size, with no number for the seal's drawn width (the talisman is narrower than its
+ * size, which is its height).
  */
 export function SealedHead({
   hash,
   scale,
   children,
+  below,
   className,
 }: {
   hash: string;
   scale: PageSealScale;
   children: ReactNode;
+  below?: ReactNode;
   className?: string;
 }) {
   return (
     <div
       data-sealed-head={scale}
-      className={cn('flex min-w-0 items-start gap-4 md:gap-5', className)}
+      className={cn(
+        'grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 md:gap-x-5',
+        className
+      )}
     >
       <PageSeal hash={hash} scale={scale} />
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="min-w-0">{children}</div>
+      {below !== undefined && (
+        <div data-sealed-below="" className="col-start-2 min-w-0">
+          {below}
+        </div>
+      )}
     </div>
   );
 }
