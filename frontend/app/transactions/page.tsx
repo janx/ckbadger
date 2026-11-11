@@ -286,10 +286,10 @@ export default function TransactionsPage() {
       label: 'Transaction',
       // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 21 characters at
       // 13 px (163.8 px) and the 16 px gap: 236.3 of its 237 px. The 30 px it gained over 207 are
-      // the widest container's own (1,232 px from 1280; the columns took 1,200 of it), so no
-      // other column moves; the table is 1,230 px, the committed table's width, and both of the
-      // page's lists change form at the same width (old issue C: the stone had taken the 30 from
-      // the hash, 12 + 6 → 10 + 4).
+      // the widest container's own (1,232 px from 1280; the columns took 1,200 of it); the table
+      // is 1,230 px, the committed table's width, and both of the page's lists change form at
+      // the same width (old issue C: the stone had taken the 30 from the hash, 12 + 6 → 10 + 4).
+      // Every column is declared for its own widest content: the 32 px no longer hide one.
       minWidth: 237,
       render: (tx) => (
         <div className="flex items-start">
@@ -324,7 +324,14 @@ export default function TransactionsPage() {
     {
       key: 'status',
       label: 'Status · waiting',
-      minWidth: 150,
+      // Its widest content on one line: the 7 px dot, the 6 px gap, the widest status word
+      // ("Confirming", 10 characters at 12 px, 72 px), the 6 px gap and the longest wait
+      // formatTimeAgo writes for any age under 100 days ("· 59s ago" / "· 59m ago" / "· 23h ago" /
+      // "· 99d ago", 9 characters, 64.8 px), and the 16 px gap: 171.8 of its 172. At 150 it lived
+      // on the container's spread slack and "● Pending · 26s ago" (150.2) broke when that went to
+      // the hash (old issue C). A wait of 100 days or more, or "this device's clock is behind",
+      // wraps inside the cell.
+      minWidth: 172,
       render: (tx) => (
         <span className="text-small flex items-center gap-1.5">
           <PoolDot status={tx.status} />
@@ -385,7 +392,11 @@ export default function TransactionsPage() {
     {
       key: 'size',
       label: 'Size, bytes',
-      minWidth: 90,
+      // The largest a transaction can be, a block's "597,000" (7 characters at 12 px, 50.4 px), and
+      // the 16 px gap, with 1.6 px to spare. Its head takes two lines ("Size," / "bytes"), as
+      // "Fee rate, shannon/KB" beside it already does, so the head row keeps its height; the 22 px
+      // its one-line head held went to Status (old issue C).
+      minWidth: 68,
       numeric: true,
       render: (tx) => tx.txSize.toLocaleString('en-US'),
     },

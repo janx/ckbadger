@@ -10,7 +10,8 @@ import { render } from '@/__tests__/utils/test-utils';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
-import { formatUtc8DateTime } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
+import { poolStatusLabel } from '@/components/ui/pool-status';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -194,7 +195,7 @@ describe('Transactions pool view', () => {
     const cols = Array.from(table.querySelectorAll('col')).map((c) =>
       Number.parseFloat((c as HTMLElement).style.width)
     );
-    expect(cols).toEqual([237, 180, 150, 64, 164, 128, 123, 90, 94]);
+    expect(cols).toEqual([237, 180, 172, 64, 164, 128, 123, 68, 94]);
     expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(1230).toBeLessThanOrEqual(1232);
@@ -208,6 +209,94 @@ describe('Transactions pool view', () => {
     expect(used).toBeCloseTo(236.3, 6);
     expect(used).toBeLessThanOrEqual(237);
     expect(used + 7.8).toBeGreaterThan(237);
+  });
+
+  // Old issue C, round 2: at 1,200 px the pool's columns lived on the 32 px the 1,232 px container
+  // spread over them (Status rendered 154 for its declared 150); the hash's 30 px took that, and
+  // "● Pending · 26s ago" broke onto two lines. Status is now declared for its widest content on
+  // one line, and Size, whose values are at most 7 characters, pays for it.
+  it('declares Status wide enough for every status with the longest one-unit wait, on one line', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const statuses = ['pending', 'proposed', 'committed_awaiting_index'] as const;
+    // 59.5 s ago: "59s ago", the longest seconds form, whatever the test's own few ms add
+    const timestamp = String(Date.now() - 59_500);
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      total: 3,
+      totals: { pending: 1, proposed: 1, awaitingIndex: 1 },
+      data: statuses.map((status, i) => ({
+        hash: `0x${String(i + 1).repeat(64)}`,
+        status,
+        value: '100000000',
+        fee: '12345',
+        feeRate: '54623',
+        txSize: 597000,
+        cycles: '3500000000',
+        inputsCount: 2,
+        outputsCount: 3,
+        timestamp,
+        interpretation: { status: 'complete' as const, reasons: [] },
+        activity: feedSamples.eightParties,
+      })),
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const heads = within(table).getAllByRole('columnheader');
+    const at = heads.findIndex((th) => th.textContent === 'Status · waiting');
+    const width = Number.parseFloat((table.querySelectorAll('col')[at] as HTMLElement).style.width);
+    expect(width).toBe(172);
+    // The cell: a 7 px dot, 6 px gaps (gap-1.5), the status word and "· <wait>", all at 12 px
+    // (JetBrains Mono, 7.2 px a character), then the column's 16 px gap.
+    const cells = Array.from(table.querySelectorAll('tbody tr')).map(
+      (tr) => tr.querySelectorAll('td')[at].firstElementChild as HTMLElement
+    );
+    expect(cells.map((cell) => cell.textContent)).toEqual([
+      'Pending· 59s ago',
+      'Proposed· 59s ago',
+      'Confirming· 59s ago',
+    ]);
+    for (const cell of cells) {
+      expect(cell.className).toBe('text-small flex items-center gap-1.5');
+      expect(cell.firstElementChild).toHaveClass('h-[7px]', 'w-[7px]');
+    }
+    // The widest status word the pool serves, and the longest wait the one-unit formatter writes
+    // for any age under 100 days (the seconds, minutes and hours forms and two-digit days are all
+    // 7 characters). A wait of 100 days or more, or "this device's clock is behind", wraps inside
+    // the cell; nothing runs past it.
+    const word = Math.max(...statuses.map((s) => poolStatusLabel(s).length));
+    expect(word).toBe('Confirming'.length);
+    const now = Date.now();
+    const waits = [59.5, 59 * 60 + 30, 23 * 3600 + 1800, 99 * 86400 + 43200].map((s) =>
+      formatTimeAgo(new Date(now - s * 1000))
+    );
+    expect(waits).toEqual(['59s ago', '59m ago', '23h ago', '99d ago']);
+    const wait = Math.max(...waits.map((w) => `· ${w}`.length));
+    expect(wait).toBe(9);
+    const widest = 7 + 6 + word * 7.2 + 6 + wait * 7.2 + 16;
+    expect(widest).toBeCloseTo(171.8, 6);
+    expect(widest).toBeLessThanOrEqual(width);
+    // what broke at the old 150: "● Pending · 26s ago" needs 150.2
+    expect(7 + 6 + 'Pending'.length * 7.2 + 6 + '· 26s ago'.length * 7.2 + 16).toBeGreaterThan(150);
+    // Size pays: its values are at most "597,000" (a transaction is no larger than a block),
+    // 7 characters at 12 px in 68 − 16 = 52 px; its head "Size, bytes" (11 px, 6.6 a character)
+    // takes two lines, as "Fee rate, shannon/KB" beside it already does, so the head row keeps
+    // its height.
+    const size = heads.findIndex((th) => th.textContent === 'Size, bytes');
+    const rate = heads.findIndex((th) => th.textContent === 'Fee rate, shannon/KB');
+    const colWidth = (i: number) =>
+      Number.parseFloat((table.querySelectorAll('col')[i] as HTMLElement).style.width);
+    expect(colWidth(size)).toBe(68);
+    expect(within(table).getAllByText('597,000')).toHaveLength(3);
+    expect('597,000'.length * 7.2).toBeLessThanOrEqual(colWidth(size) - 16);
+    expect('Size, bytes'.length * 6.6).toBeGreaterThan(colWidth(size) - 16);
+    expect('bytes'.length * 6.6).toBeLessThanOrEqual(colWidth(size) - 16);
+    expect('Fee rate, shannon/KB'.length * 6.6).toBeGreaterThan(colWidth(rate) - 16);
   });
 
   // Old issue C: the pool's table changes form at 1,230 px, where the committed one does; the
