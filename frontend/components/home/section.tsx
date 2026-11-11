@@ -9,18 +9,29 @@ export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-section';
 
 /**
  * A homepage section heading as a command line (rubbing × Song print, phase 2): the prompt square,
- * then the section's name as the command and, when it has them, its args.
+ * then the section's name as the command and, when it has them, its args; a note (phase 5: a
+ * link, the block a figure is read at) stands at the row's right end, outside the heading's name.
  */
 export function SectionHeading({
   id,
   command,
   args,
+  note,
 }: {
   id?: string;
   command: ReactNode;
   args?: ReactNode;
+  note?: ReactNode;
 }) {
-  return <PromptHeading id={id} command={command} args={args} className={SECTION_HEADING_CLASS} />;
+  return (
+    <PromptHeading
+      id={id}
+      command={command}
+      args={args}
+      note={note}
+      className={SECTION_HEADING_CLASS}
+    />
+  );
 }
 
 /** A heading row that states the section's one hint at its right (consistency C10). */
