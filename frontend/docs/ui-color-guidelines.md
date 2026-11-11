@@ -68,7 +68,10 @@ The token names are the roles the pages were written against; the values are the
 | `gold`     | old gold 古金            | `#c9a45c` | `#80600f` | Warning, DAO, emphasis values                            |
 | `aqua`     | indigo 靛青              | `#7fa3c9` | `#2e5f8f` | Informational, links                                     |
 | `lavender` | lotus 藕荷               | `#a797c4` | `#5e4d9a` | Special; a chart hue                                     |
-| `identity` | rouge 胭脂 (the boards') | `#c97f93` | `#9c3b5f` | The identity class                                       |
+| `identity` | rouge 胭脂 (the boards') | `#c97f93` | `#9c3b5f` | The identity class (`CLASS_COLORS.identities`)           |
+| `token`    | azurite 石青             | `#6f9ad6` | `#2a5a9e` | The token class (`CLASS_COLORS.tokens`)                  |
+| `object`   | lotus violet             | `#a58ad6` | `#5e45a8` | The object class (`CLASS_COLORS.objects`)                |
+| `copper`   | ochre 赭石               | `#cc8a5e` | `#93522b` | Bitcoin: RGB++, the BTC tiers (`BITCOIN_COLORS.copper`)  |
 | `amber`    | moss 苔绿                | `#a3bf7a` | `#46701f` | A chart hue (one-to-one for the old burnt orange)        |
 
 `mark` and `rouge` are both cinnabar: `mark` is the pigment as a shape (≥ 3:1, never body text),
@@ -132,8 +135,9 @@ scanlines by night, ruled paper by day, 1 px in every 3); `vignette` black 18 % 
 the midnight strength); `grain-opacity` 0.02 / 0.03; `glow` 1 / 0; `glass-fill` the surface,
 opaque, and `glass-sheen` / `-top-edge` / `-bottom-edge` / `-ring` transparent (a frame is a tile:
 the surface under its own 1 px border); `well-inset` black 60 % / ink 8 % (the boards' `inset`),
-`well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the well
-/ bg at 80 %; `seal-press` 0.16 / 0.08, the opacity of the newest block's seal pressed behind the
+`well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the
+surface, opaque, in both themes (the vitals strip is the page's own ground drawn solid, so the page
+never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's seal pressed behind the
 404 verse (the most each theme allows with every ink of the verse and its facts text-grade across a
 stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
 calc(0.45 * var(--m-glow)))`), out by day.
