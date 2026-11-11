@@ -45,6 +45,8 @@ describe('CkbytesSection', () => {
     const label = within(total).getByTestId('ckbytes-label');
     expect(label).toHaveTextContent(/^in circulation$/);
     expect(label).toHaveClass('text-text-dim', 'text-small', 'ml-3');
+    // one unit, never broken inside, at its own tracking (not the display figure's)
+    expect(label).toHaveClass('whitespace-nowrap', 'tracking-normal');
     expect(total.lastElementChild).toBe(label);
     expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
     // Lane L: the block the total is exact at is a link.

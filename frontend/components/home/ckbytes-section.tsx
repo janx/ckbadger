@@ -325,10 +325,12 @@ function AllocationReady({ view }: { view: AllocationView }) {
         <span className="text-text-dim">.{total.decimal}</span>
         <span className="text-text-dim text-[0.5em]"> CKB</span>
         {/* what the figure is, now the heading says `supply` (the board's label); the block it
-            is read at is the heading's note, said once */}
+            is read at is the heading's note, said once. One unit, so it moves under the figure
+            whole rather than break ('in' / 'circulation' at 1024), at its own tracking, not the
+            display figure's −0.03 em */}
         <span
           data-testid="ckbytes-label"
-          className="text-text-dim text-small ml-3 align-middle font-normal"
+          className="text-text-dim text-small ml-3 whitespace-nowrap align-middle font-normal tracking-normal"
         >
           in circulation
         </span>
