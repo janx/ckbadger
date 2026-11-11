@@ -538,7 +538,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(screen.queryByRole('table')).toBeNull();
       expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
         ['identity', '#20,828,894', expect.stringMatching(/^5 txs · 4 proposals · .+ ago$/)],
-        ['miner', 'miner ckb1qzda0c...93hhsj', 'fees 0.05060000 CKB'],
+        ['miner', 'miner …93hhsj', 'fees 0.05060000 CKB'],
         [
           'figures',
           // Every desktop column: hash, size with its overhead, cycles, the reward.
@@ -548,6 +548,57 @@ describe('BlocksPage · Blocks v3 board', () => {
       ]);
       // A reward not yet paid says where it will be.
       expect(phoneLines(cards[1])[2].left).toMatch(/· reward pays at #20,828,904$/);
+    });
+
+    // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)
+    // missed the 324 px text column by a few px with the 12 px gap, so the fees dropped to a line
+    // of their own and rows took different shapes by their fee. The phone row names an unnamed
+    // miner by its tail (minerName: the address's head is its lock's code hash, the same for every
+    // default-lock miner), so the miner and any fee below 10 CKB (always eight decimals) hold one
+    // line at 390 and at 360 (294 px). jsdom cannot measure: the characters are the measure, 12 px
+    // Courier Prime at 7.2 px each, the unit at 11 px.
+    it('keeps the miner and a fee below 10 CKB on one line at 390 and 360 px', async () => {
+      atContainerWidth(358);
+      vi.mocked(api.getBlocks).mockResolvedValue({
+        ...page,
+        data: [
+          { ...page.data[0], totalFees: '999999999' },
+          { ...page.data[1], minerPool: 'Example Pool', totalFees: '1935' },
+        ],
+      });
+      render(<BlocksPage />);
+      const cards = await screen.findAllByTestId('block-row-mobile');
+      const [unnamed, pooled] = cards.map((card) => phoneLines(card)[1]);
+      expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
+        'miner',
+        'miner …93hhsj',
+        'fees 9.99999999 CKB',
+      ]);
+      expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
+      // the miner stays a link to its address, the full address its title
+      for (const [card, name] of [
+        [cards[0], '…93hhsj'],
+        [cards[1], 'Example Pool'],
+      ] as const) {
+        const line = card.querySelector('[data-line="miner"]') as HTMLElement;
+        const link = within(line).getByRole('link', { name });
+        expect(link).toHaveAttribute('href', `/mainnet/address/${miner}`);
+        expect(link).toHaveAttribute('title', miner);
+        // one flex line: the miner on the left, the fees as its right part
+        expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
+        expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
+      }
+      const width = (text: string) =>
+        chars(text.length - ' CKB'.length, 12) + (text.endsWith(' CKB') ? chars(4, 11) : 0);
+      const lineWidth = (left: string, right: string) => chars(left.length, 12) + 12 + width(right);
+      // the widest fee below 10 CKB with the tail: 93.6 + 12 + 134.4 = 240 px
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(240, 6);
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
+      // with the address's head it was 180 + 12 + 134.4 = 326.4 px, past both columns
+      expect(lineWidth('miner ckb1qzda0c...93hhsj', unnamed.right!)).toBeGreaterThan(324);
+      // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
+      expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
+      expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
     });
 
     // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own
