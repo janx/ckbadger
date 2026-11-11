@@ -400,7 +400,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             ) : (
               fiber.data &&
               fiber.data.length > 0 && (
-                <DetailSection title="Fiber channels">
+                <DetailSection
+                  title="Fiber channels"
+                  args={fiber.data.length.toLocaleString('en-US')}
+                >
                   <p className="text-text-dim text-small mb-3">
                     Up to 100 indexed channels associated with this address.
                   </p>
