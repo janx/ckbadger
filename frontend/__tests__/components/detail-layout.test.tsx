@@ -125,6 +125,37 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
     expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('prompt');
   });
 
+  it('runs a section command on its args in either tier (phase 5): dim, after the title, in the name', () => {
+    render(
+      <DetailLayout
+        title="Script"
+        tier2={
+          <DetailSection title="Code versions" args="4">
+            evidence
+          </DetailSection>
+        }
+      >
+        <DetailSection title="Cells" args="128,440 live" actions={<span>newest first</span>}>
+          rows
+        </DetailSection>
+      </DetailLayout>
+    );
+    const cells = screen.getByRole('heading', { name: 'Cells 128,440 live' });
+    expect(cells).toHaveClass('prompt', 'text-section');
+    const [command, args] = Array.from(cells.children) as HTMLElement[];
+    expect(command).toHaveTextContent(/^Cells$/);
+    expect(args).toHaveTextContent(/^128,440 live$/);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    // the actions stay the row's right end, outside the heading
+    expect(cells.parentElement).toHaveTextContent('newest first');
+    expect(cells).not.toHaveTextContent('newest first');
+    // a tier-2 section keeps its quiet h2; the args ride in it, dim, with no prompt
+    const versions = screen.getByRole('heading', { name: 'Code versions 4' });
+    expect(versions).toHaveClass('text-body', 'text-text');
+    expect(versions).not.toHaveClass('prompt');
+    expect(versions.lastElementChild).toHaveClass('text-text-dim', 'font-normal');
+  });
+
   it('opens tier 2 with one boundary: 96 px, a hairline, then the evidence eyebrow above the content', () => {
     const { container } = render(
       <DetailTier2 className="grid lg:grid-cols-2">

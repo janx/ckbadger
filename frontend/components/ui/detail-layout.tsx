@@ -160,11 +160,18 @@ export function DetailLayout({
 
 export function DetailSection({
   title,
+  args,
   actions,
   children,
   className,
 }: {
   title: ReactNode;
+  /**
+   * What the command runs on (rubbing × Song print, phase 5): a count, a status, a name, in the
+   * dim ink after the title — `cells 128 live`. Part of the heading's name in either tier.
+   */
+  args?: ReactNode;
+  /** The row's right end: a note, a link, or the section's controls (a legend, a range). */
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
@@ -175,11 +182,14 @@ export function DetailSection({
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
         {/* A tier-1 h2 is a command line (rubbing × Song print, phase 2: the prompt square, the
             title as the command) at 600 through h2.text-section (globals.css, move 3); a tier-2
-            h2 stays the quiet 500, unmarked. */}
+            h2 stays the quiet 500, unmarked, its args in the same dim ink. */}
         {tier === 2 ? (
-          <h2 className="text-body text-text font-medium">{title}</h2>
+          <h2 className="text-body text-text font-medium">
+            {title}
+            {args !== undefined && <span className="text-text-dim ml-2.5 font-normal">{args}</span>}
+          </h2>
         ) : (
-          <PromptHeading command={title} />
+          <PromptHeading command={title} args={args} />
         )}
         {actions}
       </div>
