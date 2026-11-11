@@ -7,6 +7,7 @@ import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { SealedHead } from '@/components/ui/page-seal';
+import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -48,6 +49,8 @@ import {
   type TransactionFeePayer,
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { exactCkbText } from '@/lib/ckb-decimal';
+import { txComment } from '@/lib/tx-comment';
 import {
   getScriptDetailHref,
   getIdentityItemDetailHref,
@@ -1073,6 +1076,21 @@ export default function TransactionDetailPage() {
       );
   const knowledgeDelta =
     occupiedIn !== null && occupiedOut !== null ? occupiedOut - occupiedIn : null;
+  const feeShannons = exactUnsignedInteger(tx.fee, `${hash}: fee`);
+  // The comment (rubbing × Song print, phase 5, the Transaction board): written only when every
+  // figure it states is known, from the counts the cells heading draws, the fee as the facts rail
+  // prints it and the common-knowledge delta of the evidence tier. A pool transaction has no tiles
+  // and no occupied bytes yet, so it has no comment.
+  const comment =
+    tiles && knowledgeDelta !== null
+      ? txComment({
+          inputs: tiles.inputs.length,
+          outputs: tiles.outputs.length,
+          isCellbase: tx.isCellbase,
+          feeCkb: tx.isCellbase ? null : exactCkbText(feeShannons, false),
+          knowledgeDeltaBytes: knowledgeDelta,
+        })
+      : null;
 
   const inflow =
     tiles && tx.isCellbase
@@ -1198,7 +1216,16 @@ export default function TransactionDetailPage() {
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
           {/* The one corner (Transaction board): the transaction's seal pressed beside its
               identity, never in the cells and flows below. */}
-          <SealedHead hash={tx.hash} scale="record">
+          <SealedHead
+            hash={tx.hash}
+            scale="record"
+            // Under the seal and the identity, in the identity column (the board's comment).
+            below={
+              comment === null ? undefined : (
+                <Comment lines={comment} className="mt-4 max-w-[60ch]" />
+              )
+            }
+          >
             <div className="flex min-w-0 flex-col gap-2">
               <span className="text-text-dim text-small">Transaction</span>
               <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
@@ -1264,11 +1291,7 @@ export default function TransactionDetailPage() {
             <div className="flex flex-col gap-0.5">
               <dt className="text-text-dim text-small">Fee</dt>
               <dd className="text-body">
-                <ExactCkb
-                  shannons={exactUnsignedInteger(tx.fee, `${hash}: fee`)}
-                  signed={false}
-                  tone="plain"
-                />
+                <ExactCkb shannons={feeShannons} signed={false} tone="plain" />
               </dd>
               {feePaidBy.length > 0 && (
                 <dd className="text-text-dim text-small">

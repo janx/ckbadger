@@ -335,6 +335,41 @@ describe('Transaction board, tier 1', () => {
     );
   });
 
+  // Rubbing × Song print, phase 5 (T4): the board's comment under the sealed head, in the identity
+  // column: three lines from the figures the page draws — the cells heading's counts, the rail's
+  // fee and the evidence tier's common-knowledge delta (563 → 589 occupied bytes).
+  it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const first = await screen.findByText('1 cell became 1.', {}, SLOW);
+    const comment = first.closest('.comment') as HTMLElement;
+    expect(comment).not.toBeNull();
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
+    ).toEqual([
+      '1 cell became 1.',
+      '0.00064119 ckb to the miner.',
+      'common knowledge grew by 26 bytes.',
+    ]);
+    expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
+    expect(container.querySelectorAll('.comment')).toHaveLength(1);
+    // under the seal and the identity, in the identity column, inside the page's header
+    const head = container.querySelector('[data-sealed-head]') as HTMLElement;
+    const below = comment.parentElement!;
+    expect(below).toHaveAttribute('data-sealed-below');
+    expect(below.parentElement).toBe(head);
+    expect(below).toHaveClass('col-start-2');
+    expect(head.closest('header')).toContainElement(comment);
+    // reading order: the identity (the hash and its copy button), the comment, then the facts
+    expectBefore(screen.getByRole('button', { name: 'Copy transaction hash' }), comment);
+    expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
+    // the fee is the one the rail prints, digit for digit
+    expect(screen.getByRole('complementary', { name: 'Transaction facts' })).toHaveTextContent(
+      '0.00064119 CKB'
+    );
+    // the counts are the cells heading's
+    expect(screen.getByRole('heading', { name: 'Cells 1 in → 1 out' })).toBeInTheDocument();
+  });
+
   it('keeps the status, time, block and fee in a facts rail (TX-18)', async () => {
     render(<TransactionDetailPage />);
     const rail = await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW);
@@ -613,8 +648,17 @@ describe('Transaction variants (D4)', () => {
       within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#101' })
     ).toHaveAttribute('href', '/mainnet/blocks/101');
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
-    // A cellbase consumes no cell: the cells command runs on 0 in (T1).
+    // A cellbase consumes no cell: the cells command runs on 0 in (T1), and its comment says where
+    // its cells come from, with no fee line (T4).
     expect(screen.getByRole('heading', { name: 'Cells 0 in → 1 out' })).toBeInTheDocument();
+    const comment = screen.getByText('1 cell from the block reward; none consumed.').closest('p')!;
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
+    ).toEqual([
+      '1 cell from the block reward; none consumed.',
+      'common knowledge grew by 61 bytes.',
+    ]);
+    expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(
       () =>
@@ -641,6 +685,9 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
     expect(screen.getByText('Pending since')).toBeInTheDocument();
+    // No comment while it waits: its cells and occupied bytes are read once it is indexed (T4).
+    expect(document.querySelector('.comment')).toBeNull();
+    expect(document.querySelector('[data-sealed-below]')).toBeNull();
   });
 
   // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the
