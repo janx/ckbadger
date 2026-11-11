@@ -243,6 +243,39 @@ describe('the textures', () => {
       [1, 1, 0, 1],
     ]);
   });
+
+  // Kept from the old hash seal's tests when it went (its figures were these eight and six of its
+  // own), with the stones' texture boxes added to its three.
+  it('draws every texture in its box from its own bits, the same bits the same strokes', () => {
+    for (const name of TEXTURES)
+      for (const [w, h] of [
+        [5, 1],
+        [5, 2],
+        [5, 3],
+        [4, 2],
+        [4, 3],
+        [4, 4],
+        [4, 6],
+      ]) {
+        const fig = TEXTURE[name];
+        const n = fig.bits(w, h);
+        expect(Number.isInteger(n) && n >= 0, `${name} ${w}×${h}`).toBe(true);
+        for (const fill of [0, 1]) {
+          const b = new Array(n).fill(fill);
+          const strokes = fig.make(b, w, h);
+          expect(fig.make(b, w, h), name).toEqual(strokes);
+          for (const s of strokes) {
+            expect(s.pts.length, `${name} ${w}×${h}`).toBeGreaterThanOrEqual(2);
+            for (const [x, y] of s.pts) {
+              expect(x, `${name} x`).toBeGreaterThanOrEqual(-0.6);
+              expect(x, `${name} x`).toBeLessThanOrEqual(w + 0.6);
+              expect(y, `${name} y`).toBeGreaterThanOrEqual(-0.6);
+              expect(y, `${name} y`).toBeLessThanOrEqual(h + 0.6);
+            }
+          }
+        }
+      }
+  });
 });
 
 describe('the compact encoding (the row seal)', () => {

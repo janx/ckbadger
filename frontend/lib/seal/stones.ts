@@ -148,7 +148,7 @@ const BAND = 1.55;
 const HAIR = 0.6;
 /** The brush of the rules between compartments. */
 const RULE: BrushSpec = { curve: 'corner', r: 0.2, over: 0.1, entry: 'point', exit: 'taper' };
-/** The compact encoding's tolerance, in px at the size drawn (as the talisman's row seal). */
+/** The compact encoding's tolerance, in px at the size drawn (every row seal). */
 export const ROW_TOLERANCE_PX = 0.2;
 /**
  * How many digits a page seal writes a block's transaction count or a cell's index in. Neither

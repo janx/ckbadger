@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
-import { expectBefore, expectOnePageSealOf } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -249,7 +249,7 @@ describe('Block board · first tier', () => {
   it('presses the block’s seal beside its height and hash, outside the content', async () => {
     const { container } = render(<BlockDetailPage />);
     const title = await screen.findByRole('heading', { level: 1 });
-    const seal = expectOnePageSealOf(container, sealOf(block));
+    const seal = expectOnePageSeal(container, sealOf(block));
     expect(PAGE_SEAL_HEIGHTS.block).toEqual({ wide: 104, narrow: 80 });
     expect(seal.querySelector('svg')).toHaveAttribute(
       'aria-label',
@@ -268,7 +268,7 @@ describe('Block board · first tier', () => {
   it('reads the summary in the sealed head, after the hash, before the tab row', async () => {
     const { container } = render(<BlockDetailPage />);
     const summary = await screen.findByTestId('block-summary');
-    const seal = expectOnePageSealOf(container, sealOf(block));
+    const seal = expectOnePageSeal(container, sealOf(block));
     const head = seal.closest('[data-sealed-head]')!;
     expect(head).toContainElement(summary);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
@@ -292,7 +292,7 @@ describe('Block board · first tier', () => {
     vi.mocked(api.getBlock).mockResolvedValue(counted);
     const { container } = render(<BlockDetailPage />);
     await screen.findByRole('heading', { level: 1 });
-    const seal = expectOnePageSealOf(container, sealOf(counted));
+    const seal = expectOnePageSeal(container, sealOf(counted));
     expect(seal.querySelector('svg')).toHaveAttribute(
       'aria-label',
       `Block seal ${block.hash.slice(0, 10)}, ${count} transaction${count === 1 ? '' : 's'}`

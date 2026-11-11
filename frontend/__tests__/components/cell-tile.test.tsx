@@ -8,7 +8,7 @@ import { drawSeal } from '@/lib/seal/stones';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import {
   expectBefore,
-  expectOneRowSealOf,
+  expectOneRowSeal,
   expectOwnerSealOf,
   sealHash,
 } from '@/__tests__/utils/seals';
@@ -157,7 +157,7 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const { inputs, outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[1]} />);
     const tile = screen.getByTestId('tx-io-output-1');
-    const seal = expectOneRowSealOf(
+    const seal = expectOneRowSeal(
       tile,
       {
         kind: 'cell',
@@ -208,26 +208,26 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const { inputs, outputs } = cellTiles(transfer('committed', 'consumed'), undefined);
     for (const cell of [...inputs, ...outputs]) {
       const { unmount } = render(<CellTile cell={cell} />);
-      expectOneRowSealOf(screen.getByTestId(cell.testId!), cell.seal.id, 'ink');
+      expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'ink');
       unmount();
     }
     // a live output is pressed
     const live = cellTiles(transfer('committed', 'live'), undefined).outputs[0];
     render(<CellTile cell={live} />);
-    expectOneRowSealOf(screen.getByTestId('tx-io-output-0'), live.seal.id, 'pressed');
+    expectOneRowSeal(screen.getByTestId('tx-io-output-0'), live.seal.id, 'pressed');
   });
 
   it('draws the outputs of a transaction not yet committed dashed, and its inputs still pressed', () => {
     const { inputs, outputs } = cellTiles(transfer('pending'), undefined);
     for (const cell of outputs) {
       const { unmount } = render(<CellTile cell={cell} />);
-      const seal = expectOneRowSealOf(screen.getByTestId(cell.testId!), cell.seal.id, 'unpressed');
+      const seal = expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'unpressed');
       expect(seal.querySelector('[stroke-dasharray]')).not.toBeNull();
       unmount();
     }
     for (const cell of inputs) {
       const { unmount } = render(<CellTile cell={cell} />);
-      expectOneRowSealOf(screen.getByTestId(cell.testId!), cell.seal.id, 'pressed');
+      expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'pressed');
       unmount();
     }
   });
@@ -237,7 +237,7 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const tags = (seal: HTMLElement) =>
       Array.from(seal.querySelectorAll('svg *')).map((node) => node.tagName.toLowerCase());
     render(<CellTile cell={outputs[0]} />);
-    const plain = expectOneRowSealOf(screen.getByTestId('tx-io-output-0'), outputs[0].seal.id);
+    const plain = expectOneRowSeal(screen.getByTestId('tx-io-output-0'), outputs[0].seal.id);
     expect(outputs[0].seal.id.type).toBeNull();
     expect(plain.querySelector('svg')).toHaveAttribute(
       'aria-label',
@@ -247,7 +247,7 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     expect(tags(plain)).toEqual([expect.any(String), 'circle', 'circle', 'rect']);
     expect(plain.innerHTML).not.toContain('fill="none"');
     render(<CellTile cell={outputs[1]} />);
-    const usdi = expectOneRowSealOf(screen.getByTestId('tx-io-output-1'), outputs[1].seal.id);
+    const usdi = expectOneRowSeal(screen.getByTestId('tx-io-output-1'), outputs[1].seal.id);
     expect(usdi.querySelector('svg')).toHaveAttribute(
       'aria-label',
       expect.stringContaining(', tokens,')

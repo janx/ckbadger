@@ -81,7 +81,7 @@ describe('ErrorPageShell', () => {
   });
 
   // The seals by kind (C5): the newest block's square stone, its transactions counted in rods, in
-  // place of the brush talisman of its hash.
+  // place of the old brush seal of its hash.
   it('with providers it presses the newest block’s seal behind the verse: the tip block’s stone, once', async () => {
     render(
       <MemoryRouter initialEntries={['/mainnet/nowhere']}>
@@ -96,7 +96,7 @@ describe('ErrorPageShell', () => {
     // decoration behind the text: hidden from the reader, who has the caption
     expect(seal).toHaveAttribute('aria-hidden', 'true');
     expect(seal).toHaveClass('error-seal');
-    // one seal on the page, the stone and not the talisman
+    // one seal on the page, the stone and not the old hash seal
     expect(document.querySelectorAll('[data-seal]')).toHaveLength(1);
     expect(document.querySelector('[data-hash-seal]')).toBeNull();
     const drawn = seal.querySelector<HTMLElement>('[data-seal]')!;
@@ -105,7 +105,7 @@ describe('ErrorPageShell', () => {
     expect(drawn).toHaveAttribute('data-seal-form', 'page');
     expect(drawn).toHaveAttribute('data-seal-state', 'pressed');
     // the tip's block as /blocks/{n} serves it: its hash and its 5 transactions, drawn 469 px
-    // square (the area of the 306 × 720 talisman), pressed −3° (the not-found board's hand)
+    // square (the area of the old 306 × 720 brush seal), pressed −3° (the not-found board's hand)
     const id: SealId = { kind: 'block', hash: TIP_HASH, txs: 5 };
     expect(drawn.innerHTML).toBe(
       parsed(
@@ -193,9 +193,9 @@ describe('ErrorPageShell', () => {
     expect(screen.getByRole('heading', { level: 1, name: VERSE_NAME })).toBeInTheDocument();
   });
 
-  // The stone takes about the area the brush talisman took: that one was 11.94 × 28.14 units, as
+  // The stone takes about the area the old brush seal took: that one was 11.94 × 28.14 units, as
   // tall as main's box (a screen at most); a square of its area is 0.651 of its height.
-  it('sizes the stone from the first screen: 0.65 of the talisman’s height, never past the gutters', () => {
+  it('sizes the stone from the first screen: 0.65 of the old brush seal’s height, never past the gutters', () => {
     const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
     const rule = (selector: string) => {
       const at = css.indexOf(`\n${selector} {`);
@@ -208,7 +208,7 @@ describe('ErrorPageShell', () => {
     );
     expect(rule('.error-seal')).toContain('opacity: var(--m-seal-press);');
     expect(rule('.error-seal svg')).toContain('width: auto;');
-    // the talisman's rule is gone with it
+    // the old hash seal's rule is gone with it
     expect(css).not.toContain('[data-hash-seal]');
   });
 

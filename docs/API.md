@@ -226,13 +226,13 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 ### blocks (crates/api/src/routes/blocks.rs)
 
-| Method | Path                                  | Handler               | Purpose                                                              |
-| ------ | ------------------------------------- | --------------------- | -------------------------------------------------------------------- |
-| GET    | `/api/v1/blocks`                      | `list_blocks`         | List blocks (cursor-paginated, DESC)                                 |
-| GET    | `/api/v1/blocks/{id}`                 | `get_block`           | Get block by number or 0x-prefixed hash (with miner/reward/hardfork) |
-| GET    | `/api/v1/blocks/{id}/fee-stats`       | `get_block_fee_stats` | Per-block fee-rate stats (avg/min/max) and cycles                    |
-| GET    | `/api/v1/blocks/{id}/proposals`       | `get_block_proposals` | List block proposals with linkage to committed transactions          |
-| GET    | `/api/v1/blocks/{id}/uncles/{index}`  | `get_block_uncle`     | Full header of the uncle at `index` in canonical block `{id}`        |
+| Method | Path                                 | Handler               | Purpose                                                              |
+| ------ | ------------------------------------ | --------------------- | -------------------------------------------------------------------- |
+| GET    | `/api/v1/blocks`                     | `list_blocks`         | List blocks (cursor-paginated, DESC)                                 |
+| GET    | `/api/v1/blocks/{id}`                | `get_block`           | Get block by number or 0x-prefixed hash (with miner/reward/hardfork) |
+| GET    | `/api/v1/blocks/{id}/fee-stats`      | `get_block_fee_stats` | Per-block fee-rate stats (avg/min/max) and cycles                    |
+| GET    | `/api/v1/blocks/{id}/proposals`      | `get_block_proposals` | List block proposals with linkage to committed transactions          |
+| GET    | `/api/v1/blocks/{id}/uncles/{index}` | `get_block_uncle`     | Full header of the uncle at `index` in canonical block `{id}`        |
 
 **Params**
 
@@ -392,7 +392,16 @@ merged transaction list beneath it. Pool rows stay out of both and are reported 
 **Responses**
 
 - `CursorPaginatedResponse<CellResponse>` — cell summary
-- `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`
+- `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`, and the cell's class as the transaction detail serves it:
+  - `typeCellType: string` — always present: the cell's class by its type script
+    (`transaction_structure::cell_type`), `plain | sudt | xudt | <registry slug> | typed` — the
+    same string the transaction detail serves as this cell's `cellType`, as an output and as an
+    input (save the genesis Satoshi output, whose `cellType` there is the burn marker). `cellType`
+    on this endpoint stays the genesis burn marker: `genesis_special_burn` on that output, absent
+    on every other cell.
+  - `display: TransactionCellDisplay | null` — the token / object / identity / file display the
+    transaction detail serves for this cell (`transaction_cells::from_parts`), `null` when its
+    type script has none.
 - `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo` (`deprecated` reflects the stored script record, e.g. an address on a superseded ACP deployment reports `true`).
   `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
   network — never the raw input echoed back. `pendingSummary` is described below

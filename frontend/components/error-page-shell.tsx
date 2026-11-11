@@ -10,7 +10,7 @@
 //
 // The title is the verse, in the voice (components/ui/comment, `.comment-lg`). Behind it the
 // newest block's seal is pressed on the page — the block's square stone (the seals by kind), its
-// transactions counted in rods — about the area the tall brush talisman before it took, centred
+// transactions counted in rods — about the area the old tall brush seal before it took, centred
 // and faint: the chain went on while this page was not found. CSS only; no canvas, no WebGL,
 // nothing moves but the seal, which is the next block's when the tip moves.
 
@@ -119,9 +119,9 @@ const Seal = lazy(() => import('@/components/ui/seal').then((m) => ({ default: m
 
 /**
  * The stone's side as drawn, in px; the CSS sets it from the first screen (`.error-seal`). The
- * square stone takes about the area the tall brush talisman before it took: that one was
+ * square stone takes about the area the old tall brush seal before it took: that one was
  * 11.94 × 28.14 units, drawn 306 × 720 px, and the square of the same area is √(306 × 720) ≈ 469
- * px, 0.65 of the talisman's height — the fraction of the first screen the CSS gives the stone.
+ * px, 0.65 of that seal's height — the fraction of the first screen the CSS gives the stone.
  * A page stone is drawn in its own units, so this sets only the svg's width and height.
  */
 const SEAL_PX = 469;

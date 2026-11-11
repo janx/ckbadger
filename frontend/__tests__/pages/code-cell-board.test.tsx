@@ -6,7 +6,7 @@ import { api, type Cell } from '@/lib/api';
 import { elfParts } from '@/lib/cell-parts';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
-import { expectOnePageSealOf } from '@/__tests__/utils/seals';
+import { expectOnePageSeal } from '@/__tests__/utils/seals';
 
 // The CellCode board's cell: JoyID v5, 0x673e1843…55f9:0 — 100,438 CKB, a 100,312-byte RISC-V
 // ELF. Its layout is the chain's (program headers, sections, the 4-byte gap); only the payload
@@ -50,7 +50,7 @@ describe('code cell page against the CellCode board', () => {
   it('presses the code cell’s own seal: its Type ID an unregistered type, class other (seal kinds, C3)', async () => {
     const { container } = view();
     await screen.findByTestId('code-cell-of', undefined, wait);
-    expectOnePageSealOf(container, {
+    expectOnePageSeal(container, {
       kind: 'cell',
       tx: codeCellFixture.txHash,
       index: 0,

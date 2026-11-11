@@ -4,9 +4,10 @@
  * A texture says how many bits it reads for its box and turns them into strokes (polylines in the
  * box's units) with its own brush habits.
  *
- * The eight here are the ones the seals keep from the talisman: cloud script, thunder (zigzag),
- * water, cloud scrolls (curls), the chain of loops, the meander, the running stitch (dashes) and
- * the hooks. Each is the prototype's own, byte for byte (the fidelity tests compare them).
+ * The eight here are the ones the block and script stones write their fields with: cloud script,
+ * thunder (zigzag), water, cloud scrolls (curls), the chain of loops, the meander, the running
+ * stitch (dashes) and the hooks. Each is the prototype's own, byte for byte (the fidelity tests
+ * compare them).
  */
 
 import { chainSegs, type Curve, type Entry, type Exit, type Pt, type Seg } from '@/lib/seal/brush';
@@ -42,7 +43,8 @@ export interface FigureStroke {
   readonly weight?: number;
 }
 
-export interface Figure {
+/** A texture: how many bits it reads for a w × h box, the strokes it makes of them, its brush. */
+interface Figure {
   bits(w: number, h: number): number;
   make(b: Bits, w: number, h: number): FigureStroke[];
   readonly brush: BrushSpec;

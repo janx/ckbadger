@@ -47,8 +47,7 @@ interface DetailLayoutBaseProps {
   identity?: ReactNode;
   /**
    * The object's seal, pressed beside the title and identity (SealedHead): the stone of its id in
-   * its state (`{ id, state? }`, the seals by kind), or the talisman of the 32-byte hash the page
-   * names its object by at the object's scale (`{ hash, scale }`, rubbing × Song print, phase 3).
+   * its state (`{ id, state? }`, the seals by kind).
    */
   seal?: PageSealOf;
   /**

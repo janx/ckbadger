@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { expectOnePageSeal, expectOnePageSealOf, SEAL_IDS } from '@/__tests__/utils/seals';
+import { expectOnePageSeal, SEAL_IDS } from '@/__tests__/utils/seals';
 
 describe('DetailLayout identity', () => {
   it('keeps prose words intact while allowing an unbroken identifier to wrap', () => {
@@ -21,46 +21,10 @@ describe('DetailLayout identity', () => {
 });
 
 // Visual finish V7: an entity page's content fades in when its data arrives and the layout mounts.
-// Rubbing × Song print, phase 3: an object page presses its hash seal beside its title and
-// identity; the facts and the content run under it, never beside the stamp.
-describe('DetailLayout seal', () => {
-  const HASH = `0x${'a1'.repeat(32)}`;
-
-  it('presses the page seal beside the title and identity, not the facts or the content', () => {
-    const { container } = render(
-      <DetailLayout
-        title="#20,914,858"
-        identity={<span>Block {HASH}</span>}
-        seal={{ hash: HASH, scale: 'record' }}
-        facts={[{ label: 'Epoch', value: '15,271' }]}
-      >
-        <p>content</p>
-      </DetailLayout>
-    );
-    const seal = expectOnePageSeal(container, HASH, 'record');
-    const head = seal.closest('[data-sealed-head]')!;
-    const header = container.querySelector('header')!;
-    expect(head.parentElement).toBe(header);
-    expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));
-    expect(head).toHaveTextContent(`Block ${HASH}`);
-    expect(head).not.toContainElement(screen.getByText('15,271'));
-    expect(header).toContainElement(screen.getByText('15,271'));
-    expect(header).not.toContainElement(screen.getByText('content'));
-  });
-
-  it('draws no seal when it is given none', () => {
-    const { container } = render(<DetailLayout title="Blocks" kind="index" children="rows" />);
-    expect(container.querySelector('[data-hash-seal]')).toBeNull();
-    expect(container.querySelector('[data-sealed-head]')).toBeNull();
-    expect(container.querySelector('header')!.firstElementChild).toContainElement(
-      screen.getByRole('heading', { level: 1 })
-    );
-  });
-});
-
 // The seals by kind: an object page presses the stone of its id (a block, a transaction, a cell, a
-// script) in its state, in the same place the talisman stood.
-describe('DetailLayout seal by kind (the seals by kind)', () => {
+// script) in its state beside its title and identity; the facts and the content run under it,
+// never beside the stamp.
+describe('DetailLayout seal', () => {
   it('presses the stone of the id beside the title and identity, not the facts or the content', () => {
     const block = SEAL_IDS.block;
     const { container } = render(
@@ -74,7 +38,7 @@ describe('DetailLayout seal by kind (the seals by kind)', () => {
         <p>content</p>
       </DetailLayout>
     );
-    const seal = expectOnePageSealOf(container, block);
+    const seal = expectOnePageSeal(container, block);
     const head = seal.closest('[data-sealed-head]')!;
     const header = container.querySelector('header')!;
     expect(head.parentElement).toBe(header);
@@ -94,35 +58,44 @@ describe('DetailLayout seal by kind (the seals by kind)', () => {
         content
       </DetailLayout>
     );
-    expectOnePageSealOf(container, SEAL_IDS.cell, 'ink');
+    expectOnePageSeal(container, SEAL_IDS.cell, 'ink');
     unmount();
     const pool = render(
       <DetailLayout title="Transaction" seal={{ id: SEAL_IDS.tx, state: 'unpressed' }}>
         content
       </DetailLayout>
     );
-    expectOnePageSealOf(pool.container, SEAL_IDS.tx, 'unpressed');
+    expectOnePageSeal(pool.container, SEAL_IDS.tx, 'unpressed');
+  });
+
+  it('draws no seal when it is given none', () => {
+    const { container } = render(<DetailLayout title="Blocks" kind="index" children="rows" />);
+    expect(container.querySelector('[data-seal]')).toBeNull();
+    expect(container.querySelector('[data-sealed-head]')).toBeNull();
+    expect(container.querySelector('header')!.firstElementChild).toContainElement(
+      screen.getByRole('heading', { level: 1 })
+    );
   });
 });
 
 // Rubbing × Song print, phase 5 (Gate 3 note): the page's opening sentence reads with its name, the
 // head's last line after the identity — beside the seal, so the stamp's height holds the words.
 describe('DetailLayout lede', () => {
-  const HASH = `0x${'b2'.repeat(32)}`;
+  const HASH = SEAL_IDS.block.hash;
 
   it('sets the lede in the sealed head’s column, after the identity, before the facts and content', () => {
     const { container } = render(
       <DetailLayout
         title="#20,914,858"
         identity={<span data-testid="identity">Block {HASH}</span>}
-        seal={{ hash: HASH, scale: 'record' }}
+        seal={{ id: SEAL_IDS.block }}
         lede={<p data-testid="lede">4 transactions, mined by a pool.</p>}
         facts={[{ label: 'Epoch', value: '15,271' }]}
       >
         <p>content</p>
       </DetailLayout>
     );
-    const seal = expectOnePageSeal(container, HASH, 'record');
+    const seal = expectOnePageSeal(container, SEAL_IDS.block);
     const head = seal.closest('[data-sealed-head]')!;
     const lede = screen.getByTestId('lede');
     // The column beside the seal holds the title row, the identity and then the lede, last.
@@ -152,11 +125,7 @@ describe('DetailLayout lede', () => {
 
   it('adds nothing to the head when it is given none', () => {
     const { container } = render(
-      <DetailLayout
-        title="#20,914,858"
-        identity={`Block ${HASH}`}
-        seal={{ hash: HASH, scale: 'record' }}
-      >
+      <DetailLayout title="#20,914,858" identity={`Block ${HASH}`} seal={{ id: SEAL_IDS.block }}>
         content
       </DetailLayout>
     );

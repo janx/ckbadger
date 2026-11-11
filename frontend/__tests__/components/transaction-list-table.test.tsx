@@ -7,7 +7,7 @@ import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import {
   expectBefore,
-  expectOneRowSealOf,
+  expectOneRowSeal,
   parsed,
   SEAL_INKS,
   sealHash,
@@ -254,7 +254,7 @@ describe('TransactionListTable row stones', () => {
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
     rows.forEach((tr, i) => {
-      const seal = expectOneRowSealOf(tr, ids[i]);
+      const seal = expectOneRowSeal(tr, ids[i]);
       expect(tr.querySelector('td')).toContainElement(seal);
       // (24 − the 18 px line) / 2: the one-line row keeps its height
       expect(seal).toHaveClass('-my-[3px]');
@@ -270,7 +270,7 @@ describe('TransactionListTable row stones', () => {
     const cards = screen.getAllByTestId('transaction-row-mobile');
     expect(cards).toHaveLength(3);
     cards.forEach((card, i) => {
-      const seal = expectOneRowSealOf(card, ids[i]);
+      const seal = expectOneRowSeal(card, ids[i]);
       expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
       expect(card.firstElementChild).toContainElement(seal);
       expect(seal).not.toHaveClass('-my-[3px]');
@@ -289,7 +289,7 @@ describe('TransactionListTable row stones', () => {
         width === null
           ? within(screen.getByRole('table')).getAllByRole('row')[1]
           : screen.getByTestId('transaction-row-mobile');
-      const seal = expectOneRowSealOf(row, ids[2]);
+      const seal = expectOneRowSeal(row, ids[2]);
       expect(seal.querySelector('svg')).toHaveAttribute(
         'aria-label',
         'Transaction seal 0xc89d2d25, 0 consumed, 1 created'
@@ -360,7 +360,7 @@ describe('TransactionListTable row stones', () => {
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(50);
     rows.forEach((tr, i) =>
-      expectOneRowSealOf(tr, {
+      expectOneRowSeal(tr, {
         kind: 'tx',
         hash: many[i].hash,
         consumed: i % 7,
