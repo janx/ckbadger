@@ -12,6 +12,16 @@ export const addressHash = `0x${'3e'.repeat(32)}`;
 export const addressText =
   'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq83503v79qrpczf2e6wdgf6jj8am56udwsgxzykc';
 export const fixtureHash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
+/**
+ * The mainnet type scripts the cell fixtures carry (each typed cell has its type script, as on
+ * chain, so its seal has a type to draw): the code hashes of docs/metadata/scripts/ and the Nervos
+ * DAO's one type script hash.
+ */
+const SPORE_CODE_HASH = '0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5';
+const BIT_CELL_CODE_HASH = '0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f';
+const XUDT_CODE_HASH = '0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95';
+const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
+const DAO_TYPE_HASH = '0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58';
 export const addressFixture: Address = {
   lockScriptHash: addressHash,
   address: addressText,
@@ -132,9 +142,10 @@ export const addressObjectsFixture: AddressCell[] = collections.flatMap(
       outputIndex: 0,
       capacity: collection === 6 ? '28400000000' : '29300000000',
       lockScriptHash: addressHash,
-      typeScriptHash: null,
-      typeCodeHash: null,
-      typeHashType: null,
+      typeScriptHash: fixtureHash(1200 + collection * 10 + i),
+      typeCodeHash: SPORE_CODE_HASH,
+      typeHashType: 'type',
+      typeCellType: 'spore',
       dataSize: 100,
       createdAtBlock: 13495427,
       class: 'object' as const,
@@ -163,9 +174,10 @@ export const addressIdentitiesFixture: AddressCell[] = [
     outputIndex: 0,
     capacity: '22799993047',
     lockScriptHash: addressHash,
-    typeScriptHash: null,
-    typeCodeHash: null,
-    typeHashType: null,
+    typeScriptHash: fixtureHash(1300),
+    typeCodeHash: BIT_CELL_CODE_HASH,
+    typeHashType: 'type',
+    typeCellType: 'bit-cell',
     dataSize: 100,
     createdAtBlock: 13495427,
     class: 'identity',
@@ -237,9 +249,10 @@ export const addressDaoCellsFixture: AddressCell[] = addressDaoFixture.map((d) =
   capacity: d.capacity,
   occupiedCapacity: '10400000000',
   lockScriptHash: addressHash,
-  typeScriptHash: null,
-  typeCodeHash: null,
-  typeHashType: null,
+  typeScriptHash: DAO_TYPE_HASH,
+  typeCodeHash: DAO_CODE_HASH,
+  typeHashType: 'type',
+  typeCellType: 'nervos-dao',
   dataSize: 8,
   createdAtBlock: d.depositBlockNumber,
   class: 'dao',
@@ -271,9 +284,10 @@ const tokenCells: AddressCell[] = Array.from({ length: 15 }, (_, i) => {
     capacity: splitClassCapacity('token', i, 15),
     occupiedCapacity: String(occupied * 100000000),
     lockScriptHash: addressHash,
-    typeScriptHash: null,
-    typeCodeHash: null,
-    typeHashType: null,
+    typeScriptHash: token.typeScriptHash,
+    typeCodeHash: XUDT_CODE_HASH,
+    typeHashType: 'data1',
+    typeCellType: 'xudt',
     dataSize: 16,
     createdAtBlock: 18000000 + i,
     class: 'token',
@@ -305,9 +319,11 @@ const otherCells: AddressCell[] = (['script', 'plain'] as const).flatMap((kind) 
       capacity: splitClassCapacity(kind, i, count),
       occupiedCapacity: String(occupied * 100000000),
       lockScriptHash: addressHash,
-      typeScriptHash: null,
-      typeCodeHash: null,
-      typeHashType: null,
+      // an unregistered type script (the API's `typed`); plain CKB has none
+      typeScriptHash: kind === 'plain' ? null : fixtureHash(1400 + i),
+      typeCodeHash: kind === 'plain' ? null : fixtureHash(1450),
+      typeHashType: kind === 'plain' ? null : 'data1',
+      typeCellType: kind === 'plain' ? 'plain' : 'typed',
       dataSize: kind === 'plain' ? 2 : 10,
       createdAtBlock: 18000000 + i,
       class: kind,

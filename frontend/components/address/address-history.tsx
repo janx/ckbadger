@@ -10,7 +10,9 @@ import Link from '@/components/ui/link';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import { ClassMark } from '@/components/ui/class-mark';
+import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ADDRESS_CLASSES } from '@/components/address/address-holdings';
+import { addressCellSealId } from '@/lib/address-cell-seal';
 import type {
   Activity,
   Address,
@@ -246,22 +248,42 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
     />
   );
 }
+/** A live cell's out point, the link to its page: "0xdce40476...3993e1:4". */
+function CellOutPoint({ cell: c }: { cell: AddressCell }) {
+  return (
+    <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
+      <Hash hash={c.txHash} startChars={10} endChars={6} copyable={false} className="text-small" />:
+      {c.outputIndex}
+    </Link>
+  );
+}
+
+/**
+ * The live cells table's columns (12 px monospace, 7.2 px a character; 11 px, 6.6; 16 px between
+ * columns, none after the last). Its minimum is 992 px, the width it changes form at. The seals
+ * by kind (C4) lead the Cell column with the cell's 30 px row seal, its footprint (30 + 8 = 38 px)
+ * taken from measured slack so the total and the form change stay 992:
+ * - Cell 200 → 238: the out point with a four-digit index, 24 characters (172.8) + 16, and the
+ *   seal's 38: 226.8.
+ * - Occupied 196 → 178: a cell is at most a block's 597,000 bytes, so at most "597,000.00000000"
+ *   (16 characters, 115.2) and " CKB" at 11 px (26.4) + 16: 157.6.
+ * - Created at 120 → 100 (the last column): "#99,999,999" is 11 characters (79.2), and
+ *   "#100,000,000" 12 (86.4).
+ * Contains (280) and Capacity (196: every amount under a billion CKB on one line, 186.4) keep
+ * theirs.
+ */
 const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'outpoint',
     label: 'Cell',
-    minWidth: 200,
+    minWidth: 200 + ROW_SEAL.cell.footprint,
+    // The cell's seal leads the row, overhanging the out point's 18 px line (RowSeal), so a row
+    // keeps its height; the out point stays the row's link (the seal is an image, not a link).
     render: (c) => (
-      <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
-        <Hash
-          hash={c.txHash}
-          startChars={10}
-          endChars={6}
-          copyable={false}
-          className="text-small"
-        />
-        :{c.outputIndex}
-      </Link>
+      <span className="flex items-start">
+        <RowSeal id={addressCellSealId(c)} overhang />
+        <CellOutPoint cell={c} />
+      </span>
     ),
   },
   {
@@ -303,7 +325,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'occupied',
     label: 'Occupied, CKB',
-    minWidth: 196,
+    minWidth: 178,
     numeric: true,
     className: 'whitespace-normal',
     render: (c) => (
@@ -326,7 +348,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'created',
     label: 'Created at',
-    minWidth: 120,
+    minWidth: 100,
     render: (c) => (
       <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
     ),
@@ -362,11 +384,13 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
       mobileRow={(c, wide) => (
         <PhoneRow
           testId="address-cell-row-mobile"
+          // the cell's seal is the row's mark, beside every line (it overhangs nothing here)
+          mark={<RowSeal id={addressCellSealId(c)} />}
           lines={[
             {
               key: 'cell',
               tone: 'head',
-              left: cellColumns[0].render(c),
+              left: <CellOutPoint cell={c} />,
               right: <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" />,
             },
             {

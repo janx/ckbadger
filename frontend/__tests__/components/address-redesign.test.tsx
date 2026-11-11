@@ -16,6 +16,9 @@ import {
   addressTransactionsFixture,
 } from '@/__tests__/msw/fixtures/address';
 import { addressProducerCells } from '@/__tests__/msw/fixtures/address-producer';
+import { expectBefore, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import { addressCellSealId } from '@/lib/address-cell-seal';
 import type { Activity, ItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
 
@@ -214,6 +217,105 @@ describe('Address v3 components', () => {
         .querySelector('a[href*="hashType=data1&kind=type"]')
     ).not.toBeNull();
   });
+  // The seals by kind (C3 for the address's cells, lane C4): every live cell leads with its own
+  // 30 px row seal, in force (pressed: a live cell); no owner's stone (every cell here is the page
+  // address's own). The producer's eleven cells cover every class the seal draws.
+  describe('the cell’s row seal', () => {
+    const cells = addressProducerCells.data;
+    /** What each seal says, in the producer's order: the class `kindOf()` gives each cell. */
+    const CLASSES = [
+      'ckb',
+      'other',
+      'dao',
+      'dao',
+      'tokens',
+      'tokens',
+      'objects',
+      'objects',
+      'identities',
+      'identities',
+      'identities',
+    ];
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('leads every table row before its out point, overhanging the 18 px line', () => {
+      render(<AddressLiveCells rows={cells} />);
+      const table = screen.getByRole('table', { name: 'Live cells' });
+      const rows = within(table).getAllByRole('row').slice(1);
+      expect(rows).toHaveLength(cells.length);
+      rows.forEach((row, i) => {
+        const cell = cells[i];
+        const seal = expectOneRowSealOf(row, addressCellSealId(cell));
+        expect(seal.querySelector('svg')).toHaveAttribute(
+          'aria-label',
+          `Cell seal ${cell.txHash.slice(0, 10)}:${cell.outputIndex}, ${CLASSES[i]}, 1,000.00000000 CKB`
+        );
+        // first in the first column, before the out point (still the row's link), and 30 px over
+        // the 18 px line: 6 px above and below
+        const first = row.querySelector('td')!;
+        expect(first.firstElementChild).toHaveClass('flex', 'items-start');
+        expect(first.firstElementChild?.firstElementChild).toBe(seal);
+        expect(seal).toHaveClass('-my-[6px]');
+        const outPoint = within(first).getByRole('link');
+        expect(outPoint).toHaveAttribute(
+          'href',
+          `/mainnet/cell/${cell.txHash}-${cell.outputIndex}`
+        );
+        expect(outPoint).toHaveTextContent(`0xdce40476...3993e1:${cell.outputIndex}`);
+        expectBefore(seal, outPoint);
+        expect(row.querySelector('[data-owner-seal]')).toBeNull();
+      });
+    });
+
+    it.each([358, 608])(
+      'leads every phone row at %i px as its mark, beside every line, with no overhang',
+      (width) => {
+        atContainerWidth(width);
+        render(<AddressLiveCells rows={cells} />);
+        expect(screen.queryByRole('table', { name: 'Live cells' })).toBeNull();
+        const rows = screen.getAllByTestId('address-cell-row-mobile');
+        expect(rows).toHaveLength(cells.length);
+        rows.forEach((row, i) => {
+          const cell = cells[i];
+          const seal = expectOneRowSealOf(row, addressCellSealId(cell));
+          expect(row.firstElementChild).toHaveAttribute('data-part', 'mark');
+          expect(row.firstElementChild).toContainElement(seal);
+          expect(seal).not.toHaveClass('-my-[6px]');
+          // the head line is the out point alone, the seal in its own column
+          const lines = phoneLines(row);
+          expect(lines[0].left).toBe(`0xdce40476...3993e1:${cell.outputIndex}`);
+          expectBefore(seal, within(row).getAllByRole('link')[0]);
+          expect(row.querySelector('[data-owner-seal]')).toBeNull();
+        });
+      }
+    );
+
+    // The seal's 38 px (30 + the 8 px gap) are budgeted in the Cell column and taken from
+    // Occupied's and Created at's measured slack (see cellColumns): the table keeps its 992 px.
+    it('budgets the seal in the Cell column and keeps the table at 992 px', () => {
+      render(<AddressLiveCells rows={cells} />);
+      const table = screen.getByRole('table', { name: 'Live cells' });
+      const widths = Array.from(table.querySelectorAll('col')).map(
+        (c) => (c as HTMLElement).style.width
+      );
+      expect(widths).toEqual(['238px', '280px', '196px', '178px', '100px']);
+      expect(238 - 200).toBe(ROW_SEAL.cell.footprint);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(992);
+    });
+
+    it.each([
+      [992, 'table'],
+      [991, 'rows'],
+    ])('changes form where it did: at %i px it is %s', (width, form) => {
+      atContainerWidth(width);
+      const { container } = render(<AddressLiveCells rows={cells} />);
+      expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+    });
+  });
+
   it('retains null cycles as unavailable and never a zero measurement', () => {
     render(
       <AddressTransactions

@@ -3,7 +3,8 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
-import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSealOf, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { addressCellSealId } from '@/lib/address-cell-seal';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -203,17 +204,48 @@ describe('Address v3', () => {
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
   });
 
-  // Rubbing × Song print, phase 3: an address is its lock script, so its page seal (112 px, 80 on
-  // a phone, −4°) is pressed from the lock script hash the address read already carries.
-  it('presses the lock script’s seal beside the address, from the hash the address read carries', async () => {
+  // The seals by kind (C4): an address is its lock script, so its page presses the script's
+  // stone (the tall rounded one, 104 px, 80 below md, −4°) of the lock script hash the address
+  // read already carries; nothing else is fetched for it.
+  it('presses the lock script’s stone beside the address, from the hash the address read carries', async () => {
     const { container } = render(<AddressDetailPage />);
     await loaded();
     expect(addressFixture.lockScriptHash).toBe(addressHash);
-    const seal = expectOnePageSeal(container, addressHash, 'object');
+    const seal = expectOnePageSealOf(container, { kind: 'script', hash: addressHash });
+    expect(seal).toHaveAttribute('data-seal-form', 'page');
+    // the talisman is gone from the head
+    expect(container.querySelector('[data-hash-seal]')).toBeNull();
     const head = seal.closest('[data-sealed-head]')!;
     expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));
     expectBefore(seal, screen.getByRole('heading', { level: 1 }));
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
+  });
+
+  // The seals by kind (C3 for the address's cells): the Live cells tab leads every row with the
+  // cell's own row seal, classed as the transaction page classes the same cell; the page's one
+  // page seal stays the address's.
+  it('leads every live cell with the cell’s own seal, and the page keeps one page seal, the lock’s', async () => {
+    vi.mocked(api.getAddressHoldings).mockResolvedValue(addressProducerHoldings);
+    vi.mocked(api.getAddressCells).mockImplementation(async (_a, p) => ({
+      ...addressProducerCells,
+      data: addressProducerCells.data.filter((c) => !p?.class || c.class === p.class),
+    }));
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    await tab('Live cells');
+    const table = await screen.findByRole('table', { name: 'Live cells' });
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(addressProducerCells.data.length);
+    rows.forEach((row, i) => {
+      const cell = addressProducerCells.data[i];
+      const seal = expectOneRowSealOf(row, addressCellSealId(cell));
+      expect(row.querySelector('td')).toContainElement(seal);
+      expectBefore(
+        seal,
+        within(row).getByRole('link', { name: new RegExp(`:${cell.outputIndex}$`) })
+      );
+    });
+    expectOnePageSealOf(container, { kind: 'script', hash: addressHash });
   });
 
   it('keeps an invalid address 400 as a read error', async () => {

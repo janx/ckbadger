@@ -9,10 +9,10 @@
 //   the facts, then the ways on
 //
 // The title is the verse, in the voice (components/ui/comment, `.comment-lg`). Behind it the
-// newest block's hash is pressed on the page as its talisman — the hash seal of design 6, the heavy
-// brush with no stone — the full height of the first screen, centred and faint: the chain went on
-// while this page was not found. CSS only; no canvas, no WebGL, nothing moves but the seal, which
-// is the next block's when the tip moves.
+// newest block's seal is pressed on the page — the block's square stone (the seals by kind), its
+// transactions counted in rods — about the area the tall brush talisman before it took, centred
+// and faint: the chain went on while this page was not found. CSS only; no canvas, no WebGL,
+// nothing moves but the seal, which is the next block's when the tip moves.
 
 import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
@@ -25,7 +25,6 @@ import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { api } from '@/lib/api';
-import { color } from '@/lib/palette';
 import { truncateHash } from '@/lib/utils';
 
 interface ErrorPageShellProps {
@@ -112,24 +111,28 @@ export function ErrorPageShell({
 }
 
 /**
- * The talisman generator arrives with the first 404 or error page, not with every first load: the
- * shell is in the entry chunk (the error boundaries are), and the seal is the one thing on it a
- * reader can wait a moment for — the verse, the facts and the caption are there at once.
+ * The seal library arrives with the first 404 or error page, not with every first load: the shell
+ * is in the entry chunk (the error boundaries are), and the seal is the one thing on it a reader
+ * can wait a moment for — the verse, the facts and the caption are there at once.
  */
-const HashSeal = lazy(() =>
-  import('@/components/ui/hash-seal').then((m) => ({ default: m.HashSeal }))
-);
+const Seal = lazy(() => import('@/components/ui/seal').then((m) => ({ default: m.Seal })));
 
-/** The seal's longer side as drawn; the CSS sets it to the first screen's height (`.error-seal`). */
-const SEAL_PX = 720;
+/**
+ * The stone's side as drawn, in px; the CSS sets it from the first screen (`.error-seal`). The
+ * square stone takes about the area the tall brush talisman before it took: that one was
+ * 11.94 × 28.14 units, drawn 306 × 720 px, and the square of the same area is √(306 × 720) ≈ 469
+ * px, 0.65 of the talisman's height — the fraction of the first screen the CSS gives the stone.
+ * A page stone is drawn in its own units, so this sets only the svg's width and height.
+ */
+const SEAL_PX = 469;
 /** Pressed a little askew, as a hand presses a seal (the not-found board's −3°). */
 const SEAL_TILT = -3;
 
 /**
  * The newest block's seal, pressed behind the verse, and a line naming it. The tip is the vitals'
- * (the status line's `tip #n`); the hash is that block's own, read from `/blocks/{n}`. While
- * neither has arrived, or when either fails, there is no seal: the verse stands alone. The seal
- * stays pressed until the next tip's block is read.
+ * (the status line's `tip #n`); the block's hash and its transaction count are that block's own,
+ * read from `/blocks/{n}`. While neither has arrived, or when either fails, there is no seal: the
+ * verse stands alone. The seal stays pressed until the next tip's block is read.
  */
 function TipSeal() {
   const { data: stats } = useNetworkStats();
@@ -148,12 +151,12 @@ function TipSeal() {
     <>
       <div className="error-seal" aria-hidden="true" data-testid="error-seal">
         <Suspense fallback={null}>
-          <HashSeal
-            hash={block.hash}
-            variant="brush"
-            size={SEAL_PX}
+          {/* in the cinnabar mark (Seal's ink), pressed: the block is on the chain */}
+          <Seal
+            id={{ kind: 'block', hash: block.hash, txs: block.transactionsCount }}
+            form="page"
+            height={SEAL_PX}
             tilt={SEAL_TILT}
-            ink={color('mark')}
           />
         </Suspense>
       </div>
