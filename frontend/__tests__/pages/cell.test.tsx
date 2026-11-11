@@ -205,11 +205,11 @@ describe('CellDetailPage', () => {
     const heading = await screen.findByRole('heading', { name: 'Nervos DAO deposited' });
     expect(heading.lastElementChild).toHaveTextContent(/^deposited$/);
     expect(heading.lastElementChild).toHaveClass('text-text-dim');
-    expect(screen.getByText(/deposited · deposit block/)).toBeInTheDocument();
+    // the heading says the status; the line under it does not say it again
+    const line = screen.getByText(/^deposit block/).closest('p') as HTMLElement;
+    expect(line).not.toHaveTextContent('deposited');
     // Exact CKB in the site's one amount form, thousands grouped (SC-C3, #16).
-    expect(screen.getByText(/deposited · deposit block/).closest('p')).toHaveTextContent(
-      'compensation 12,345.23456789 CKB'
-    );
+    expect(line).toHaveTextContent('compensation 12,345.23456789 CKB');
     expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
   });
   // Rubbing × Song print, phase 5 (D2): the dep group's command runs on its member count.

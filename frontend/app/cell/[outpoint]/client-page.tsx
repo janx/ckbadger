@@ -452,11 +452,11 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         )}
         <CellFacts cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.daoInfo && (
-          // The command runs on the status the API gives (deposited, withdrawing, withdrawn).
+          // The command runs on the status the API gives (deposited, withdrawing, withdrawn); the
+          // heading says it, so the line under it does not say it again.
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
             <p className="text-text-dim text-small">
-              {cell.daoInfo.daoStatus} · deposit block{' '}
-              <BlockLink number={cell.daoInfo.depositBlockNumber} />
+              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} />
               {cell.daoInfo.compensationCkb != null ? (
                 <>
                   {' '}
