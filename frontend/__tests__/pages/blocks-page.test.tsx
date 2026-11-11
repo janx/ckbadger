@@ -11,7 +11,7 @@ import { api, type Block } from '@/lib/api';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import type { SealId } from '@/lib/seal/stones';
-import { expectBefore, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 
 // Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
 // function: the phone describe's restoreAllMocks would reset one).
@@ -358,7 +358,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(rows).toHaveLength(page.data.length);
     rows.forEach((tr, i) => {
       const cell = tr.querySelector('td')!;
-      const seal = expectOneRowSealOf(tr, sealOf(page.data[i]));
+      const seal = expectOneRowSeal(tr, sealOf(page.data[i]));
       expect(cell).toContainElement(seal);
       // one 18 px line keeps the row's height: the 26 px stone overhangs it by 4 px above and below
       expect(ROW_SEAL.block.overhang).toBe(4);
@@ -412,7 +412,7 @@ describe('BlocksPage · Blocks v3 board', () => {
           `Block seal ${b.hash.slice(0, 10)}, ${['1 transaction', '7 transactions', '12 transactions'][i]}`
       )
     );
-    rows.forEach((tr, i) => expectOneRowSealOf(tr, sealOf(counted[i])));
+    rows.forEach((tr, i) => expectOneRowSeal(tr, sealOf(counted[i])));
     // three counts, three stones: the count changes the drawing, not only its name
     expect(new Set(rows.map((tr) => tr.querySelector('[data-seal]')!.innerHTML)).size).toBe(3);
   });
@@ -508,7 +508,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       cards.forEach((card, i) => {
-        const seal = expectOneRowSealOf(card, sealOf(page.data[i]));
+        const seal = expectOneRowSeal(card, sealOf(page.data[i]));
         expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
         expect(card.firstElementChild).toContainElement(seal);
         // three lines hold the stone; no overhang
@@ -523,7 +523,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       expect(cards).toHaveLength(3);
-      cards.forEach((card, i) => expectOneRowSealOf(card, sealOf(counted[i])));
+      cards.forEach((card, i) => expectOneRowSeal(card, sealOf(counted[i])));
     });
 
     it('leads each row of the 608 px table with its block’s row seal, beside the height and hash', async () => {
@@ -531,7 +531,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       Array.from(table.querySelectorAll('tbody tr')).forEach((tr, i) => {
-        const seal = expectOneRowSealOf(tr, sealOf(page.data[i]));
+        const seal = expectOneRowSeal(tr, sealOf(page.data[i]));
         expect(tr.querySelector('td')).toContainElement(seal);
         // two lines (height, hash) hold the stone; no overhang
         expect(seal.className).not.toMatch(/-my-/);
@@ -566,7 +566,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       const rows = Array.from(table.querySelectorAll('tbody tr'));
       expect(rows).toHaveLength(3);
-      rows.forEach((tr, i) => expectOneRowSealOf(tr, sealOf(counted[i])));
+      rows.forEach((tr, i) => expectOneRowSeal(tr, sealOf(counted[i])));
     });
 
     it('draws the six-column table of board L1 in the 608 px band, without the reward', async () => {

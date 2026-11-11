@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
-import { expectBefore, expectOnePageSealOf } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -114,7 +114,7 @@ describe('CellDetailPage', () => {
     outpoint = `${hash}-2`;
     const { container } = view();
     const title = await screen.findByRole('heading', { level: 1 });
-    const seal = expectOnePageSealOf(
+    const seal = expectOnePageSeal(
       container,
       {
         kind: 'cell',
@@ -148,7 +148,7 @@ describe('CellDetailPage', () => {
     });
     const { container } = view();
     await screen.findByRole('heading', { level: 1 });
-    expectOnePageSealOf(
+    expectOnePageSeal(
       container,
       {
         kind: 'cell',
@@ -188,7 +188,7 @@ describe('CellDetailPage', () => {
     });
     const { container } = view();
     await screen.findByRole('heading', { level: 1 });
-    const seal = expectOnePageSealOf(container, {
+    const seal = expectOnePageSeal(container, {
       kind: 'cell',
       tx: base.txHash,
       index: 0,

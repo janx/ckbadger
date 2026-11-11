@@ -5,7 +5,7 @@ import { RowSeal } from '@/components/ui/row-seal';
 import { drawSeal } from '@/lib/seal/stones';
 import {
   expectBefore,
-  expectOneRowSealOf,
+  expectOneRowSeal,
   expectOwnerSealOf,
   SEAL_IDS,
   SEAL_INKS,
@@ -65,7 +65,7 @@ describe('OwnerSeal (the seals by kind)', () => {
       </div>
     );
     const row = screen.getByTestId('row');
-    const seal = expectOneRowSealOf(row, cell);
+    const seal = expectOneRowSeal(row, cell);
     const owner = expectOwnerSealOf(row, cell.lock);
     expectBefore(seal, owner);
     expect(screen.getAllByRole('img')).toHaveLength(2);

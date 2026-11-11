@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { expectOnePageSealOf, SEAL_IDS } from '@/__tests__/utils/seals';
+import { expectOnePageSeal, SEAL_IDS } from '@/__tests__/utils/seals';
 
 describe('DetailLayout identity', () => {
   it('keeps prose words intact while allowing an unbroken identifier to wrap', () => {
@@ -38,7 +38,7 @@ describe('DetailLayout seal', () => {
         <p>content</p>
       </DetailLayout>
     );
-    const seal = expectOnePageSealOf(container, block);
+    const seal = expectOnePageSeal(container, block);
     const head = seal.closest('[data-sealed-head]')!;
     const header = container.querySelector('header')!;
     expect(head.parentElement).toBe(header);
@@ -58,14 +58,14 @@ describe('DetailLayout seal', () => {
         content
       </DetailLayout>
     );
-    expectOnePageSealOf(container, SEAL_IDS.cell, 'ink');
+    expectOnePageSeal(container, SEAL_IDS.cell, 'ink');
     unmount();
     const pool = render(
       <DetailLayout title="Transaction" seal={{ id: SEAL_IDS.tx, state: 'unpressed' }}>
         content
       </DetailLayout>
     );
-    expectOnePageSealOf(pool.container, SEAL_IDS.tx, 'unpressed');
+    expectOnePageSeal(pool.container, SEAL_IDS.tx, 'unpressed');
   });
 
   it('draws no seal when it is given none', () => {
@@ -95,7 +95,7 @@ describe('DetailLayout lede', () => {
         <p>content</p>
       </DetailLayout>
     );
-    const seal = expectOnePageSealOf(container, SEAL_IDS.block);
+    const seal = expectOnePageSeal(container, SEAL_IDS.block);
     const head = seal.closest('[data-sealed-head]')!;
     const lede = screen.getByTestId('lede');
     // The column beside the seal holds the title row, the identity and then the lede, last.

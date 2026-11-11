@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
-import { expectOnePageSealOf } from '@/__tests__/utils/seals';
+import { expectOnePageSeal } from '@/__tests__/utils/seals';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -73,7 +73,7 @@ describe('Cell page against the Cell board', () => {
     const { container } = view();
     await screen.findByRole('heading', { level: 1 }, { timeout: 5000 });
     // the class is the transaction page's: kindOf() of the API's typeCellType and display
-    const seal = expectOnePageSealOf(container, {
+    const seal = expectOnePageSeal(container, {
       kind: 'cell',
       tx: cell.txHash,
       index: 1,

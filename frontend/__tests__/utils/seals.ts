@@ -80,7 +80,7 @@ export const SEAL_IDS: { [K in SealKind]: Extract<SealId, { kind: K }> } = {
  * with its narrow height below md, leading a SealedHead of its kind. Returns the seal's holder.
  * Row seals in `root` (a page's lists) are not counted.
  */
-export function expectOnePageSealOf(
+export function expectOnePageSeal(
   root: ParentNode,
   id: SealId,
   state: SealState = 'pressed'
@@ -116,7 +116,7 @@ export function expectOnePageSealOf(
  * link stays the row's link). Owner stones before an address in the row (OwnerSeal) are not the
  * row's seal and are not counted. Returns the seal's holder.
  */
-export function expectOneRowSealOf(
+export function expectOneRowSeal(
   row: Element,
   id: SealId,
   state: SealState = 'pressed'

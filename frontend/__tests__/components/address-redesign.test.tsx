@@ -16,7 +16,7 @@ import {
   addressTransactionsFixture,
 } from '@/__tests__/msw/fixtures/address';
 import { addressProducerCells } from '@/__tests__/msw/fixtures/address-producer';
-import { expectBefore, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { addressCellSealId } from '@/lib/address-cell-seal';
 import type { Activity, ItemDelta } from '@/lib/api';
@@ -248,7 +248,7 @@ describe('Address v3 components', () => {
       expect(rows).toHaveLength(cells.length);
       rows.forEach((row, i) => {
         const cell = cells[i];
-        const seal = expectOneRowSealOf(row, addressCellSealId(cell));
+        const seal = expectOneRowSeal(row, addressCellSealId(cell));
         expect(seal.querySelector('svg')).toHaveAttribute(
           'aria-label',
           `Cell seal ${cell.txHash.slice(0, 10)}:${cell.outputIndex}, ${CLASSES[i]}, 1,000.00000000 CKB`
@@ -280,7 +280,7 @@ describe('Address v3 components', () => {
         expect(rows).toHaveLength(cells.length);
         rows.forEach((row, i) => {
           const cell = cells[i];
-          const seal = expectOneRowSealOf(row, addressCellSealId(cell));
+          const seal = expectOneRowSeal(row, addressCellSealId(cell));
           expect(row.firstElementChild).toHaveAttribute('data-part', 'mark');
           expect(row.firstElementChild).toContainElement(seal);
           expect(seal).not.toHaveClass('-my-[6px]');

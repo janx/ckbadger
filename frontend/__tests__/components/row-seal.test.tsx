@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { ROW_LINE_PX, ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { drawSeal, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
-import { expectOneRowSealOf, SEAL_IDS, SEAL_INKS, sealIdsAt } from '@/__tests__/utils/seals';
+import { expectOneRowSeal, SEAL_IDS, SEAL_INKS, sealIdsAt } from '@/__tests__/utils/seals';
 
 // block #20,914,858's hash (the night's test hash)
 const HASH = '0xbbb655aefa778c0856e702030e9f8e9f6171daa392c90b3d9abe3d69c74b386b';
@@ -16,7 +16,7 @@ describe('RowSeal by kind (the seals by kind)', () => {
       for (const kind of KINDS) {
         const id = i ? sealIdsAt(i)[kind] : SEAL_IDS[kind];
         const { container, unmount } = render(<RowSeal id={id} />);
-        expectOneRowSealOf(container, id);
+        expectOneRowSeal(container, id);
         unmount();
       }
   });
@@ -90,7 +90,7 @@ describe('RowSeal by kind (the seals by kind)', () => {
     for (const kind of KINDS)
       for (const state of STATES) {
         const { container, unmount } = render(<RowSeal id={SEAL_IDS[kind]} state={state} />);
-        expectOneRowSealOf(container, SEAL_IDS[kind], state);
+        expectOneRowSeal(container, SEAL_IDS[kind], state);
         unmount();
       }
   });
@@ -111,7 +111,7 @@ describe('RowSeal by kind (the seals by kind)', () => {
       { ...SEAL_IDS.cell, index: 10000 },
     ] satisfies SealId[]) {
       const { container, unmount } = render(<RowSeal id={id} />);
-      expectOneRowSealOf(container, id);
+      expectOneRowSeal(container, id);
       unmount();
     }
   });

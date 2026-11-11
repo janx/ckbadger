@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
-import { expectBefore, expectOnePageSealOf, parsed, SEAL_INKS } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSeal, parsed, SEAL_INKS } from '@/__tests__/utils/seals';
 import { PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import { drawSeal, type SealId, type SealState } from '@/lib/seal/stones';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
@@ -230,7 +230,7 @@ function expectTxSeals(
   seam: boolean
 ): { head: HTMLElement; seam: HTMLElement | null } {
   const header = container.querySelector('header') as HTMLElement;
-  const head = expectOnePageSealOf(header, id, state);
+  const head = expectOnePageSeal(header, id, state);
   const all = container.querySelectorAll('[data-seal][data-seal-form="page"]');
   const holders = container.querySelectorAll<HTMLElement>('[data-seam-seal]');
   if (!seam) {

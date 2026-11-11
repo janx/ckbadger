@@ -3,7 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
-import { expectBefore, expectOnePageSealOf, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { expectBefore, expectOnePageSeal, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { addressCellSealId } from '@/lib/address-cell-seal';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -211,7 +211,7 @@ describe('Address v3', () => {
     const { container } = render(<AddressDetailPage />);
     await loaded();
     expect(addressFixture.lockScriptHash).toBe(addressHash);
-    const seal = expectOnePageSealOf(container, { kind: 'script', hash: addressHash });
+    const seal = expectOnePageSeal(container, { kind: 'script', hash: addressHash });
     expect(seal).toHaveAttribute('data-seal-form', 'page');
     // the old hash seal is gone from the head
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
@@ -238,14 +238,14 @@ describe('Address v3', () => {
     expect(rows).toHaveLength(addressProducerCells.data.length);
     rows.forEach((row, i) => {
       const cell = addressProducerCells.data[i];
-      const seal = expectOneRowSealOf(row, addressCellSealId(cell));
+      const seal = expectOneRowSeal(row, addressCellSealId(cell));
       expect(row.querySelector('td')).toContainElement(seal);
       expectBefore(
         seal,
         within(row).getByRole('link', { name: new RegExp(`:${cell.outputIndex}$`) })
       );
     });
-    expectOnePageSealOf(container, { kind: 'script', hash: addressHash });
+    expectOnePageSeal(container, { kind: 'script', hash: addressHash });
   });
 
   it('keeps an invalid address 400 as a read error', async () => {

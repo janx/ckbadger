@@ -8,7 +8,7 @@ import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 import { CELL_COLORS } from '@/lib/design-tokens';
-import { expectOnePageSealOf } from '@/__tests__/utils/seals';
+import { expectOnePageSeal } from '@/__tests__/utils/seals';
 import type { SealState } from '@/lib/seal/stones';
 
 /** No seal on the page. */
@@ -18,7 +18,7 @@ function expectNoSeal() {
 
 /** The header presses the transaction's one stone, 1 → 1 (the fixtures' counts), in `state`. */
 function expectHeadStone(state: SealState) {
-  expectOnePageSealOf(
+  expectOnePageSeal(
     document.querySelector('header')!,
     { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
     state

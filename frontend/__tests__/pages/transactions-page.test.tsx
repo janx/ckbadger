@@ -2,7 +2,7 @@ import { CHARTS } from '@/components/charts/chart-catalogue';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { expectBefore, expectOneRowSealOf } from '@/__tests__/utils/seals';
+import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
@@ -274,7 +274,7 @@ describe('Transactions pool view', () => {
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     expect(rows).toHaveLength(2);
     rows.forEach((tr, i) => {
-      const seal = expectOneRowSealOf(tr, ids[i], 'unpressed');
+      const seal = expectOneRowSeal(tr, ids[i], 'unpressed');
       expect(tr.querySelector('td')).toContainElement(seal);
       expect(seal).toHaveClass('-my-[3px]');
       expectBefore(seal, within(tr as HTMLElement).getByTitle(ids[i].hash));
@@ -292,7 +292,7 @@ describe('Transactions pool view', () => {
     const cards = await screen.findAllByTestId('pool-row-mobile');
     expect(cards).toHaveLength(2);
     cards.forEach((card, i) => {
-      const phoneSeal = expectOneRowSealOf(card, ids[i], 'unpressed');
+      const phoneSeal = expectOneRowSeal(card, ids[i], 'unpressed');
       expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
       expect(card.firstElementChild).toContainElement(phoneSeal);
       expect(phoneSeal).not.toHaveClass('-my-[3px]');

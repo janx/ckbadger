@@ -4,7 +4,7 @@ import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT, PageSeal, SealedHead } from '@/compo
 import { drawSeal, sealLabel, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
 import {
   expectBefore,
-  expectOnePageSealOf,
+  expectOnePageSeal,
   SEAL_IDS,
   SEAL_INKS,
   sealIdsAt,
@@ -33,7 +33,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
             <h1>{kind}</h1>
           </SealedHead>
         );
-        const seal = expectOnePageSealOf(container, id);
+        const seal = expectOnePageSeal(container, id);
         // The svg is a block, so no descender space opens under the stamp; the width follows the
         // height (w-auto), never a number of its own.
         expect(seal).toHaveClass('[&>svg]:block');
@@ -79,7 +79,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
             <h1>{kind}</h1>
           </SealedHead>
         );
-        expectOnePageSealOf(container, id, state);
+        expectOnePageSeal(container, id, state);
         unmount();
       }
     const { container } = render(<PageSeal id={SEAL_IDS.cell} />);
