@@ -9,7 +9,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
-  type ReactNode,
   type SVGProps,
 } from 'react';
 import {
@@ -22,7 +21,6 @@ import { usePipelineSnapshot } from '@/hooks/usePipelineSnapshot';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import type { PipelineSnapshot } from '@/lib/api';
-import { cn } from '@/lib/utils';
 import type { MotionCtx, MotionView } from '@/lib/pipeline/motion';
 import { diffSnapshots, type Transition } from '@/lib/pipeline/transitions';
 import { STAGE_BASE, mixColor, tok } from '@/lib/pipeline/encoding';
@@ -101,53 +99,18 @@ function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null 
   return width;
 }
 
-function Stat({
-  label,
-  value,
-  tone,
-  className,
-}: {
-  label: string;
-  value: ReactNode;
-  tone: string;
-  className?: string;
-}) {
-  return (
-    <span className="flex items-baseline gap-1.5 font-mono">
-      <span className="eyebrow text-text-dim text-small">{label}</span>
-      <span className={cn(`text-body font-semibold tabular-nums ${tone}`, className)}>{value}</span>
-    </span>
-  );
-}
-
-function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
-  // The pool and NEXT counts are on the canvas itself; the header keeps only the tip, which
-  // flares when a block lands (material pass v2, move 4).
+/**
+ * The frame head's args (rubbing × Song print, phase 5, H1): `--tip #20,969,560`. The pool and
+ * NEXT counts are on the canvas itself; the head names only the tip, a link to its block that
+ * flares when a block lands (material pass v2, move 4), and a dash until the first snapshot.
+ */
+function PipelineTip({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
   const flare = usePhosphor(snapshot?.tip.number);
   return (
-    <div data-testid="pipeline-stats" className="flex flex-wrap gap-x-[18px] gap-y-1">
-      <Stat
-        label="Tip"
-        value={snapshot ? <BlockLink number={snapshot.tip.number} /> : '—'}
-        tone="text-text-bright"
-        className={flare}
-      />
-    </div>
-  );
-}
-
-/** The header's actions: the tip, then the way to every block. */
-function PipelineActions({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
-  return (
-    <div className="flex items-baseline gap-5">
-      <PipelineStats snapshot={snapshot} />
-      <Link
-        href="/blocks"
-        className="text-interactive hover:text-jade text-small font-mono transition-colors"
-      >
-        All blocks →
-      </Link>
-    </div>
+    <span data-testid="pipeline-tip" className="tabular-nums">
+      {'--tip '}
+      {snapshot ? <BlockLink number={snapshot.tip.number} className={flare} /> : '—'}
+    </span>
   );
 }
 
@@ -863,9 +826,20 @@ export function PipelinePanel() {
   const { data, error } = usePipelineSnapshot();
   return (
     <TerminalPanel aria-label="Transaction pipeline" data-testid="pipeline-panel">
-      <TerminalPanelHeader indicator="active" actions={<PipelineActions snapshot={data} />}>
+      <TerminalPanelHeader
+        indicator="active"
+        args={<PipelineTip snapshot={data} />}
+        actions={
+          <Link
+            href="/blocks"
+            className="text-interactive hover:text-jade text-small font-mono transition-colors"
+          >
+            all blocks →
+          </Link>
+        }
+      >
         <span className="flex items-center gap-2.5">
-          Transaction Pipeline
+          pipeline
           <span
             title={PIPELINE_HELP}
             className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 rounded-full border text-center font-mono normal-case leading-3 tracking-normal"

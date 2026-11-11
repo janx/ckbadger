@@ -98,6 +98,33 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(row).toContainElement(screen.getByRole('button', { name: 'Act' }));
   });
 
+  // Rubbing × Song print, phase 5 (H1): the head runs its command on args — `pipeline --tip #N`
+  // — dim and regular after the name, inside the command line, never among the actions.
+  it('writes its args dim after the command, inside the command line, not with the actions', () => {
+    const { rerender } = render(
+      <TerminalPanelHeader
+        args={<span data-testid="args">--tip #20,969,560</span>}
+        actions={<a href="/blocks">all blocks →</a>}
+      >
+        Pipeline
+      </TerminalPanelHeader>
+    );
+    const command = screen.getByText('Pipeline');
+    const head = command.parentElement!;
+    const args = screen.getByTestId('args').parentElement!;
+    expect(args.parentElement).toBe(head);
+    expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
+    expect(args).not.toHaveClass('lowercase');
+    expect(command.compareDocumentPosition(args)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(head).toHaveTextContent(/^Pipeline--tip #20,969,560$/);
+    const link = screen.getByRole('link', { name: 'all blocks →' });
+    expect(head).not.toContainElement(link);
+    expect(head.parentElement).toContainElement(link);
+    // no args: the name alone, as before
+    rerender(<TerminalPanelHeader>Pipeline</TerminalPanelHeader>);
+    expect(screen.getByText('Pipeline').parentElement!.children).toHaveLength(2);
+  });
+
   it('turns the mark into the indicator: live breathes, warning is gold, inactive is dim', () => {
     const { rerender } = render(
       <TerminalPanelHeader indicator="active">Transaction pipeline</TerminalPanelHeader>

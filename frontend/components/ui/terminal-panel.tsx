@@ -66,13 +66,15 @@ interface TerminalPanelHeaderProps {
   children: ReactNode;
   className?: string;
   indicator?: IndicatorStatus;
+  /** What the command runs on (`--tip #20,969,560`): dim, regular, its own case, after the name. */
+  args?: ReactNode;
   actions?: ReactNode;
 }
 
 /**
  * The frame's head is a command line (rubbing × Song print, phase 2): the prompt square — which
  * is also the frame's indicator — then the instrument's name as the command, lowercase, in the
- * moon ink at 13 px / 500.
+ * moon ink at 13 px / 500, and its args in the dim ink (phase 5).
  */
 const MARK_CLASS: Record<IndicatorStatus, string> = {
   // the mark as it is on a tier-1 h2
@@ -87,6 +89,7 @@ export function TerminalPanelHeader({
   children,
   className,
   indicator = 'none',
+  args,
   actions,
 }: TerminalPanelHeaderProps) {
   return (
@@ -109,6 +112,7 @@ export function TerminalPanelHeader({
           />
         }
         command={children}
+        args={args}
         className="text-body break-words font-mono font-medium"
       />
 
