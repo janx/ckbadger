@@ -86,6 +86,24 @@ describe('RowSeal by kind (the seals by kind)', () => {
     }
   });
 
+  // C11: a cell tile stands its stone alone in a 30 px mark column, the column's 10 px gap being
+  // the stone's gap; its own 8 px margin there would push it off the column's centre.
+  it('keeps no gap of its own when asked, for a stone standing alone in a mark column', () => {
+    for (const kind of KINDS) {
+      const { container, rerender, unmount } = render(
+        <RowSeal id={SEAL_IDS[kind]} overhang gap={false} />
+      );
+      const holder = () => container.firstElementChild as HTMLElement;
+      expectOneRowSeal(container, SEAL_IDS[kind], 'pressed', { gap: false });
+      expect(holder()).not.toHaveClass('mr-2');
+      expect(holder()).toHaveClass(`-my-[${ROW_SEAL[kind].overhang}px]`, '[&>svg]:block');
+      // the default keeps it
+      rerender(<RowSeal id={SEAL_IDS[kind]} overhang />);
+      expect(holder()).toHaveClass('mr-2');
+      unmount();
+    }
+  });
+
   it('draws the stone in its state: a consumed cell in the dead ink, a pool transaction unpressed', () => {
     for (const kind of KINDS)
       for (const state of STATES) {

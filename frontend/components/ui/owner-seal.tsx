@@ -11,11 +11,24 @@ export const OWNER_SEAL = { height: 20, width: 15, gap: 5 } as const;
  * The owner's stone (the seals by kind): the row stone of a lock script's hash, an address's own
  * stone, standing before the address's text in a cell row — the owner read from its own stone,
  * not from the cell's small mark. An image named by the hash (its label), not a link: the address
- * beside it keeps its own link. `data-owner-seal` tells it from the row's own seal.
+ * beside it keeps its own link. `data-owner-seal` tells it from the row's own seal. `gap={false}`:
+ * the stone stands alone in a column of its own (a cell tile's 30 px mark column, C11), whose gap
+ * is its gap, so it keeps no 5 px of its own after it.
  */
-export function OwnerSeal({ lockHash, className }: { lockHash: string; className?: string }) {
+export function OwnerSeal({
+  lockHash,
+  gap = true,
+  className,
+}: {
+  lockHash: string;
+  gap?: boolean;
+  className?: string;
+}) {
   return (
-    <span data-owner-seal="" className={cn('mr-[5px] inline-flex align-middle', className)}>
+    <span
+      data-owner-seal=""
+      className={cn('inline-flex align-middle', gap && 'mr-[5px]', className)}
+    >
       <Seal
         id={{ kind: 'script', hash: lockHash }}
         form="row"

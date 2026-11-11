@@ -706,10 +706,11 @@ describe('TransactionDetailPage', () => {
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
     expect(await screen.findByText(/4\s+confirmations/)).toBeInTheDocument();
     expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
-    // Indexed: the same stone, pressed, and pressed again across its cells.
+    // Indexed: the same stone, pressed, and pressed again across its cells (C11: its two halves,
+    // one on each sheet).
     expectHeadStone('pressed');
     expect(document.querySelectorAll('[data-seam-seal] [data-seal-state="pressed"]')).toHaveLength(
-      1
+      2
     );
 
     await act(() => vi.advanceTimersByTimeAsync(9000));
@@ -871,7 +872,10 @@ describe('TransactionDetailPage', () => {
   it('shows canonical cell structure first and loads the raw cell graph only when opened', async () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
-    expect(screen.getByLabelText('Cells flow through the capacity pool')).toBeInTheDocument();
+    // C11: the flows run over the seam between the two sheets (was: through the capacity pool)
+    expect(
+      screen.getByLabelText('Capacity flows from the consumed cells to the created ones')
+    ).toBeInTheDocument();
     expect(api.getTransactionGraph).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Raw data'));
     fireEvent.click(screen.getByText('Cell graph'));

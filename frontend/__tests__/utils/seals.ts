@@ -112,14 +112,16 @@ export function expectOnePageSeal(
 /**
  * `row` holds exactly one seal of the seals by kind, the row stone of `id` in `state` (pressed
  * when not given): the drawing of that id (compared as markup with `drawSeal`'s), at its kind's
- * row height and drawn width, with the 8 px gap after it; an image and not a link (the row's own
- * link stays the row's link). Owner stones before an address in the row (OwnerSeal) are not the
- * row's seal and are not counted. Returns the seal's holder.
+ * row height and drawn width, with the 8 px gap after it (none with `gap: false`, a stone standing
+ * alone in a cell tile's mark column, the column's gap its gap); an image and not a link (the
+ * row's own link stays the row's link). Owner stones before an address in the row (OwnerSeal) are
+ * not the row's seal and are not counted. Returns the seal's holder.
  */
 export function expectOneRowSeal(
   row: Element,
   id: SealId,
-  state: SealState = 'pressed'
+  state: SealState = 'pressed',
+  { gap = true }: { gap?: boolean } = {}
 ): HTMLElement {
   const seals = Array.from(row.querySelectorAll<HTMLElement>('[data-seal]')).filter(
     (s) => s.closest('[data-owner-seal]') === null
@@ -138,7 +140,9 @@ export function expectOneRowSeal(
   expect(seal.innerHTML).toBe(
     parsed(drawSeal(id, { form: 'row', height, state, ...SEAL_INKS }).svg)
   );
-  expect(seal).toHaveClass('mr-2', '[&>svg]:block');
+  expect(seal).toHaveClass('[&>svg]:block');
+  if (gap) expect(seal).toHaveClass('mr-2');
+  else expect(seal.className).not.toMatch(/(^|\s)m[rx]-/);
   expect(seal.closest('a')).toBeNull();
   expect(seal.querySelector('a')).toBeNull();
   return seal;
@@ -147,9 +151,14 @@ export function expectOneRowSeal(
 /**
  * `holder` (an address's line in a cell row) holds exactly one owner's stone, the 20 px script row
  * stone of `lockHash` (compared as markup with `drawSeal`'s), an image and not a link, with the
- * 5 px gap after it. Returns the stone's holder (`[data-owner-seal]`).
+ * 5 px gap after it (none with `gap: false`, in a cell tile's mark column). Returns the stone's
+ * holder (`[data-owner-seal]`).
  */
-export function expectOwnerSealOf(holder: Element, lockHash: string): HTMLElement {
+export function expectOwnerSealOf(
+  holder: Element,
+  lockHash: string,
+  { gap = true }: { gap?: boolean } = {}
+): HTMLElement {
   const owners = holder.querySelectorAll<HTMLElement>('[data-owner-seal]');
   expect(owners).toHaveLength(1);
   const [owner] = Array.from(owners);
@@ -170,7 +179,8 @@ export function expectOwnerSealOf(holder: Element, lockHash: string): HTMLElemen
       drawSeal(id, { form: 'row', height: OWNER_SEAL.height, state: 'pressed', ...SEAL_INKS }).svg
     )
   );
-  expect(owner).toHaveClass('mr-[5px]');
+  if (gap) expect(owner).toHaveClass('mr-[5px]');
+  else expect(owner.className).not.toMatch(/(^|\s)m[rx]-/);
   expect(owner.closest('a')).toBeNull();
   expect(owner.querySelector('a')).toBeNull();
   return owner;

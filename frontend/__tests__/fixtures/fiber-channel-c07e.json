@@ -219,6 +219,7 @@
       "blockNumber": 15564812,
       "timestamp": "2025-03-06T02:35:48.404Z",
       "inputsCapacity": "300000000000",
+      "outputsCapacity": "299999999080",
       "inputs": [
         {
           "previousOutput": {
@@ -386,6 +387,7 @@
       "blockNumber": 15634497,
       "timestamp": "2025-03-14T06:15:32.281Z",
       "inputsCapacity": "106200000000",
+      "outputsCapacity": "106199999545",
       "inputs": [
         {
           "previousOutput": {
@@ -465,6 +467,7 @@
       "blockNumber": 15643185,
       "timestamp": "2025-03-15T05:53:47.989Z",
       "inputsCapacity": "156199998976",
+      "outputsCapacity": "156199997709",
       "inputs": [
         {
           "previousOutput": {

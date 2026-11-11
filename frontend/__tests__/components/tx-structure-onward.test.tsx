@@ -30,8 +30,11 @@ describe('TxStructure onward / me_out variant (txviz)', () => {
         onward="the channel, onward"
       />
     );
+    // C11: the bridge column follows the created sheet (was: after the 112 px pool column's sides)
     const grid = container.querySelector('[data-tx-canvas]')!;
-    expect(grid.className).toContain('lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)_96px]');
+    expect(grid.className).toContain('lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)_96px]');
+    expect(grid.lastElementChild).toHaveAttribute('data-onward-bridge');
+    expect(grid.lastElementChild!.previousElementSibling).toHaveAttribute('data-sheet', 'created');
     const bridge = container.querySelector('[data-onward-bridge]')!;
     expect(bridge.querySelector('path')).toHaveAttribute('stroke-dasharray', '3 3');
     expect(bridge).toHaveAttribute('data-onward-from', 'out:0');

@@ -272,28 +272,39 @@ describe('move 3 on the tx page’s cells diagram', () => {
       occupied: '6100000000',
       state,
     });
-  it('sits in the one instrument frame; the prose under it stays flat', () => {
+  // C11: the one frame became two sheets of one contract, each its own instrument frame, in a
+  // labelled group that keeps the frame's name. Round 2: the "Capacity entering the pool" line
+  // under them is gone — it stated the consumed sheet's total again, and nothing is a pool now.
+  it('sits on two instrument frames, the sheets; the consumed head states the total once', () => {
     const { container } = render(
       <TxStructure
         txHash="0xtx"
         inputs={[tile('in:0', 'consumed')]}
         outputs={[tile('out:0', 'live')]}
         fee="1000"
-        poolCapacity="106200000000"
+        consumedCapacity="106200000000"
+        createdCapacity="106199999000"
       />
     );
     const frame = screen.getByTestId('tx-cells-frame');
-    expect(frame).toHaveAttribute('data-instrument-frame');
-    expect(frame).toHaveAttribute('aria-label', 'Cells consumed and created');
-    // material pass v2 (move 2): the frame's surface is `.glass`, not the flat colour — a flat
-    // tile since rubbing × Song print, with no lit top edge
-    expect(frame).toHaveClass('rounded-lg', 'border', 'glass');
-    expect(frame).not.toHaveClass('neon-edge-top');
-    expect(frame).toContainElement(container.querySelector('[data-tx-canvas]') as HTMLElement);
-    // the column heads are the frame's eyebrows
-    expect(frame).toHaveTextContent('1 cell consumed');
-    expect(frame).toHaveTextContent('1 cell created');
-    const pool = screen.getByText(/Capacity entering the pool/);
-    expect(frame).not.toContainElement(pool);
+    expect(frame).toBe(screen.getByRole('group', { name: 'Cells consumed and created' }));
+    expect(frame).toBe(container.querySelector('[data-tx-canvas]'));
+    expect(frame).not.toHaveAttribute('data-instrument-frame');
+    const sheets = Array.from(frame.querySelectorAll<HTMLElement>('[data-instrument-frame]'));
+    expect(sheets.map((s) => s.getAttribute('data-sheet'))).toEqual(['consumed', 'created']);
+    for (const sheet of sheets) {
+      // material pass v2 (move 2): the frame's surface is `.glass`, not the flat colour — a flat
+      // tile since rubbing × Song print, with no lit top edge
+      expect(sheet).toHaveClass('rounded-lg', 'border', 'glass');
+      expect(sheet).not.toHaveClass('neon-edge-top');
+    }
+    // the sheets' heads are their eyebrows
+    expect(sheets[0]).toHaveTextContent('1 cell consumed');
+    expect(sheets[1]).toHaveTextContent('1 cell created');
+    // the consumed capacity once, on its sheet's head, exact; no second line under the sheets
+    const total = sheets[0].querySelector('[data-sheet-total]');
+    expect(total).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    expect(container.querySelectorAll('[data-sheet-total]')).toHaveLength(2);
+    expect(container).not.toHaveTextContent(/entering the pool/i);
   });
 });
