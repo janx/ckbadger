@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import { SealedHead, type PageSealScale } from '@/components/ui/page-seal';
+import { SealedHead, type PageSealOf } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 import {
@@ -46,10 +46,11 @@ interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
   identity?: ReactNode;
   /**
-   * The object's hash seal (rubbing × Song print, phase 3), pressed beside the title and identity:
-   * the 32-byte hash the page names its object by, at the object's scale (SealedHead).
+   * The object's seal, pressed beside the title and identity (SealedHead): the stone of its id in
+   * its state (`{ id, state? }`, the seals by kind), or the talisman of the 32-byte hash the page
+   * names its object by at the object's scale (`{ hash, scale }`, rubbing × Song print, phase 3).
    */
-  seal?: { hash: string; scale: PageSealScale };
+  seal?: PageSealOf;
   /**
    * The page's opening sentence, read with its name (rubbing × Song print, phase 5): the last line
    * of the head, after the identity — beside the seal when there is one, so the stamp's height
@@ -127,13 +128,7 @@ export function DetailLayout({
       <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>
         {/* The seal is pressed beside the title, identity and lede, never in the content (the
             facts and the sections run the full width under it). */}
-        {seal ? (
-          <SealedHead hash={seal.hash} scale={seal.scale}>
-            {head}
-          </SealedHead>
-        ) : (
-          head
-        )}
+        {seal ? <SealedHead {...seal}>{head}</SealedHead> : head}
         {facts && (
           // One column until md: at 640 a two-column grid wrapped labels into three lines.
           <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">
