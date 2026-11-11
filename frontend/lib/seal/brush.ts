@@ -27,6 +27,11 @@ export function f2(v: number): string {
   return (Math.round(v * 100) / 100).toString();
 }
 
+/** One decimal, as the prototype's `f1` writes it. */
+export function f1(v: number): string {
+  return (Math.round(v * 10) / 10).toString();
+}
+
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
 
 export interface SampleOptions {

@@ -20,6 +20,8 @@ export interface BrushSpec {
   readonly r?: number;
   readonly over?: number;
   readonly entry?: Entry;
+  /** Length of an exposed (pointed) entry, in pitches; the glyphs and borders set it. */
+  readonly entryLen?: number;
   readonly press0?: number;
   readonly exit?: Exit;
   readonly tail?: number;
