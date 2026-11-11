@@ -8,6 +8,8 @@ import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR } from '@/lib/design-tokens';
+import { hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
+import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
 
 const cell = {
   txHash: `0x${'01'.repeat(32)}`,
@@ -415,6 +417,115 @@ describe('cell microscope at phone width (responsive review A#10, A#11)', () => 
     expect(data).toHaveTextContent(/^2$/);
     expect(data.style.paddingInline).toBe('4px');
     expect(Number.parseFloat(data.style.minWidth)).toBeGreaterThanOrEqual(6.3 + 8);
+  });
+});
+
+// Old issue B (2026-11-12): from lg the rail beside the bytes had a 0 minimum, so at 1024 px it
+// got only what the bytes' 846 left (976 − 24 − 846 = 106 px, 76 of text), and every detail
+// head's unbroken figure ran 27–47 px past the page. The rail now keeps 320 px, and each of the
+// four heads lets its figure wrap under the name as one unit.
+describe('cell microscope field detail rail (old issue B)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const HEAD = 'flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5';
+  const NAME = 'text-text-bright text-body min-w-0 break-words';
+  const FIGURE = 'text-text-dim text-meta whitespace-nowrap';
+  const elfCell = {
+    ...codeCellFixture,
+    data: `0x${'7f454c46020101000000000000000000' + '0200' + 'f300' + '01000000'}${'00'.repeat(
+      100312 - 24
+    )}`,
+  } as unknown as Cell;
+
+  /** The rail's one head: the name that may wrap between words, then the figure as one unit. */
+  function expectHead(name: string, figure: string) {
+    const rail = screen.getByRole('complementary', { name: 'Field detail' });
+    const heads = rail.querySelectorAll<HTMLElement>('[data-detail-head]');
+    expect(heads).toHaveLength(1);
+    expect(heads[0].className).toBe(HEAD);
+    expect([...heads[0].children].map((el) => [el.tagName, el.className, el.textContent])).toEqual([
+      ['SPAN', NAME, name],
+      ['SPAN', FIGURE, figure],
+    ]);
+  }
+
+  it('keeps the rail at least 320 px beside the bytes from lg, the bytes up to 846', () => {
+    render(<CellMicroscope cell={cell} />);
+    const grid = screen.getByRole('complementary', { name: 'Field detail' }).parentElement!;
+    expect(grid.className).toBe(
+      'grid items-start gap-6 pt-2 lg:grid-cols-[minmax(0,846px)_minmax(320px,1fr)]'
+    );
+    // below lg one column: the rail under the bytes at the full width
+    expect(grid.className).not.toMatch(/(^|\s)grid-cols-/);
+  });
+
+  it('lets the default head’s count wrap under its name', () => {
+    render(<CellMicroscope cell={cell} />);
+    expectHead('Where each byte belongs', '6 + 4 bytes');
+  });
+
+  it('lets a field’s range wrap under its name', () => {
+    render(<CellMicroscope cell={cell} />);
+    fireEvent.mouseOver(screen.getByLabelText('Cell bytes').querySelector('[data-byte="data:2"]')!);
+    expectHead('unclassified bytes', '[2..4) · 2 B');
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /^code_hash \[4\.\.6\)/ }));
+    expectHead('lock · code_hash', '[4..6) · 2 B');
+  });
+
+  it('lets a map part’s occupied size wrap under its name and script', () => {
+    const locked = {
+      ...cell,
+      commonKnowledgeSizeBreakdown: { ...cell.commonKnowledgeSizeBreakdown!, lockScriptBytes: 2 },
+    } as Cell;
+    render(<CellMicroscope cell={locked} lockName="Multisig" />);
+    const map = screen.getByRole('group', { name: 'Capacity map' });
+    fireEvent.mouseEnter(within(map).getByTitle('lock · 2 bytes'));
+    expectHead('lock · Multisig', '2 B occupied');
+    fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));
+    expectHead('data', '4 B occupied');
+  });
+
+  it('lets an ELF region’s range wrap under its name', () => {
+    render(<CellMicroscope cell={elfCell} />);
+    const map = screen.getByRole('group', { name: 'ELF binary map' });
+    fireEvent.mouseEnter(within(map).getByTitle('.text · 91,352 B'));
+    const text = screen
+      .getByRole('complementary', { name: 'Field detail' })
+      .querySelector('[data-detail-head] > :last-child')!.textContent!;
+    expect(text).toMatch(/^\[[\d,]+\.\.[\d,]+\) · 91,352 B$/);
+    expectHead('.text', text);
+  });
+
+  it('budgets 1024 px: the bytes hold a whole 16-byte row, the rail its widest figure', () => {
+    render(<CellMicroscope cell={elfCell} />);
+    const grid = screen.getByRole('complementary', { name: 'Field detail' }).parentElement!;
+    const rail = Number(/_minmax\((\d+)px,1fr\)\]/.exec(grid.className)![1]);
+    expect(rail).toBe(320);
+    // 1024 − the container's 2 × 24 px gutter = 976; the grid's gap-6 is 24
+    const bytes = 976 - 24 - rail;
+    expect(bytes).toBe(632);
+    // the dump's frame: the panel's 1 px border, its well's m-2, the well's 1 px border and px-4
+    const frame = 2 * (1 + 8 + 1 + 16);
+    for (const digits of [4, 5] as const) {
+      expect(hexRowBytes(bytes, digits)).toBe(16);
+      expect(hexRowWidth(16, digits) + frame).toBeLessThanOrEqual(bytes);
+    }
+    // the rail's text: 320 − its 1 px border and px-3.5 on each side = 290 px; every figure of the
+    // 100,312-byte code cell (11 px, 6.6 px a character) is one unit inside it
+    const text = rail - 2 * (1 + 14);
+    const parts = [...cellOutputParts(elfCell), ...cellDataParts(elfCell)];
+    const widest = Math.max(
+      ...parts.map(
+        (p) =>
+          `[${p.start.toLocaleString('en-US')}..${p.end.toLocaleString('en-US')}) · ${(p.end - p.start).toLocaleString('en-US')} B`
+            .length
+      )
+    );
+    expect(widest * 6.6).toBeLessThanOrEqual(text);
+    // and at 1280 (1,232 of content) the bytes keep their 846 and the rail its 362, as before
+    expect(1232 - 24 - 846).toBeGreaterThanOrEqual(rail);
   });
 });
 
