@@ -48,10 +48,15 @@ import {
   capacityDigits,
   drawSeal,
   drawStone,
+  handOf,
   indexLayout,
   PAGE_DIGITS,
   SCRIPT_TEXTURE,
   sealLabel,
+  TX_DIGIT_H,
+  TX_PAGE_DIGITS,
+  txCountRods,
+  txPageMeasures,
   type CellClass,
   type SealId,
   type SealOptions,
@@ -999,6 +1004,85 @@ describe('what a seal says', () => {
     expect(full(row({ ...tx, consumed: 240, created: 12 }).svg)).toBe(2);
     expect(page({ ...tx, consumed: 9999, created: 1000 }).svg).toContain('9999 consumed');
   });
+
+  // A transaction can consume more than 9,999 cells within CKB's 597,000-byte block (an input is
+  // 44 bytes: up to 13,568), so its page seal writes five digits; the prototype stopped at four and
+  // has no reference for five, so the stack is checked here directly: five rows, each one digit in
+  // rods, the greatest on top, inside the zone between the frame and the rim.
+  it('writes a transaction’s cells in up to five digits on its page seal, digit under digit in its zone', () => {
+    expect(TX_PAGE_DIGITS).toBe(5);
+    expect(PAGE_DIGITS).toBe(4); // a block's transactions and a cell's index stay at four
+    const hand = handOf('page');
+    const m = txPageMeasures(hand);
+    /** The digit a row of rods writes: a ring is 0, else its standing rods and 5 for a lying one. */
+    const digitOf = (strokes: { brush?: unknown }[]) =>
+      strokes.some((s) => s.brush === ARC)
+        ? 0
+        : strokes.filter((s) => s.brush === ROD).length +
+          (strokes.some((s) => s.brush === ROD_FLAT) ? 5 : 0);
+    for (const n of [0, 7, 12, 248, 1820, 9999, 10000, 13000, 13568, 40302, 99999])
+      for (const end of [0, 1] as const) {
+        const { zone, strokes } = txCountRods(n, end, m);
+        const nd = String(n).length;
+        const dh = TX_DIGIT_H[nd - 1] * m.p,
+          step = dh * 1.42,
+          top = zone.y + (zone.h - (nd * dh + (nd - 1) * dh * 0.42)) / 2;
+        const rows: (typeof strokes)[] = Array.from({ length: nd }, () => []);
+        for (const s of strokes) {
+          const ys = s.pts.map(([, y]) => y),
+            xs = s.pts.map(([x]) => x);
+          const k = Math.floor((Math.min(...ys) - top) / step + 1e-9);
+          expect(k, `${n} ${end}`).toBeGreaterThanOrEqual(0);
+          expect(k, `${n} ${end}`).toBeLessThan(nd);
+          // inside its digit's box, and the box inside the zone
+          expect(Math.max(...ys)).toBeLessThanOrEqual(top + k * step + dh + 1e-9);
+          expect(Math.min(...xs)).toBeGreaterThanOrEqual(zone.x);
+          expect(Math.max(...xs)).toBeLessThanOrEqual(zone.x + zone.w);
+          rows[k].push(s);
+        }
+        expect(top, `${n}`).toBeGreaterThan(zone.y);
+        expect(top + nd * dh + (nd - 1) * dh * 0.42).toBeLessThan(zone.y + zone.h);
+        expect(rows.map(digitOf).join(''), `${n} at end ${end}`).toBe(String(n));
+      }
+    // the zones: the consumed at the left of the core, the created at its right, in the frame
+    const left = txCountRods(13000, 0, m).zone,
+      right = txCountRods(13000, 1, m).zone;
+    expect(left.x).toBeGreaterThan(m.wf);
+    expect(left.x + left.w).toBeLessThan(m.cx - m.Rout);
+    expect(right.x).toBeGreaterThan(m.cx + m.Rout);
+    expect(right.x + right.w).toBeLessThan(m.W - m.wf);
+    expect(left.y).toBeGreaterThan(m.wf);
+    expect(left.y + left.h).toBeLessThan(m.H - m.wf);
+    // five digits stand where four did: each smaller, the stack no taller than the zone
+    expect(TX_DIGIT_H[4]).toBeLessThan(TX_DIGIT_H[3]);
+    expect(() => txCountRods(100000, 0, m)).toThrow('in up to 5 digits, got 100000');
+    // and the page seal draws exactly those rods, at either size and in every state
+    const id: SealId = { kind: 'tx', hash: TXH[3], consumed: 13000, created: 1 };
+    for (const height of [94, 64])
+      for (const state of ['pressed', 'ink', 'unpressed'] as const) {
+        const { svg } = drawSeal(id, { form: 'page', height, state, ...INKS });
+        expect(svg).toContain('13000 consumed, 1 created');
+        const ink = state === 'ink' ? INKS.dead : INKS.ink;
+        for (const [n, end] of [
+          [13000, 0],
+          [1, 1],
+        ] as const)
+          expect(svg).toContain(
+            PROTOTYPE.ink(
+              outlinesOf(
+                txCountRods(n, end, m).strokes,
+                ROD,
+                (x) => x,
+                (y) => y,
+                1.05,
+                hand,
+                hand.p
+              ),
+              ink
+            )
+          );
+      }
+  });
 });
 
 describe('a seal refuses what it cannot draw, naming it', () => {
@@ -1022,7 +1106,7 @@ describe('a seal refuses what it cannot draw, naming it', () => {
     refuses({ ...ids.script, hash: null }, 'the script hash is not a lowercase 32-byte hash: null');
   });
 
-  it('a count that is not a whole number ≥ 0, or past four digits on a page', () => {
+  it('a count that is not a whole number ≥ 0, or past its digits on a page (four; a transaction’s cells five)', () => {
     refuses(
       { ...ids.block, txs: -1 },
       `block ${ids.block.hash}: the transaction count must be a whole number ≥ 0, got -1`
@@ -1040,12 +1124,19 @@ describe('a seal refuses what it cannot draw, naming it', () => {
       'a page seal writes the transaction count in up to 4 digits, got 10000'
     );
     refuses(
-      { ...ids.tx, consumed: 10000 },
-      'a page seal writes the cells consumed in up to 4 digits'
+      { ...ids.tx, consumed: 100000 },
+      `transaction ${ids.tx.hash}: a page seal writes the cells consumed in up to 5 digits, got 100000`
     );
+    refuses(
+      { ...ids.tx, created: 100000 },
+      'a page seal writes the cells created in up to 5 digits, got 100000'
+    );
+    // a transaction can consume ten thousand cells or more within a block: its page seal writes them
+    expect(() => drawSeal({ ...ids.tx, consumed: 10000 }, P)).not.toThrow();
+    expect(() => drawSeal({ ...ids.tx, consumed: 99999, created: 99999 }, P)).not.toThrow();
     // a row seal counts to nine and draws a full block beyond
     expect(() => drawSeal({ ...ids.block, txs: 10000 }, R)).not.toThrow();
-    expect(() => drawSeal({ ...ids.tx, consumed: 10000 }, R)).not.toThrow();
+    expect(() => drawSeal({ ...ids.tx, consumed: 100000 }, R)).not.toThrow();
   });
 
   it('an index that is not a whole number ≥ 0, or past four digits on a page', () => {

@@ -150,8 +150,18 @@ const HAIR = 0.6;
 const RULE: BrushSpec = { curve: 'corner', r: 0.2, over: 0.1, entry: 'point', exit: 'taper' };
 /** The compact encoding's tolerance, in px at the size drawn (as the talisman's row seal). */
 export const ROW_TOLERANCE_PX = 0.2;
-/** How many digits a page seal writes a count or an index in. */
+/**
+ * How many digits a page seal writes a block's transaction count or a cell's index in. Neither
+ * reaches five within CKB's 597,000-byte block: a transaction or an output takes far more than
+ * 60 bytes.
+ */
 export const PAGE_DIGITS = 4;
+/**
+ * How many digits a transaction's page seal writes the cells it consumed or created in. An input
+ * is 44 bytes (a 36-byte out point and an 8-byte since), so a 597,000-byte block holds a
+ * transaction of up to 13,568 inputs: five digits, never six.
+ */
+export const TX_PAGE_DIGITS = 5;
 /** How many decimal digits of whole CKB the beads of a cell can say. */
 export const CAPACITY_DIGITS = 11;
 
@@ -194,11 +204,9 @@ function assertCount(of: string, field: string, value: unknown): void {
     throw new Error(`seal: ${of}: ${field} must be a whole number ≥ 0, got ${String(value)}`);
 }
 
-function assertPageDigits(of: string, what: string, n: number): void {
-  if (decimalDigits(n).length > PAGE_DIGITS)
-    throw new Error(
-      `seal: ${of}: a page seal writes ${what} in up to ${PAGE_DIGITS} digits, got ${n}`
-    );
+function assertPageDigits(of: string, what: string, n: number, max: number): void {
+  if (decimalDigits(n).length > max)
+    throw new Error(`seal: ${of}: a page seal writes ${what} in up to ${max} digits, got ${n}`);
 }
 
 function assertId(id: SealId, form: SealForm): void {
@@ -211,7 +219,7 @@ function assertId(id: SealId, form: SealForm): void {
     case 'block':
       assertHash(of, 'the block hash', id.hash);
       assertCount(of, 'the transaction count', id.txs);
-      if (form === 'page') assertPageDigits(of, 'the transaction count', id.txs);
+      if (form === 'page') assertPageDigits(of, 'the transaction count', id.txs, PAGE_DIGITS);
       return;
     case 'tx':
       assertHash(of, 'the transaction hash', id.hash);
@@ -221,13 +229,13 @@ function assertId(id: SealId, form: SealForm): void {
       ] as const)
         if (n !== null) {
           assertCount(of, field, n);
-          if (form === 'page') assertPageDigits(of, field, n);
+          if (form === 'page') assertPageDigits(of, field, n, TX_PAGE_DIGITS);
         }
       return;
     case 'cell':
       assertHash(of, 'the out point’s transaction hash', id.tx);
       assertCount(of, 'the index', id.index);
-      if (form === 'page') assertPageDigits(of, 'the index', id.index);
+      if (form === 'page') assertPageDigits(of, 'the index', id.index, PAGE_DIGITS);
       assertHash(of, 'the lock hash', id.lock);
       if (id.type !== null) {
         if (typeof id.type !== 'object')
@@ -608,6 +616,83 @@ function scriptStone(id: Extract<SealId, { kind: 'script' }>, st: Style): Drawn 
 
 /* ---------- the transaction ---------- */
 
+/** A transaction's page stone in its units (the prototype's measures, from the hand). */
+export interface TxPageMeasures {
+  readonly p: number;
+  readonly w0: number;
+  /** The glyph's side. */
+  readonly s: number;
+  /** The radius inside the written border, and the border's band. */
+  readonly rIn: number;
+  readonly band: number;
+  /** The rim's width, and its outer radius at its widest. */
+  readonly rimw: number;
+  readonly Rout: number;
+  /** The frame's width. */
+  readonly wf: number;
+  readonly W: number;
+  readonly H: number;
+  /** The core's centre. */
+  readonly cx: number;
+  readonly cy: number;
+}
+
+export function txPageMeasures(hand: Hand): TxPageMeasures {
+  const { p, w0 } = hand;
+  const s = GB * p,
+    rIn = (s / 2) * Math.SQRT2 * 0.88,
+    band = BAND * p;
+  const rimw = w0 * 1.3,
+    Rout = (rIn + band + 0.15 * p + rimw / 2) / RIM_MIN;
+  const wf = w0 * FRAMEW,
+    fgap = 0.2 * p,
+    zw = 4.3 * p;
+  const H = 2 * (Rout + fgap + wf),
+    W = H + 2 * zw;
+  return { p, w0, s, rIn, band, rimw, Rout, wf, W, H, cx: W / 2, cy: H / 2 };
+}
+
+/**
+ * A digit's height in a transaction page's count, in pitches, by how many digits the count has
+ * (the prototype's one to four; the fifth is the port's, the stack about as tall as three's and
+ * four's).
+ */
+export const TX_DIGIT_H = [4.2, 3.0, 2.05, 1.5, 1.2] as const;
+
+/** A count of cells written at one end of a transaction's page seal. */
+export interface TxCount {
+  /** The zone the count stands in, between the frame and the rim. */
+  readonly zone: Box;
+  /** The distance between two rods. */
+  readonly pitch: number;
+  readonly strokes: FigureStroke[];
+}
+
+/**
+ * The cells a transaction consumed (`end` 0, at the left) or created (1, at the right), in rods on
+ * its page seal: digit under digit, the greatest on top, centred in the zone between the frame and
+ * the rim; up to five digits (`TX_PAGE_DIGITS`), more is refused.
+ */
+export function txCountRods(n: number, end: 0 | 1, m: TxPageMeasures): TxCount {
+  const { p, wf, cx, Rout, H } = m;
+  const nd = decimalDigits(n).length;
+  if (nd > TX_PAGE_DIGITS)
+    throw new Error(
+      `seal: a transaction's page seal writes its cells in up to ${TX_PAGE_DIGITS} digits, got ${n}`
+    );
+  const zx = end ? cx + Rout + 0.15 * p : wf + 0.5 * p,
+    zwi = cx - Rout - wf - 0.65 * p;
+  const zone: Box = { x: zx, y: wf + 0.9 * p, w: zwi, h: H - 2 * wf - 1.8 * p };
+  const pitch = 0.66 * p;
+  const r = rodCount(n, zone, {
+    pitch,
+    maxDigits: TX_PAGE_DIGITS,
+    digitH: TX_DIGIT_H[nd - 1] * p,
+  });
+  if (r.full) throw new Error(`seal: ${n} cells do not fit ${TX_PAGE_DIGITS} digits`);
+  return { zone, pitch, strokes: r.strokes };
+}
+
 function txStone(id: Extract<SealId, { kind: 'tx' }>, st: Style): Drawn {
   const { row, hand, col, fc, hollow, dash } = st;
   const p = hand.p,
@@ -654,19 +739,9 @@ function txStone(id: Extract<SealId, { kind: 'tx' }>, st: Style): Drawn {
     });
     return { W: bw, H: bh, body, chosen };
   }
-  const s = GB * p,
-    rIn = (s / 2) * Math.SQRT2 * 0.88,
-    band = BAND * p;
-  const rimw = w0 * 1.3,
-    Rout = (rIn + band + 0.15 * p + rimw / 2) / RIM_MIN;
-  const wf = w0 * FRAMEW,
-    fgap = 0.2 * p,
-    zw = 4.3 * p;
-  const H = 2 * (Rout + fgap + wf),
-    W = H + 2 * zw;
+  const m = txPageMeasures(hand);
+  const { s, rIn, band, rimw, Rout, wf, W, H, cx, cy } = m;
   const pen = new Pen(hand, H, st.height, st.encoding);
-  const cx = W / 2,
-    cy = H / 2;
   const Rm = rIn + band / 2 + 0.05 * p;
   let coreSvg = pen.draw(
     ringStrokes(core.ring, Rm, band * 0.3, core.k, cx, cy, core.flip),
@@ -681,21 +756,8 @@ function txStone(id: Extract<SealId, { kind: 'tx' }>, st: Style): Drawn {
   coreSvg += pen.glyph(g, cx - s / 2, cy - s / 2, s, col, 1.3, p * 1.25);
   counts.forEach((n, i) => {
     if (n === null) return;
-    const zx = i ? cx + Rout + 0.15 * p : wf + 0.5 * p,
-      zwi = cx - Rout - wf - 0.65 * p;
-    const nd = decimalDigits(n).length;
-    const r = rodCount(
-      n,
-      { x: zx, y: wf + 0.9 * p, w: zwi, h: H - 2 * wf - 1.8 * p },
-      {
-        pitch: 0.66 * p,
-        maxDigits: PAGE_DIGITS,
-        digitH: [4.2, 3.0, 2.05, 1.5][Math.min(nd, 4) - 1] * p,
-      }
-    );
-    if (r.full) throw new Error(`seal: ${named(id)}: ${n} cells do not fit four digits`);
     coreSvg += pen.draw(
-      r.strokes,
+      txCountRods(n, i ? 1 : 0, m).strokes,
       ROD,
       (xx) => xx,
       (yy) => yy,
@@ -898,6 +960,12 @@ export function sealLabel(id: SealId): string {
 
 /* ---------- the entries ---------- */
 
+/** A form's hand: its stroke weight over the lattice unit, and the pitch. */
+export function handOf(form: SealForm): Hand {
+  const w0 = form === 'row' ? ROW_RATIO : PAGE_RATIO;
+  return { w0, p: 1 + w0 };
+}
+
 /**
  * The stone of `id` and what it was drawn from, in the given encoding (a page seal's is the
  * prototype's, a row seal's the compact one). `drawSeal` is the entry for pages and components.
@@ -906,8 +974,7 @@ export function drawStone(id: SealId, o: SealOptions, encoding?: EncodingName): 
   assertOptions(o);
   assertId(id, o.form);
   const row = o.form === 'row';
-  const w0 = row ? ROW_RATIO : PAGE_RATIO;
-  const hand: Hand = { w0, p: 1 + w0 };
+  const hand = handOf(o.form);
   const col = o.state === 'ink' ? o.dead : o.ink;
   const hollow = o.state === 'unpressed';
   const st: Style = {
