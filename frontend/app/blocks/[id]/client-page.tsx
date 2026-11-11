@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
+import { HexCode } from '@/components/ui/hex-code';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -223,33 +224,43 @@ export default function BlockDetailPage() {
         )}
         <DetailLayout
           documentTitle={[formatBlockNumber(block.number), 'block']}
+          // The name plate (seals by kind, C10): the height first, on the plate's left edge where
+          // the kind word and the hash start, then the step links as one pair, ‹ ›, in reading
+          // order (genesis has no previous: its next link stands alone in the pair). Under the
+          // stone below md the title has the full width (328 px at 360) and the row (the 26 px
+          // height, 166 px, + 10 + 36 + 6 + 36) needs 254 px, 279 at 30 px from md; should it ever
+          // be too narrow, the pair wraps as a whole.
           title={
-            <span className="flex items-center gap-2.5">
-              {block.number > 0 && (
+            <span className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+              <span>{formatBlockNumber(block.number)}</span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {block.number > 0 && (
+                  <ArrowLink
+                    href={`/blocks/${block.number - 1}`}
+                    label={`Previous block, ${(block.number - 1).toLocaleString('en-US')}`}
+                    d="M7.5 2 3.5 6l4 4"
+                  />
+                )}
                 <ArrowLink
-                  href={`/blocks/${block.number - 1}`}
-                  label={`Previous block, ${(block.number - 1).toLocaleString('en-US')}`}
-                  d="M7.5 2 3.5 6l4 4"
+                  href={`/blocks/${block.number + 1}`}
+                  label={`Next block, ${(block.number + 1).toLocaleString('en-US')}`}
+                  d="M4.5 2 8.5 6l-4 4"
                 />
-              )}
-              {formatBlockNumber(block.number)}
-              <ArrowLink
-                href={`/blocks/${block.number + 1}`}
-                label={`Next block, ${(block.number + 1).toLocaleString('en-US')}`}
-                d="M4.5 2 8.5 6l-4 4"
-              />
+              </span>
             </span>
           }
-          identity={
-            <span className="flex min-w-0 items-baseline gap-2.5">
-              <span className="shrink-0">Block</span>
-              <Hash hash={block.hash} truncate={false} />
-            </span>
-          }
-          // The block's talisman, the stamp the chain put on it, beside its height and hash.
-          seal={{ hash: block.hash, scale: 'record' }}
-          // The summary reads with the height and hash, beside the seal (phase 5, Gate 3 note): the
-          // 150 px stamp holds the sentence instead of an empty gap under the identity.
+          // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
+          // voice (C10 round 2: `inherit` writes no ink or size), click to copy as before.
+          identity={<HexCode value={block.hash} truncate={false} variant="inherit" />}
+          // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
+          // hash, and the transactions it holds in rods. A count the API did not serve is refused
+          // (the summary below reads it first), never filled in.
+          seal={{
+            id: { kind: 'block', hash: block.hash, txs: block.transactionsCount },
+            kind: 'Block',
+          }}
+          // The summary is the head's last line (phase 5, Gate 3 note), under the stone and the
+          // plate from the page's left edge, where the tab row and the sections start (C10).
           lede={
             <p data-testid="block-summary" className="text-body max-w-[80ch] leading-relaxed">
               {formatCount(block.transactionsCount, 'transaction')}
@@ -275,6 +286,7 @@ export default function BlockDetailPage() {
               )}
             </p>
           }
+          // on the kind line, after "Block"
           status={
             activation && (
               <Link href="/hardforks" className="text-text-dim text-small">

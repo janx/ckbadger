@@ -8,7 +8,8 @@ import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
-import { ROW_SEAL_FOOTPRINT_PX, RowSeal } from '@/components/ui/row-seal';
+import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
+import type { SealId } from '@/lib/seal/stones';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -48,9 +49,11 @@ export default function BlocksPage() {
     {
       key: 'block',
       label: 'Block',
-      // The seal, "#20,879,198" (11 characters at 13 px, 85.8 px), a 12 px space and
-      // "0xd161...8fef" (13 at 11 px, 85.8 px): 205.8 px and the 16 px gap (was 200 without it).
-      minWidth: 195 + ROW_SEAL_FOOTPRINT_PX,
+      // The block's stone and its gap (26 + 8, ROW_SEAL.block.footprint), "#20,879,198" (11
+      // characters at 13 px, 85.8 px), a 12 px space (7.2 px) and "0xd161...8fef" (13 at 11 px,
+      // 85.8 px): 212.8 px and the 16 px gap, 228.8 (was 200 without a seal, 222 with the old
+      // hash seal's 27).
+      minWidth: 195 + ROW_SEAL.block.footprint,
       render: (block) => <BlockIdentity block={block} />,
     },
     {
@@ -117,7 +120,12 @@ export default function BlocksPage() {
     {
       key: 'fees',
       label: 'Fees, CKB',
-      minWidth: 112,
+      // Fees under 1,000 CKB, "999.99999999" (12 characters at 12 px, 86.4 px), and the 16 px
+      // gap: 102.4 px. Every amount has its eight decimals, so no fee is 13 characters and the
+      // next is 14 ("1,000.00000000", 116.8 px), which 112 did not hold either: the column gave
+      // the block stone's 7 px more than the old hash seal's from its 112 and keeps 2.6 to spare,
+      // so the table keeps its 1,230 px minimum (the widest container is 1,232).
+      minWidth: 105,
       numeric: true,
       render: (block) => (
         <ExactCkb
@@ -251,14 +259,24 @@ function BlocksLegend() {
 }
 
 /**
+ * A block's seal (seals by kind, §0): the stone of its hash, carrying how many transactions it
+ * holds — `transactionsCount` as the API serves it on the list and the block page. Nothing is
+ * filled in: a count that is missing or not a whole number is refused by the seal, naming the
+ * block's hash.
+ */
+function blockSeal(block: Block): SealId {
+  return { kind: 'block', hash: block.hash, txs: block.transactionsCount };
+}
+
+/**
  * The row seal, then "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. The
  * number is the row's one bright thing at body (table-rows T5), on an 18 px line so the row keeps
- * its height (the seal overhangs that line, RowSeal).
+ * its height (the 26 px stone overhangs that line by 4 px above and below, RowSeal).
  */
 function BlockIdentity({ block }: { block: Block }) {
   return (
     <div className="flex items-start">
-      <RowSeal hash={block.hash} overhang />
+      <RowSeal id={blockSeal(block)} overhang />
       <div className="min-w-0 space-y-1">
         <div className="whitespace-nowrap">
           <Link href={`/blocks/${block.number}`} className={KEY}>
@@ -364,7 +382,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
   return (
     <PhoneRow
       testId="block-row-mobile"
-      mark={<RowSeal hash={block.hash} />}
+      mark={<RowSeal id={blockSeal(block)} />}
       lines={[
         {
           key: 'identity',
@@ -430,13 +448,14 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'height',
     label: 'Height',
-    // The seal beside the two lines ("#20,879,198" at 13 px and the hash at 11 px, 85.8 px each)
-    // and the 16 px gap: 128.8 px, with 2 px to spare (at 129 the cell's sub-pixel width broke the
-    // number); it was 112 without the seal.
-    minWidth: 104 + ROW_SEAL_FOOTPRINT_PX,
+    // The block's stone and its gap (26 + 8) beside the two lines ("#20,879,198" at 13 px and the
+    // hash at 11 px, 85.8 px each) and the 16 px gap: 135.8 px, with 2.2 px to spare (the number
+    // may break between characters, and with the old hash seal at 0.2 px to spare the cell's
+    // sub-pixel width broke it); it was 112 without a seal, 131 with the old hash seal's 27.
+    minWidth: 104 + ROW_SEAL.block.footprint,
     render: (block) => (
       <div className="flex items-start">
-        <RowSeal hash={block.hash} />
+        <RowSeal id={blockSeal(block)} />
         <div className="min-w-0">
           <Link href={`/blocks/${block.number}`} className={KEY}>
             {formatBlockNumber(block.number)}
@@ -484,7 +503,10 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'miner',
     label: 'Miner',
-    minWidth: 156,
+    // An unnamed miner, "ckb1qzda0c...93hhsj" (19 characters at 12 px, 136.8 px), and the 16 px
+    // gap: 152.8 px, 1.2 to spare. A pool's name may be as long here as at 156 (19 characters:
+    // 138 px holds 19.2), so the column gave 2 of the block stone's 7 px from its 156.
+    minWidth: 154,
     className: 'whitespace-nowrap',
     render: miner,
   },
@@ -498,9 +520,10 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'resources',
     label: 'Size · cycles',
-    // The most cycles a block may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
-    // gap (the last column): it gave the row seal's 19 px from its 120, so the table keeps 608 px.
-    minWidth: 101,
+    // The most cycles a block may take, "3,500,000,000" (13 characters at 12 px, 93.6 px; "replay
+    // failed" is as long), and no gap (the last column): 96 keeps 2.4 to spare. It gave the old
+    // hash seal's 19 px from its 120, then 5 of the block stone's 7, so the table keeps 608 px.
+    minWidth: 96,
     // The column that takes the free width (the board's 1fr).
     width: 'auto',
     numeric: true,

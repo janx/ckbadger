@@ -15,6 +15,8 @@
   "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
   "typeCodeHash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
   "typeHashType": "type",
+  "typeCellType": "typed",
+  "display": null,
   "dataSize": 100312,
   "createdAtBlock": 17894900,
   "createdTimestamp": "2025-11-21T12:12:59.076+00:00",

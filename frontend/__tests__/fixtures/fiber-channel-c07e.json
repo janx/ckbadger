@@ -219,6 +219,7 @@
       "blockNumber": 15564812,
       "timestamp": "2025-03-06T02:35:48.404Z",
       "inputsCapacity": "300000000000",
+      "outputsCapacity": "299999999080",
       "inputs": [
         {
           "previousOutput": {
@@ -263,7 +264,7 @@
             "hashType": "type",
             "args": "0x27077f1f76a98ec4bdc13750d8bccf2bee36e3f3"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         },
         {
@@ -275,7 +276,7 @@
             "hashType": "type",
             "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         },
         {
@@ -287,11 +288,82 @@
             "hashType": "type",
             "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         }
       ],
-      "scriptGroups": [],
+      "scriptGroups": [
+        {
+          "scriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+          "kind": "lock",
+          "ran": true,
+          "inputIndices": [0],
+          "outputIndices": [],
+          "witnessIndex": 0,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+          "kind": "lock",
+          "ran": true,
+          "inputIndices": [1],
+          "outputIndices": [],
+          "witnessIndex": 1,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x5720c6cc34e9a57f07b5cd72c74b70e7a484e6d7ee742f108db9fbd3221eb394",
+          "kind": "lock",
+          "ran": false,
+          "inputIndices": [],
+          "outputIndices": [0],
+          "witnessIndex": null,
+          "script": {
+            "codeHash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+            "hashType": "type",
+            "args": "0x27077f1f76a98ec4bdc13750d8bccf2bee36e3f3"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+          "kind": "lock",
+          "ran": false,
+          "inputIndices": [],
+          "outputIndices": [1],
+          "witnessIndex": null,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+          "kind": "lock",
+          "ran": false,
+          "inputIndices": [],
+          "outputIndices": [2],
+          "witnessIndex": null,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
+          },
+          "cycles": null
+        }
+      ],
       "witnessDetails": [
         {
           "index": 0,
@@ -315,6 +387,7 @@
       "blockNumber": 15634497,
       "timestamp": "2025-03-14T06:15:32.281Z",
       "inputsCapacity": "106200000000",
+      "outputsCapacity": "106199999545",
       "inputs": [
         {
           "previousOutput": {
@@ -343,11 +416,40 @@
             "hashType": "type",
             "args": "0xf959178a80133b437afc9b1a03c30e8457b61ed206000000000100a00000000000000002"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         }
       ],
-      "scriptGroups": [],
+      "scriptGroups": [
+        {
+          "scriptHash": "0x5720c6cc34e9a57f07b5cd72c74b70e7a484e6d7ee742f108db9fbd3221eb394",
+          "kind": "lock",
+          "ran": true,
+          "inputIndices": [0],
+          "outputIndices": [],
+          "witnessIndex": 0,
+          "script": {
+            "codeHash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+            "hashType": "type",
+            "args": "0x27077f1f76a98ec4bdc13750d8bccf2bee36e3f3"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0xa29f67c5e650751d141336342f22b4b6f0b224a6443c871cc12e6396ed18b373",
+          "kind": "lock",
+          "ran": false,
+          "inputIndices": [],
+          "outputIndices": [0],
+          "witnessIndex": null,
+          "script": {
+            "codeHash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+            "hashType": "type",
+            "args": "0xf959178a80133b437afc9b1a03c30e8457b61ed206000000000100a00000000000000002"
+          },
+          "cycles": null
+        }
+      ],
       "witnessDetails": [
         {
           "index": 0,
@@ -365,6 +467,7 @@
       "blockNumber": 15643185,
       "timestamp": "2025-03-15T05:53:47.989Z",
       "inputsCapacity": "156199998976",
+      "outputsCapacity": "156199997709",
       "inputs": [
         {
           "previousOutput": {
@@ -409,7 +512,7 @@
             "hashType": "type",
             "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         },
         {
@@ -421,7 +524,7 @@
             "hashType": "type",
             "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         },
         {
@@ -433,11 +536,68 @@
             "hashType": "type",
             "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
           },
-          "status": "dead",
+          "status": "consumed",
           "display": null
         }
       ],
-      "scriptGroups": [],
+      "scriptGroups": [
+        {
+          "scriptHash": "0xa29f67c5e650751d141336342f22b4b6f0b224a6443c871cc12e6396ed18b373",
+          "kind": "lock",
+          "ran": true,
+          "inputIndices": [0],
+          "outputIndices": [],
+          "witnessIndex": 0,
+          "script": {
+            "codeHash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+            "hashType": "type",
+            "args": "0xf959178a80133b437afc9b1a03c30e8457b61ed206000000000100a00000000000000002"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+          "kind": "lock",
+          "ran": true,
+          "inputIndices": [1],
+          "outputIndices": [],
+          "witnessIndex": 1,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+          "kind": "lock",
+          "ran": false,
+          "inputIndices": [],
+          "outputIndices": [0],
+          "witnessIndex": null,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
+          },
+          "cycles": null
+        },
+        {
+          "scriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+          "kind": "lock",
+          "ran": false,
+          "inputIndices": [],
+          "outputIndices": [1, 2],
+          "witnessIndex": null,
+          "script": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "cycles": null
+        }
+      ],
       "witnessDetails": [
         {
           "index": 0,

@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import { SealedHead, type PageSealScale } from '@/components/ui/page-seal';
+import { SealedHead, type SealedHeadOf } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 import {
@@ -46,18 +46,12 @@ interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
   identity?: ReactNode;
   /**
-   * The object's hash seal (rubbing × Song print, phase 3), pressed beside the title and identity:
-   * the 32-byte hash the page names its object by, at the object's scale (SealedHead).
-   */
-  seal?: { hash: string; scale: PageSealScale };
-  /**
    * The page's opening sentence, read with its name (rubbing × Song print, phase 5): the last line
-   * of the head, after the identity — beside the seal when there is one, so the stamp's height
-   * holds the words instead of an empty gap.
+   * of the head, after the identity. In a sealed head it is what is below the stone and the name
+   * plate, from the page's left edge (the seals by kind, C10).
    */
   lede?: ReactNode;
   status?: ReactNode;
-  actions?: ReactNode;
   facts?: readonly DetailFact[];
   children: ReactNode;
   /** Developer evidence. Omit on pages that are developer pages throughout. */
@@ -67,10 +61,21 @@ interface DetailLayoutBaseProps {
   className?: string;
 }
 /**
+ * Without a seal the head is the title row (the h1 and `status`, then `actions`), the identity and
+ * the lede. With one it is the name plate (SealedHead, the seals by kind C10): the stone of
+ * `seal.id` in its state, the kind line (`seal.kind`, the kind word, then `status`), the h1 and the
+ * identity — the id line, which the plate sets in its quiet voice — beside the stone, the lede
+ * below both. The plate always has its id line, and no place for actions.
+ */
+type DetailHeadProps =
+  | { seal?: undefined; actions?: ReactNode }
+  | { seal: SealedHeadOf; identity: ReactNode; actions?: never };
+
+/**
  * `title` is the h1; `documentTitle` (C1) names the browser tab when the h1 is not the page's name
  * or is not a plain string (entity pages: `[name, kind]`, e.g. `['#20,894,843', 'block']`).
  */
-export type DetailLayoutProps = DetailLayoutBaseProps & DocumentTitleProps;
+export type DetailLayoutProps = DetailLayoutBaseProps & DetailHeadProps & DocumentTitleProps;
 
 /** Domain first, with one enforced boundary (DetailTier2) before developer evidence. */
 export function DetailLayout({
@@ -90,19 +95,33 @@ export function DetailLayout({
   className,
 }: DetailLayoutProps) {
   useDocumentTitle(documentTitleParts(title, documentTitle));
-  const head = (
+  const h1 = (
+    <h1
+      // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
+      className={cn(
+        'text-text-bright break-words',
+        kind === 'entity' ? 'text-entity' : 'text-index',
+        // The name plate's name is one type step smaller below md (seals by kind, C10;
+        // RESPONSIVE_LAYOUT principle 5): under the stone it has the full width, but at 30 px a
+        // short out point (19 characters, 330.6 px) or a short address (21, 365.4 px) is wider than
+        // the 328 px line at 360; at 26 px they are 286.5 and 316.7 px.
+        seal && kind === 'entity' && 'max-md:text-index'
+      )}
+    >
+      {title}
+    </h1>
+  );
+  const head = seal ? (
+    // The name plate: the kind word and the status on the kind line, the h1 and the identity (the
+    // id line, in the plate's own voice) beside the stone, the lede under both from the left edge.
+    <SealedHead {...seal} status={status} identity={identity} below={lede}>
+      {h1}
+    </SealedHead>
+  ) : (
     <>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-baseline gap-3">
-          <h1
-            // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
-            className={cn(
-              'text-text-bright break-words',
-              kind === 'entity' ? 'text-entity' : 'text-index'
-            )}
-          >
-            {title}
-          </h1>
+          {h1}
           {status}
         </div>
         {actions}
@@ -125,15 +144,9 @@ export function DetailLayout({
       {/* An index page's title row closes on a hairline (Midnight, continued, move 2; BlocksAfter):
           h1 and legend, 14 px, the 1 px line, then the list. */}
       <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>
-        {/* The seal is pressed beside the title, identity and lede, never in the content (the
-            facts and the sections run the full width under it). */}
-        {seal ? (
-          <SealedHead hash={seal.hash} scale={seal.scale}>
-            {head}
-          </SealedHead>
-        ) : (
-          head
-        )}
+        {/* The seal is pressed beside the name plate, never in the content (the facts and the
+            sections run the full width under the head). */}
+        {head}
         {facts && (
           // One column until md: at 640 a two-column grid wrapped labels into three lines.
           <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">

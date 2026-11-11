@@ -24,7 +24,7 @@ import {
 } from '@/components/activity-event-row';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { TxStructure, continuityColor } from '@/components/transaction/tx-structure';
+import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
@@ -75,6 +75,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
+import type { SealState } from '@/lib/seal/stones';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section...</p>,
@@ -738,6 +739,19 @@ export default function TransactionDetailPage() {
       </DetailLayout>
     );
   }
+  // The transaction's stone (the seals by kind), pressed on the head and, from lg, across the cells:
+  // its hash, the cells it consumed — the API's count, as its row in a list, but none for a
+  // cellbase (the API counts its one null input) — and the cells it created; dashed while it is
+  // not yet indexed in a block.
+  const seal: { id: TxSealId; state?: SealState } = {
+    id: {
+      kind: 'tx',
+      hash: tx.hash,
+      consumed: tx.isCellbase ? 0 : tx.inputsCount,
+      created: tx.outputsCount,
+    },
+    state: isProvisional ? 'unpressed' : undefined,
+  };
   const status =
     tx.poolStatus === 'committed_awaiting_index'
       ? poolStatusLabel(tx.poolStatus)
@@ -1214,27 +1228,33 @@ export default function TransactionDetailPage() {
       >
         <header className="min-w-0 lg:col-start-1">
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
-          {/* The one corner (Transaction board): the transaction's seal pressed beside its
-              identity, never in the cells and flows below. */}
+          {/* The one corner (Transaction board): the transaction's long stone pressed beside its
+              name plate (seals by kind, C10) — the kind line, the action, the hash and its copy —
+              with the summary and the board's comment under both, from the page's left edge;
+              from lg its seam seal is pressed again between the cells below. The action is one
+              type step smaller below md, as every name plate's name. */}
           <SealedHead
-            hash={tx.hash}
-            scale="record"
-            // Under the seal and the identity, in the identity column (the board's comment).
-            below={
-              comment === null ? undefined : (
-                <Comment lines={comment} className="mt-4 max-w-[60ch]" />
-              )
-            }
-          >
-            <div className="flex min-w-0 flex-col gap-2">
-              <span className="text-text-dim text-small">Transaction</span>
-              <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
-              {summary}
-              <div className="text-small flex min-w-0 items-center gap-0.5">
-                <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
+            id={seal.id}
+            state={seal.state}
+            kind="Transaction"
+            // the id line, in the plate's quiet voice (the plate sets it); the copy button keeps
+            // its own classes
+            identity={
+              <div className="flex min-w-0 items-center gap-0.5">
+                <span className="min-w-0">{tx.hash}</span>
                 <CopyHash hash={tx.hash} />
               </div>
-            </div>
+            }
+            below={
+              <>
+                {summary}
+                {comment !== null && <Comment lines={comment} className="mt-4 max-w-[60ch]" />}
+              </>
+            }
+          >
+            <h1 className="text-text-bright text-entity max-md:text-index break-words font-medium">
+              {headline}
+            </h1>
           </SealedHead>
         </header>
         <aside
@@ -1404,6 +1424,9 @@ export default function TransactionDetailPage() {
                 inputs={tiles.inputs}
                 outputs={tiles.outputs}
                 fee={tx.fee}
+                // C11: the sheets' heads end with the API's exact totals
+                consumedCapacity={required(tx.inputsCapacity, hash, 'inputsCapacity')}
+                createdCapacity={required(tx.outputsCapacity, hash, 'outputsCapacity')}
                 hideGroups
                 linking="page"
                 inflow={inflow}
@@ -1411,6 +1434,7 @@ export default function TransactionDetailPage() {
                 focusedCellIds={lit ? [...lit.cells] : []}
                 onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
                 continuity={continuity}
+                seamSeal={seal}
                 // A lit tile clears the selection on click only while there is one: a tile lit
                 // by hover alone has no clearing click (review 2026-11-03 — the clearing replace
                 // used to cancel the out point link's navigation to the cell page).

@@ -18,9 +18,12 @@ const ROUTE_NAME =
 /** The pressed seal once its drawing (a lazy chunk) has arrived. */
 async function pressedSeal(): Promise<HTMLElement> {
   const seal = await screen.findByTestId('error-seal');
-  await waitFor(() => expect(seal.querySelector('[data-hash-seal] svg')).not.toBeNull());
+  await waitFor(() => expect(seal.querySelector('[data-seal] svg')).not.toBeNull());
   return seal;
 }
+
+/** What the tip block's stone says (MSW's `/blocks/:id`: TIP_HASH, 5 transactions). */
+const TIP_SEAL_LABEL = `Block seal ${TIP_HASH.slice(0, 10)}, 5 transactions`;
 
 /** The verse's lines as rendered, in order. */
 function verseLines(h1: HTMLElement): string[] {
@@ -67,10 +70,12 @@ describe('NotFoundPage', () => {
     expect(screen.queryByRole('contentinfo')).toBeNull();
     // behind the verse, the newest block's seal: the vitals' tip, its hash read from /blocks/{n}
     const seal = await pressedSeal();
-    expect(seal.querySelector('[data-hash-seal="brush"] svg')).toHaveAttribute(
+    expect(seal.querySelectorAll('[data-seal]')).toHaveLength(1);
+    expect(seal.querySelector('[data-seal="block"][data-seal-form="page"] svg')).toHaveAttribute(
       'aria-label',
-      `Hash seal ${TIP_HASH.slice(0, 10)}`
+      TIP_SEAL_LABEL
     );
+    expect(document.querySelector('[data-hash-seal]')).toBeNull();
     // no WebGL, no canvas, no 256 squares: the night is gone
     expect(document.querySelector('canvas, .error-night, [data-tube]')).toBeNull();
   });
@@ -156,14 +161,8 @@ describe('NotFoundPage', () => {
     ]);
     // the seal pressed behind is the newest block's, never the hash that was asked for
     const seal = await pressedSeal();
-    expect(seal.querySelector('svg')).toHaveAttribute(
-      'aria-label',
-      `Hash seal ${TIP_HASH.slice(0, 10)}`
-    );
-    expect(seal.querySelector('svg')).not.toHaveAttribute(
-      'aria-label',
-      `Hash seal ${HASH.slice(0, 10)}`
-    );
+    expect(seal.querySelector('svg')).toHaveAttribute('aria-label', TIP_SEAL_LABEL);
+    expect(seal.querySelector('svg')?.getAttribute('aria-label')).not.toContain(HASH.slice(0, 10));
   });
 
   it('shows lookup failure as uncertainty, not a fabricated absence', () => {

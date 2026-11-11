@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
+import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -71,6 +72,8 @@ const sporeTx = {
   isCellbase: false,
   timestamp: '2026-10-22T14:43:55.651+00:00',
   inputsCapacity: '4266152741621',
+  // the API's sum of the three outputs below
+  outputsCapacity: '96000000000',
   inputs: [
     input(0, { type: { codeHash: CKBFS, hashType: 'data1', args: '0x' }, display: fileDisplay }),
     input(1, {}),
@@ -126,6 +129,28 @@ const sporeTx = {
       script: cell.lock,
       cycles: null,
     },
+    // Every output's lock is a group, the ones that do not run here too (the API lists them all):
+    // output 0's, and output 2's — the inputs' Default Lock again, a second group of that hash.
+    {
+      scriptHash: `0x${'a5'.repeat(32)}`,
+      kind: 'lock',
+      ran: false,
+      inputIndices: [],
+      outputIndices: [0],
+      witnessIndex: null,
+      script: { codeHash: OUT0_LOCK, hashType: 'type', args: '0x' },
+      cycles: null,
+    },
+    {
+      scriptHash: `0x${'a1'.repeat(32)}`,
+      kind: 'lock',
+      ran: false,
+      inputIndices: [],
+      outputIndices: [2],
+      witnessIndex: null,
+      script: defaultLock,
+      cycles: null,
+    },
   ],
   witnessDetails: [
     { index: 0, size: 85, kind: 'witness_args', fields: [] },
@@ -168,6 +193,15 @@ describe('Its transactions against the Cell board', () => {
     expect(continuity).toHaveTextContent('in:0 → out:0 · same file cell continues');
     expect(structure.querySelector('[data-continuity-kind="objects"]')).not.toBeNull();
     expect(structure.querySelector('[data-continuity-kind="file"]')).not.toBeNull();
+    // C11 round 3: those two links are the only lines between the sheets (no row-aligned
+    // connector suggests that input N became output N)
+    expect(seamLines(structure)).toHaveLength(2);
+    // and beyond the created sheet, the onward bridge that carries the board's live cell on
+    expect(canvasLines(structure)).toEqual([
+      ...seamLines(structure),
+      ...Array.from(structure.querySelectorAll('[data-onward-bridge] path')),
+    ]);
+    expect(structure.querySelectorAll('[data-onward-bridge] path')).toHaveLength(1);
     const out1 = structure.querySelector('[data-cell-id="out:1"]') as HTMLElement;
     await within(out1).findByText('Nervape Shadow Lock');
     expect(
@@ -220,7 +254,8 @@ describe('Its transactions against the Cell board', () => {
     view(cell);
     const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     const groups = [...structure.querySelectorAll<HTMLElement>('[data-group-id]')];
-    expect(groups).toHaveLength(4);
+    // the four of the board, then the two output locks that do not run here
+    expect(groups).toHaveLength(6);
     await within(groups[2]).findByRole('link', { name: 'Spore' });
     expect(groups[2].textContent).toMatch(/^typeSporeexecuted/);
     expect(groups[0].textContent).not.toMatch(/locklock|typetype/);
@@ -258,8 +293,10 @@ describe('Its transactions against the Cell board', () => {
     } as unknown as Cell;
     getTransactionDetail.mockResolvedValue({
       ...sporeTx,
+      // the Spore type group (input 2 → output 1) replaced by the Type ID one; the rest as before
       scriptGroups: [
-        ...sporeTx.scriptGroups!.slice(0, 1),
+        ...sporeTx.scriptGroups!.slice(0, 2),
+        ...sporeTx.scriptGroups!.slice(3),
         {
           scriptHash: `0x${'b1'.repeat(32)}`,
           kind: 'type',

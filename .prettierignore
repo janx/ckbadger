@@ -30,5 +30,5 @@ docker-data/
 # Helm templates (Go template syntax)
 deploy/helm/*/templates/
 
-# Verbatim copies of the hash-seal design prototype (the fidelity test loads them as they are)
-frontend/__tests__/fixtures/talisman-prototype/
+# Verbatim copies of the seals-by-kind design prototype (kinds5.js and what it requires)
+frontend/__tests__/fixtures/seal-prototype/

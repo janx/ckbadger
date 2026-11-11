@@ -5,7 +5,15 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+import {
+  expectBefore,
+  expectOneRowSeal,
+  parsed,
+  SEAL_INKS,
+  sealHash,
+} from '@/__tests__/utils/seals';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import { drawSeal, type SealId } from '@/lib/seal/stones';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -225,52 +233,142 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   });
 });
 
-// Rubbing × Song print, phase 3: every row leads with its transaction's row seal (28 px, the fold
-// of the transaction page's seal), before the hash; the hash stays the row's link.
-describe('TransactionListTable row seals', () => {
+// The seals by kind (C2): every row leads with its transaction's row stone, the long slab (24 px
+// high, 48.5 wide): rods for the cells it consumed, the glyph in its rim, rods for the cells it
+// created. The hash stays the row's link.
+describe('TransactionListTable row stones', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
   const txs = [scriptCall, transfer, cellbase];
+  // A cellbase consumes no cell: the API counts its one null input (inputsCount 1), the stone 0.
+  const ids: SealId[] = [
+    { kind: 'tx', hash: scriptCall.hash, consumed: 3, created: 3 },
+    { kind: 'tx', hash: transfer.hash, consumed: 3, created: 3 },
+    { kind: 'tx', hash: cellbase.hash, consumed: 0, created: 1 },
+  ];
 
-  it('leads every table row with its row seal, overhanging the hash line, before the hash link', () => {
+  it('leads every table row with its stone, overhanging the hash line by 3 px, before the hash link', () => {
     render(<TransactionListTable transactions={txs} />);
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
     rows.forEach((tr, i) => {
-      const seal = expectOneRowSeal(tr, txs[i].hash);
+      const seal = expectOneRowSeal(tr, ids[i]);
       expect(tr.querySelector('td')).toContainElement(seal);
-      expect(seal).toHaveClass('-my-[5px]');
+      // (24 − the 18 px line) / 2: the one-line row keeps its height
+      expect(seal).toHaveClass('-my-[3px]');
       expectBefore(seal, within(tr).getByTitle(txs[i].hash).closest('a')!);
     });
-    // a cellbase row is set back, its seal with it
+    // a cellbase row is set back, its stone with it (still pressed: it is in a block)
     expect(rows[2]).toHaveClass('opacity-[.55]');
   });
 
-  it('leads every phone row with its row seal in its own column', () => {
+  it('leads every phone row with its stone in its own column, not overhanging', () => {
     atContainerWidth(358);
     render(<TransactionListTable transactions={txs} />);
     const cards = screen.getAllByTestId('transaction-row-mobile');
     expect(cards).toHaveLength(3);
     cards.forEach((card, i) => {
-      const seal = expectOneRowSeal(card, txs[i].hash);
+      const seal = expectOneRowSeal(card, ids[i]);
       expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
       expect(card.firstElementChild).toContainElement(seal);
+      expect(seal).not.toHaveClass('-my-[3px]');
       expectBefore(seal, within(card).getByTitle(txs[i].hash));
     });
   });
 
-  // The seal's 27 px come out of the Value and Fee columns' slack: the table still fits the
-  // widest container (1,232 px at 1280 and up) and the 1,248 px reference.
-  it('budgets the seal in the Transaction column and keeps the table inside 1,232 px', () => {
+  // The API counts a cellbase's one input, the null out point; the row knows a cellbase by
+  // `isCellbase` (it sets the row back by it) and writes 0, as its Cells column does.
+  it('presses a cellbase’s stone 0 → n, as its Cells column reads, never the counted null input', () => {
+    expect(cellbase.inputsCount).toBe(1);
+    for (const width of [null, 358] as const) {
+      if (width !== null) atContainerWidth(width);
+      const { unmount } = render(<TransactionListTable transactions={[cellbase]} />);
+      const row =
+        width === null
+          ? within(screen.getByRole('table')).getAllByRole('row')[1]
+          : screen.getByTestId('transaction-row-mobile');
+      const seal = expectOneRowSeal(row, ids[2]);
+      expect(seal.querySelector('svg')).toHaveAttribute(
+        'aria-label',
+        'Transaction seal 0xc89d2d25, 0 consumed, 1 created'
+      );
+      // the stone of the raw count is another drawing: the 0 is what is pressed
+      const counted = drawSeal(
+        { kind: 'tx', hash: cellbase.hash, consumed: 1, created: 1 },
+        { form: 'row', height: ROW_SEAL.tx.height, state: 'pressed', ...SEAL_INKS }
+      );
+      expect(seal.innerHTML).not.toBe(parsed(counted.svg));
+      expect(row).toHaveTextContent(width === null ? '0 → 1' : '0 → 1 cells');
+      unmount();
+    }
+  });
+
+  // The stone's footprint (56.5 px: 48.5 and the 8 px gap) is 29.5 px more than the 27 of the seal it replaced.
+  // The table had none to spare (its 1,230 px in the widest 1,232 px container; every other column
+  // at its longest content), so the hash gave 4 characters: 19 → 15 at 13 px is 31.2 px.
+  it('budgets the stone in the Transaction column from the hash, every column and the 1,230 px unchanged', () => {
     render(<TransactionListTable transactions={txs} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const widths = Array.from(table.querySelectorAll('col')).map(
       (c) => (c as HTMLElement).style.width
     );
-    expect(widths.slice(0, 5)).toEqual(['192px', '175px', '220px', '160px', '96px']);
+    expect(widths).toEqual(['192px', '175px', '220px', '160px', '96px', '62px', '145px', '180px']);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
+    expect(ROW_SEAL.tx.footprint).toBe(56.5);
+    // "0x" and 6 digits, the ellipsis, 4 digits: 15 characters of JetBrains Mono at 13 px (7.8)
+    const [, row] = within(table).getAllByRole('row');
+    const shown = within(row).getByTitle(scriptCall.hash);
+    expect(shown).toHaveTextContent(/^0x00de30\.\.\.cbbc$/);
+    const chars = shown.textContent!.length;
+    expect(chars).toBe(15);
+    // the stone, the hash and the 16 px gap fit the 192 px; one more character would not
+    const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
+    expect(used).toBeCloseTo(189.5, 6);
+    expect(used).toBeLessThanOrEqual(192);
+    expect(used + 7.8).toBeGreaterThan(192);
+  });
+
+  // The form changes where it did: a table from 1,230 px, the phone rows below.
+  it('changes form at the same 1,230 px', () => {
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1230, 'table'],
+      [1229, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount } = render(<TransactionListTable transactions={txs} />);
+      expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('draws 50 rows with 50 stones, each transaction’s once', () => {
+    const many: Transaction[] = Array.from({ length: 50 }, (_, i) => ({
+      ...transfer,
+      hash: sealHash(`list-${i}`),
+      inputsCount: i % 7,
+      outputsCount: (i * 3) % 11,
+    }));
+    const started = performance.now();
+    render(<TransactionListTable transactions={many} />);
+    const elapsed = performance.now() - started;
+    console.info(`50 transaction rows with their stones: ${elapsed.toFixed(1)} ms`);
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(50);
+    rows.forEach((tr, i) =>
+      expectOneRowSeal(tr, {
+        kind: 'tx',
+        hash: many[i].hash,
+        consumed: i % 7,
+        created: (i * 3) % 11,
+      })
+    );
+    const labels = rows.map((tr) => tr.querySelector('svg')!.getAttribute('aria-label'));
+    expect(new Set(labels).size).toBe(50);
   });
 });
 

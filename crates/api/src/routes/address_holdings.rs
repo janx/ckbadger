@@ -24,7 +24,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{dao, transaction_cells};
+use super::{dao, transaction_cells, transaction_structure};
 use crate::{
     response::{
         default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
@@ -239,7 +239,15 @@ struct Cell {
     type_hash_type: Option<String>,
     data_size: i32,
     created_at_block: i64,
+    /// The holdings page's own grouping, from [`classify`]: its filters and
+    /// totals. Not the class vocabulary of `type_cell_type`.
     class: Class,
+    /// The cell's protocol identity by its type script, from
+    /// [`transaction_structure::cell_type`]: `plain`, `sudt`, `xudt`, a
+    /// registry slug (`nervos-dao`, `spore`, `bit-account`, …) or `typed` —
+    /// the `typeCellType` the cell detail and the `cellType` the transaction
+    /// detail serve for this cell. Always present.
+    type_cell_type: String,
     display: Option<transaction_cells::CellDisplay>,
     expires_at: Option<u64>,
     held_since_block: Option<i64>,
@@ -1066,6 +1074,10 @@ fn cell_response(
             )
         })
         .transpose()?;
+    // The cell's class by the transaction detail's own function, as the cell
+    // detail serves it; the caller's context names the outpoint.
+    let type_cell_type = transaction_structure::cell_type(typed.as_ref())
+        .map_err(|(_, error)| anyhow!("type cell type: {}", error.0.message))?;
     let mut display = if transaction_cells::has_display(typed.as_ref())? {
         let data = if info.data_size == 0 {
             Vec::new()
@@ -1170,6 +1182,7 @@ fn cell_response(
         data_size: info.data_size,
         created_at_block: info.created_at_block,
         class: evidence.class,
+        type_cell_type,
         display,
         expires_at,
         held_since_block,

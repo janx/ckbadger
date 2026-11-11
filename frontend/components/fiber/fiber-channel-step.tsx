@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { TxStructure, type TxContinuity } from '@/components/transaction/tx-structure';
-import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
+import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
 import { api, type TransactionDetail } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
@@ -156,7 +156,8 @@ export function FiberChannelStep({
             inputs={inputs}
             outputs={outputs}
             fee={tx.fee}
-            poolCapacity={tx.inputsCapacity ?? undefined}
+            // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
+            {...sheetTotals(tx)}
             continuity={continuity}
             meOut={carries ? `out:${carries.index}` : undefined}
             onward="the channel, onward"

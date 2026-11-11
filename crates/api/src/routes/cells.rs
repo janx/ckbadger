@@ -2027,6 +2027,18 @@ pub struct CellDetailResponse {
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
+    /// The cell's protocol identity by its type script, from
+    /// [`super::transaction_structure::cell_type`]: `plain`, `sudt`, `xudt`, a
+    /// registry slug (`nervos-dao`, `spore`, `bit-account`, …) or `typed`.
+    /// The `cellType` the transaction detail serves for this cell, as an
+    /// output and as an input — save the genesis Satoshi output, whose
+    /// `cellType` there is the burn marker served here as `cell_type`.
+    /// Always present.
+    pub type_cell_type: String,
+    /// The token / object / identity / file display of this cell, built by
+    /// [`super::transaction_cells::from_parts`] as the transaction detail
+    /// builds it for this cell; `null` when its type script has none.
+    pub display: Option<super::transaction_cells::CellDisplay>,
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub type_script_hash: Option<String>,
@@ -4183,6 +4195,31 @@ async fn get_cell(
         _ => {}
     }
 
+    let lock = ScriptResponse {
+        code_hash: format!("0x{}", hex::encode(info.lock_code_hash)),
+        hash_type: lock_hash_type_str.to_string(),
+        args: format!("0x{}", hex::encode(&info.lock_args)),
+    };
+    // The cell's class, from the transaction detail's own two functions over
+    // the cell's verified bytes (the data matched its indexed hash above):
+    // the `cellType` and `display` that endpoint serves for this cell.
+    let type_cell_type =
+        super::transaction_structure::cell_type(type_script.as_ref()).map_err(|(_, error)| {
+            ApiError::internal(format!(
+                "cell {outpoint} type cell type: {}",
+                error.0.message
+            ))
+        })?;
+    let display = super::transaction_cells::from_parts(
+        &state.store,
+        &info.capacity.to_string(),
+        &lock,
+        type_script.as_ref(),
+        cell_data.as_deref().expect("cell data is read above"),
+        true,
+    )
+    .map_err(|error| ApiError::internal(format!("cell {outpoint} display: {error:#}")))?;
+
     let current_spend_requirements = current_spend_requirements(&state, &info, &outpoint)?;
 
     ok(CellDetailResponse {
@@ -4193,6 +4230,8 @@ async fn get_cell(
         used_capacity_breakdown: occupied_capacity_breakdown,
         virtual_used_capacity: virtual_occupied_capacity,
         cell_type,
+        type_cell_type,
+        display,
         lock_script_hash: format!("0x{}", hex::encode(info.lock_script_hash())),
         address,
         type_script_hash: info
@@ -4215,11 +4254,7 @@ async fn get_cell(
         lifetime_ms,
         live_age_ms,
         live_age_at_block,
-        lock: ScriptResponse {
-            code_hash: format!("0x{}", hex::encode(info.lock_code_hash)),
-            hash_type: lock_hash_type_str.to_string(),
-            args: format!("0x{}", hex::encode(&info.lock_args)),
-        },
+        lock,
         type_script,
         protocol_script: cell_protocol_script(&info),
         data: cell_data.map(|d| format!("0x{}", hex::encode(d))),

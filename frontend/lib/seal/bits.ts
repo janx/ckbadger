@@ -1,8 +1,8 @@
 /**
  * The hash a seal is drawn from, read as the prototype reads it: 256 bits, each hex digit most
  * significant bit first (seal2.js `bits`, the same order as `lib/night/bits.ts`, which this
- * reuses). A recipe reads the bits in order through a `BitReader`; every slice it takes is kept,
- * so a plan can say which bits decided what.
+ * reuses). A seal reads the bits in order through a `BitReader`; every slice it takes is kept,
+ * so a glyph can say which bits chose it and its variant.
  */
 
 import { bitsOf } from '@/lib/night/bits';
@@ -29,7 +29,7 @@ export function valueOf(slice: BitSlice): number {
 }
 
 /**
- * The hash's bits read front to back. The prototype wraps round past bit 256; no recipe here
+ * The hash's bits read front to back. The prototype wraps round past bit 256; no seal here
  * reads that far (the bound is pinned by a test), so reading past the end is an error.
  */
 export class BitReader {
@@ -50,7 +50,7 @@ export class BitReader {
     if (!Number.isInteger(k) || k < 0) throw new Error(`hash seal: cannot read ${k} bits`);
     if (this.cur + k > this.all.length)
       throw new Error(
-        `hash seal: the recipe reads past bit ${this.all.length} (at ${this.cur}, wants ${k} more)`
+        `hash seal: the seal reads past bit ${this.all.length} (at ${this.cur}, wants ${k} more)`
       );
     const slice = { at: this.cur, bits: Array.from(this.all.subarray(this.cur, this.cur + k)) };
     this.cur += k;

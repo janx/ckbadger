@@ -1,6 +1,9 @@
 /** Real create_router responses from crates/api/tests/api_address_holdings.rs.
  * Captured by the API lane (2026-10-27); wire values are unchanged.
  * `satisfies` makes required/nullable producer fields type-check against the consumer.
+ * `typeCellType` (seal kinds, 2026-11-11) was added after the capture: each cell's value is what
+ * the API's `cell_type()` (`crates/api/src/routes/transaction_structure.rs`) names its type code
+ * hash — `plain` with no type, `sudt` (the UDT parser), a registry slug, `typed` for 0x99…99.
  */
 import type { AddressCell, AddressHoldings, CursorPaginatedResponse } from '@/lib/api';
 export const addressProducerCells = {
@@ -18,6 +21,7 @@ export const addressProducerCells = {
       occupiedCapacity: '6100000000',
       outputIndex: 0,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'plain',
       typeCodeHash: null,
       typeHashType: null,
       typeScriptHash: null,
@@ -35,6 +39,7 @@ export const addressProducerCells = {
       occupiedCapacity: '9400000000',
       outputIndex: 1,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'typed',
       typeCodeHash: '0x9999999999999999999999999999999999999999999999999999999999999999',
       typeHashType: 'data1',
       typeScriptHash: '0x9898bd8afd8e711056c0fb1bfddb2bc2b53de26f766ec407f5ace9c1bdd55505',
@@ -72,6 +77,7 @@ export const addressProducerCells = {
       occupiedCapacity: '10200000000',
       outputIndex: 2,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'nervos-dao',
       typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
       typeHashType: 'type',
       typeScriptHash: '0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58',
@@ -108,6 +114,7 @@ export const addressProducerCells = {
       occupiedCapacity: '10200000000',
       outputIndex: 3,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'nervos-dao',
       typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
       typeHashType: 'type',
       typeScriptHash: '0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58',
@@ -137,6 +144,7 @@ export const addressProducerCells = {
       occupiedCapacity: '14200000000',
       outputIndex: 4,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'sudt',
       typeCodeHash: '0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212',
       typeHashType: 'type',
       typeScriptHash: '0x3b02b7c0d2d8abe06500d473edc9956a11ef5601c58361d4c3048df3f15902ee',
@@ -166,6 +174,7 @@ export const addressProducerCells = {
       occupiedCapacity: '14200000000',
       outputIndex: 5,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'sudt',
       typeCodeHash: '0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212',
       typeHashType: 'type',
       typeScriptHash: '0x3b02b7c0d2d8abe06500d473edc9956a11ef5601c58361d4c3048df3f15902ee',
@@ -195,6 +204,7 @@ export const addressProducerCells = {
       occupiedCapacity: '20100000000',
       outputIndex: 6,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'spore',
       typeCodeHash: '0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5',
       typeHashType: 'type',
       typeScriptHash: '0x88597e678182ee74b8aa453d3ee263a6bbdd65f32900425ba842c0ea29b6817f',
@@ -224,6 +234,7 @@ export const addressProducerCells = {
       occupiedCapacity: '13300000000',
       outputIndex: 7,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'm-nft',
       typeCodeHash: '0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9',
       typeHashType: 'type',
       typeScriptHash: '0xf7c18075c4d3188c3bb1974275aef501545992639ee615f48fcbc5e95dd4331b',
@@ -253,6 +264,7 @@ export const addressProducerCells = {
       occupiedCapacity: '11400000000',
       outputIndex: 8,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'did-ckb',
       typeCodeHash: '0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a',
       typeHashType: 'type',
       typeScriptHash: '0x7df5b9cf320a34aaa9d26f7d966a138253234a1a66a9440ef5ec7a9da8b7abdc',
@@ -282,6 +294,7 @@ export const addressProducerCells = {
       occupiedCapacity: '18800000000',
       outputIndex: 9,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'bit-cell',
       typeCodeHash: '0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f',
       typeHashType: 'type',
       typeScriptHash: '0xba5bf8e54bfdf282d1db4f2c788e6164a4e442a81dc08ed9e84c73d1b782147d',
@@ -311,6 +324,7 @@ export const addressProducerCells = {
       occupiedCapacity: '19400000000',
       outputIndex: 10,
       txHash: '0xdce40476d0a0fcaf57ba8fdd7091552416ab27dfa5aba73d90a9eb48543993e1',
+      typeCellType: 'bit-account',
       typeCodeHash: '0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1',
       typeHashType: 'type',
       typeScriptHash: '0x083582da49278011dc45d835a34a879900e7ba2fa9e6701b57ad4e3bead3bf7c',

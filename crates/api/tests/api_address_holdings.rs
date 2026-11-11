@@ -932,6 +932,7 @@ async fn address_producer_wire_contract_preserves_required_nullable_fields() {
             "dataSize",
             "createdAtBlock",
             "class",
+            "typeCellType",
             "display",
             "expiresAt",
             "heldSinceBlock",
@@ -947,6 +948,130 @@ async fn address_producer_wire_contract_preserves_required_nullable_fields() {
     assert_eq!(s, StatusCode::OK, "{holdings}");
     eprintln!("D3_CELLS_JSON={cells}");
     eprintln!("D3_HOLDINGS_JSON={holdings}");
+}
+
+/// Seal kinds (A0-2): an address's cells class each cell as its cell page
+/// does. Every live cell of the fixture — plain, an unregistered type, a
+/// Nervos DAO deposit and a withdrawal request, two sUDT cells, a Spore in a
+/// cluster, an mNFT, did:ckb, a .bit cell and a .bit account — is served on
+/// `/addresses/{a}/cells` (both orders) with the `typeCellType` of
+/// `/cells/{tx}/{i}`, from the one `transaction_structure::cell_type`, and
+/// with its `display`. The one difference in `display` is the mNFT's
+/// collection, documented in `docs/API.md` (AddressCell): a current holding
+/// names its class's current name and composition, where the cell page keeps
+/// only the class id its bytes prove. The display kind, which classes the
+/// cell, is the same for every kind.
+#[tokio::test]
+async fn address_cells_serve_the_cell_detail_class_of_every_kind() {
+    let f = fixture().await;
+    // The cell page proves each cell's canonical location: the creating
+    // transaction's rows, as the indexer writes them beside its outputs.
+    let mut b = StoreBatch::new(&f.store);
+    b.put_tx_hash_map(&f.hash, 7, 0);
+    b.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash: f.hash.clone().try_into().unwrap(),
+            is_cellbase: false,
+            timestamp: 1_700_000_001_000,
+            inputs_count: 0,
+            outputs_count: 11,
+            fee: 0,
+            tx_size: 1000,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    b.commit().unwrap();
+    let (s, j) = get(
+        &f.app,
+        &format!("/api/v1/addresses/{}/cells?limit=100", f.owner),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    let expected = [
+        (0, "plain", None),
+        (1, "typed", None),
+        (2, "nervos-dao", None),
+        (3, "nervos-dao", None),
+        (4, "sudt", Some("token")),
+        (5, "sudt", Some("token")),
+        (6, "spore", Some("object")),
+        (7, "m-nft", Some("object")),
+        (8, "did-ckb", Some("identity")),
+        (9, "bit-cell", Some("identity")),
+        (10, "bit-account", Some("identity")),
+    ];
+    let rows = j["data"].as_array().unwrap();
+    assert_eq!(rows.len(), expected.len(), "{j}");
+    for (index, type_cell_type, display_kind) in expected {
+        let row = rows
+            .iter()
+            .find(|row| row["outputIndex"] == index)
+            .unwrap_or_else(|| panic!("row {index} missing: {j}"));
+        let (s, cell) = get(
+            &f.app,
+            &format!("/api/v1/cells/0x{}/{index}", hex::encode(&f.hash)),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "cell {index}: {cell}");
+        assert_eq!(row["typeCellType"], type_cell_type, "row {index}: {row}");
+        assert_eq!(
+            row["typeCellType"], cell["typeCellType"],
+            "row {index} ({type_cell_type})"
+        );
+        assert_eq!(
+            row["display"]["kind"].as_str(),
+            display_kind,
+            "row {index}: {row}"
+        );
+        assert_eq!(
+            row["display"]["kind"], cell["display"]["kind"],
+            "row {index} ({type_cell_type})"
+        );
+        if type_cell_type == "m-nft" {
+            let mut holding = row["display"].clone();
+            assert_eq!(holding["collectionName"], "Current mNFT group", "{row}");
+            assert_eq!(holding["compositionTier"], "centralized_mixture", "{row}");
+            assert!(
+                cell["display"]["collectionName"].is_null()
+                    && cell["display"]["compositionTier"].is_null(),
+                "{cell}"
+            );
+            holding["collectionName"] = serde_json::Value::Null;
+            holding["compositionTier"] = serde_json::Value::Null;
+            assert_eq!(holding, cell["display"], "row {index}");
+        } else {
+            assert_eq!(
+                row["display"], cell["display"],
+                "row {index} ({type_cell_type})"
+            );
+        }
+    }
+    let token = rows.iter().find(|row| row["outputIndex"] == 4).unwrap();
+    assert_eq!(token["display"]["amount"], "5", "{token}");
+    assert_eq!(token["display"]["symbol"], "EXACT", "{token}");
+    let spore = rows.iter().find(|row| row["outputIndex"] == 6).unwrap();
+    assert_eq!(spore["display"]["collectionName"], "Spore group", "{spore}");
+    let account = rows.iter().find(|row| row["outputIndex"] == 10).unwrap();
+    assert_eq!(account["display"]["name"], "original.bit", "{account}");
+    // The capacity order serves the same rows through the same descriptor.
+    let (s, dao) = get(
+        &f.app,
+        &format!(
+            "/api/v1/addresses/{}/cells?class=dao&order=capacity",
+            f.owner
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{dao}");
+    let dao = dao["data"].as_array().unwrap();
+    assert_eq!(dao.len(), 2, "{dao:?}");
+    for row in dao {
+        assert_eq!(row["typeCellType"], "nervos-dao", "{row}");
+        assert!(row["display"].is_null(), "{row}");
+    }
 }
 
 #[tokio::test]

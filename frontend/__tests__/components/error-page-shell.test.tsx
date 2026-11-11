@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { MemoryRouter } from 'react-router-dom';
 import { render as bareRender } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -12,6 +14,8 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import { server } from '@/__tests__/msw/server';
+import { parsed, SEAL_INKS } from '@/__tests__/utils/seals';
+import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ErrorPageShell } from '@/components/error-page-shell';
@@ -19,7 +23,10 @@ import { ErrorPageShell } from '@/components/error-page-shell';
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
 const API = '/api/:network/v1';
-/** The tip's block (`/statistics/network` says #1,000,000) as MSW's `/blocks/:id` serves it. */
+/**
+ * The tip's block (`/statistics/network` says #1,000,000) as MSW's `/blocks/:id` serves it: this
+ * hash (32 lowercase bytes) and 5 transactions.
+ */
 const TIP_HASH = '0xabc123def456789012345678901234567890123456789012345678901234abcd';
 const VERSE = [
   'no page at this path.',
@@ -54,7 +61,7 @@ describe('ErrorPageShell', () => {
     expect(screen.queryByRole('contentinfo')).toBeNull();
     // provider-safe: no query client, so no tip to read and no seal; no canvas, no night
     expect(screen.queryByTestId('error-seal')).toBeNull();
-    expect(document.querySelector('[data-hash-seal]')).toBeNull();
+    expect(document.querySelector('[data-seal], [data-hash-seal]')).toBeNull();
     expect(document.querySelector('canvas, .error-night')).toBeNull();
     // a whole screen ends on the empty prompt, as the frame's pages do
     expect(screen.getAllByTestId('prompt-end')).toHaveLength(1);
@@ -73,7 +80,9 @@ describe('ErrorPageShell', () => {
     expect(eyebrow).toHaveTextContent('Not found · 404');
   });
 
-  it('with providers it presses the newest block’s seal behind the verse: the brush talisman of the tip’s hash', async () => {
+  // The seals by kind (C5): the newest block's square stone, its transactions counted in rods, in
+  // place of the old brush seal of its hash.
+  it('with providers it presses the newest block’s seal behind the verse: the tip block’s stone, once', async () => {
     render(
       <MemoryRouter initialEntries={['/mainnet/nowhere']}>
         <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
@@ -82,19 +91,35 @@ describe('ErrorPageShell', () => {
       </MemoryRouter>
     );
     const seal = await screen.findByTestId('error-seal');
-    // the drawing is a lazy chunk: the talisman generator is not in the entry
-    await waitFor(() => expect(seal.querySelector('[data-hash-seal] svg')).not.toBeNull());
+    // the drawing is a lazy chunk: the seal library is not in the entry
+    await waitFor(() => expect(seal.querySelector('[data-seal] svg')).not.toBeNull());
     // decoration behind the text: hidden from the reader, who has the caption
     expect(seal).toHaveAttribute('aria-hidden', 'true');
     expect(seal).toHaveClass('error-seal');
-    const drawn = seal.querySelector('[data-hash-seal="brush"]')!;
-    expect(drawn).not.toBeNull();
+    // one seal on the page, the stone and not the old hash seal
+    expect(document.querySelectorAll('[data-seal]')).toHaveLength(1);
+    expect(document.querySelector('[data-hash-seal]')).toBeNull();
+    const drawn = seal.querySelector<HTMLElement>('[data-seal]')!;
+    expect(seal.firstElementChild).toBe(drawn);
+    expect(drawn).toHaveAttribute('data-seal', 'block');
+    expect(drawn).toHaveAttribute('data-seal-form', 'page');
+    expect(drawn).toHaveAttribute('data-seal-state', 'pressed');
+    // the tip's block as /blocks/{n} serves it: its hash and its 5 transactions, drawn 469 px
+    // square (the area of the old 306 × 720 brush seal), pressed −3° (the not-found board's hand)
+    const id: SealId = { kind: 'block', hash: TIP_HASH, txs: 5 };
+    expect(drawn.innerHTML).toBe(
+      parsed(
+        drawSeal(id, { form: 'page', height: 469, state: 'pressed', ...SEAL_INKS, tilt: -3 }).svg
+      )
+    );
     const svg = drawn.querySelector('svg')!;
-    expect(svg).toHaveAttribute('aria-label', `Hash seal ${TIP_HASH.slice(0, 10)}`);
+    expect(svg).toHaveAttribute('aria-label', 'Block seal 0xabc123de, 5 transactions');
+    expect(svg).toHaveAttribute('width', '469');
+    expect(svg).toHaveAttribute('height', '469');
     // in the cinnabar mark, pressed a little askew; faint is the CSS's (--m-seal-press)
     expect(drawn.innerHTML).toContain('var(--c-mark)');
     expect(drawn.innerHTML).not.toContain('var(--c-rouge)');
-    expect(svg.getAttribute('style')).toContain('rotate(-3deg)');
+    expect(svg.getAttribute('style')).toBe('transform: rotate(-3deg)');
     // the seal sits in main, behind the verse, the first screen's height (globals.css)
     expect(screen.getByRole('main')).toContainElement(seal);
     expect(screen.getByRole('main')).toHaveClass('isolate');
@@ -130,7 +155,7 @@ describe('ErrorPageShell', () => {
     // the vitals named the tip, and reading its block failed (a 404 is the API's definite answer)
     await waitFor(() => expect(client.getQueryState(['block', 1000000])?.status).toBe('error'));
     expect(screen.queryByTestId('error-seal')).toBeNull();
-    expect(document.querySelector('[data-hash-seal], [data-seal-caption]')).toBeNull();
+    expect(document.querySelector('[data-seal], [data-hash-seal], [data-seal-caption]')).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: VERSE_NAME })).toBeInTheDocument();
   });
 
@@ -144,6 +169,47 @@ describe('ErrorPageShell', () => {
       </MemoryRouter>
     );
     expect(screen.queryByTestId('error-seal')).toBeNull();
+    expect(document.querySelector('[data-seal], [data-seal-caption]')).toBeNull();
+  });
+
+  it('presses no seal while the tip’s block is being read', async () => {
+    server.use(http.get(`${API}/blocks/:id`, () => new Promise<never>(() => {})));
+    const client = createTestQueryClient();
+    bareRender(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/mainnet/nowhere']}>
+          <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
+            <span>facts</span>
+          </ErrorPageShell>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    // the vitals named the tip, and its block is being asked for
+    await waitFor(() =>
+      expect(client.getQueryState(['block', 1000000])?.fetchStatus).toBe('fetching')
+    );
+    expect(screen.queryByTestId('error-seal')).toBeNull();
+    expect(document.querySelector('[data-seal], [data-seal-caption]')).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: VERSE_NAME })).toBeInTheDocument();
+  });
+
+  // The stone takes about the area the old brush seal took: that one was 11.94 × 28.14 units, as
+  // tall as main's box (a screen at most); a square of its area is 0.651 of its height.
+  it('sizes the stone from the first screen: 0.65 of the old brush seal’s height, never past the gutters', () => {
+    const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+    const rule = (selector: string) => {
+      const at = css.indexOf(`\n${selector} {`);
+      expect(at).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf('}', at));
+    };
+    expect(Math.sqrt(11.94 / 28.14)).toBeCloseTo(0.65, 2);
+    expect(rule('.error-seal > [data-seal]')).toContain(
+      'height: min(65%, 65svh, calc(100vw - 32px));'
+    );
+    expect(rule('.error-seal')).toContain('opacity: var(--m-seal-press);');
+    expect(rule('.error-seal svg')).toContain('width: auto;');
+    // the old hash seal's rule is gone with it
+    expect(css).not.toContain('[data-hash-seal]');
   });
 
   it('the crash page: the thought of the failed transition, the error in red, one footer, and no claim about the chain', () => {
@@ -236,7 +302,7 @@ describe('ErrorPageShell', () => {
       expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
       expect(document.querySelector('canvas, .error-night')).toBeNull();
       // above every provider: no tip to read, so the verse stands without a seal
-      expect(document.querySelector('[data-hash-seal]')).toBeNull();
+      expect(document.querySelector('[data-seal], [data-hash-seal]')).toBeNull();
       expect(
         screen.getByRole('heading', {
           level: 1,

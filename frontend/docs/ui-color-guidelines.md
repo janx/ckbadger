@@ -60,22 +60,29 @@ Use the following hierarchy in `frontend/app` and `frontend/components`:
 
 The token names are the roles the pages were written against; the values are the boards' inks.
 
-| Token      | Ink                      | Night     | Day       | Usage                                                    |
-| ---------- | ------------------------ | --------- | --------- | -------------------------------------------------------- |
-| `jade`     | celadon 青瓷             | `#93c1b6` | `#2f6b63` | Active, interactive, nav, the data colour, phosphor      |
-| `mark`     | cinnabar 朱砂            | `#c2452d` | `#b5331f` | Prompt squares, seals, the search square — UI grade only |
-| `rouge`    | cinnabar text 朱砂       | `#d9634a` | `#a8392a` | Error, failure (cinnabar as text)                        |
-| `gold`     | old gold 古金            | `#c9a45c` | `#80600f` | Warning, DAO, emphasis values                            |
-| `aqua`     | indigo 靛青              | `#7fa3c9` | `#2e5f8f` | Informational, links                                     |
-| `lavender` | lotus 藕荷               | `#a797c4` | `#5e4d9a` | Special; a chart hue                                     |
-| `identity` | rouge 胭脂 (the boards') | `#c97f93` | `#9c3b5f` | The identity class (`CLASS_COLORS.identities`)           |
-| `token`    | azurite 石青             | `#6f9ad6` | `#2a5a9e` | The token class (`CLASS_COLORS.tokens`)                  |
-| `object`   | lotus violet             | `#a58ad6` | `#5e45a8` | The object class (`CLASS_COLORS.objects`)                |
-| `copper`   | ochre 赭石               | `#cc8a5e` | `#93522b` | Bitcoin: RGB++, the BTC tiers (`BITCOIN_COLORS.copper`)  |
-| `amber`    | moss 苔绿                | `#a3bf7a` | `#46701f` | A chart hue (one-to-one for the old burnt orange)        |
+| Token      | Ink                      | Night     | Day       | Usage                                                                      |
+| ---------- | ------------------------ | --------- | --------- | -------------------------------------------------------------------------- |
+| `jade`     | celadon 青瓷             | `#93c1b6` | `#2f6b63` | Active, interactive, nav, the data colour, phosphor                        |
+| `mark`     | cinnabar 朱砂            | `#c2452d` | `#b5331f` | Prompt squares, the seals' ink in force, the search square — UI grade only |
+| `rouge`    | cinnabar text 朱砂       | `#d9634a` | `#a8392a` | Error, failure (cinnabar as text)                                          |
+| `gold`     | old gold 古金            | `#c9a45c` | `#80600f` | Warning, DAO, emphasis values                                              |
+| `aqua`     | indigo 靛青              | `#7fa3c9` | `#2e5f8f` | Informational, links                                                       |
+| `lavender` | lotus 藕荷               | `#a797c4` | `#5e4d9a` | Special; a chart hue                                                       |
+| `identity` | rouge 胭脂 (the boards') | `#c97f93` | `#9c3b5f` | The identity class (`CLASS_COLORS.identities`)                             |
+| `token`    | azurite 石青             | `#6f9ad6` | `#2a5a9e` | The token class (`CLASS_COLORS.tokens`)                                    |
+| `object`   | lotus violet             | `#a58ad6` | `#5e45a8` | The object class (`CLASS_COLORS.objects`)                                  |
+| `copper`   | ochre 赭石               | `#cc8a5e` | `#93522b` | Bitcoin: RGB++, the BTC tiers (`BITCOIN_COLORS.copper`)                    |
+| `amber`    | moss 苔绿                | `#a3bf7a` | `#46701f` | A chart hue (one-to-one for the old burnt orange)                          |
 
 `mark` and `rouge` are both cinnabar: `mark` is the pigment as a shape (≥ 3:1, never body text),
 `rouge` the same red lifted (by night) or deepened (by day) to body-text contrast.
+
+A seal (the seals by kind: `lib/seal/`, `components/ui/seal.tsx`) is pressed in one of three inks,
+and the ink is its state: `mark` for what is in force (a block, a committed transaction, a live
+cell, a script); `text-dim`, the dead ink, for a consumed cell or an uncle; and for what is not yet
+committed (a pool transaction and the cells it would create) a dashed stone in `mark`, its field at
+half strength. A row stone's text is cut in `base-bg`, the page ground. `Seal` passes no other
+paint, and the library refuses one that is not a palette reference or a hex (`assertPaint`).
 
 The grounds step the other way by day: the page is paper (`base-bg`), a surface is a whiter sheet
 (`base-surface`), the well is the whitest (`base-void`, under an inset), and `base-elevated` is a
@@ -137,7 +144,7 @@ opaque, and `glass-sheen` / `-top-edge` / `-bottom-edge` / `-ring` transparent (
 the surface under its own 1 px border); `well-inset` black 60 % / ink 8 % (the boards' `inset`),
 `well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the
 surface, opaque, in both themes (the vitals strip is the page's own ground drawn solid, so the page
-never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's seal pressed behind the
+never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's stone (its page seal) pressed behind the
 404 verse (the most each theme allows with every ink of the verse and its facts text-grade across a
 stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
 calc(0.45 * var(--m-glow)))`), out by day.

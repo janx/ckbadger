@@ -121,6 +121,7 @@
   "dataHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "dataSize": 0,
   "depGroupItems": null,
+  "display": null,
   "isDepGroup": false,
   "lifetimeMs": 1800000,
   "liveAgeAtBlock": null,
@@ -140,5 +141,6 @@
   "status": "dead",
   "txHash": "0x2518f6535cd50d5f3c668f8d1f5a247b91c3cb01c28b612795cc5a9fad2b9188",
   "type": null,
+  "typeCellType": "plain",
   "typeScriptHash": null
 }

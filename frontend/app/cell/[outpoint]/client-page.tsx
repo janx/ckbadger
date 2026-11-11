@@ -8,6 +8,7 @@ import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
+import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ExactCkb } from '@/components/activity-event-row';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
@@ -20,6 +21,7 @@ import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
+import { cellPageSeal } from '@/lib/cell-seal';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -379,25 +381,25 @@ function CellOrigin({ cell }: { cell: Cell }) {
 function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | null }) {
   const names = useScriptNames(cell);
   const outpoint = `${cell.txHash}:${cell.outputIndex}`;
+  // The seals by kind (C3): the cell's own stone, classed by the transaction page's one
+  // classifier from the class fields the API serves for it; spent, in the dead ink.
+  const seal = cellPageSeal(cell, kindOf);
   return (
     <>
       <DetailLayout
-        // Consistency round C13 + lane U (U3): the page presents a cell — "Cell" in dim before
-        // its short out point; the full out point, its copy and the transaction it is an output
-        // of are the identity lines beneath (no "Transaction … / output N" breadcrumb).
-        title={
-          <>
-            {/* An inline-block, so a phone wraps "Cell" away before it breaks the out point. */}
-            <span className="text-text-dim">Cell</span>{' '}
-            <span className="inline-block">
-              {short(cell.txHash)}:{cell.outputIndex}
-            </span>
-          </>
-        }
+        // Consistency round C13 + lane U (U3): the page presents a cell, named by its short out
+        // point; the kind line before it says "Cell" (seals by kind, C10), the full out point and
+        // its copy are the id line, and the transaction it is an output of is said under the plate
+        // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, its one break
+        // opportunity after the "…": under the stone below md it has the full width, and at 26 px
+        // the short out point (19 characters, 20 or 21 for an index up to 999) is 286.5 to 316.7
+        // px, inside the 328 px line at 360, so it stands on one line.
+        title={`${short(cell.txHash)}:${cell.outputIndex}`}
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
-        // The out point's 32-byte part is its transaction's hash (the index is not a hash): a cell
-        // carries the seal of the transaction that made it, the seal on that transaction's page.
-        seal={{ hash: cell.txHash, scale: 'object' }}
+        // The cell's own page seal: its transaction's rim and border, its index in rods, its
+        // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
+        seal={{ ...seal, kind: 'Cell' }}
+        // on the kind line, after "Cell"
         status={
           <span className="flex flex-wrap items-center gap-3">
             <span
@@ -414,18 +416,21 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <CodeCellOf cell={cell} />
           </span>
         }
+        // The id line: the full out point and its copy, in the plate's quiet voice (C10 round 2:
+        // it was text-body in the bright ink, competing with the h1 above it), its colon in the
+        // same ink; it wraps anywhere, as the line does.
         identity={
-          <div className="space-y-1.5">
-            {/* Lane U (U6): the inventory item this cell is, first under the h1. */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="min-w-0">{outpoint}</span>
+            <CopyOutpoint value={outpoint} />
+          </div>
+        }
+        // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
+        // dim small voice: the inventory item this cell is (lane U, U6), the transaction it is an
+        // output of, and what its out point is.
+        lede={
+          <div className="text-text-dim text-small space-y-1.5">
             <CellInventoryLine cell={cell} />
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-text-bright text-body [overflow-wrap:anywhere]">
-                {cell.txHash}
-                <span className="text-text-dim">:</span>
-                {cell.outputIndex}
-              </span>
-              <CopyOutpoint value={outpoint} />
-            </div>
             <CellOrigin cell={cell} />
             <p>
               The out point is the cell&apos;s only name: transaction hash and output index. No

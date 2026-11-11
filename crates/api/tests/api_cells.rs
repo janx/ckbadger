@@ -625,6 +625,31 @@ async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCk
     let mut indexed = dotcell_name_cell_info(data_size);
     indexed.data_hash = Some(fixture_data_hash(&data).try_into().unwrap());
     batch.put_cell(&tx_hash, 0, &indexed, 123);
+    // The identity row the indexer writes for the name `support.cell`: an
+    // indexed name cell's display (as on the transaction page) requires it.
+    batch.put_identity(
+        &ckbadger_store::types::derive_dotcell_id("support"),
+        &IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some("support.cell".into()),
+            is_live: true,
+            created_at_block: 123,
+            created_at_tx: tx_hash.to_vec(),
+            extra: IdentityExtra::DotCell {
+                label: "support".into(),
+                namespace_args: namespace.as_slice().try_into().unwrap(),
+                layout_version: 3,
+                expired_at: 0,
+                owner_hash20: [0; 20],
+                manager_hash20: [0; 20],
+                next_id: [0; 20],
+                records_hash: [0; 32],
+                records: vec![],
+                parent_id: None,
+            },
+        },
+    );
     batch.commit().unwrap();
     seed_cell_transaction(&store, &tx_hash, 123, 1);
     seed_block_headers_at(&store, &[(123, 1_700_000_000_000)]);
@@ -667,6 +692,27 @@ async fn test_cell_detail_decodes_dotcell_name_from_ckb_store() {
     );
     assert_eq!(json["protocolScript"]["lock"], "dotcell-account-lock");
     assert_eq!(json["protocolScript"]["type"], "dotcell-account");
+}
+
+/// Seal kinds (A0-1): a `.cell` name cell's page serves the class the
+/// transaction page gives it — `typeCellType` `dotcell-account` and the
+/// identity display named from its own bytes (the mainnet `support.cell`
+/// id) — beside the burn marker `cellType`, which a name cell has not.
+#[tokio::test]
+async fn test_cell_detail_classes_a_dotcell_name_cell_as_an_identity() {
+    let (app, tx_hash, _chain) =
+        dotcell_name_cell_app(hex::decode(DOTCELL_SUPPORT_DATA).unwrap()).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["typeCellType"], "dotcell-account");
+    assert_eq!(json["display"]["kind"], "identity");
+    assert_eq!(json["display"]["standard"], "dotcell");
+    assert_eq!(json["display"]["name"], "support.cell");
+    assert_eq!(
+        json["display"]["id"],
+        "0x62d71147ac82b83c8531126cacb0d2f072bfd94a"
+    );
+    assert!(json.get("cellType").is_none(), "got {json}");
 }
 
 /// A Cells Account cell whose bytes do not decode cannot have been stored by
@@ -2535,6 +2581,19 @@ async fn one_output_cell_app(
     capacity: u64,
     seed: impl FnOnce(&mut StoreBatch),
 ) -> (axum::Router, [u8; 32], TestCkbChain) {
+    one_output_cell_app_at(123, lock, type_, data, capacity, seed).await
+}
+
+/// [`one_output_cell_app`] with the transaction in block `block` (the
+/// network's genesis baseline seeded too, for a block-0 burn cell).
+async fn one_output_cell_app_at(
+    block: u64,
+    lock: ckb_types::packed::Script,
+    type_: Option<ckb_types::packed::Script>,
+    data: Vec<u8>,
+    capacity: u64,
+    seed: impl FnOnce(&mut StoreBatch),
+) -> (axum::Router, [u8; 32], TestCkbChain) {
     use ckb_types::bytes::Bytes;
     use ckb_types::core::{Capacity, TransactionBuilder};
     use ckb_types::packed;
@@ -2550,12 +2609,12 @@ async fn one_output_cell_app(
         .output_data(Bytes::from(data.clone()).pack())
         .build();
     let tx_hash: [u8; 32] = tx.hash().unpack();
-    let block = ckb_types::core::BlockBuilder::default()
-        .number(123u64.pack())
+    let chain = seed_ckb_chain(&[ckb_types::core::BlockBuilder::default()
+        .number(block.pack())
         .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800).pack())
         .transaction(tx)
-        .build();
-    let chain = seed_ckb_chain(&[block]);
+        .build()]);
+    let block = i64::try_from(block).unwrap();
 
     let hash_type = |script: &packed::Script| -> i16 {
         let byte: u8 = script.hash_type().into();
@@ -2581,12 +2640,13 @@ async fn one_output_cell_app(
             udt_amount: None,
             data_hash: Some(fixture_data_hash(&data).try_into().unwrap()),
         },
-        123,
+        block,
     );
     seed(&mut batch);
     batch.commit().unwrap();
-    seed_cell_transaction(&store, &tx_hash, 123, 1);
-    seed_block_headers_at(&store, &[(123, 1_700_000_000_000)]);
+    seed_genesis_baseline(&store);
+    seed_cell_transaction(&store, &tx_hash, block, 1);
+    seed_block_headers_at(&store, &[(block, 1_700_000_000_000)]);
 
     let config = test_config_with_ckb_db_path(
         store.clone(),
@@ -2757,6 +2817,30 @@ async fn test_xudt_cell_without_an_amount_names_its_token_and_the_reason() {
             "noAmountReason": "xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)",
         })
     );
+}
+
+/// Seal kinds (A0-1): the genesis Satoshi cell keeps its burn marker
+/// `cellType` and its virtual size; its class `typeCellType` is still
+/// `cell_type()`'s — `plain`, no type script — with no display. This is the
+/// one cell whose transaction-page `cellType` (the burn marker) differs from
+/// its cell-page `typeCellType`; both class it as plain CKB.
+#[tokio::test]
+async fn test_genesis_satoshi_cell_keeps_its_burn_marker_beside_its_class() {
+    use ckb_types::core::ScriptHashType;
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &ckbadger_common::dao::SATOSHI_PUBKEY_HASH,
+    );
+    let (app, tx_hash, _chain) =
+        one_output_cell_app_at(0, lock, None, Vec::new(), 100_000_000_000, |_| {}).await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["cellType"], "genesis_special_burn");
+    assert_eq!(json["virtualCommonKnowledgeSize"], "504000000000000000");
+    assert_eq!(json["typeCellType"], "plain");
+    assert!(json["display"].is_null(), "got {}", json["display"]);
 }
 
 /// Review P1-2 / 27: the address transactions page reads its positions, then

@@ -67,6 +67,36 @@ function Line({
   );
 }
 
+/**
+ * One part of a token's name (its amount, or its unit) as an atomic box capped at the line: whole,
+ * on a line of its own, when it fits there; wrapping inside itself (at its spaces, then anywhere)
+ * only when it alone is wider. Neither part has a length bound (a unit is the token's own text; an
+ * amount of a 0-decimal token can be any number of digits), and `whitespace-nowrap` would forbid
+ * even the last-resort break, so the `anywhere` sits here, on each part (seals by kind, C8, C9:
+ * "5,913.45087427 LP-UTXOSwap V1" is 296 px; beside the 88 px cell stone the line is 254 px at 390
+ * and 224 px at 360). The default baseline sets the box's last line on the sentence's, and the
+ * link's colour and glow reach it by inheritance. A short id (19 characters at most) stays
+ * `whitespace-nowrap`: its length is bounded.
+ */
+function NamePart({ children }: { children: string }) {
+  return <span className="inline-block max-w-full [overflow-wrap:anywhere]">{children}</span>;
+}
+
+/**
+ * A token's amount and unit, degrading in order (C9): on one line when the pair fits; otherwise the
+ * amount whole on one line and the unit whole on the next (the one space between the two parts is
+ * the only break the pair offers, so the unit's own hyphen is never taken while the unit fits a
+ * line); and only a part wider than the line by itself wraps inside. The pair is an atomic box
+ * capped at the line too, so it never leaves its amount on the lead's line and its unit below.
+ */
+function TokenAmount({ amount, unit }: { amount: string; unit: string }) {
+  return (
+    <span className="inline-block max-w-full">
+      <NamePart>{amount}</NamePart> <NamePart>{unit}</NamePart>
+    </span>
+  );
+}
+
 /** "Nervape Mask 0x7e3bc1bc…216539" with the cluster's name; "a Spore object 0x…" before it. */
 function SporeLine({ item }: { item: Extract<CellInventoryItem, { kind: 'spore' }> }) {
   const object = useQuery({
@@ -210,9 +240,10 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
 }
 
 /**
- * Lane U (U6): the cell page hero's one line naming the inventory item the cell is — right under
- * the h1. A cell of an unhandled protocol, or a plain cell, gets no line; a handled cell whose data
- * does not name its item says so in place, never a guess.
+ * Lane U (U6): the cell page hero's one line naming the inventory item the cell is — the first line
+ * under the stone and the name plate (seals by kind, C10). A cell of an unhandled protocol, or a
+ * plain cell, gets no line; a handled cell whose data does not name its item says so in place,
+ * never a guess.
  */
 export function CellInventoryLine({ cell }: { cell: Cell }) {
   let item: CellInventoryItem | null;
@@ -243,7 +274,7 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           mark="tokens"
           lead="This cell holds"
           href={item.href}
-          name={<span className="whitespace-nowrap">{`${item.amount} ${item.unit}`}</span>}
+          name={<TokenAmount amount={item.amount} unit={item.unit} />}
         />
       );
     case 'token-without-amount':
@@ -252,7 +283,7 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           mark="tokens"
           lead="This cell holds no readable amount of"
           href={item.href}
-          name={<span className="whitespace-nowrap">{item.unit}</span>}
+          name={<NamePart>{item.unit}</NamePart>}
           tail={
             <span data-testid="cell-inventory-no-amount" className="text-text-dim text-small">
               {' '}

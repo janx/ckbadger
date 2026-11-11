@@ -10,7 +10,12 @@ interface HexCodeProps {
   endChars?: number;
   className?: string;
   copyable?: boolean;
-  variant?: 'default' | 'bright' | 'dim';
+  /**
+   * The ink: the text ink by default, bright or dim; `inherit` writes no ink of its own, so the
+   * value takes the ink (and the size) of the line it stands in — a name plate's id line, which
+   * sets its voice once (seals by kind, C10 round 2).
+   */
+  variant?: 'default' | 'bright' | 'dim' | 'inherit';
 }
 
 export function HexCode({
@@ -29,10 +34,11 @@ export function HexCode({
       ? `${value.slice(0, startChars)}...${value.slice(-endChars)}`
       : value;
 
-  const variantClasses = {
+  const variantClasses: Record<NonNullable<HexCodeProps['variant']>, string | null> = {
     default: 'text-text',
     bright: 'text-text-bright',
     dim: 'text-text-dim',
+    inherit: null,
   };
 
   const handleCopy = async () => {

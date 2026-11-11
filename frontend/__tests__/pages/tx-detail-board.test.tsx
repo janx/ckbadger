@@ -8,7 +8,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
-import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import {
+  expectBefore,
+  expectNamePlate,
+  expectOnePageSeal,
+  parsed,
+  SEAL_INKS,
+} from '@/__tests__/utils/seals';
+import { PAGE_SEAL_TILT } from '@/components/ui/page-seal';
+import { drawSeal, type SealId, type SealState } from '@/lib/seal/stones';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
@@ -16,6 +24,14 @@ import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const TYPE_CODE_HASH = '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075';
+/**
+ * Script hashes as the API serves them, 32 bytes (seal kinds, C3: a cell's seal is drawn from its
+ * lock and type hash, which must be real hashes): blake2b of the input lock (args 0x11 × 20), the
+ * type script and the output lock (args 0x22 × 20) below.
+ */
+const INPUT_LOCK = '0x29e560749fc5c785e3c1cfc3e14c0e608ec87120f0c066facf023ee8bd569d84';
+const TYPE_SCRIPT = '0xba0286acbad839ae8a95e182d7698efdf654135d483b92863c55c80d170868ad';
+const OUTPUT_LOCK = '0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0';
 let mockSearchParams = new URLSearchParams();
 /** Other lanes' suites share this machine: give first renders room. */
 const SLOW = { timeout: 5000 };
@@ -110,7 +126,7 @@ function committed(): TransactionDetail {
     ],
     scriptGroups: [
       {
-        scriptHash: '0xinputlock',
+        scriptHash: INPUT_LOCK,
         kind: 'lock',
         ran: true,
         inputIndices: [0],
@@ -120,7 +136,7 @@ function committed(): TransactionDetail {
         cycles: '1694860',
       },
       {
-        scriptHash: '0xtypescript',
+        scriptHash: TYPE_SCRIPT,
         kind: 'type',
         ran: true,
         inputIndices: [0],
@@ -130,7 +146,7 @@ function committed(): TransactionDetail {
         cycles: '228853',
       },
       {
-        scriptHash: '0xoutputlock',
+        scriptHash: OUTPUT_LOCK,
         kind: 'lock',
         ran: false,
         inputIndices: [],
@@ -159,7 +175,7 @@ function committed(): TransactionDetail {
         actions: [
           {
             scriptInfoHash: `0x${'44'.repeat(32)}`,
-            scriptHash: '0xtypescript',
+            scriptHash: TYPE_SCRIPT,
             data: '0x01',
             schema: 'spore',
             name: 'TransferSpore',
@@ -208,6 +224,59 @@ const lookup = {
   [TYPE_CODE_HASH]: { codeHash: TYPE_CODE_HASH, name: 'Spore' },
 } as unknown as Awaited<ReturnType<typeof api.lookupScripts>>;
 
+/**
+ * The page's seals by kind (C2): the header presses one page stone of `id` (its long stone, 94 px,
+ * 64 below md), and — when the cells are drawn — the same stone is pressed again at 64 px across
+ * the seam between the two sheets (C11: two impressions of it, its left half on the consumed sheet
+ * and its right half on the created one), shown from lg only. Returns the head's stone and the
+ * seam seal's first half (null when none).
+ */
+function expectTxSeals(
+  container: HTMLElement,
+  id: SealId,
+  state: SealState,
+  seam: boolean
+): { head: HTMLElement; seam: HTMLElement | null } {
+  const header = container.querySelector('header') as HTMLElement;
+  const head = expectOnePageSeal(header, id, state);
+  const all = container.querySelectorAll('[data-seal][data-seal-form="page"]');
+  const holders = container.querySelectorAll<HTMLElement>('[data-seam-seal]');
+  if (!seam) {
+    expect(all).toHaveLength(1);
+    expect(holders).toHaveLength(0);
+    return { head, seam: null };
+  }
+  // the seam seal's two halves of one stone, never a second one in the header
+  expect(all).toHaveLength(3);
+  expect(holders).toHaveLength(1);
+  const [holder] = Array.from(holders);
+  expect(header).not.toContainElement(holder);
+  expect(screen.getByTestId('tx-cells-frame')).toContainElement(holder);
+  // in the seam, from lg only (below it the sheets stack and the header's stone is the one), and
+  // hidden from a screen reader, which has the header's
+  expect(holder.parentElement).toHaveAttribute('data-seam');
+  expect(holder.parentElement).toHaveClass('hidden', 'lg:block');
+  expect(holder).toHaveAttribute('aria-hidden', 'true');
+  const stamps = Array.from(holder.querySelectorAll<HTMLElement>('[data-seal]'));
+  expect(stamps.map((s) => s.closest('[data-seam-half]')!.getAttribute('data-seam-half'))).toEqual([
+    'consumed',
+    'created',
+  ]);
+  for (const stamp of stamps) {
+    expect(stamp).toHaveAttribute('data-seal', 'tx');
+    expect(stamp).toHaveAttribute('data-seal-form', 'page');
+    expect(stamp).toHaveAttribute('data-seal-state', state);
+    expect(stamp.innerHTML).toBe(
+      parsed(
+        drawSeal(id, { form: 'page', height: 64, state, ...SEAL_INKS, tilt: PAGE_SEAL_TILT }).svg
+      )
+    );
+    expect(stamp.querySelector('a')).toBeNull();
+    expect(stamp.closest('a')).toBeNull();
+  }
+  return { head, seam: stamps[0] };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockSearchParams = new URLSearchParams();
@@ -220,7 +289,7 @@ beforeEach(() => {
       outPointTxHash: `0x71a7ba8f${'00'.repeat(26)}72e46c`,
       outPointIndex: 0,
       depType: 'dep_group',
-      scriptHashes: ['0xinputlock'],
+      scriptHashes: [INPUT_LOCK],
       outputLockScriptHashes: [],
       resolvedCells: [
         {
@@ -228,7 +297,7 @@ beforeEach(() => {
           index: 0,
           dataHash: '0xdata',
           typeHash: null,
-          scriptHashes: ['0xinputlock'],
+          scriptHashes: [INPUT_LOCK],
           outputLockScriptHashes: [],
           codeSize: 52048,
           scriptNames: ['Default Lock'],
@@ -249,7 +318,7 @@ beforeEach(() => {
       outPointTxHash: `0x96b198fb${'00'.repeat(26)}b69824`,
       outPointIndex: 0,
       depType: 'code',
-      scriptHashes: ['0xtypescript'],
+      scriptHashes: [TYPE_SCRIPT],
       outputLockScriptHashes: [],
       resolvedCells: [
         {
@@ -257,7 +326,7 @@ beforeEach(() => {
           index: 0,
           dataHash: '0xd3',
           typeHash: null,
-          scriptHashes: ['0xtypescript'],
+          scriptHashes: [TYPE_SCRIPT],
           outputLockScriptHashes: [],
           codeSize: 76752,
           scriptNames: ['Spore'],
@@ -269,7 +338,7 @@ beforeEach(() => {
       outPointIndex: 0,
       depType: 'code',
       scriptHashes: [],
-      outputLockScriptHashes: ['0xoutputlock'],
+      outputLockScriptHashes: [OUTPUT_LOCK],
       resolvedCells: [
         {
           txHash: `0xd00a0222${'00'.repeat(26)}2c47f7`,
@@ -277,7 +346,7 @@ beforeEach(() => {
           dataHash: '0xd4',
           typeHash: '0xtt',
           scriptHashes: [],
-          outputLockScriptHashes: ['0xoutputlock'],
+          outputLockScriptHashes: [OUTPUT_LOCK],
           codeSize: 122552,
           scriptNames: [],
         },
@@ -303,7 +372,10 @@ describe('Transaction board, tier 1', () => {
     Object.assign(navigator, { clipboard: { writeText } });
     render(<TransactionDetailPage />);
     const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
-    expect(h1.previousElementSibling).toHaveTextContent('Transaction');
+    // the kind line says "Transaction" before the action (seals by kind, C10)
+    const kindLine = document.querySelector('[data-sealed-kind]') as HTMLElement;
+    expect(kindLine).toHaveTextContent(/^Transaction$/);
+    expectBefore(kindLine, h1);
     expect(h1.querySelector('[data-class]')).toBeNull();
     const summary = await screen.findByTestId('tx-summary', {}, SLOW);
     expect(summary).toHaveTextContent(
@@ -314,18 +386,49 @@ describe('Transaction board, tier 1', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
   });
 
-  // Rubbing × Song print, phase 3 (the Transaction board's one corner): the transaction's
-  // talisman, the 150 px page seal (96 on a phone, −4°), pressed beside the page's own header —
-  // the eyebrow, the action, the summary and the hash — never in the facts, cells or flows.
-  it('presses the transaction’s seal beside its header, outside the facts and the cells', async () => {
+  // The seals by kind (C2; the Transaction board's one corner): the transaction's long stone,
+  // 94 px (64 on a phone, −4°), its rods the cells it consumed and created, never in the facts.
+  // The name plate (C10): beside it the kind line "Transaction", the action and the hash with its
+  // copy button; the summary and the comment under both, from the page's left edge.
+  it('presses the transaction’s stone beside its name plate, the summary under both, outside the facts and the cells', async () => {
     const { container } = render(<TransactionDetailPage />);
     const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
-    const seal = expectOnePageSeal(container, TX_HASH, 'record');
-    const head = seal.closest('[data-sealed-head]')!;
+    await screen.findByTestId('tx-cells-frame', {}, SLOW);
+    const { head: seal } = expectTxSeals(
+      container,
+      { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
+      'pressed',
+      true
+    );
+    const header = container.querySelector('header') as HTMLElement;
+    const { head, stone, kindLine, nameBox, title, below } = expectNamePlate(header, 'Transaction');
+    expect(stone).toBe(seal);
+    expect(title).toBe(h1);
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index');
+    expect(kindLine.children).toHaveLength(1);
+    // the plate: the action, then the id line — the hash and its copy button, nothing else
+    expect(nameBox.children).toHaveLength(2);
+    const idLine = nameBox.lastElementChild as HTMLElement;
+    expect(idLine).toHaveTextContent(new RegExp(`^${TX_HASH}$`));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    // C10 round 2: the id line in the plate's one quiet voice, set by the plate; the hash and its
+    // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
+    // the copy button keeps its own classes
+    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    const hash = within(idLine).getByText(TX_HASH);
+    expect(hash.className).toBe('min-w-0');
+    expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
+    expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
+      'text-text-dim',
+      'hover:text-jade',
+      '-my-3',
+      'h-11',
+      'w-11'
+    );
+    // under both: the summary first
+    expect(below!.firstElementChild).toBe(screen.getByTestId('tx-summary'));
+    expect(nameBox).not.toContainElement(screen.getByTestId('tx-summary'));
     expect(head.closest('header')).toContainElement(h1);
-    expect(head).toContainElement(h1);
-    expect(head).toContainElement(screen.getByTestId('tx-summary'));
-    expect(head).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
     expectBefore(seal, h1);
     expect(head).not.toContainElement(
       await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW)
@@ -335,9 +438,40 @@ describe('Transaction board, tier 1', () => {
     );
   });
 
-  // Rubbing × Song print, phase 5 (T4): the board's comment under the sealed head, in the identity
-  // column: three lines from the figures the page draws — the cells heading's counts, the rail's
-  // fee and the evidence tier's common-knowledge delta (563 → 589 occupied bytes).
+  // The seam seal (C2, C11): from lg the cells lie on two sheets, consumed | created, with a 4 px
+  // seam between; the same stone is pressed across that seam, its left half on the consumed sheet
+  // and its right half on the created one. The sheets' heads end with the API's exact totals.
+  it('presses the same stone across the seam between the two sheets, from lg', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-cells-frame', {}, SLOW);
+    const { seam } = expectTxSeals(
+      container,
+      { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
+      'pressed',
+      true
+    );
+    const canvas = container.querySelector<HTMLElement>('[data-tx-canvas]')!;
+    const [consumed, gap, created] = Array.from(canvas.children) as HTMLElement[];
+    expect(consumed).toHaveAttribute('data-sheet', 'consumed');
+    expect(gap).toHaveAttribute('data-seam');
+    expect(gap).toContainElement(seam!);
+    expect(created).toHaveAttribute('data-sheet', 'created');
+    expect(canvas).not.toHaveTextContent(/capacity pool/i);
+    expect(within(consumed).getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
+    expect(within(created).getByRole('heading', { name: '1 cell created' })).toBeInTheDocument();
+    // the totals are the API's inputsCapacity and outputsCapacity, exact
+    expect(consumed.querySelector('[data-sheet-total]')).toHaveTextContent(/^555(\.0+)? CKB$/);
+    expect(created.querySelector('[data-sheet-total]')).toHaveTextContent(/^554\.99935881 CKB$/);
+    // the heads hold the stone's band; the fee closes the created sheet
+    for (const sheet of [consumed, created])
+      expect(sheet.querySelector('[data-sheet-head]')).toHaveClass('lg:min-h-[70px]');
+    expect(within(created).getByTestId('tx-fee')).toHaveTextContent(/^fee0\.00064119 CKB$/);
+  });
+
+  // Rubbing × Song print, phase 5 (T4): the board's comment, three lines from the figures the page
+  // draws — the cells heading's counts, the rail's fee and the evidence tier's common-knowledge
+  // delta (563 → 589 occupied bytes). The name plate (C10): under the stone and the plate after
+  // the summary, from the page's left edge (it was in the column beside the stone).
   it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
     const { container } = render(<TransactionDetailPage />);
     const first = await screen.findByText('1 cell became 1.', {}, SLOW);
@@ -352,14 +486,17 @@ describe('Transaction board, tier 1', () => {
     ]);
     expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
     expect(container.querySelectorAll('.comment')).toHaveLength(1);
-    // under the seal and the identity, in the identity column, inside the page's header
-    const head = container.querySelector('[data-sealed-head]') as HTMLElement;
-    const below = comment.parentElement!;
-    expect(below).toHaveAttribute('data-sealed-below');
-    expect(below.parentElement).toBe(head);
-    expect(below).toHaveClass('col-start-2');
+    // under the seal and the plate, across both columns, after the summary, inside the header
+    const { head, below } = expectNamePlate(
+      container.querySelector('header') as HTMLElement,
+      'Transaction'
+    );
+    expect(comment.parentElement).toBe(below);
+    const summary = await screen.findByTestId('tx-summary', {}, SLOW);
+    expect(Array.from(below!.children)).toEqual([summary, comment]);
     expect(head.closest('header')).toContainElement(comment);
-    // reading order: the identity (the hash and its copy button), the comment, then the facts
+    // reading order: the identity (the hash and its copy button), the summary, the comment, then
+    // the facts
     expectBefore(screen.getByRole('button', { name: 'Copy transaction hash' }), comment);
     expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
     // the fee is the one the rail prints, digit for digit
@@ -429,11 +566,11 @@ describe('Transaction board, tier 2', () => {
     fireEvent.mouseEnter(w0);
     expect(w0).toHaveAttribute('data-lit', 'true');
     expect(screen.getByTestId('tx-witness-item-1')).toHaveClass('opacity-25');
-    expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveAttribute(
+    expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveAttribute(
       'data-lit',
       'true'
     );
-    expect(document.querySelector('[data-group-row="type:run:0xtypescript"]')).toHaveAttribute(
+    expect(document.querySelector(`[data-group-row="type:run:${TYPE_SCRIPT}"]`)).toHaveAttribute(
       'data-dimmed',
       'true'
     );
@@ -484,13 +621,12 @@ describe('Transaction board, tier 2', () => {
     expect(dep2).toHaveTextContent('not run here');
     expect(dep2).not.toHaveTextContent('dep_group');
     fireEvent.mouseEnter(dep2);
-    expect(document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')).toHaveAttribute(
-      'data-lit',
-      'true'
-    );
+    expect(
+      document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
+    ).toHaveAttribute('data-lit', 'true');
     expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
     const attached = document.querySelector(
-      '[data-group-row="lock:attached:0xoutputlock"]'
+      `[data-group-row="lock:attached:${OUTPUT_LOCK}"]`
     ) as HTMLElement;
     expect(attached).toHaveTextContent('code 0xd00a0222...2c47f7:0 · not run here');
     // In the code column the out point opens the code cell; the kind jumps to the dep row.
@@ -502,7 +638,9 @@ describe('Transaction board, tier 2', () => {
       'href',
       '#tx-dep-2'
     );
-    const spore = document.querySelector('[data-group-row="type:run:0xtypescript"]') as HTMLElement;
+    const spore = document.querySelector(
+      `[data-group-row="type:run:${TYPE_SCRIPT}"]`
+    ) as HTMLElement;
     expect(within(spore).getByRole('link', { name: '0x96b198fb...b69824:0' })).toHaveAttribute(
       'href',
       expect.stringMatching(new RegExp(`/cell/0x96b198fb${'00'.repeat(26)}b69824-0$`))
@@ -622,7 +760,16 @@ describe('Transaction variants (D4)', () => {
       inputsCommonKnowledgeSize: '0',
       outputsCapacity: '55961739927',
       outputsCommonKnowledgeSize: '61',
-      outputs: [{ ...committed().outputs![0], capacity: '55961739927', commonKnowledgeSize: '61' }],
+      // a cellbase's reward cell is plain, 61 bytes: no type script, so no type group
+      outputs: [
+        {
+          ...committed().outputs![0],
+          type: undefined,
+          cellType: 'plain',
+          capacity: '55961739927',
+          commonKnowledgeSize: '61',
+        },
+      ],
       scriptGroups: [committed().scriptGroups![2]],
       witnessDetails: [
         {
@@ -665,6 +812,19 @@ describe('Transaction variants (D4)', () => {
     // A cellbase consumes no cell: the cells command runs on 0 in (T1), and its comment says where
     // its cells come from, with no fee line (T4).
     expect(screen.getByRole('heading', { name: 'Cells 0 in → 1 out' })).toBeInTheDocument();
+    // C2: its stones say the same 0 → 1 — the API counts its one null input (inputsCount 1), the
+    // page knows a cellbase by isCellbase — on the header and across the cells
+    const { head, seam } = expectTxSeals(
+      document.body,
+      { kind: 'tx', hash: TX_HASH, consumed: 0, created: 1 },
+      'pressed',
+      true
+    );
+    for (const stone of [head, seam!])
+      expect(stone.querySelector('svg')).toHaveAttribute(
+        'aria-label',
+        'Transaction seal 0x57a54eb7, 0 consumed, 1 created'
+      );
     const comment = screen.getByText('1 cell from the block reward; none consumed.').closest('p')!;
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
@@ -700,8 +860,21 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
     expect(screen.getByText('Pending since')).toBeInTheDocument();
     // No comment while it waits: its cells and occupied bytes are read once it is indexed (T4).
+    // Under the stone and the plate (C10) stands its summary alone, the sentence that says so.
     expect(document.querySelector('.comment')).toBeNull();
-    expect(document.querySelector('[data-sealed-below]')).toBeNull();
+    const below = document.querySelector('[data-sealed-below]') as HTMLElement;
+    expect(below.children).toHaveLength(1);
+    expect(below).toHaveTextContent(
+      /^Activity and canonical cell structure are available once this transaction is committed and indexed\.$/
+    );
+    // C2: not in a block yet, so its stone is dashed; its cells are not drawn, so no seam seal.
+    expect(screen.queryByTestId('tx-cells-frame')).toBeNull();
+    expectTxSeals(
+      document.body,
+      { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
+      'unpressed',
+      false
+    );
   });
 
   // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the
@@ -738,7 +911,7 @@ describe('Transaction board, R2b-a fields', () => {
     const out = await screen.findByTestId('tx-io-output-0', {}, SLOW);
     await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'), SLOW);
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
-    expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveTextContent(
+    expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
       'pubkey hash 0x111111...1111'
     );
   });
@@ -784,13 +957,13 @@ describe('Transaction board, R2b-a fields', () => {
     // A misfit lock says why its args were not decoded, quietly, in place of the fields.
     await waitFor(
       () =>
-        expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveTextContent(
-          `args not decoded: ${joyidReason}`
-        ),
+        expect(
+          document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)
+        ).toHaveTextContent(`args not decoded: ${joyidReason}`),
       SLOW
     );
     expect(
-      document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
+      document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
     ).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
     const owner = screen.getByTestId('tx-fact-output-lock-0');
     expect(owner).toHaveTextContent('New owner of the object in output 0');
@@ -809,14 +982,14 @@ describe('Transaction board, R2b-a fields', () => {
           actions: [
             {
               scriptInfoHash: `0x${'44'.repeat(32)}`,
-              scriptHash: '0xtypescript',
+              scriptHash: TYPE_SCRIPT,
               data: '0x01',
               schema: 'spore',
               name: 'MintProxy',
             },
             {
               scriptInfoHash: `0x${'45'.repeat(32)}`,
-              scriptHash: '0xtypescript',
+              scriptHash: TYPE_SCRIPT,
               data: '0x02',
               schema: null,
               name: null,

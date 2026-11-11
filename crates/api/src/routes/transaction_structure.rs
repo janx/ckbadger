@@ -1273,6 +1273,67 @@ mod tests {
         assert_eq!(cell_type(Some(&groups[0].script)).unwrap(), "typed");
     }
 
+    /// `cell_type` is the one class vocabulary the transaction detail
+    /// (`cellType`) and the cell detail (`typeCellType`) serve, and the
+    /// frontend's `kindOf` reads: no type is `plain`; a UDT is its standard
+    /// (`sudt`, never the registry's `simple-udt` slug); any other registered
+    /// type is its registry slug; an unregistered one is `typed`. The code
+    /// hash alone decides — hash type and args do not.
+    #[test]
+    fn cell_type_names_the_class_vocabulary_by_code_hash() {
+        let registered = |protocol: ProtocolScript, hash_type: &str| {
+            let (code_hash, _) = PROTOCOL_REGISTRY
+                .iter()
+                .filter(|(_, p)| *p == protocol)
+                .min_by_key(|(hash, _)| *hash)
+                .expect("bundled registry deployment");
+            script(
+                &format!("0x{}", hex::encode(code_hash)),
+                hash_type,
+                "0x1234",
+            )
+        };
+        assert_eq!(cell_type(None).unwrap(), "plain");
+        for (protocol, expected) in [
+            (ProtocolScript::Sudt, "sudt"),
+            (ProtocolScript::Xudt, "xudt"),
+            (ProtocolScript::Dao, "nervos-dao"),
+            (ProtocolScript::SporeNft, "spore"),
+            (ProtocolScript::MnftToken, "m-nft"),
+            (ProtocolScript::DidCkb, "did-ckb"),
+            (ProtocolScript::BitCell, "bit-cell"),
+            (ProtocolScript::DotbitAccount, "bit-account"),
+            (ProtocolScript::DotCellAccount, "dotcell-account"),
+            (ProtocolScript::Ckbfs, "ckbfs"),
+        ] {
+            for hash_type in ["type", "data1"] {
+                assert_eq!(
+                    cell_type(Some(&registered(protocol, hash_type))).unwrap(),
+                    expected,
+                    "{protocol:?} {hash_type}"
+                );
+            }
+        }
+        assert_ne!(ProtocolScript::Sudt.slug(), "sudt");
+        assert_eq!(
+            cell_type(Some(&script(
+                &format!("0x{}", "99".repeat(32)),
+                "data1",
+                "0x"
+            )))
+            .unwrap(),
+            "typed"
+        );
+        // A code hash that is not hex is an error, never a class.
+        let (status, error) = cell_type(Some(&script("0xzz", "type", "0x"))).unwrap_err();
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            error.0.message.contains("invalid cell type code hash"),
+            "{}",
+            error.0.message
+        );
+    }
+
     fn script(code_hash: &str, hash_type: &str, args: &str) -> ScriptResponse {
         ScriptResponse {
             code_hash: code_hash.into(),

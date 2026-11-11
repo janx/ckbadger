@@ -6,6 +6,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
+import { HexCode } from '@/components/ui/hex-code';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -87,15 +88,21 @@ export default function AddressDetailPage() {
   const addr = params.addr as string;
   return <AddressDetailPageContent key={addr} addr={addr} />;
 }
+/**
+ * The address's id line: the full address and its copy button. It sets no size or ink of its own
+ * (`inherit`): the name plate's id line gives it the plate's quiet voice (seals by kind, C10 round
+ * 2); the address wraps anywhere, as the line does.
+ */
 function AddressIdentity({ value }: { value: string }) {
   const [copyState, setCopyState] = useState('Copy address');
   return (
-    <span className="text-body flex min-w-0 items-start gap-2">
-      <Hash
-        hash={value}
+    <span className="flex min-w-0 items-start gap-2">
+      <HexCode
+        value={value}
         truncate={false}
         copyable={false}
-        className="text-body min-w-0 [overflow-wrap:anywhere]"
+        variant="inherit"
+        className="min-w-0"
       />
       <button
         aria-label={copyState}
@@ -245,9 +252,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               'address',
             ]}
             identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
-            // An address is its lock script; the seal is pressed from the lock script's hash (the
-            // address read already carries it; nothing else is fetched for the seal).
-            seal={{ hash: a.lockScriptHash, scale: 'object' }}
+            // An address is its lock script: the page presses the script's stone (the tall rounded
+            // one) of the lock script's hash, which the address read already carries; nothing else
+            // is fetched for the seal. Its name plate (seals by kind, C10) opens on "Address".
+            seal={{ id: { kind: 'script', hash: a.lockScriptHash }, kind: 'Address' }}
+            // on the kind line, after "Address"
             status={
               <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">
                 {a.lockScript && (

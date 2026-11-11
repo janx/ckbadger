@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { FiberChannelStep } from '@/components/fiber/fiber-channel-step';
 import fixture from '../fixtures/fiber-channel-c07e.json';
+import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
@@ -67,6 +68,24 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
       'out:0'
     );
     expect(screen.getByText(/in:0 → out:0 · the channel continues/)).toBeInTheDocument();
+    // C11 round 3: across the seam, only that link (the funding cell continuing as the
+    // commitment); the bridge carries the channel on past the sheet
+    const links = seamLines(container);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('data-continuity-kind', 'file');
+    const bridge = Array.from(container.querySelectorAll('[data-onward-bridge] path'));
+    expect(bridge).toHaveLength(1);
+    expect(canvasLines(container)).toEqual([...links, ...bridge]);
+    // C11: the step's two sheets end their heads with the API's exact totals (inputsCapacity,
+    // outputsCapacity), and the fee closes the created sheet; round 2: the consumed total is no
+    // longer repeated as a "Capacity entering the pool" line under the sheets
+    const consumed = container.querySelector('[data-sheet="consumed"]') as HTMLElement;
+    const created = container.querySelector('[data-sheet="created"]') as HTMLElement;
+    expect(within(consumed).getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
+    expect(consumed.querySelector('[data-sheet-total]')).toHaveTextContent(/^1,062(\.0+)? CKB$/);
+    expect(created.querySelector('[data-sheet-total]')).toHaveTextContent(/^1,061\.99999545 CKB$/);
+    expect(within(created).getByTestId('tx-fee')).toHaveTextContent(/^fee0\.00000455 CKB$/);
+    expect(screen.queryByText(/entering the pool/i)).toBeNull();
     // the step's box: each line as wide as its words (R16: a text box is its words)
     expect(screen.getByText('→ step 3, after 6 epochs').parentElement).toHaveClass('items-start');
     // the step's one caption, at caption width (R14)
