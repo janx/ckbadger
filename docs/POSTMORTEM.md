@@ -3832,6 +3832,51 @@ different type, not a null.
 
 ---
 
+### API-022: Two secondaries caught up in the order their primaries are written
+
+**Date**: 2026-11-12
+
+**Symptom**: Mainnet, 2026-11-11 08:34:26: `GET /transactions?limit=20` answered 500 once; the
+page's retry 1.26 s later answered 200. It came while the indexer was writing block 20983950
+(08:34:26.33–27.33, commit inside). No reorg. The log held no error message, only the status.
+
+**Root Cause**: The API's refresh round caught up the append-only secondary first and the domain
+secondary second, "to match the indexer's own commit order". The indexer commits a batch's cell
+payloads to append-only (synced) and then the domain batch that points at them, and it keeps
+committing while the round runs: the catch-up window (API-016) keeps readers out, not the
+writer. A batch committed between the round's two catch-ups therefore reached the domain view and
+not the append-only view, and until the next round (one second) every read of that batch's
+outputs failed: `missing canonical output payload 0x…:0`. API-016's docs had called the refresh
+order "invisible to readers".
+
+**Fix**: The round advances domain first, then append-only and the CKB node reader, the reverse
+of the order their rows are written in. A row in the domain view had its payload committed before
+the domain catch-up, so the append-only catch-up after it holds the payload; an append-only view
+ahead of domain is harmless (payloads are write-once and read only through a domain row). The
+writer's order is unchanged: crash safety needs payloads durable before the domain tip.
+
+**The log**: `ApiError::internal` puts its message in the response body only, and the request
+log wrote `completed status=500` at INFO, so the cause had to be inferred from timings. The
+request log now sits inside the compression layer and reads a 5xx body: the request's line
+carries `error_kind` and `error` (the API error's code and message), at ERROR for every 5xx but
+503. Regression: `an_internal_error_logs_its_message_with_the_request`.
+
+**Why the tests missed it**: test stores were single unified primaries, so no test had two
+secondaries or a commit landing inside a round. Regression:
+`a_block_committed_during_a_catch_up_round_never_serves_rows_without_their_payloads` opens real
+primaries and secondaries, lands a commit after each of the round's catch-ups, and serves
+`/transactions` (red on the old order with exactly the mainnet error).
+
+**Lesson**: Excluding readers during catch-up does not make catch-up atomic across stores while
+a writer is still writing. When readers follow references from store A into store B and the
+writer commits B before A, the reader must advance A before B.
+
+**Files**: `crates/api/src/store_readiness.rs`, `crates/api/tests/api_store_readiness.rs`,
+`docs/STORE_SCHEMA.md`, `crates/api/src/request_log.rs`, `crates/api/src/lib.rs`,
+`crates/api/tests/api_transactions.rs`
+
+---
+
 ## Category: NervosDAO
 
 ### DAO-032: A completion whose request was written earlier in the same live batch was dropped
