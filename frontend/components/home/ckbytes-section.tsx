@@ -110,12 +110,14 @@ export function CkbytesSection() {
 }
 
 /**
- * The two daily-change figures and the DAO block, under the allocation: in the left column from
- * `lg`, the section's last row below it (32 px under the allocation or its note, as before).
+ * The two daily-change figures and the DAO block, under the allocation: the section's last row,
+ * across both columns from `lg` (the 7 / 3 split is the allocation beside its note; the figures
+ * keep the full width they had, so the DAO block stands beside the change figures and nothing is
+ * left empty under the note).
  */
 function ChangeFigures() {
   return (
-    <div className="mt-[18px] grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-x-10 gap-y-8 lg:col-start-1 lg:row-start-2">
+    <div className="mt-[18px] grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-x-10 gap-y-8 lg:col-span-2 lg:col-start-1 lg:row-start-2">
       <div className={SMALL_MULTIPLES_CLASS}>
         <ChangeFigure
           testId="home-knowledge-change"
@@ -184,14 +186,17 @@ export function allocationOf(a: CkbytesAllocation): AllocationView {
 
 /**
  * The supply comment (the Main board's note, in the voice): what the three parts are, then what
- * the chain holds at the block the allocation was read at. The last sentence is true by
- * construction: `allocationOf` has just checked, to the shannon, that the parts add up.
+ * they make together. The last sentence is true by construction: `allocationOf` has just checked,
+ * to the shannon, that the parts add up. The block is said once, in the heading's note (phase 5),
+ * so the comment does not repeat it; the view is taken so the comment stays bound to a ready
+ * allocation.
  */
 export function supplyComment(view: AllocationView): string[] {
+  if (view.circulating <= BigInt(0)) throw new Error('supplyComment: no circulation to describe');
   return [
     'common knowledge is what live cells occupy.',
     'the rest is free, or in the dao.',
-    `at ${formatBlockNumber(view.blockNumber)} they add up to every ckbyte in circulation.`,
+    'together they are every ckbyte in circulation.',
   ];
 }
 
@@ -212,7 +217,7 @@ function SupplyNote({ view }: { view: AllocationView }) {
     <aside
       aria-label="Note"
       data-testid="ckbytes-note"
-      className="lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start lg:pt-1"
+      className="lg:col-start-2 lg:row-start-1 lg:self-start lg:pt-1"
     >
       <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
       <p

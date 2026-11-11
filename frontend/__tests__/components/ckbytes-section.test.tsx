@@ -125,11 +125,14 @@ describe('CkbytesSection', () => {
     expect(allocation).toHaveClass('lg:col-start-1', 'lg:row-start-1');
     expect(note).toBe(screen.getByRole('complementary', { name: 'Note' }));
     expect(note.tagName).toBe('ASIDE');
-    expect(note).toHaveClass('lg:col-start-2', 'lg:row-start-1', 'lg:row-span-2');
+    expect(note).toHaveClass('lg:col-start-2', 'lg:row-start-1');
+    expect(note).not.toHaveClass('lg:row-span-2');
     expect(changes).toContainElement(screen.getByTestId('home-knowledge-change'));
     expect(changes).toContainElement(screen.getByTestId('home-dao-change'));
     expect(changes).toContainElement(screen.getByTestId('home-dao'));
-    expect(changes).toHaveClass('lg:col-start-1', 'lg:row-start-2');
+    // the change row keeps the full width under the 7 / 3 split: the DAO block stands beside
+    // the change figures, nothing is left empty under the note
+    expect(changes).toHaveClass('lg:col-span-2', 'lg:col-start-1', 'lg:row-start-2');
   });
 
   it('writes the formula under the comment: C − burnt − S from the DAO header of the block', async () => {
@@ -220,7 +223,7 @@ describe('CkbytesSection', () => {
   });
 
   // Rubbing × Song print, phase 4: the Main board's supply note, in the voice, under the legend.
-  it('comments on the allocation in the voice: the three parts, then the block they add up at', async () => {
+  it('comments on the allocation in the voice: the three parts, then the whole they make', async () => {
     render(<CkbytesSection />);
     await screen.findByTestId('ckbytes-circulating');
     const comment = document.querySelector('.comment') as HTMLElement;
@@ -230,9 +233,10 @@ describe('CkbytesSection', () => {
     ).toEqual([
       'common knowledge is what live cells occupy.',
       'the rest is free, or in the dao.',
-      // the served allocation's own block, never a figure the response does not carry
-      'at #20,820,045 they add up to every ckbyte in circulation.',
+      // the block is the heading note's to say (phase 5), once; the comment does not repeat it
+      'together they are every ckbyte in circulation.',
     ]);
+    expect(comment).not.toHaveTextContent('#20,820,045');
     // it sits with the allocation it describes, after the legend: the first thing of the note
     // that follows the allocation (phase 5, H3: the note is the board's aside)
     const legend = document.querySelector('[data-legend="Nervos DAO"]')!.parentElement!;
