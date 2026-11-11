@@ -30,8 +30,14 @@ describe('NetworkClientPage', () => {
     // Default MSW handler serves no completed or active round.
     render(<NetworkClientPage />, { wrapper: createWrapper() });
 
-    // Explains what the peer crawler is.
-    expect(await screen.findByText('The CKB peer crawler')).toBeInTheDocument();
+    // Explains what the peer crawler is: phase 5 (B9), the crawler as a command, off in config.
+    const heading = await screen.findByRole('heading', {
+      level: 2,
+      name: 'peer crawler disabled',
+    });
+    expect(heading).toHaveClass('prompt', 'text-section', 'text-text-bright');
+    expect(heading.lastElementChild).toHaveTextContent(/^disabled$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
     expect(screen.getByText(/an advertised candidate is not verified/i)).toBeInTheDocument();
     // How to enable it.
     expect(screen.getByText('How to enable')).toBeInTheDocument();
@@ -50,6 +56,10 @@ describe('NetworkClientPage', () => {
     render(<NetworkClientPage />, { wrapper: createWrapper() });
 
     expect(await screen.findByText(/waiting for the first round/i)).toBeInTheDocument();
+    // Phase 5 (B9): the same explainer, its args the config state.
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'peer crawler enabled' })
+    ).toBeInTheDocument();
   });
 
   it('shows the dashboard summary cards when crawl data exists', async () => {

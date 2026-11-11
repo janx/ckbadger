@@ -25,6 +25,7 @@ import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 
 type StateFilter = 'all' | FiberChannelState;
 
@@ -314,12 +315,18 @@ export default function FiberChannelsPage() {
             aria-labelledby="fiber-channels-heading"
             className="mt-16 flex min-w-0 flex-col gap-2.5"
           >
-            <div className="flex flex-wrap items-baseline justify-between gap-4">
-              <h2 id="fiber-channels-heading" className="text-text-bright text-section font-medium">
-                Channels
-              </h2>
-              <span className="text-text-dim text-meta">sorted by capacity</span>
-            </div>
+            {/* Phase 5 (B7): the list as a command run on its count in the chosen state, once the
+                list has counted it; the sort is the note. */}
+            <PromptHeading
+              id="fiber-channels-heading"
+              command="Channels"
+              args={
+                channels.data?.total === undefined
+                  ? undefined
+                  : `${channels.data.total.toLocaleString('en-US')} ${chosen.label.toLowerCase()}`
+              }
+              note="sorted by capacity"
+            />
             <div className="flex flex-wrap gap-1.5" role="group" aria-label="State">
               {filters.map((filter) => {
                 const on = stateFilter === filter.value;

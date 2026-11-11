@@ -8,6 +8,7 @@ import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
 import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
@@ -407,9 +408,15 @@ export default function ForksPage() {
           />
           <section aria-labelledby="fork-switches-heading" className="mt-16 min-w-0">
             <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-              <h2 id="fork-switches-heading" className="text-text-bright text-section font-medium">
-                Branch switches on this node
-              </h2>
+              {/* Phase 5 (B8): the list as a command run on its count, once the list has counted
+                  it, and on whose view it is; the shape key stays the row's control. */}
+              <PromptHeading
+                id="fork-switches-heading"
+                command="branch switches"
+                args={
+                  total === undefined ? undefined : `${total.toLocaleString('en-US')} · this node`
+                }
+              />
               <ShapeKey />
             </div>
             {events.isLoading && <p role="status">Loading branch switches…</p>}

@@ -5,6 +5,7 @@ import { api, LabelCount } from '@/lib/api';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { fade } from '@/lib/palette';
 import { formatPercent } from '@/lib/ckb-decimal';
+import { formatCount } from '@/lib/format-count';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
@@ -82,7 +83,7 @@ export function NetworkDistributions() {
     );
   // Its scope ("reachable now or verified before") is said in tier 2 (R14: no note beside the h2).
   return (
-    <TopicSection title="Which software they run">
+    <TopicSection title="Which software they run" args={formatCount(data.verifiedRetained, 'node')}>
       <Bars items={data.versions} attr="data-version-bar" />
     </TopicSection>
   );
@@ -181,7 +182,7 @@ function HostingSection({
     return fits(full) ? full : fits(share(count)) ? share(count) : '';
   };
   return (
-    <TopicSection title="Where they run">
+    <TopicSection title="Where they run" args={formatCount(total, 'node')}>
       <div
         ref={ref}
         role="img"

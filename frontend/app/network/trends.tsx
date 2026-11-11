@@ -10,6 +10,7 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import { formatCount } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import { TopicSection } from '@/app/network/topic-section';
 
@@ -383,7 +384,11 @@ export function NetworkTrends() {
     : [];
 
   return (
-    <TopicSection title="Over time">
+    // Phase 5 (B12): the plot's days once the pair of histories is loaded and consistent.
+    <TopicSection
+      title="Over time"
+      args={peerHistoryError || peerHistoryLoading ? undefined : formatCount(days.length, 'day')}
+    >
       {peerHistoryError ? (
         <p role="alert" className="text-negative text-small font-mono">
           {peerHistoryError}

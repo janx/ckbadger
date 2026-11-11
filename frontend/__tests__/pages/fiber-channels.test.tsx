@@ -40,6 +40,8 @@ describe('FiberChannelsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^All/ }));
     await waitFor(() => expect(releaseAll).toBeTypeOf('function'));
     expect(screen.queryByTitle(channel.channelId)).not.toBeInTheDocument();
+    // Nor a stale count: while the chosen list loads the heading runs on nothing (phase 5, B7).
+    expect(screen.getByRole('heading', { level: 2, name: 'Channels' })).toBeInTheDocument();
     releaseAll?.();
     expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
   });
@@ -165,7 +167,13 @@ describe('FiberChannelsPage', () => {
       })
     );
     render(<FiberChannelsPage />);
-    expect(await screen.findByRole('heading', { name: 'Channels' })).toHaveClass('text-section');
+    // Phase 5 (B7): the list as a command, run on its count in the chosen state once counted.
+    const heading = await screen.findByRole('heading', { name: 'Channels 38 open' });
+    expect(heading).toHaveClass('prompt', 'text-section');
+    expect(heading).toHaveAttribute('id', 'fiber-channels-heading');
+    expect(heading.lastElementChild).toHaveTextContent(/^38 open$/);
+    expect(heading.lastElementChild).toHaveClass('text-text-dim');
+    expect(screen.getByRole('region', { name: 'Channels 38 open' })).toContainElement(heading);
     await waitFor(() => expect(requested[0]).toBe('open'));
     const open = await screen.findByRole('button', { name: 'Open 1' });
     expect(open).toHaveAttribute('aria-pressed', 'true');
@@ -206,7 +214,11 @@ describe('FiberChannelsPage', () => {
     expect(id).not.toHaveClass('text-[color:var(--ink)]'); // the link cyan (BOARD_INKS.link)
     expect(Array.from(table.querySelectorAll('tbody .text-text-bright'))).toEqual([id]);
     expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
-    expect(screen.getByText('sorted by capacity')).toHaveClass('text-meta');
+    // The sort stays the right-prompt note, outside the heading's name.
+    const sorted = screen.getByText('sorted by capacity');
+    expect(sorted).toHaveClass('text-meta');
+    expect(sorted).toHaveAttribute('data-prompt-note');
+    expect(sorted.previousElementSibling).toBe(heading);
     expect(screen.getByText('Showing 1–1 of 38 channels · 50 per page')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Closed together 1' }));
     await waitFor(() => expect(requested).toContain('cooperativelyClosed'));
@@ -214,6 +226,10 @@ describe('FiberChannelsPage', () => {
       await screen.findByRole('table', { name: 'Closed together channels' })
     ).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Lifetime' })).toBeInTheDocument();
+    // The args follow the chosen state, its chip's words in the command's lower case.
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Channels 38 closed together' })
+    ).toBeInTheDocument();
   });
 });
 
