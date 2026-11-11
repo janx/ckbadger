@@ -16,6 +16,7 @@ import { useParams } from '@/src/navigation';
 import { formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
@@ -55,6 +56,13 @@ function checkedCapacity(cell: Cell): { capacity: bigint; occupied: bigint } {
       `Cell ${cell.txHash}:${cell.outputIndex} anatomy differs from indexed occupied capacity`
     );
   return { capacity, occupied };
+}
+
+/** A dep group's members: the API sends them with every dep group, so none is a broken read. */
+function depGroupItems(cell: Cell): NonNullable<Cell['depGroupItems']> {
+  if (!cell.depGroupItems)
+    throw new Error(`Cell ${cell.txHash}:${cell.outputIndex} is a dep group without its members`);
+  return cell.depGroupItems;
 }
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
@@ -444,7 +452,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         )}
         <CellFacts cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.daoInfo && (
-          <DetailSection title="Nervos DAO">
+          // The command runs on the status the API gives (deposited, withdrawing, withdrawn).
+          <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
             <p className="text-text-dim text-small">
               {cell.daoInfo.daoStatus} · deposit block{' '}
               <BlockLink number={cell.daoInfo.depositBlockNumber} />
@@ -471,9 +480,9 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         {cell.elf && <CodeCellBoard cell={cell} />}
         <CellMicroscope key={outpoint} cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.isDepGroup && (
-          <DetailSection title="Dep group">
+          <DetailSection title="Dep group" args={formatCount(depGroupItems(cell).length, 'item')}>
             <ul className="text-small space-y-2">
-              {cell.depGroupItems?.map((item) => (
+              {depGroupItems(cell).map((item) => (
                 <li key={`${item.txHash}:${item.outputIndex}`}>
                   <Link
                     href={`/cell/${item.txHash}-${item.outputIndex}`}

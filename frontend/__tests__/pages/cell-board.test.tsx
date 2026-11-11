@@ -245,6 +245,8 @@ describe('Cell page against the Cell board', () => {
     } as Cell);
     view();
     const dao = await screen.findByText(/withdrawn · deposit block/);
+    // phase 5 (D1): the section's command runs on the same status
+    expect(screen.getByRole('heading', { name: 'Nervos DAO withdrawn' })).toBeInTheDocument();
     expect(dao).toHaveTextContent('deposit block #20,311,586');
     expect(within(dao).getByRole('link', { name: '#20,311,586' })).toHaveAttribute(
       'href',
