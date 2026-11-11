@@ -472,6 +472,7 @@ interface AddressCell {
   dataSize: number;
   createdAtBlock: number;
   class: 'dao' | 'token' | 'object' | 'identity' | 'script' | 'plain';
+  typeCellType: string; // plain | sudt | xudt | <registry slug> | typed: the transaction detail's cellType
   display: TransactionCellDisplay | null;
   expiresAt: number | null; // identity Unix seconds, where the protocol has expiry
   heldSinceBlock: number | null; // identity continuous physical ownership
@@ -479,6 +480,9 @@ interface AddressCell {
 }
 ```
 
+`class` groups the page's filters and totals; `typeCellType` is the cell's class
+by its type script (`transaction_structure::cell_type`), the same value the cell
+detail serves as `typeCellType` and the transaction detail as `cellType`.
 `display` reuses the transaction-cell descriptor. Current mNFT holdings may use
 the current class name/composition, while historical transaction tiles retain
 their immutable-evidence rules. `createdAtBlock` is the current outpoint creation
