@@ -220,8 +220,10 @@ const lookup = {
 
 /**
  * The page's seals by kind (C2): the header presses one page stone of `id` (its long stone, 94 px,
- * 64 below md), and — when the cells are drawn — the cells frame presses the same stone again at
- * 64 px, its seam seal, shown from lg only. Returns both (the seam seal null when none).
+ * 64 below md), and — when the cells are drawn — the same stone is pressed again at 64 px across
+ * the seam between the two sheets (C11: two impressions of it, its left half on the consumed sheet
+ * and its right half on the created one), shown from lg only. Returns the head's stone and the
+ * seam seal's first half (null when none).
  */
 function expectTxSeals(
   container: HTMLElement,
@@ -238,28 +240,35 @@ function expectTxSeals(
     expect(holders).toHaveLength(0);
     return { head, seam: null };
   }
-  // one extra impression, never a second one in the header
-  expect(all).toHaveLength(2);
+  // the seam seal's two halves of one stone, never a second one in the header
+  expect(all).toHaveLength(3);
   expect(holders).toHaveLength(1);
   const [holder] = Array.from(holders);
   expect(header).not.toContainElement(holder);
   expect(screen.getByTestId('tx-cells-frame')).toContainElement(holder);
-  // from lg only (below it the cells stack and the header's stone is the one), and hidden from a
-  // screen reader, which has the header's
-  expect(holder).toHaveClass('hidden', 'lg:flex');
+  // in the seam, from lg only (below it the sheets stack and the header's stone is the one), and
+  // hidden from a screen reader, which has the header's
+  expect(holder.parentElement).toHaveAttribute('data-seam');
+  expect(holder.parentElement).toHaveClass('hidden', 'lg:block');
   expect(holder).toHaveAttribute('aria-hidden', 'true');
-  const stamp = holder.querySelector<HTMLElement>('[data-seal]')!;
-  expect(stamp).toHaveAttribute('data-seal', 'tx');
-  expect(stamp).toHaveAttribute('data-seal-form', 'page');
-  expect(stamp).toHaveAttribute('data-seal-state', state);
-  expect(stamp.innerHTML).toBe(
-    parsed(
-      drawSeal(id, { form: 'page', height: 64, state, ...SEAL_INKS, tilt: PAGE_SEAL_TILT }).svg
-    )
-  );
-  expect(stamp.querySelector('a')).toBeNull();
-  expect(stamp.closest('a')).toBeNull();
-  return { head, seam: stamp };
+  const stamps = Array.from(holder.querySelectorAll<HTMLElement>('[data-seal]'));
+  expect(stamps.map((s) => s.closest('[data-seam-half]')!.getAttribute('data-seam-half'))).toEqual([
+    'consumed',
+    'created',
+  ]);
+  for (const stamp of stamps) {
+    expect(stamp).toHaveAttribute('data-seal', 'tx');
+    expect(stamp).toHaveAttribute('data-seal-form', 'page');
+    expect(stamp).toHaveAttribute('data-seal-state', state);
+    expect(stamp.innerHTML).toBe(
+      parsed(
+        drawSeal(id, { form: 'page', height: 64, state, ...SEAL_INKS, tilt: PAGE_SEAL_TILT }).svg
+      )
+    );
+    expect(stamp.querySelector('a')).toBeNull();
+    expect(stamp.closest('a')).toBeNull();
+  }
+  return { head, seam: stamps[0] };
 }
 
 beforeEach(() => {
@@ -395,11 +404,10 @@ describe('Transaction board, tier 1', () => {
     );
   });
 
-  // The seam seal (C2): from lg, where the cells lie consumed | capacity pool | created, the same
-  // stone is pressed again at the head of the pool column, its left rods (consumed) toward the
-  // consumed cells and its right rods (created) toward the created ones; the column's label moves
-  // under it and both cell columns start under the band.
-  it('presses the same stone across the cells, at the head of the capacity pool column, from lg', async () => {
+  // The seam seal (C2, C11): from lg the cells lie on two sheets, consumed | created, with a 4 px
+  // seam between; the same stone is pressed across that seam, its left half on the consumed sheet
+  // and its right half on the created one. The sheets' heads end with the API's exact totals.
+  it('presses the same stone across the seam between the two sheets, from lg', async () => {
     const { container } = render(<TransactionDetailPage />);
     await screen.findByTestId('tx-cells-frame', {}, SLOW);
     const { seam } = expectTxSeals(
@@ -408,18 +416,22 @@ describe('Transaction board, tier 1', () => {
       'pressed',
       true
     );
-    const pool = seam!.closest('[data-seam-seal]')!.parentElement!;
-    const label = within(pool).getByText('Capacity pool');
-    expect(pool.firstElementChild).toBe(seam!.parentElement);
-    expectBefore(seam!, label);
-    expect(label).toHaveClass('lg:absolute', 'lg:top-[72px]');
-    // the pool column stands between the consumed cells and the created ones
-    const canvas = container.querySelector('[data-tx-canvas]')!;
-    expect(Array.from(canvas.children).indexOf(pool)).toBe(1);
-    expect(canvas.children[0]).toHaveTextContent('1 cell consumed');
-    expect(canvas.children[2]).toHaveTextContent('1 cell created');
-    for (const side of [canvas.children[0], canvas.children[2]])
-      expect(side.querySelector('h3')).toHaveClass('mb-3', 'lg:mb-0', 'lg:min-h-[88px]');
+    const canvas = container.querySelector<HTMLElement>('[data-tx-canvas]')!;
+    const [consumed, gap, created] = Array.from(canvas.children) as HTMLElement[];
+    expect(consumed).toHaveAttribute('data-sheet', 'consumed');
+    expect(gap).toHaveAttribute('data-seam');
+    expect(gap).toContainElement(seam!);
+    expect(created).toHaveAttribute('data-sheet', 'created');
+    expect(canvas).not.toHaveTextContent(/capacity pool/i);
+    expect(within(consumed).getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
+    expect(within(created).getByRole('heading', { name: '1 cell created' })).toBeInTheDocument();
+    // the totals are the API's inputsCapacity and outputsCapacity, exact
+    expect(consumed.querySelector('[data-sheet-total]')).toHaveTextContent(/^555(\.0+)? CKB$/);
+    expect(created.querySelector('[data-sheet-total]')).toHaveTextContent(/^554\.99935881 CKB$/);
+    // the heads hold the stone's band; the fee closes the created sheet
+    for (const sheet of [consumed, created])
+      expect(sheet.querySelector('[data-sheet-head]')).toHaveClass('lg:min-h-[70px]');
+    expect(within(created).getByTestId('tx-fee')).toHaveTextContent(/^fee0\.00064119 CKB$/);
   });
 
   // Rubbing × Song print, phase 5 (T4): the board's comment under the sealed head, in the identity

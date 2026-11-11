@@ -16,8 +16,8 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
  * a flat tile since rubbing × Song print: the surface under its own 1 px border in the line ink,
  * an 8 px radius, `.glass` (its materials now the opaque surface with no sheen, no edges, no ring;
  * see globals.css) and inset scanlines — no lit edge along the top. The transaction pipeline, the
- * tx page's cells diagram, the cell page's byte dump, the DNA gel and the network map sit in it;
- * prose, tables and charts stay unframed.
+ * tx page's two sheets of cells (one frame each, the seam between), the cell page's byte dump, the
+ * DNA gel and the network map sit in it; prose, tables and charts stay unframed.
  */
 export function TerminalPanel({
   children,

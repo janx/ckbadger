@@ -73,7 +73,9 @@ function tx(hash: string, cellbase = false): TransactionDetail {
     fee: '0',
     isCellbase: cellbase,
     timestamp: '2024-01-01T00:00:00Z',
-    inputsCapacity: cellbase ? null : '10000000000',
+    // as the API serves them: always both, the sums of the cells (a cellbase consumes none: 0)
+    inputsCapacity: cellbase ? '0' : '10000000000',
+    outputsCapacity: '20000000000',
     inputs: cellbase
       ? []
       : [
@@ -159,6 +161,20 @@ describe('CellTransactions', () => {
     expect(screen.queryByText(/Spent transaction/)).not.toBeInTheDocument();
     // Phase 5 (D11): a live cell's transactions are the one that created it.
     expectPrompt(screen.getByRole('heading', { name: 'Transactions 1' }), 'Transactions', '1');
+  });
+  // C11: each transaction's two sheets end their heads with the API's exact sums, as read.
+  it('heads the sheets with the API’s exact totals, a cellbase’s consumed 0 included', async () => {
+    const cell = spentFixture as unknown as Cell;
+    getTransactionDetail.mockImplementation(async (hash: string) => tx(hash, hash === cell.txHash));
+    view(cell);
+    await screen.findAllByText(/in:0/);
+    const totals = (side: string) =>
+      Array.from(document.querySelectorAll(`[data-sheet="${side}"] [data-sheet-total]`)).map(
+        (t) => t.textContent
+      );
+    // the creating cellbase, then the spending transaction
+    expect(totals('consumed')).toEqual(['0 CKB', '100.00000000 CKB']);
+    expect(totals('created')).toEqual(['200.00000000 CKB', '200.00000000 CKB']);
   });
   it('uses the real Cell API spent producer and focuses its exact spending input', async () => {
     const cell = spentFixture as unknown as Cell;

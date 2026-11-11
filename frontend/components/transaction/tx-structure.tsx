@@ -1,7 +1,7 @@
 'use client';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
-import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
+import { TerminalPanel } from '@/components/ui/terminal-panel';
 import { ExactCkb } from '@/components/activity-event-row';
 import Link from '@/components/ui/link';
 import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
@@ -16,23 +16,36 @@ import { formatCount } from '@/lib/format-count';
 export type TxSealId = Extract<SealId, { kind: 'tx' }>;
 
 /**
- * The seam seal, from lg up (the seals by kind, C2): the transaction's stone at its narrow page
- * height, 64 px (104.5 wide), tilted as the page's head presses it (−4°), at the head of the
- * 112 px capacity-pool column, centred: its consumed rods toward the consumed cells, its created
- * rods toward the created ones. Tilted, it covers 108.7 × 71.1 px — 1.6 px inside the column at
- * either side, 3.6 px past its box above (into the panel's 12 px padding) and below, to 67.6 px.
- * The column's "Capacity pool" label moves under it, to 72 px (a 16.5 px line, to 88.5); both side
- * columns' heads hold the band to 88 px, so the first cell's middle is at least 88 + 27 (half the
- * 54 px shortest tile) = 115 px and the pool, 16 px above it, starts under the label: every flow
- * stays below the stone and the label. Below lg, where the cells stack, there is none.
+ * The two sheets from lg up (seals by kind, C11): a transaction is two sheets of one contract,
+ * what it consumed | what it created, side by side and equal, each its own frame, with a 4 px seam
+ * between them through which the page ground shows; capacity crosses at the seam. Each sheet keeps
+ * a lane on its seam side, from its tiles' edge to its own edge (35 px of padding and the 1 px
+ * border), where the flows run: one overlay centred on the seam, lane + seam + lane wide.
+ */
+export const SHEETS = {
+  /** The seam between the sheets, px. */
+  seam: 4,
+  /** Each sheet's lane on its seam side, px: from a tile's edge to the sheet's edge. */
+  lane: 36,
+} as const;
+
+/**
+ * The seam seal, from lg up (C2; C11): the transaction's stone at its narrow page height, 64 px
+ * (104.5 wide), tilted as the page's head presses it (−4°), pressed across the seam and pulled
+ * apart by it: its left half on the consumed sheet up to that sheet's edge, its right half on the
+ * created sheet from that sheet's edge, the 4 px of ground between, nothing of the stone lost.
+ * Tilted, it covers 108.7 × 71.1 px; centred in the heads' 95 px band (1 px border, 12 px padding,
+ * the heads' 70 px, their 12 px margin) it keeps 11.9 px above and below, and each half reaches
+ * 54.4 px into its sheet from the sheet's edge: the heads keep 24 px clear inside the 36 px lane.
+ * Below lg, where the sheets stack, there is none.
  */
 export const SEAM_SEAL = {
   /** The stone's height, px: the transaction's narrow page height. */
   height: PAGE_SEAL_HEIGHTS.tx.narrow,
-  /** The label's top in the pool column, px. */
-  labelTop: 72,
-  /** Where the cells start in the side columns, px (their heads' height). */
-  band: 88,
+  /** The heads' band, px: from a sheet's top edge to its first row. */
+  band: 95,
+  /** How far each half reaches into its sheet from the sheet's seam edge, px (54.4, rounded up). */
+  reach: 55,
 } as const;
 
 export interface TxStructureGroup {
@@ -70,6 +83,13 @@ export interface TxStructureProps {
   fee: string;
   /** Exact sum supplied by the API; never reconstructed from partially loaded cells. */
   poolCapacity?: string;
+  /**
+   * The consumed sheet's total (C11): the exact shannons of the cells the transaction consumed,
+   * as the API sums them (`inputsCapacity`), the head's third line; never summed from the tiles.
+   */
+  consumedCapacity?: string;
+  /** The created sheet's total (C11): the API's exact `outputsCapacity`, as `consumedCapacity`. */
+  createdCapacity?: string;
   groups?: readonly TxStructureGroup[];
   continuity?: readonly TxContinuity[];
   witnesses?: ReactNode;
@@ -108,8 +128,8 @@ export interface TxStructureProps {
   afterOnward?: ReactNode;
   /**
    * The transaction page's seam seal (`SEAM_SEAL`): the same stone its head presses, in the same
-   * state, pressed again between what it consumed and what it created, from lg up. Every other
-   * page leaves it out (a list's seal is whole).
+   * state, pressed again across the seam between what it consumed and what it created, from lg
+   * up. Every other page leaves it out (a list's seal is whole).
    */
   seamSeal?: { id: TxSealId; state?: SealState };
 }
@@ -127,6 +147,8 @@ export function TxStructure({
   outputs,
   fee,
   poolCapacity,
+  consumedCapacity,
+  createdCapacity,
   groups = [],
   continuity = [],
   witnesses,
@@ -157,10 +179,15 @@ export function TxStructure({
         const bounds = cell.getBoundingClientRect();
         next[cell.dataset.cellId!] = bounds.top - top + bounds.height / 2;
       });
-      // F2-tx (D4): the inflow source joins the pool like a consumed cell.
+      // F2-tx (D4): the inflow source joins the flows like a consumed cell; C11: the fee row
+      // leaves them like a created one.
       root.querySelectorAll<HTMLElement>('[data-inflow]').forEach((source) => {
         const bounds = source.getBoundingClientRect();
         next[INFLOW_ID] = bounds.top - top + bounds.height / 2;
+      });
+      root.querySelectorAll<HTMLElement>('[data-fee]').forEach((row) => {
+        const bounds = row.getBoundingClientRect();
+        next[FEE_ID] = bounds.top - top + bounds.height / 2;
       });
       setCenters((previous) =>
         JSON.stringify(previous) === JSON.stringify(next) ? previous : next
@@ -174,7 +201,7 @@ export function TxStructure({
       observer?.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [inputs, outputs]);
+  }, [inputs, outputs, inflow]);
   const ids = new Set([...inputs, ...outputs].map((c) => c.id));
   if (ids.size !== inputs.length + outputs.length)
     throw new Error(`${txHash}: duplicate cell id in transaction structure`);
@@ -203,181 +230,158 @@ export function TxStructure({
           : focusedCellIds
   );
   const ys = Object.values(centers);
-  const poolTop = ys.length ? Math.min(...ys) - 16 : 0;
-  const poolBottom = ys.length ? Math.max(...ys) + 16 : 0;
-  const column = (cells: readonly CellTileData[], label: string) => (
-    <div className="min-w-0">
-      <h3
-        className={cn(
-          'text-text-dim text-small mb-3',
-          // the seam seal's band (SEAM_SEAL.band): the cells start under the stone and its label
-          seamSeal && 'lg:mb-0 lg:min-h-[88px]'
-        )}
-      >
-        {formatCount(cells.length, 'cell')} {label}
-      </h3>
-      <div className="space-y-3">
-        {label === 'consumed' && inflow && <InflowSource txHash={txHash} inflow={inflow} />}
-        {cells.map((cell) => (
-          <CellTile
-            key={cell.id}
-            cell={cell}
-            highlighted={linked.has(cell.id) || cell.id === meOut}
-            dimmed={
-              ((linking === 'continuity' && Boolean(hover)) || focusedCellIds.length > 0) &&
-              !linked.has(cell.id) &&
-              cell.id !== meOut
-            }
-            onClick={focusedCellIds.includes(cell.id) ? onClearFocus : undefined}
-            onHover={(id) => {
-              if (linking === 'continuity') setHover(id ? { kind: 'cell', id } : null);
-              onCellHover?.(id);
-            }}
-          />
-        ))}
-      </div>
-    </div>
+  const tile = (cell: CellTileData) => (
+    <CellTile
+      key={cell.id}
+      cell={cell}
+      highlighted={linked.has(cell.id) || cell.id === meOut}
+      dimmed={
+        ((linking === 'continuity' && Boolean(hover)) || focusedCellIds.length > 0) &&
+        !linked.has(cell.id) &&
+        cell.id !== meOut
+      }
+      onClick={focusedCellIds.includes(cell.id) ? onClearFocus : undefined}
+      onHover={(id) => {
+        if (linking === 'continuity') setHover(id ? { kind: 'cell', id } : null);
+        onCellHover?.(id);
+      }}
+    />
   );
+  const sheet = (side: Side, cells: readonly CellTileData[], total: string | undefined) => (
+    <TerminalPanel data-sheet={side} className="min-w-0">
+      {/* the sheet's lane on its seam side (SHEETS.lane: 35 px and the 1 px border); 12 px on
+          the outer side, above and under its last row */}
+      <div
+        data-sheet-content=""
+        className={cn('p-3', side === 'consumed' ? 'lg:pr-[35px]' : 'lg:pl-[35px]')}
+      >
+        <SheetHead
+          txHash={txHash}
+          side={side}
+          count={cells.length}
+          total={total}
+          sealed={seamSeal !== undefined}
+        />
+        <div data-sheet-rows="" className="space-y-3">
+          {side === 'consumed' && inflow && <InflowSource txHash={txHash} inflow={inflow} />}
+          {cells.map(tile)}
+          {side === 'created' && <FeeRow txHash={txHash} fee={fee} />}
+        </div>
+      </div>
+    </TerminalPanel>
+  );
+  // The overlay's x, px: the consumed tiles' edge, the consumed sheet's edge, the created sheet's
+  // edge, the created tiles' edge (lane, seam, lane).
+  const [tilesIn, edgeIn, edgeOut, tilesOut] = [
+    0,
+    SHEETS.lane,
+    SHEETS.lane + SHEETS.seam,
+    2 * SHEETS.lane + SHEETS.seam,
+  ];
   return (
     <div className="min-w-0 space-y-6" aria-label={`Transaction ${txHash} structure`}>
-      {/* Midnight, continued (move 3): the cells diagram is an instrument, so it sits in the one
-          frame; the column heads inside it are its eyebrows. The prose and lists under it stay
-          flat. */}
-      <TerminalPanel aria-label="Cells consumed and created" data-testid="tx-cells-frame">
-        <TerminalPanelContent padding="md">
-          <div
-            ref={canvas}
-            data-tx-canvas
-            className={cn(
-              'relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:gap-0',
-              meOut === undefined
-                ? 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)]'
-                : 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)_96px]'
-            )}
+      {/* Two sheets and the seam (seals by kind, C11; the board's two sheets of one contract):
+          each sheet an instrument frame, its head its eyebrow; the prose and lists under them
+          stay flat. From lg they lie side by side with the 4 px seam between, the flows drawn
+          over the seam and the sheets' lanes; below lg they stack, 12 px apart. */}
+      <div
+        ref={canvas}
+        data-tx-canvas=""
+        role="group"
+        aria-label="Cells consumed and created"
+        data-testid="tx-cells-frame"
+        className={cn(
+          'relative grid min-w-0 grid-cols-1 gap-y-3 lg:items-start lg:gap-y-0',
+          meOut === undefined
+            ? 'lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]'
+            : 'lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)_96px]'
+        )}
+      >
+        {sheet('consumed', inputs, consumedCapacity)}
+        <div data-seam="" className="relative hidden self-stretch lg:block">
+          <svg
+            aria-label="Capacity flows from the consumed cells to the created ones"
+            className="pointer-events-none absolute inset-y-0 -left-9 z-20 h-full w-[76px] overflow-visible"
           >
-            {column(inputs, 'consumed')}
-            <div className="text-text-dim text-meta relative flex flex-wrap items-center justify-center gap-2 py-3 text-center lg:block lg:min-h-[180px] lg:p-0">
-              {seamSeal && (
-                // The head's own stone is the page's image for a screen reader; this second
-                // impression is hidden from it.
-                <span
-                  data-seam-seal=""
-                  aria-hidden="true"
-                  className="absolute inset-x-0 top-0 hidden justify-center lg:flex"
-                >
-                  <Seal
-                    id={seamSeal.id}
-                    form="page"
-                    height={SEAM_SEAL.height}
-                    state={seamSeal.state}
-                    tilt={PAGE_SEAL_TILT}
-                    className="[&>svg]:block"
+            {ys.length > 0 && (
+              <>
+                {inputs.map((cell) => (
+                  <path
+                    key={cell.id}
+                    d={`M${tilesIn} ${centers[cell.id]}H${edgeIn}`}
+                    stroke={linked.has(cell.id) ? 'var(--c-text-bright)' : 'var(--c-ink-quiet)'}
+                    strokeWidth="1.5"
                   />
-                </span>
-              )}
-              <span
-                className={cn(
-                  'lg:absolute lg:inset-x-0',
-                  // under the seam seal (SEAM_SEAL.labelTop), else at the column's head
-                  seamSeal ? 'lg:top-[72px]' : 'lg:top-0'
+                ))}
+                {inflow && centers[INFLOW_ID] !== undefined && (
+                  <path
+                    data-inflow-path={inflow.tone}
+                    d={`M${tilesIn} ${centers[INFLOW_ID]}H${edgeIn}`}
+                    className={inflow.tone === 'dao' ? 'stroke-gold' : 'stroke-text-dim'}
+                    strokeWidth="1.5"
+                    strokeDasharray="4 3"
+                  />
                 )}
-              >
-                Capacity pool
-              </span>
-              <span aria-hidden="true" className="lg:hidden">
-                ↓
-              </span>
-              <svg
-                aria-label="Cells flow through the capacity pool"
-                className="pointer-events-none absolute inset-0 hidden h-full w-full overflow-visible lg:block"
-              >
-                {ys.length > 0 && (
-                  <>
-                    {inputs.map((cell) => (
-                      <path
-                        key={cell.id}
-                        d={`M0 ${centers[cell.id]}H46`}
-                        stroke={linked.has(cell.id) ? 'var(--c-text-bright)' : 'var(--c-ink-quiet)'}
-                        strokeWidth="1.5"
-                      />
-                    ))}
-                    {inflow && centers[INFLOW_ID] !== undefined && (
-                      <path
-                        data-inflow-path={inflow.tone}
-                        d={`M0 ${centers[INFLOW_ID]}H46`}
-                        className={inflow.tone === 'dao' ? 'stroke-gold' : 'stroke-text-dim'}
-                        strokeWidth="1.5"
-                        strokeDasharray="4 3"
-                      />
-                    )}
-                    {outputs.map((cell) => (
-                      <path
-                        key={cell.id}
-                        d={`M66 ${centers[cell.id]}H112`}
-                        stroke={
-                          linked.has(cell.id) || cell.id === meOut
-                            ? 'var(--c-text-bright)'
-                            : 'var(--c-ink-quiet)'
-                        }
-                        strokeWidth="1.5"
-                      />
-                    ))}
-                    <rect
-                      x="46"
-                      y={poolTop}
-                      width="20"
-                      height={poolBottom - poolTop}
-                      rx="4"
-                      fill="var(--c-tile)"
-                      stroke="var(--c-ink-quiet)"
-                    />
-                    <path d={`M56 ${poolBottom}v16`} stroke="var(--c-ink-quiet)" />
-                    {continuity.map((link) => (
-                      <path
-                        key={`${link.from}:${link.to}`}
-                        data-continuity-kind={link.kind}
-                        d={`M0 ${centers[link.from]}C44 ${centers[link.from]} 68 ${centers[link.to]} 112 ${centers[link.to]}`}
-                        fill="none"
-                        stroke={continuityColor(link.kind)}
-                        strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
-                        strokeDasharray="4 3"
-                      />
-                    ))}
-                  </>
+                {outputs.map((cell) => (
+                  <path
+                    key={cell.id}
+                    d={`M${edgeOut} ${centers[cell.id]}H${tilesOut}`}
+                    stroke={
+                      linked.has(cell.id) || cell.id === meOut
+                        ? 'var(--c-text-bright)'
+                        : 'var(--c-ink-quiet)'
+                    }
+                    strokeWidth="1.5"
+                  />
+                ))}
+                {centers[FEE_ID] !== undefined && (
+                  <path
+                    data-fee-path=""
+                    d={`M${edgeOut} ${centers[FEE_ID]}H${tilesOut}`}
+                    className="stroke-text-dim"
+                    strokeWidth="1.5"
+                    strokeDasharray="4 3"
+                  />
                 )}
-              </svg>
-              <div className="space-y-1 lg:absolute lg:inset-x-0" style={{ top: poolBottom + 20 }}>
-                <span className="block">fee</span>
-                <ExactCkb
-                  shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
-                  signed={false}
-                  tone="plain"
-                />
-              </div>
-            </div>
-            {column(outputs, 'created')}
-            {meOut !== undefined && (
-              <div
-                data-onward-bridge
-                data-onward-from={meOut}
-                aria-hidden="true"
-                className="relative hidden lg:block"
-              >
-                <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
-                  {centers[meOut] !== undefined && (
-                    <path
-                      d={`M0 ${centers[meOut]}H96`}
-                      className="stroke-text-bright"
-                      strokeWidth="1.2"
-                      strokeDasharray="3 3"
-                    />
-                  )}
-                </svg>
-              </div>
+                {continuity.map((link) => (
+                  <path
+                    key={`${link.from}:${link.to}`}
+                    data-continuity-kind={link.kind}
+                    d={`M${tilesIn} ${centers[link.from]}C30 ${centers[link.from]} 46 ${centers[link.to]} ${tilesOut} ${centers[link.to]}`}
+                    fill="none"
+                    stroke={continuityColor(link.kind)}
+                    strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
+                    strokeDasharray="4 3"
+                  />
+                ))}
+              </>
             )}
+          </svg>
+          {seamSeal && <SeamSeal id={seamSeal.id} state={seamSeal.state} />}
+        </div>
+        {sheet('created', outputs, createdCapacity)}
+        {meOut !== undefined && (
+          <div
+            data-onward-bridge
+            data-onward-from={meOut}
+            aria-hidden="true"
+            className="relative hidden self-stretch lg:block"
+          >
+            <svg className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible">
+              {centers[meOut] !== undefined && (
+                // from the followed tile's right edge, inside the sheet's 12 px padding and its
+                // 1 px border, out of the sheet
+                <path
+                  d={`M-13 ${centers[meOut]}H96`}
+                  className="stroke-text-bright"
+                  strokeWidth="1.2"
+                  strokeDasharray="3 3"
+                />
+              )}
+            </svg>
           </div>
-        </TerminalPanelContent>
-      </TerminalPanel>
+        )}
+      </div>
       {meOut !== undefined && (
         <p className="text-text-dim text-meta flex items-center gap-1.5">
           <svg aria-hidden="true" width="22" height="6">
@@ -508,8 +512,127 @@ export function TxStructure({
   );
 }
 
-// F2-tx (D4): the inflow source tile and its measurement key.
+/** A sheet of the transaction: what it consumed, or what it created. */
+type Side = 'consumed' | 'created';
+
+/**
+ * A sheet's head (C11; the board's label, value and sub-line): the eyebrow label, the count of
+ * its cells and, when the caller has it, the API's exact total of their capacity. One h3, named
+ * "5 cells consumed" as the old column heads were: the count comes first in the markup and the
+ * label is drawn above it. The created head is mirrored from lg (right-aligned); below lg both
+ * read from the left. With the seam seal the heads hold its band and keep 24 px clear on their
+ * seam side (`SEAM_SEAL`).
+ */
+function SheetHead({
+  txHash,
+  side,
+  count,
+  total,
+  sealed,
+}: {
+  txHash: string;
+  side: Side;
+  count: number;
+  total: string | undefined;
+  sealed: boolean;
+}) {
+  const mirrored = side === 'created' && 'lg:items-end lg:text-right';
+  return (
+    <div
+      data-sheet-head={side}
+      className={cn(
+        'mb-3 flex flex-col',
+        mirrored,
+        sealed && 'lg:min-h-[70px]',
+        sealed && (side === 'consumed' ? 'lg:pr-6' : 'lg:pl-6')
+      )}
+    >
+      <h3 className={cn('flex flex-col', mirrored)}>
+        <span className="text-text-bright text-section">{formatCount(count, 'cell')}</span>{' '}
+        <span className="eyebrow text-text-dim text-meta order-first">{side}</span>
+      </h3>
+      {total !== undefined && (
+        <span data-sheet-total="" className="text-small">
+          <ExactCkb
+            shannons={exactUnsignedInteger(total, `${txHash}: ${side} capacity`)}
+            signed={false}
+            tone="plain"
+          />
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The seam seal (C11): one stone in an `aria-hidden` holder centred on the seam, drawn twice —
+ * the first clipped to its left half and moved 2 px left, the second over it clipped to its right
+ * half and moved 2 px right — so each half lies on its own sheet up to the sheet's edge and the
+ * seam's 4 px of ground runs between them. The clip's outer insets are −8 px so the tilt's
+ * overhang (2.1 px across, 3.6 px down) is kept. The library's `seamPx` is not used: its gap
+ * tilts with the stone and would not meet the real seam.
+ */
+function SeamSeal({ id, state }: { id: TxSealId; state?: SealState }) {
+  const half = (side: Side) => (
+    <span
+      data-seam-half={side}
+      className={cn(
+        'flex',
+        side === 'consumed'
+          ? '-translate-x-0.5 [clip-path:inset(-8px_50%_-8px_-8px)]'
+          : 'absolute inset-0 translate-x-0.5 [clip-path:inset(-8px_-8px_-8px_50%)]'
+      )}
+    >
+      <Seal
+        id={id}
+        form="page"
+        height={SEAM_SEAL.height}
+        state={state}
+        tilt={PAGE_SEAL_TILT}
+        className="[&>svg]:block"
+      />
+    </span>
+  );
+  // The head's own stone is the page's image for a screen reader; this second impression is
+  // hidden from it, and from the pointer.
+  return (
+    <span
+      data-seam-seal=""
+      aria-hidden="true"
+      className="pointer-events-none absolute left-1/2 top-0 z-20 flex h-[95px] -translate-x-1/2 items-center"
+    >
+      <span className="relative flex">
+        {half('consumed')}
+        {half('created')}
+      </span>
+    </span>
+  );
+}
+
+// F2-tx (D4): the inflow source tile and its measurement key; C11: the fee row's.
 const INFLOW_ID = '__inflow';
+const FEE_ID = '__fee';
+
+/**
+ * The fee (C11): the created sheet's last row, the mirror of the inflow source on the consumed
+ * side — capacity that leaves the transaction without becoming a cell. Dashed, in the dim tone.
+ */
+function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
+  return (
+    <div
+      data-fee=""
+      data-testid="tx-fee"
+      className="text-small border-text-dim/60 text-text rounded border border-dashed px-3 py-2"
+    >
+      <span className="block">fee</span>
+      <ExactCkb
+        shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
+        signed={false}
+        tone="plain"
+      />
+    </div>
+  );
+}
 function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) {
   return (
     <div

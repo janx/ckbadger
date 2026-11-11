@@ -1418,6 +1418,9 @@ export default function TransactionDetailPage() {
                 inputs={tiles.inputs}
                 outputs={tiles.outputs}
                 fee={tx.fee}
+                // C11: the sheets' heads end with the API's exact totals
+                consumedCapacity={required(tx.inputsCapacity, hash, 'inputsCapacity')}
+                createdCapacity={required(tx.outputsCapacity, hash, 'outputsCapacity')}
                 hideGroups
                 linking="page"
                 inflow={inflow}

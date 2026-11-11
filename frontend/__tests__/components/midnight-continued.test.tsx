@@ -272,7 +272,9 @@ describe('move 3 on the tx page’s cells diagram', () => {
       occupied: '6100000000',
       state,
     });
-  it('sits in the one instrument frame; the prose under it stays flat', () => {
+  // C11: the one frame became two sheets of one contract, each its own instrument frame, in a
+  // labelled group that keeps the frame's name; the prose under them stays flat.
+  it('sits on two instrument frames, the sheets; the prose under them stays flat', () => {
     const { container } = render(
       <TxStructure
         txHash="0xtx"
@@ -283,16 +285,20 @@ describe('move 3 on the tx page’s cells diagram', () => {
       />
     );
     const frame = screen.getByTestId('tx-cells-frame');
-    expect(frame).toHaveAttribute('data-instrument-frame');
-    expect(frame).toHaveAttribute('aria-label', 'Cells consumed and created');
-    // material pass v2 (move 2): the frame's surface is `.glass`, not the flat colour — a flat
-    // tile since rubbing × Song print, with no lit top edge
-    expect(frame).toHaveClass('rounded-lg', 'border', 'glass');
-    expect(frame).not.toHaveClass('neon-edge-top');
-    expect(frame).toContainElement(container.querySelector('[data-tx-canvas]') as HTMLElement);
-    // the column heads are the frame's eyebrows
-    expect(frame).toHaveTextContent('1 cell consumed');
-    expect(frame).toHaveTextContent('1 cell created');
+    expect(frame).toBe(screen.getByRole('group', { name: 'Cells consumed and created' }));
+    expect(frame).toBe(container.querySelector('[data-tx-canvas]'));
+    expect(frame).not.toHaveAttribute('data-instrument-frame');
+    const sheets = Array.from(frame.querySelectorAll<HTMLElement>('[data-instrument-frame]'));
+    expect(sheets.map((s) => s.getAttribute('data-sheet'))).toEqual(['consumed', 'created']);
+    for (const sheet of sheets) {
+      // material pass v2 (move 2): the frame's surface is `.glass`, not the flat colour — a flat
+      // tile since rubbing × Song print, with no lit top edge
+      expect(sheet).toHaveClass('rounded-lg', 'border', 'glass');
+      expect(sheet).not.toHaveClass('neon-edge-top');
+    }
+    // the sheets' heads are their eyebrows
+    expect(sheets[0]).toHaveTextContent('1 cell consumed');
+    expect(sheets[1]).toHaveTextContent('1 cell created');
     const pool = screen.getByText(/Capacity entering the pool/);
     expect(frame).not.toContainElement(pool);
   });

@@ -177,6 +177,23 @@ export function cellTiles(
 }
 
 /**
+ * The two sheets' totals (seals by kind, C11): the API's exact sums of the capacity a transaction
+ * consumed and created (`inputsCapacity`, `outputsCapacity`), never summed from the tiles. The
+ * detail endpoint serves both for every transaction it describes — indexed, in the pool, or
+ * committed but not indexed yet; a cellbase's consumed sum is 0 — so a missing one is an error,
+ * raised with the transaction named.
+ */
+export function sheetTotals(tx: TransactionDetail): {
+  consumedCapacity: string;
+  createdCapacity: string;
+} {
+  return {
+    consumedCapacity: required(tx.inputsCapacity, tx.hash, 'inputsCapacity'),
+    createdCapacity: required(tx.outputsCapacity, tx.hash, 'outputsCapacity'),
+  };
+}
+
+/**
  * Round 3 (contracts R-B · R-9, SC-K5): an output whose data is a registry script's binary, as
  * the CellCode board's tiles say it ("code JoyID v5"). `version` is the API's first-deployment
  * place; null means no indexed code cell carries this binary yet (a pending deployment).

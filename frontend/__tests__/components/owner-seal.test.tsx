@@ -91,4 +91,13 @@ describe('OwnerSeal (the seals by kind)', () => {
     const { container } = render(<OwnerSeal lockHash={LOCK} className="-my-px" />);
     expect(container.firstElementChild).toHaveClass('-my-px', 'mr-[5px]');
   });
+
+  // C11: in a cell tile the stone stands alone, centred in the 30 px mark column, the column's
+  // 10 px gap its gap; its own 5 px margin would push it 2.5 px off the centre.
+  it('keeps no gap of its own when asked, for a stone standing alone in a mark column', () => {
+    const { container } = render(<OwnerSeal lockHash={LOCK} gap={false} className="-my-px" />);
+    const owner = expectOwnerSealOf(container, LOCK, { gap: false });
+    expect(owner).not.toHaveClass('mr-[5px]');
+    expect(owner).toHaveClass('-my-px', 'inline-flex');
+  });
 });

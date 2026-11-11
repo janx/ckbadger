@@ -71,6 +71,8 @@ const sporeTx = {
   isCellbase: false,
   timestamp: '2026-10-22T14:43:55.651+00:00',
   inputsCapacity: '4266152741621',
+  // the API's sum of the three outputs below
+  outputsCapacity: '96000000000',
   inputs: [
     input(0, { type: { codeHash: CKBFS, hashType: 'data1', args: '0x' }, display: fileDisplay }),
     input(1, {}),

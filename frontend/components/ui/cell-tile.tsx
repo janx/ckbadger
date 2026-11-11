@@ -73,23 +73,28 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       onFocus={() => onHover?.(cell.id)}
       onBlur={() => onHover?.(null)}
       className={cn(
-        'bg-base-surface text-small min-w-0 rounded border px-3 pb-2 pt-3 transition-colors',
+        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 rounded border px-3 pb-2 pt-3 transition-colors',
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',
         dimmed && 'opacity-30'
       )}
     >
-      {/* The seals by kind (C3). The first line holds three things that wrap as wholes: the
-          cell's row stone before its out point (the stone overhangs the 18 px line by 6 px above,
-          into the tile's 12 px top padding, and below; an image, the out point stays the link),
-          the owner's stone before the owner's address, and the lock's kind. The owner wraps as
-          one unit, never broken, under the stone at the narrowest (the 12 px row gap keeps 5 px
-          between the two stones); `mr-auto` keeps it beside the out point and the lock's kind at
-          the right. Tops aligned (one text size, as the baselines were): a stone has none. */}
-      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-3">
-        <span className="flex min-w-0 items-center">
-          <RowSeal id={cell.seal.id} state={cell.seal.state} overhang />
+      {/* One mark column, one text edge (seals by kind, C11): a 30 px column of marks and the
+          text, 10 px apart, in four rows — the cell's stone with its label and out point, the
+          owner's stone with the owner, the class mark with the content, then the occupied bar.
+          Each mark stands alone, centred in the column, its top on its row's first 18 px line
+          (the round stone overhangs that line by 6 px, into the 12 px top padding; the owner's by
+          1 px; the 16 px class mark sits 1 px down); the 10 px row gap keeps the round stone's
+          drawn 5 px overhang 4 px clear of the owner's stone. Every row's text starts on the same
+          edge and ends with its right-end item (state, lock kind, capacity), which wraps under its
+          row's text when it does not fit and stays right. A row is a `contents` pair: its two
+          cells are the grid's. */}
+      <div data-tile-row="cell" className="contents">
+        <span data-tile-mark className="flex items-start justify-center">
+          <RowSeal id={cell.seal.id} state={cell.seal.state} overhang gap={false} />
+        </span>
+        <TileText end={<span className="text-text-dim text-meta">{cell.state}</span>}>
           <span className="min-w-0">
             {cell.outPoint ? (
               <>
@@ -109,36 +114,66 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
               </Link>
             )}
           </span>
-        </span>
-        <span data-tile-owner className="mr-auto whitespace-nowrap">
-          <OwnerSeal lockHash={cell.seal.id.lock} className="-my-px" />
-          {cell.owner}
-        </span>
-        {cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}
+        </TileText>
       </div>
-      <div className="my-2 flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-text-bright flex min-w-0 max-w-full items-start gap-1.5">
+      <div data-tile-row="owner" data-tile-owner className="contents">
+        <span data-tile-mark className="flex items-start justify-center">
+          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="-my-px" />
+        </span>
+        <TileText end={cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}>
+          {/* the owner is one unit, never broken */}
+          <span className="whitespace-nowrap">{cell.owner}</span>
+        </TileText>
+      </div>
+      <div data-tile-row="content" className="contents">
+        <span data-tile-mark className="flex items-start justify-center pt-px">
           <ClassMark kind={cell.kind} />
-          {cell.content}
         </span>
-        <ExactCkb shannons={capacity} signed={false} tone="plain" />
+        <TileText end={<ExactCkb shannons={capacity} signed={false} tone="plain" />}>
+          <span className="text-text-bright min-w-0 max-w-full">{cell.content}</span>
+        </TileText>
       </div>
-      {cell.anatomy ? (
-        <CellBar subject={cell.id} anatomy={cell.anatomy} />
-      ) : (
-        <div aria-hidden="true" className="bg-base-elevated h-1 w-14">
-          <div
-            className="bg-jade h-full"
-            style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}
-          />
+      <div data-tile-row="occupied" className="contents">
+        <span data-tile-mark />
+        <div data-tile-text className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {cell.anatomy ? (
+            <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
+          ) : (
+            <div aria-hidden="true" className="bg-base-elevated h-1 w-14 shrink-0">
+              <div
+                className="bg-jade h-full"
+                style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}
+              />
+            </div>
+          )}
+          {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195". */}
+          <span className="text-text-dim text-meta">
+            occupied {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}
+          </span>
         </div>
-      )}
-      <div className="text-text-dim text-meta mt-2 flex flex-wrap justify-between gap-2">
-        {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195". */}
-        <span>occupied {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}</span>
-        <span>{cell.state}</span>
       </div>
     </article>
+  );
+}
+
+/**
+ * A tile row's text cell (C11): the row's text from the text edge, its right-end item last,
+ * pushed right; when the item does not fit beside the text it wraps under it and stays right
+ * (`ml-auto`), and one wider than the whole column wraps inside itself, right-aligned.
+ */
+function TileText({ children, end }: { children: ReactNode; end?: ReactNode }) {
+  return (
+    <div
+      data-tile-text
+      className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"
+    >
+      {children}
+      {end && (
+        <span data-tile-end className="ml-auto max-w-full text-right">
+          {end}
+        </span>
+      )}
+    </div>
   );
 }
 

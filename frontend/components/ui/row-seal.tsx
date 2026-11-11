@@ -62,13 +62,18 @@ export interface RowSealProps {
   id: SealId;
   state?: SealState;
   overhang?: boolean;
+  /**
+   * `false`: the stone stands alone in a column of its own (a cell tile's 30 px mark column, C11),
+   * whose gap is its gap, so it keeps no 8 px of its own after it.
+   */
+  gap?: boolean;
 }
 
 /**
  * The row seal, first in a list row before the row's key. It is an image named by the id (its
  * label), not a link: the row's own link stays the row's link.
  */
-export function RowSeal({ id, state, overhang = false }: RowSealProps) {
+export function RowSeal({ id, state, overhang = false, gap = true }: RowSealProps) {
   // the kind is checked before it picks the height, so an id that is no seal's is refused by name
   assertSealId(id, 'row');
   return (
@@ -77,7 +82,7 @@ export function RowSeal({ id, state, overhang = false }: RowSealProps) {
       form="row"
       height={ROW_SEAL[id.kind].height}
       state={state}
-      className={cn('mr-2 [&>svg]:block', overhang && OVERHANG[id.kind])}
+      className={cn('[&>svg]:block', gap && 'mr-2', overhang && OVERHANG[id.kind])}
     />
   );
 }

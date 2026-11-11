@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { CellTile } from '@/components/ui/cell-tile';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { TxStructure } from '@/components/transaction/tx-structure';
@@ -12,6 +12,12 @@ import {
   expectOwnerSealOf,
   sealHash,
 } from '@/__tests__/utils/seals';
+
+/**
+ * C11: in a tile the cell's stone and the owner's stand alone in the 30 px mark column, the
+ * column's 10 px gap their gap, so neither keeps its own trailing margin.
+ */
+const IN_MARK_COLUMN = { gap: false };
 
 // The drawing is counted: every seal on a tile is drawn once per id, however often it renders.
 vi.mock('@/lib/seal/stones', async (importOriginal) => {
@@ -167,7 +173,8 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
         type: { class: 'tokens', hash: TOKEN },
         capacity: BigInt(14200000000),
       },
-      'pressed'
+      'pressed',
+      IN_MARK_COLUMN
     );
     // it overhangs the 18 px line by 6 px above and below, so the first line keeps its height
     expect(seal).toHaveClass('-my-[6px]');
@@ -187,17 +194,21 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     });
   });
 
-  it('stands the owner’s stone of the cell’s lock directly before the owner’s address, outside its link', () => {
+  // C11: the owner's row is the tile's second; its stone stands in the mark column, the address
+  // starts at the text edge (was: the stone directly before the address in one span).
+  it('stands the owner’s stone of the cell’s lock in the mark column of the owner’s row, outside its link', () => {
     const { outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[1]} />);
     const tile = screen.getByTestId('tx-io-output-1');
     const holder = tile.querySelector('[data-tile-owner]')!;
-    const stone = expectOwnerSealOf(holder, NEW_OWNER);
+    expect(holder).toBe(tile.children[1]);
+    const stone = expectOwnerSealOf(holder, NEW_OWNER, IN_MARK_COLUMN);
+    const [mark, text] = Array.from(holder.children);
+    expect(mark.children).toHaveLength(1);
+    expect(mark.firstElementChild).toBe(stone);
     const address = within(tile).getByRole('link', { name: /^ckb1qzda0c/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
-    // directly before it: the stone, then the address, nothing between
-    expect(stone.nextElementSibling).toBe(address);
-    expect(holder.firstElementChild).toBe(stone);
+    expect(text).toContainElement(address);
     // one line: the stone at the line's height (20 px, 1 px over above and below)
     expect(stone).toHaveClass('-my-px');
     // the out point and its seal come first; the owner, then the lock's kind
@@ -208,26 +219,31 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const { inputs, outputs } = cellTiles(transfer('committed', 'consumed'), undefined);
     for (const cell of [...inputs, ...outputs]) {
       const { unmount } = render(<CellTile cell={cell} />);
-      expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'ink');
+      expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'ink', IN_MARK_COLUMN);
       unmount();
     }
     // a live output is pressed
     const live = cellTiles(transfer('committed', 'live'), undefined).outputs[0];
     render(<CellTile cell={live} />);
-    expectOneRowSeal(screen.getByTestId('tx-io-output-0'), live.seal.id, 'pressed');
+    expectOneRowSeal(screen.getByTestId('tx-io-output-0'), live.seal.id, 'pressed', IN_MARK_COLUMN);
   });
 
   it('draws the outputs of a transaction not yet committed dashed, and its inputs still pressed', () => {
     const { inputs, outputs } = cellTiles(transfer('pending'), undefined);
     for (const cell of outputs) {
       const { unmount } = render(<CellTile cell={cell} />);
-      const seal = expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'unpressed');
+      const seal = expectOneRowSeal(
+        screen.getByTestId(cell.testId!),
+        cell.seal.id,
+        'unpressed',
+        IN_MARK_COLUMN
+      );
       expect(seal.querySelector('[stroke-dasharray]')).not.toBeNull();
       unmount();
     }
     for (const cell of inputs) {
       const { unmount } = render(<CellTile cell={cell} />);
-      expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'pressed');
+      expectOneRowSeal(screen.getByTestId(cell.testId!), cell.seal.id, 'pressed', IN_MARK_COLUMN);
       unmount();
     }
   });
@@ -237,7 +253,12 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const tags = (seal: HTMLElement) =>
       Array.from(seal.querySelectorAll('svg *')).map((node) => node.tagName.toLowerCase());
     render(<CellTile cell={outputs[0]} />);
-    const plain = expectOneRowSeal(screen.getByTestId('tx-io-output-0'), outputs[0].seal.id);
+    const plain = expectOneRowSeal(
+      screen.getByTestId('tx-io-output-0'),
+      outputs[0].seal.id,
+      'pressed',
+      IN_MARK_COLUMN
+    );
     expect(outputs[0].seal.id.type).toBeNull();
     expect(plain.querySelector('svg')).toHaveAttribute(
       'aria-label',
@@ -247,7 +268,12 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     expect(tags(plain)).toEqual([expect.any(String), 'circle', 'circle', 'rect']);
     expect(plain.innerHTML).not.toContain('fill="none"');
     render(<CellTile cell={outputs[1]} />);
-    const usdi = expectOneRowSeal(screen.getByTestId('tx-io-output-1'), outputs[1].seal.id);
+    const usdi = expectOneRowSeal(
+      screen.getByTestId('tx-io-output-1'),
+      outputs[1].seal.id,
+      'pressed',
+      IN_MARK_COLUMN
+    );
     expect(usdi.querySelector('svg')).toHaveAttribute(
       'aria-label',
       expect.stringContaining(', tokens,')
@@ -312,25 +338,185 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
       quiet.mockRestore();
     }
   });
+});
 
-  it('keeps the tile’s lines: the out point and the owner each one unit, the lock’s kind last', () => {
+/* ---------- one mark column, one text edge (C11) ---------- */
+
+/** A tile's four rows, each a `contents` pair of its mark cell and its text cell. */
+function tileRows(tile: HTMLElement) {
+  const rows = Array.from(tile.children) as HTMLElement[];
+  expect(rows.map((row) => row.getAttribute('data-tile-row'))).toEqual([
+    'cell',
+    'owner',
+    'content',
+    'occupied',
+  ]);
+  return rows.map((row) => {
+    // the row adds no box of its own: its two cells are the grid's
+    expect(row).toHaveClass('contents');
+    expect(row.children).toHaveLength(2);
+    const [mark, text] = Array.from(row.children) as HTMLElement[];
+    expect(mark).toHaveAttribute('data-tile-mark');
+    expect(text).toHaveAttribute('data-tile-text');
+    return { row, mark, text };
+  });
+}
+
+/** A text cell's right-end item: last, pushed right, staying right when it wraps under the text. */
+function expectEnd(text: HTMLElement, content: RegExp) {
+  expect(text).toHaveClass(
+    'flex',
+    'min-w-0',
+    'flex-wrap',
+    'items-baseline',
+    'justify-between',
+    'gap-x-2'
+  );
+  const end = text.lastElementChild as HTMLElement;
+  expect(end).toHaveAttribute('data-tile-end');
+  expect(end).toHaveClass('ml-auto', 'max-w-full', 'text-right');
+  expect(end).toHaveTextContent(content);
+  expect(text.querySelectorAll('[data-tile-end]')).toHaveLength(1);
+  return end;
+}
+
+// The user's Gate C ("看着也不舒服"): the old tile's three marks of three widths (the 30 px cell
+// stone, the 15 px owner's stone, the 16 px class mark) each pushed their text to its own x, and
+// its first flex line wrapped seal + out point, owner and lock kind differently at every width.
+// The tile is now a grid of a 30 px mark column and the text, 10 px apart, in four rows: every
+// mark centred in the one column, every text from the one edge, the right ends one column.
+describe('CellTile: one mark column, one text edge (C11)', () => {
+  it('is a grid of the 30 px mark column and the text, 10 px apart, in four rows of one mark each', () => {
     const { outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
-    // 12 px above, so the stone overhanging its line by 6 px stays 6 px inside the border
-    expect(tile).toHaveClass('pt-3', 'pb-2', 'px-3');
-    const line = tile.firstElementChild!;
-    expect(line).toHaveClass('flex', 'flex-wrap', 'items-start', 'justify-between', 'gap-x-2');
-    // a 12 px row gap: a wrapped owner's stone stands 5 px under the cell's stone
-    expect(line).toHaveClass('gap-y-3');
-    const [lead, owner, kind] = Array.from(line.children);
-    expect(lead.firstElementChild).toHaveAttribute('data-seal', 'cell');
-    expect(within(lead as HTMLElement).getByRole('link', { name: /:0$/ })).toHaveClass(
-      'whitespace-nowrap'
+    expect(tile.tagName).toBe('ARTICLE');
+    expect(tile).toHaveClass('grid', 'grid-cols-[30px_minmax(0,1fr)]', 'gap-x-2.5', 'gap-y-2.5');
+    // 12 px above, so the stone overhanging its line by 6 px stays 6 px inside the border; a
+    // 10 px row gap keeps the round stone's 5 px drawn overhang 4 px clear of the owner's stone
+    expect(tile).toHaveClass('pt-3', 'pb-2', 'px-3', 'min-w-0');
+    const [cell, owner, content, occupied] = tileRows(tile);
+    expect(cell.mark.children).toHaveLength(1);
+    expect(cell.mark.firstElementChild).toHaveAttribute('data-seal', 'cell');
+    expect(owner.mark.children).toHaveLength(1);
+    expect(owner.mark.firstElementChild).toHaveAttribute('data-owner-seal');
+    expect(content.mark.children).toHaveLength(1);
+    expect(content.mark.firstElementChild).toHaveAttribute('data-class', 'ckb');
+    expect(occupied.mark.childNodes).toHaveLength(0);
+    // each mark centred in the column, its top on its row's first line (the stones overhang the
+    // 18 px line by their own negative margins; the 16 px class mark sits 1 px down)
+    for (const { mark } of [cell, owner, content])
+      expect(mark).toHaveClass('flex', 'items-start', 'justify-center');
+    expect(content.mark).toHaveClass('pt-px');
+    // no mark anywhere in the text column
+    for (const { text } of [cell, owner, content, occupied]) {
+      expect(text.querySelector('[data-seal], [data-class], [data-owner-seal]')).toBeNull();
+      expect(text).toHaveClass('min-w-0');
+    }
+    // nothing hidden, nothing twice
+    expect(tile.querySelector('.hidden, .sr-only')).toBeNull();
+    expect(tile.querySelectorAll('[data-seal]')).toHaveLength(2);
+    expect(tile.querySelectorAll('[data-ckb-amount]')).toHaveLength(1);
+    expect(within(tile).getAllByRole('link')).toHaveLength(2);
+  });
+
+  it('reads the label and the out point on the first row, the cell’s state at its right end', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    render(<CellTile cell={outputs[0]} />);
+    const tile = screen.getByTestId('tx-io-output-0');
+    const [cell] = tileRows(tile);
+    const seal = expectOneRowSeal(cell.mark, outputs[0].seal.id, 'pressed', IN_MARK_COLUMN);
+    expect(seal).toHaveClass('-my-[6px]');
+    // the out point with its index is one unit, never broken, and the cell's link
+    const outPoint = within(cell.text).getByRole('link', {
+      name: /^0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:0$/,
+    });
+    expect(outPoint).toHaveClass('whitespace-nowrap');
+    expect(outPoint).toHaveAttribute('title', `${HASH}:0`);
+    expect(cell.text.firstElementChild).toHaveTextContent(
+      /^output 0 0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:0$/
     );
-    expect(owner).toHaveAttribute('data-tile-owner');
-    expect(owner).toHaveClass('mr-auto', 'whitespace-nowrap');
-    expect(kind).toHaveTextContent('change');
+    const state = expectEnd(cell.text, /^live$/);
+    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text-dim');
+    // the state once in the tile (it was the last line's right end)
+    expect(within(tile).getAllByText('live')).toHaveLength(1);
+  });
+
+  it('reads the owner, never broken, on the second row, the lock’s kind at its right end', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    render(<CellTile cell={outputs[0]} />);
+    const [, owner] = tileRows(screen.getByTestId('tx-io-output-0'));
+    expect(owner.row).toHaveAttribute('data-tile-owner');
+    expectOwnerSealOf(owner.mark, LOCK, IN_MARK_COLUMN);
+    const name = owner.text.firstElementChild as HTMLElement;
+    expect(name).toHaveClass('whitespace-nowrap');
+    expect(within(name).getByRole('link', { name: /^ckb1qzda0c/ })).toHaveAttribute(
+      'href',
+      `/mainnet/address/${ADDRESS}`
+    );
+    // the change output's lock kind (no lookup: 'change' alone), dim
+    expect(expectEnd(owner.text, /^change$/).firstElementChild).toHaveClass('text-text-dim');
+    // a lock of no known kind: the owner alone, no empty end
+    cleanup();
+    render(<CellTile cell={outputs[1]} />);
+    const [, other] = tileRows(screen.getByTestId('tx-io-output-1'));
+    expect(other.text.children).toHaveLength(1);
+    expect(other.text.querySelector('[data-tile-end]')).toBeNull();
+  });
+
+  it('reads the content, bright, on the third row, the exact capacity at its right end', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    render(<CellTile cell={outputs[1]} />);
+    const tile = screen.getByTestId('tx-io-output-1');
+    const [, , content] = tileRows(tile);
+    expect(content.mark.firstElementChild).toHaveAttribute('data-class', 'tokens');
+    const what = content.text.firstElementChild as HTMLElement;
+    expect(what).toHaveClass('text-text-bright', 'min-w-0', 'max-w-full');
+    expect(what).toHaveTextContent('USDI');
+    const capacity = expectEnd(content.text, /^142(\.0+)? CKB$/);
+    expect(capacity.querySelector('[data-ckb-amount]')).not.toBeNull();
+    expect(capacity.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
+  });
+
+  it('draws the occupied bar and its bytes on one line, the fourth row, under the text edge', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    render(<CellTile cell={outputs[0]} />);
+    const [, , , occupied] = tileRows(screen.getByTestId('tx-io-output-0'));
+    expect(occupied.text).toHaveClass('flex', 'min-w-0', 'flex-wrap', 'items-center', 'gap-x-2');
+    expect(occupied.text.children).toHaveLength(2);
+    const [bar, bytes] = Array.from(occupied.text.children) as HTMLElement[];
+    expect(bar).toHaveAttribute('aria-hidden', 'true');
+    expect(bar).toHaveClass('h-1', 'w-14', 'shrink-0');
+    expect(bytes).toHaveTextContent(/^occupied 61$/);
+    expect(bytes).toHaveClass('text-meta', 'text-text-dim');
+    // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
+    cleanup();
+    render(
+      <CellTile
+        cell={sealedTile({
+          id: 'in:0',
+          testId: 'tile',
+          href: '/cell/0x-0',
+          label: 'input 0',
+          owner: 'owner',
+          lockKind: null,
+          kind: 'ckb',
+          content: 'CKB',
+          capacity: '6100000000',
+          occupied: '6100000000',
+          state: 'consumed',
+          anatomy: { lock: '53', type: '0', data: '0' },
+        })}
+      />
+    );
+    const [, , , anatomy] = tileRows(screen.getByTestId('tile'));
+    const [cellBar, words] = Array.from(anatomy.text.children) as HTMLElement[];
+    expect(within(cellBar).getByRole('img')).toHaveAttribute(
+      'aria-label',
+      'in:0: 61 occupied bytes'
+    );
+    expect(cellBar).toHaveClass('min-w-0', 'flex-1');
+    expect(words).toHaveTextContent(/^occupied 61$/);
   });
 });
 

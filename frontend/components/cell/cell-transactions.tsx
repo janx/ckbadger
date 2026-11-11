@@ -5,7 +5,7 @@ import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
-import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
+import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
 import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
@@ -163,6 +163,8 @@ export function TransactionEvidence({
         outputs={tiles.outputs}
         fee={tx.fee}
         poolCapacity={tx.isCellbase ? undefined : (tx.inputsCapacity ?? undefined)}
+        // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
+        {...sheetTotals(tx)}
         groups={groups}
         // One page, two transactions: each list says whose groups it is (Cell board).
         groupsTitle={`Script groups of the transaction that ${label === 'Created' ? 'created' : 'spent'} it`}
