@@ -1229,25 +1229,27 @@ export default function TransactionDetailPage() {
         <header className="min-w-0 lg:col-start-1">
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
           {/* The one corner (Transaction board): the transaction's long stone pressed beside its
-              identity; from lg its seam seal is pressed again between the cells below. */}
+              name plate (seals by kind, C10) — the kind line, the action, the hash and its copy —
+              with the summary and the board's comment under both, from the page's left edge;
+              from lg its seam seal is pressed again between the cells below. The action is one
+              type step smaller below md, as every name plate's name. */}
           <SealedHead
             id={seal.id}
             state={seal.state}
-            // Under the seal and the identity, in the identity column (the board's comment).
+            kind="Transaction"
             below={
-              comment === null ? undefined : (
-                <Comment lines={comment} className="mt-4 max-w-[60ch]" />
-              )
+              <>
+                {summary}
+                {comment !== null && <Comment lines={comment} className="mt-4 max-w-[60ch]" />}
+              </>
             }
           >
-            <div className="flex min-w-0 flex-col gap-2">
-              <span className="text-text-dim text-small">Transaction</span>
-              <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
-              {summary}
-              <div className="text-small flex min-w-0 items-center gap-0.5">
-                <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
-                <CopyHash hash={tx.hash} />
-              </div>
+            <h1 className="text-text-bright text-entity max-md:text-index break-words font-medium">
+              {headline}
+            </h1>
+            <div className="text-small flex min-w-0 items-center gap-0.5">
+              <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
+              <CopyHash hash={tx.hash} />
             </div>
           </SealedHead>
         </header>

@@ -8,7 +8,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
-import { expectBefore, expectOnePageSeal, parsed, SEAL_INKS } from '@/__tests__/utils/seals';
+import {
+  expectBefore,
+  expectNamePlate,
+  expectOnePageSeal,
+  parsed,
+  SEAL_INKS,
+} from '@/__tests__/utils/seals';
 import { PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import { drawSeal, type SealId, type SealState } from '@/lib/seal/stones';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
@@ -357,7 +363,10 @@ describe('Transaction board, tier 1', () => {
     Object.assign(navigator, { clipboard: { writeText } });
     render(<TransactionDetailPage />);
     const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
-    expect(h1.previousElementSibling).toHaveTextContent('Transaction');
+    // the kind line says "Transaction" before the action (seals by kind, C10)
+    const kindLine = document.querySelector('[data-sealed-kind]') as HTMLElement;
+    expect(kindLine).toHaveTextContent(/^Transaction$/);
+    expectBefore(kindLine, h1);
     expect(h1.querySelector('[data-class]')).toBeNull();
     const summary = await screen.findByTestId('tx-summary', {}, SLOW);
     expect(summary).toHaveTextContent(
@@ -369,9 +378,10 @@ describe('Transaction board, tier 1', () => {
   });
 
   // The seals by kind (C2; the Transaction board's one corner): the transaction's long stone,
-  // 94 px (64 on a phone, −4°), its rods the cells it consumed and created, pressed beside the
-  // page's own header — the eyebrow, the action, the summary and the hash — never in the facts.
-  it('presses the transaction’s stone beside its header, outside the facts and the cells', async () => {
+  // 94 px (64 on a phone, −4°), its rods the cells it consumed and created, never in the facts.
+  // The name plate (C10): beside it the kind line "Transaction", the action and the hash with its
+  // copy button; the summary and the comment under both, from the page's left edge.
+  it('presses the transaction’s stone beside its name plate, the summary under both, outside the facts and the cells', async () => {
     const { container } = render(<TransactionDetailPage />);
     const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
     await screen.findByTestId('tx-cells-frame', {}, SLOW);
@@ -381,11 +391,21 @@ describe('Transaction board, tier 1', () => {
       'pressed',
       true
     );
-    const head = seal.closest('[data-sealed-head]')!;
+    const header = container.querySelector('header') as HTMLElement;
+    const { head, stone, kindLine, nameBox, title, below } = expectNamePlate(header, 'Transaction');
+    expect(stone).toBe(seal);
+    expect(title).toBe(h1);
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index');
+    expect(kindLine.children).toHaveLength(1);
+    // the plate: the action, then the id line — the hash and its copy button, nothing else
+    expect(nameBox.children).toHaveLength(2);
+    const idLine = nameBox.lastElementChild as HTMLElement;
+    expect(idLine).toHaveTextContent(new RegExp(`^${TX_HASH}$`));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    // under both: the summary first
+    expect(below!.firstElementChild).toBe(screen.getByTestId('tx-summary'));
+    expect(nameBox).not.toContainElement(screen.getByTestId('tx-summary'));
     expect(head.closest('header')).toContainElement(h1);
-    expect(head).toContainElement(h1);
-    expect(head).toContainElement(screen.getByTestId('tx-summary'));
-    expect(head).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
     expectBefore(seal, h1);
     expect(head).not.toContainElement(
       await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW)
@@ -422,9 +442,10 @@ describe('Transaction board, tier 1', () => {
       expect(side.querySelector('h3')).toHaveClass('mb-3', 'lg:mb-0', 'lg:min-h-[88px]');
   });
 
-  // Rubbing × Song print, phase 5 (T4): the board's comment under the sealed head, in the identity
-  // column: three lines from the figures the page draws — the cells heading's counts, the rail's
-  // fee and the evidence tier's common-knowledge delta (563 → 589 occupied bytes).
+  // Rubbing × Song print, phase 5 (T4): the board's comment, three lines from the figures the page
+  // draws — the cells heading's counts, the rail's fee and the evidence tier's common-knowledge
+  // delta (563 → 589 occupied bytes). The name plate (C10): under the stone and the plate after
+  // the summary, from the page's left edge (it was in the column beside the stone).
   it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
     const { container } = render(<TransactionDetailPage />);
     const first = await screen.findByText('1 cell became 1.', {}, SLOW);
@@ -439,14 +460,17 @@ describe('Transaction board, tier 1', () => {
     ]);
     expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
     expect(container.querySelectorAll('.comment')).toHaveLength(1);
-    // under the seal and the identity, in the identity column, inside the page's header
-    const head = container.querySelector('[data-sealed-head]') as HTMLElement;
-    const below = comment.parentElement!;
-    expect(below).toHaveAttribute('data-sealed-below');
-    expect(below.parentElement).toBe(head);
-    expect(below).toHaveClass('col-start-2');
+    // under the seal and the plate, across both columns, after the summary, inside the header
+    const { head, below } = expectNamePlate(
+      container.querySelector('header') as HTMLElement,
+      'Transaction'
+    );
+    expect(comment.parentElement).toBe(below);
+    const summary = await screen.findByTestId('tx-summary', {}, SLOW);
+    expect(Array.from(below!.children)).toEqual([summary, comment]);
     expect(head.closest('header')).toContainElement(comment);
-    // reading order: the identity (the hash and its copy button), the comment, then the facts
+    // reading order: the identity (the hash and its copy button), the summary, the comment, then
+    // the facts
     expectBefore(screen.getByRole('button', { name: 'Copy transaction hash' }), comment);
     expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
     // the fee is the one the rail prints, digit for digit
@@ -810,8 +834,13 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
     expect(screen.getByText('Pending since')).toBeInTheDocument();
     // No comment while it waits: its cells and occupied bytes are read once it is indexed (T4).
+    // Under the stone and the plate (C10) stands its summary alone, the sentence that says so.
     expect(document.querySelector('.comment')).toBeNull();
-    expect(document.querySelector('[data-sealed-below]')).toBeNull();
+    const below = document.querySelector('[data-sealed-below]') as HTMLElement;
+    expect(below.children).toHaveLength(1);
+    expect(below).toHaveTextContent(
+      /^Activity and canonical cell structure are available once this transaction is committed and indexed\.$/
+    );
     // C2: not in a block yet, so its stone is dashed; its cells are not drawn, so no seam seal.
     expect(screen.queryByTestId('tx-cells-frame')).toBeNull();
     expectTxSeals(

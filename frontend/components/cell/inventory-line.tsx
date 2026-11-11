@@ -240,9 +240,10 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
 }
 
 /**
- * Lane U (U6): the cell page hero's one line naming the inventory item the cell is — right under
- * the h1. A cell of an unhandled protocol, or a plain cell, gets no line; a handled cell whose data
- * does not name its item says so in place, never a guess.
+ * Lane U (U6): the cell page hero's one line naming the inventory item the cell is — the first line
+ * under the stone and the name plate (seals by kind, C10). A cell of an unhandled protocol, or a
+ * plain cell, gets no line; a handled cell whose data does not name its item says so in place,
+ * never a guess.
  */
 export function CellInventoryLine({ cell }: { cell: Cell }) {
   let item: CellInventoryItem | null;

@@ -3,7 +3,12 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
-import { expectBefore, expectOnePageSeal, expectOneRowSeal } from '@/__tests__/utils/seals';
+import {
+  expectBefore,
+  expectNamePlate,
+  expectOnePageSeal,
+  expectOneRowSeal,
+} from '@/__tests__/utils/seals';
 import { addressCellSealId } from '@/lib/address-cell-seal';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -219,6 +224,31 @@ describe('Address v3', () => {
     expect(head).toContainElement(screen.getByRole('heading', { level: 1 }));
     expectBefore(seal, screen.getByRole('heading', { level: 1 }));
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
+  });
+
+  // The name plate (seals by kind, C10): beside the lock script's stone, the kind line "Address"
+  // with the page's status (the lock, the live cells and transactions), the short address, then the
+  // full address and its copy button; nothing under them (the address page has no lede).
+  it('stands the address’s name plate beside the stone: Address and its status, the short address, the full one', async () => {
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    const { stone, kindLine, nameBox, title, below } = expectNamePlate(container, 'Address');
+    expect(stone).toHaveAttribute('data-seal', 'script');
+    expect(below).toBeNull();
+    expect(kindLine.children).toHaveLength(2);
+    expect(kindLine).toHaveTextContent(/^Addresslock JoyID40 live cells · 1,021 transactions$/);
+    expect(within(kindLine).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/scripts/JoyID')
+    );
+    expect(title).toHaveTextContent(
+      new RegExp(`^${addressText.slice(0, 12)}…${addressText.slice(-8)}$`)
+    );
+    expect(title).toHaveClass('text-entity', 'max-md:text-index');
+    expect(nameBox.children).toHaveLength(2);
+    const idLine = nameBox.lastElementChild as HTMLElement;
+    expect(idLine).toHaveTextContent(new RegExp(`^${addressText}$`));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy address' }));
   });
 
   // The seals by kind (C3 for the address's cells): the Live cells tab leads every row with the

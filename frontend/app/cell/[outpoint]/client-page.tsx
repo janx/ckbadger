@@ -387,22 +387,19 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
   return (
     <>
       <DetailLayout
-        // Consistency round C13 + lane U (U3): the page presents a cell — "Cell" in dim before
-        // its short out point; the full out point, its copy and the transaction it is an output
-        // of are the identity lines beneath (no "Transaction … / output N" breadcrumb).
-        title={
-          <>
-            {/* An inline-block, so a phone wraps "Cell" away before it breaks the out point. */}
-            <span className="text-text-dim">Cell</span>{' '}
-            <span className="inline-block">
-              {short(cell.txHash)}:{cell.outputIndex}
-            </span>
-          </>
-        }
+        // Consistency round C13 + lane U (U3): the page presents a cell, named by its short out
+        // point; the kind line before it says "Cell" (seals by kind, C10), the full out point and
+        // its copy are the id line, and the transaction it is an output of is said under the plate
+        // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, its one break
+        // opportunity after the "…": under the stone below md it has the full width, and at 26 px
+        // the short out point (19 characters, 20 or 21 for an index up to 999) is 286.5 to 316.7
+        // px, inside the 328 px line at 360, so it stands on one line.
+        title={`${short(cell.txHash)}:${cell.outputIndex}`}
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
-        seal={seal}
+        seal={{ ...seal, kind: 'Cell' }}
+        // on the kind line, after "Cell"
         status={
           <span className="flex flex-wrap items-center gap-3">
             <span
@@ -419,18 +416,23 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <CodeCellOf cell={cell} />
           </span>
         }
+        // the id line: the full out point and its copy
         identity={
-          <div className="space-y-1.5">
-            {/* Lane U (U6): the inventory item this cell is, first under the h1. */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-text-bright text-body [overflow-wrap:anywhere]">
+              {cell.txHash}
+              <span className="text-text-dim">:</span>
+              {cell.outputIndex}
+            </span>
+            <CopyOutpoint value={outpoint} />
+          </div>
+        }
+        // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
+        // dim small voice: the inventory item this cell is (lane U, U6), the transaction it is an
+        // output of, and what its out point is.
+        lede={
+          <div className="text-text-dim text-small space-y-1.5">
             <CellInventoryLine cell={cell} />
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-text-bright text-body [overflow-wrap:anywhere]">
-                {cell.txHash}
-                <span className="text-text-dim">:</span>
-                {cell.outputIndex}
-              </span>
-              <CopyOutpoint value={outpoint} />
-            </div>
             <CellOrigin cell={cell} />
             <p>
               The out point is the cell&apos;s only name: transaction hash and output index. No

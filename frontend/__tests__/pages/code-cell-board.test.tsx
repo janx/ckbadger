@@ -6,7 +6,7 @@ import { api, type Cell } from '@/lib/api';
 import { elfParts } from '@/lib/cell-parts';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
-import { expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 // The CellCode board's cell: JoyID v5, 0x673e1843…55f9:0 — 100,438 CKB, a 100,312-byte RISC-V
 // ELF. Its layout is the chain's (program headers, sections, the 4-byte gap); only the payload
@@ -61,10 +61,14 @@ describe('code cell page against the CellCode board', () => {
   });
 
   it('says whose code it is in the header and names lock and type (SC-K2)', async () => {
-    view();
-    expect(await screen.findByTestId('code-cell-of', undefined, wait)).toHaveTextContent(
-      '· code cell of JoyID, v5'
-    );
+    const { container } = view();
+    const codeCellOf = await screen.findByTestId('code-cell-of', undefined, wait);
+    expect(codeCellOf).toHaveTextContent('· code cell of JoyID, v5');
+    // the name plate (seals by kind, C10): on the kind line, with the cell's status, after "Cell"
+    const { kindLine, nameBox } = expectNamePlate(container, 'Cell');
+    expect(kindLine).toContainElement(codeCellOf);
+    expect(kindLine).toHaveTextContent(/^Celllive· code cell of JoyID, v5$/);
+    expect(nameBox).not.toContainElement(codeCellOf);
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     await within(facts).findByRole('link', { name: 'Multisig' }, wait);
     expect(facts).toHaveTextContent('args 0x6598…d696');

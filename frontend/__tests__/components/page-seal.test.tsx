@@ -4,6 +4,7 @@ import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT, PageSeal, SealedHead } from '@/compo
 import { drawSeal, sealLabel, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
 import {
   expectBefore,
+  expectNamePlate,
   expectOnePageSeal,
   SEAL_IDS,
   SEAL_INKS,
@@ -29,7 +30,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
       for (const kind of KINDS) {
         const id = i ? sealIdsAt(i)[kind] : SEAL_IDS[kind];
         const { container, unmount } = render(
-          <SealedHead id={id}>
+          <SealedHead id={id} kind={kind}>
             <h1>{kind}</h1>
           </SealedHead>
         );
@@ -75,7 +76,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
       for (const state of STATES) {
         const id = SEAL_IDS[kind];
         const { container, unmount } = render(
-          <SealedHead id={id} state={state}>
+          <SealedHead id={id} state={state} kind={kind}>
             <h1>{kind}</h1>
           </SealedHead>
         );
@@ -86,59 +87,92 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
     expect(container.firstElementChild).toHaveAttribute('data-seal-state', 'pressed');
   });
 
-  it('presses the stone first, the identity beside it, what is below in the identity column', () => {
-    render(
-      <SealedHead id={SEAL_IDS.tx} below={<p>2 cells became 3.</p>}>
+  // The name plate (seals by kind, C10; Gate C: "page head 需要优化"): beside the stone stands only
+  // the object's name plate — the kind line, the name, the id line, three short lines on one left
+  // edge, centred on the stone from md up — and everything else of the head is `below`, under the
+  // stone and the plate from the page's left edge at every width (it was set in the column beside
+  // the stone, indented by the stone's width). Below md the stone's row carries the kind line alone
+  // and the name and the id line go under the stone at the full width: the plate's wrapper is
+  // `contents` there, so its name-and-id box is the grid's next item, spanning both columns. One
+  // DOM, nothing hidden; jsdom has no layout, so the classes that arrange it are what is pinned.
+  it('stands the name plate beside the stone, and what is below under both from the left edge', () => {
+    const { container } = render(
+      <SealedHead
+        id={SEAL_IDS.tx}
+        kind="Transaction"
+        status={<span data-testid="status">committed</span>}
+        below={<p>2 cells became 3.</p>}
+      >
         <h1>Transfer</h1>
-        <p>Transaction {SEAL_IDS.tx.hash}</p>
+        <p>{SEAL_IDS.tx.hash}</p>
       </SealedHead>
     );
     const title = screen.getByRole('heading', { level: 1 });
     const seal = screen.getByRole('img', { name: sealLabel(SEAL_IDS.tx) });
-    expectBefore(seal, title);
-    const head = title.closest('[data-sealed-head]')!;
-    expect(head).toHaveAttribute('data-sealed-head', 'tx');
-    expect(head).toHaveClass(
-      'grid',
-      'grid-cols-[auto_minmax(0,1fr)]',
-      'items-start',
-      'min-w-0',
-      'gap-x-4',
-      'md:gap-x-5'
+    const { head, stone, plate, kindLine, nameBox, below } = expectNamePlate(
+      container,
+      'Transaction'
     );
-    expect(head.children).toHaveLength(3);
-    const [stone, column, below] = Array.from(head.children) as HTMLElement[];
-    expect(stone).toHaveAttribute('data-seal', 'tx');
+    expect(head).toHaveAttribute('data-sealed-head', 'tx');
     expect(stone).toContainElement(seal);
-    // two grid columns: the seal's own width, then the identity column, which may shrink
-    expect(column).toHaveClass('min-w-0');
-    expect(column).toContainElement(title);
-    expect(title.parentElement).toBe(column);
-    expect(column).toHaveTextContent(`Transaction ${SEAL_IDS.tx.hash}`);
-    // Rubbing × Song print, phase 5 (T4): the Transaction board's comment stands under the seal
-    // and the identity, in the identity column — the grid's second row, second column, so its left
-    // edge is the column's for every stone, with no number for the seal's width.
-    expect(below).toHaveAttribute('data-sealed-below');
-    expect(below).toHaveClass('col-start-2', 'min-w-0');
+    expectOnePageSeal(container, SEAL_IDS.tx);
+    // the kind line: the kind word, then the status chips, beside the stone at every width
+    expect(Array.from(kindLine.children)).toEqual([
+      kindLine.firstElementChild,
+      screen.getByTestId('status'),
+    ]);
+    expect(kindLine).toHaveTextContent(/^Transactioncommitted$/);
+    // the name and the id line, in the plate from md up, under the stone below md
+    expect(Array.from(nameBox.children).map((child) => child.textContent)).toEqual([
+      'Transfer',
+      SEAL_IDS.tx.hash,
+    ]);
+    expect(nameBox).toHaveClass('max-md:col-span-2');
+    expect(nameBox.className).not.toMatch(/(^|\s)(md|lg|xl):col-/);
+    // below: the grid's last row, across both columns at every width, outside the plate
+    expect(below).not.toBeNull();
     expect(below).toHaveTextContent(/^2 cells became 3\.$/);
-    expect(column).not.toContainElement(below);
-    expectBefore(title, below);
+    expect(plate).not.toContainElement(below);
+    expect(below!.className).not.toMatch(/(^|\s)(sm|md|lg|xl):/);
+    // reading order: stone, kind word, status, name, id line, below
+    expectBefore(seal, kindLine);
+    expectBefore(screen.getByTestId('status'), title);
+    expectBefore(title, screen.getByText(SEAL_IDS.tx.hash));
+    expectBefore(screen.getByText(SEAL_IDS.tx.hash), below!);
   });
 
-  it('adds nothing under the head when it is given nothing below', () => {
-    render(
-      <SealedHead id={SEAL_IDS.block}>
+  it('adds nothing under the head when it is given nothing below, and no status when given none', () => {
+    const { container } = render(
+      <SealedHead id={SEAL_IDS.block} kind="Block">
         <h1>#20,914,858</h1>
-        <p>Block {SEAL_IDS.block.hash}</p>
+        <p>{SEAL_IDS.block.hash}</p>
       </SealedHead>
     );
-    const title = screen.getByRole('heading', { level: 1 });
-    const head = title.closest('[data-sealed-head]')!;
+    const { head, kindLine, nameBox, below } = expectNamePlate(container, 'Block');
     expect(head).toHaveAttribute('data-sealed-head', 'block');
-    expectBefore(screen.getByRole('img', { name: sealLabel(SEAL_IDS.block) }), title);
-    expect(head.children).toHaveLength(2);
-    expect(title.parentElement!.parentElement).toBe(head);
+    expect(below).toBeNull();
     expect(head.querySelector('[data-sealed-below]')).toBeNull();
+    expect(kindLine.children).toHaveLength(1);
+    expect(kindLine).toHaveTextContent(/^Block$/);
+    expect(nameBox).toHaveTextContent(`#20,914,858${SEAL_IDS.block.hash}`);
+  });
+
+  // The plate's 8 px line gaps keep a one-line plate no taller than the stone on every page (kind
+  // 18 + name 34.5, the block's 36 + id line 20 to 26 + 16: 88.5 to 94.5 px beside 94 to 112):
+  // pinned as the classes that set them, with the rows' 16 px (20 from md).
+  it('spaces the plate’s lines 8 px apart and the head’s rows 16 px, 20 from md', () => {
+    const { container } = render(
+      <SealedHead id={SEAL_IDS.cell} kind="Cell" below={<p>the rest</p>}>
+        <h1>0xabcdef01…234567:1</h1>
+      </SealedHead>
+    );
+    const { head, plate, nameBox } = expectNamePlate(container, 'Cell');
+    expect(plate).toHaveClass('md:gap-2');
+    expect(nameBox).toHaveClass('gap-2');
+    expect(head).toHaveClass('gap-y-4', 'md:gap-y-5');
+    // no margin of their own: the gaps are the only spacing
+    for (const box of [plate, nameBox, ...Array.from(plate.children)])
+      expect(box.className).not.toMatch(/(^|\s|:)m[tby]?-/);
   });
 
   it('refuses an id it cannot draw on a page, naming it, with no fallback', () => {
@@ -153,7 +187,7 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
     );
     expect(() =>
       render(
-        <SealedHead id={{ ...SEAL_IDS.tx, consumed: 100000 }}>
+        <SealedHead id={{ ...SEAL_IDS.tx, consumed: 100000 }} kind="Transaction">
           <h1>Transfer</h1>
         </SealedHead>
       )
