@@ -3855,6 +3855,12 @@ the domain catch-up, so the append-only catch-up after it holds the payload; an 
 ahead of domain is harmless (payloads are write-once and read only through a domain row). The
 writer's order is unchanged: crash safety needs payloads durable before the domain tip.
 
+**The log**: `ApiError::internal` puts its message in the response body only, and the request
+log wrote `completed status=500` at INFO, so the cause had to be inferred from timings. The
+request log now sits inside the compression layer and reads a 5xx body: the request's line
+carries `error_kind` and `error` (the API error's code and message), at ERROR for every 5xx but
+503. Regression: `an_internal_error_logs_its_message_with_the_request`.
+
 **Why the tests missed it**: test stores were single unified primaries, so no test had two
 secondaries or a commit landing inside a round. Regression:
 `a_block_committed_during_a_catch_up_round_never_serves_rows_without_their_payloads` opens real
@@ -3866,7 +3872,8 @@ a writer is still writing. When readers follow references from store A into stor
 writer commits B before A, the reader must advance A before B.
 
 **Files**: `crates/api/src/store_readiness.rs`, `crates/api/tests/api_store_readiness.rs`,
-`docs/STORE_SCHEMA.md`
+`docs/STORE_SCHEMA.md`, `crates/api/src/request_log.rs`, `crates/api/src/lib.rs`,
+`crates/api/tests/api_transactions.rs`
 
 ---
 
