@@ -6,6 +6,7 @@ import {
   PAGE_SEAL_TILT,
   type PageSealScale,
 } from '@/components/ui/page-seal';
+import { OWNER_SEAL } from '@/components/ui/owner-seal';
 import { ROW_SEAL, ROW_SEAL_PX } from '@/components/ui/row-seal';
 import {
   drawSeal,
@@ -173,14 +174,17 @@ export function expectOnePageSealOf(
  * `row` holds exactly one seal of the seals by kind, the row stone of `id` in `state` (pressed
  * when not given): the drawing of that id (compared as markup with `drawSeal`'s), at its kind's
  * row height and drawn width, with the 8 px gap after it; an image and not a link (the row's own
- * link stays the row's link). Returns the seal's holder.
+ * link stays the row's link). Owner stones before an address in the row (OwnerSeal) are not the
+ * row's seal and are not counted. Returns the seal's holder.
  */
 export function expectOneRowSealOf(
   row: Element,
   id: SealId,
   state: SealState = 'pressed'
 ): HTMLElement {
-  const seals = row.querySelectorAll<HTMLElement>('[data-seal]');
+  const seals = Array.from(row.querySelectorAll<HTMLElement>('[data-seal]')).filter(
+    (s) => s.closest('[data-owner-seal]') === null
+  );
   expect(seals).toHaveLength(1);
   const [seal] = Array.from(seals);
   expect(seal).toHaveAttribute('data-seal', id.kind);
@@ -199,6 +203,38 @@ export function expectOneRowSealOf(
   expect(seal.closest('a')).toBeNull();
   expect(seal.querySelector('a')).toBeNull();
   return seal;
+}
+
+/**
+ * `holder` (an address's line in a cell row) holds exactly one owner's stone, the 20 px script row
+ * stone of `lockHash` (compared as markup with `drawSeal`'s), an image and not a link, with the
+ * 5 px gap after it. Returns the stone's holder (`[data-owner-seal]`).
+ */
+export function expectOwnerSealOf(holder: Element, lockHash: string): HTMLElement {
+  const owners = holder.querySelectorAll<HTMLElement>('[data-owner-seal]');
+  expect(owners).toHaveLength(1);
+  const [owner] = Array.from(owners);
+  const seals = owner.querySelectorAll<HTMLElement>('[data-seal]');
+  expect(seals).toHaveLength(1);
+  const [seal] = Array.from(seals);
+  const id: SealId = { kind: 'script', hash: lockHash };
+  expect(seal).toHaveAttribute('data-seal', 'script');
+  expect(seal).toHaveAttribute('data-seal-form', 'row');
+  expect(seal).toHaveAttribute('data-seal-state', 'pressed');
+  const svg = seal.querySelector('svg');
+  expect(svg).toHaveAttribute('role', 'img');
+  expect(svg).toHaveAttribute('aria-label', sealLabel(id));
+  expect(svg).toHaveAttribute('height', String(OWNER_SEAL.height));
+  expect(svg).toHaveAttribute('width', String(OWNER_SEAL.width));
+  expect(seal.innerHTML).toBe(
+    parsed(
+      drawSeal(id, { form: 'row', height: OWNER_SEAL.height, state: 'pressed', ...SEAL_INKS }).svg
+    )
+  );
+  expect(owner).toHaveClass('mr-[5px]');
+  expect(owner.closest('a')).toBeNull();
+  expect(owner.querySelector('a')).toBeNull();
+  return owner;
 }
 
 /** `first` comes before `second` in document order. */
