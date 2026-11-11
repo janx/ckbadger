@@ -1,18 +1,74 @@
+import { createHash } from 'node:crypto';
 import { expect } from 'vitest';
 import { PAGE_SEAL_SIZES, PAGE_SEAL_TILT, type PageSealScale } from '@/components/ui/page-seal';
 import { ROW_SEAL_PX } from '@/components/ui/row-seal';
+import type { CellClass, SealId, SealKind } from '@/lib/seal/stones';
 import { compound } from '@/lib/talisman/compound';
 import { RECIPES } from '@/lib/talisman/recipes';
 
 /** HashSeal's default paints: the cinnabar mark on the page ground. */
 const PAINT = { ink: 'var(--c-mark)', ground: 'var(--c-base-bg)' } as const;
 
+/** Seal's paints (the seals by kind): the cinnabar mark, the page ground, the dead ink. */
+export const SEAL_INKS = {
+  ink: 'var(--c-mark)',
+  ground: 'var(--c-base-bg)',
+  dead: 'var(--c-text-dim)',
+} as const;
+
 /** The markup as the DOM serialises it once parsed. */
-function parsed(markup: string): string {
+export function parsed(markup: string): string {
   const holder = document.createElement('span');
   holder.innerHTML = markup;
   return holder.innerHTML;
 }
+
+/** A 32-byte hash from a seed (sha256): fixed, and a different stone for every seed. */
+export function sealHash(seed: string): string {
+  return '0x' + createHash('sha256').update(`ckbadger seal fixture ${seed}`).digest('hex');
+}
+
+const CLASSES: readonly CellClass[] = ['tokens', 'dao', 'objects', 'identities', 'other'];
+const SHANNONS = BigInt(100000000);
+
+/**
+ * One id of each kind from the i-th seeds, the counts, the class (or no type) and the capacity
+ * varying with i: for drawing many different seals of a kind.
+ */
+export function sealIdsAt(i: number): { [K in SealKind]: Extract<SealId, { kind: K }> } {
+  const tx = sealHash(`tx-${i}`);
+  return {
+    block: { kind: 'block', hash: sealHash(`block-${i}`), txs: [1, 7, 12, 248, 1820][i % 5] },
+    tx: { kind: 'tx', hash: tx, consumed: i % 4, created: (i * 7) % 13 },
+    cell: {
+      kind: 'cell',
+      tx,
+      index: i,
+      lock: sealHash(`lock-${i}`),
+      type: i % 6 === 5 ? null : { class: CLASSES[i % 5], hash: sealHash(`type-${i}`) },
+      capacity: BigInt(61 * 10 ** (i % 9)) * SHANNONS,
+    },
+    script: { kind: 'script', hash: sealHash(`script-${i}`) },
+  };
+}
+
+/**
+ * The fixed ids the components' tests and the reference drawings use: a block of 248
+ * transactions, a transaction of 2 → 3 cells, its output 1 (a token cell of 1,204 CKB), a script.
+ */
+export const SEAL_IDS: { [K in SealKind]: Extract<SealId, { kind: K }> } = {
+  block: { kind: 'block', hash: sealHash('block'), txs: 248 },
+  tx: { kind: 'tx', hash: sealHash('tx'), consumed: 2, created: 3 },
+  cell: {
+    kind: 'cell',
+    tx: sealHash('tx'),
+    index: 1,
+    lock: sealHash('lock'),
+    type: { class: 'tokens', hash: sealHash('cell-type') },
+    capacity: BigInt(1204) * SHANNONS,
+  },
+  script: { kind: 'script', hash: sealHash('script') },
+};
 
 /**
  * `root` holds exactly one seal, the page seal of `hash` at its scale (rubbing × Song print,

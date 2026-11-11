@@ -967,6 +967,15 @@ export function handOf(form: SealForm): Hand {
 }
 
 /**
+ * Refuses an id that cannot be drawn in `form`, naming it: every check `drawSeal` makes of an id.
+ * For a component that draws once per id but checks the id it is given on every render.
+ */
+export function assertSealId(id: SealId, form: SealForm): void {
+  if (!FORMS.includes(form)) throw new Error(`seal: no such form ${JSON.stringify(form)}`);
+  assertId(id, form);
+}
+
+/**
  * The stone of `id` and what it was drawn from, in the given encoding (a page seal's is the
  * prototype's, a row seal's the compact one). `drawSeal` is the entry for pages and components.
  */

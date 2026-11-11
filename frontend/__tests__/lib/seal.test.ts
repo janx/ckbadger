@@ -43,6 +43,7 @@ import {
 import { assertPaint } from '@/lib/seal/paint';
 import { decimalDigits, ROD, ROD_FLAT, rodCount, rodDigit } from '@/lib/seal/rods';
 import {
+  assertSealId,
   blockRegions,
   CAPACITY_DIGITS,
   capacityDigits,
@@ -1172,6 +1173,39 @@ describe('a seal refuses what it cannot draw, naming it', () => {
       `cell ${ids.cell.tx}:${ids.cell.index}: a capacity of 10000000000000000000 shannons is 100000000000 CKB, more than 11 digits`
     );
     refuses({ ...ids.cell, capacity: 61 }, 'a capacity is a whole number of shannons');
+  });
+
+  // assertSealId is what a component checks on every render: exactly drawSeal's checks of an id
+  it('assertSealId refuses exactly the ids drawSeal refuses, with the same message', () => {
+    const bad: [unknown, SealOptions][] = [
+      [{ ...ids.block, hash: '0x12' }, P],
+      [{ ...ids.block, txs: 10000 }, P],
+      [{ ...ids.tx, consumed: -2 }, R],
+      [{ ...ids.tx, created: 100000 }, P],
+      [{ ...ids.cell, index: 10000 }, P],
+      [{ ...ids.cell, type: { class: 'ckb', hash: TYPEH[1] } }, R],
+      [{ ...ids.cell, capacity: 61 }, R],
+      [{ ...ids.script, hash: null }, R],
+      [{ ...ids.block, kind: 'uncle' }, P],
+      [null, R],
+    ];
+    for (const [i, [id, o]] of bad.entries()) {
+      let message = '';
+      try {
+        drawSeal(id as SealId, o);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message, `bad id ${i}`).not.toBe('');
+      expect(() => assertSealId(id as SealId, o.form)).toThrow(message);
+    }
+    expect(() => assertSealId(ids.block, 'brush' as 'page')).toThrow('no such form "brush"');
+    for (const id of Object.values(ids))
+      for (const form of ['page', 'row'] as const)
+        expect(() => assertSealId(id, form)).not.toThrow();
+    // a row seal takes the counts a page seal refuses
+    expect(() => assertSealId({ ...ids.block, txs: 10000 }, 'row')).not.toThrow();
+    expect(() => assertSealId({ ...ids.cell, index: 10000 }, 'row')).not.toThrow();
   });
 
   it('a paint, a height, a tilt, a seam, a kind, a form or a state it does not know', () => {
