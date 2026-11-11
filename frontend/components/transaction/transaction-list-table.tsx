@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
-import { ROW_SEAL_FOOTPRINT_PX, RowSeal } from '@/components/ui/row-seal';
+import { RowSeal } from '@/components/ui/row-seal';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -23,8 +23,27 @@ import { Utc8Date } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import type { GlobalActivity, Transaction } from '@/lib/api';
+import type { SealId } from '@/lib/seal/stones';
 
 const TRACK = 80;
+
+/**
+ * The hash in the table's Transaction column: "0x" and 6 digits, the ellipsis, 4 digits (15
+ * characters at 13 px, 117 px). It gave 4 characters (31.2 px) to the transaction's row stone,
+ * 29.5 px wider than the 27 px of the seal it replaced. The phone row keeps 10 + 6: its hash has
+ * a line.
+ */
+const TABLE_HASH_CHARS = { start: 8, end: 4 } as const;
+
+/** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
+function consumedCells(tx: Transaction): number {
+  return tx.isCellbase ? 0 : tx.inputsCount;
+}
+
+/** The transaction's stone: its hash, the cells it consumed and the cells it created. */
+function txSealId(tx: Transaction): SealId {
+  return { kind: 'tx', hash: tx.hash, consumed: consumedCells(tx), created: tx.outputsCount };
+}
 
 /** A zero amount drawn quiet (board: `#4b5266`), never a different number. */
 function Quiet({ when, children }: { when: boolean; children: ReactNode }) {
@@ -76,7 +95,7 @@ function whatNote(activity: GlobalActivity): ReactNode {
 function quietFigures(tx: Transaction): ReactNode[] {
   return [
     <span key="cells" className="whitespace-nowrap">
-      {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+      {consumedCells(tx)} → {tx.outputsCount} cells
     </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize!.toLocaleString('en-US')} B
@@ -143,7 +162,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   return (
     <PhoneRow
       testId="transaction-row-mobile"
-      mark={<RowSeal hash={tx.hash} />}
+      mark={<RowSeal id={txSealId(tx)} />}
       lines={[
         {
           key: 'identity',
@@ -231,18 +250,21 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      // The row seal, 19 characters at 13 px (148.2 px) and the 16 px gap (was 166 without it).
-      minWidth: 165 + ROW_SEAL_FOOTPRINT_PX,
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 15 characters at
+      // 13 px (117 px) and the 16 px gap: 189.5 of its 192 px. The stone is 29.5 px wider than the
+      // seal it replaced (27); the hash gave 4 characters (31.2 px), so no other column moves and
+      // the table keeps its 1,230 px (was 27 + 148.2 for 19 characters + 16).
+      minWidth: 192,
       // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
-      // row keeps its dim row class); its seal leads it, overhanging that line (RowSeal).
+      // row keeps its dim row class); its stone leads it, overhanging that line (RowSeal).
       render: (tx) => (
         <span className="flex items-start">
-          <RowSeal hash={tx.hash} overhang />
+          <RowSeal id={txSealId(tx)} overhang />
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
             <Hash
               hash={tx.hash}
-              startChars={10}
-              endChars={6}
+              startChars={TABLE_HASH_CHARS.start}
+              endChars={TABLE_HASH_CHARS.end}
               copyable={false}
               className="text-body text-text-bright leading-[18px]"
             />
@@ -342,7 +364,7 @@ export function TransactionListTable({
       className: 'whitespace-nowrap',
       render: (tx) => (
         <span className="text-text-dim text-small">
-          {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount}
+          {consumedCells(tx)} → {tx.outputsCount}
         </span>
       ),
     },

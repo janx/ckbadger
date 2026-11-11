@@ -10,12 +10,13 @@ import { api } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
-import { ROW_SEAL_FOOTPRINT_PX, RowSeal } from '@/components/ui/row-seal';
+import { RowSeal } from '@/components/ui/row-seal';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
 import type { PoolStatus } from '@/lib/api';
+import type { SealId } from '@/lib/seal/stones';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
@@ -75,6 +76,24 @@ function PoolDot({ status }: { status: PoolStatus }) {
   );
 }
 
+/** The cells a pool transaction consumes: a cellbase none (the API counts its one null input). */
+function poolConsumed(tx: PoolRow): number {
+  return tx.activity?.isCellbase ? 0 : tx.inputsCount;
+}
+
+/** A pool transaction's stone: its hash and its cells; not in a block yet, so pressed unpressed. */
+function poolSealId(tx: PoolRow): SealId {
+  return { kind: 'tx', hash: tx.hash, consumed: poolConsumed(tx), created: tx.outputsCount };
+}
+
+/**
+ * The hash in the pool table's Transaction column: "0x" and 8 digits, the ellipsis, 4 digits (17
+ * characters at 13 px, 132.6 px). It gave 4 characters (31.2 px) to the transaction's row stone,
+ * 29.5 px wider than the 27 px of the seal it replaced. The phone row keeps 10 + 6: its hash has
+ * a line.
+ */
+const POOL_HASH_CHARS = { start: 10, end: 4 } as const;
+
 /**
  * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
  * status and wait, then what it does and its value, then fee, rate, cells, size and cycles quiet.
@@ -118,7 +137,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       {BigInt(tx.feeRate).toLocaleString('en-US')} shannon/KB
     </span>,
     <span key="cells" className="whitespace-nowrap">
-      {tx.activity?.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+      {poolConsumed(tx)} → {tx.outputsCount} cells
     </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize.toLocaleString('en-US')} B
@@ -130,7 +149,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   return (
     <PhoneRow
       testId="pool-row-mobile"
-      mark={<RowSeal hash={tx.hash} />}
+      mark={<RowSeal id={poolSealId(tx)} state="unpressed" />}
       lines={[
         {
           key: 'identity',
@@ -266,18 +285,21 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      // The row seal, 21 characters at 13 px (163.8 px) and the 16 px gap (was 184 without it).
-      minWidth: 180 + ROW_SEAL_FOOTPRINT_PX,
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 17 characters at
+      // 13 px (132.6 px) and the 16 px gap: 205.1 of its 207 px. The stone is 29.5 px wider than
+      // the seal it replaced (27); the hash gave 4 characters (31.2 px), so no other column moves
+      // and the table keeps its 1,200 px (was 27 + 163.8 for 21 characters + 16).
+      minWidth: 207,
       render: (tx) => (
         <div className="flex items-start">
-          <RowSeal hash={tx.hash} overhang />
+          <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
           <div className="min-w-0 space-y-1">
             {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
             <Link href={`/tx/${tx.hash}`}>
               <Hash
                 hash={tx.hash}
-                startChars={12}
-                endChars={6}
+                startChars={POOL_HASH_CHARS.start}
+                endChars={POOL_HASH_CHARS.end}
                 copyable={false}
                 className="text-body text-text-bright leading-[18px]"
               />
@@ -317,7 +339,7 @@ export default function TransactionsPage() {
       label: 'Cells',
       minWidth: 64,
       numeric: true,
-      render: (tx) => `${tx.activity?.isCellbase ? 0 : tx.inputsCount} → ${tx.outputsCount}`,
+      render: (tx) => `${poolConsumed(tx)} → ${tx.outputsCount}`,
     },
     {
       key: 'value',
