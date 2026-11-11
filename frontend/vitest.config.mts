@@ -10,7 +10,8 @@ export default defineConfig({
     },
   },
   test: {
-    environment: 'jsdom',
+    // jsdom with one set of fetch and abort primitives (Node's), as a browser has one realm
+    environment: './__tests__/jsdom-environment.ts',
     setupFiles: ['./__tests__/setup.ts'],
     include: ['__tests__/**/*.test.{ts,tsx}'],
     exclude: ['node_modules', '.next'],

@@ -352,6 +352,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | Vite SPA deep links       | Rust frontend server must fall back to `index.html` for non-files              |
 | Vitest globals            | Add `vitest/globals` to tsconfig types                                         |
 | MSW handlers              | Must start server in setup.ts `beforeAll`                                      |
+| Node 24 fetch in jsdom    | Test env is `__tests__/jsdom-environment.ts`; no `@vitest-environment jsdom`   |
 | RocksDB secondary mode    | Read-only, no write locks, no snapshots — pin a read view                      |
 | Spore molecule `Bytes`    | Size field = content length (NOT total size including header)                  |
 | Theme colours             | Never hex in page code; `lib/palette.ts` keys via `color()` / Tailwind classes |
