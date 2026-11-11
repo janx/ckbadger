@@ -221,7 +221,7 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
   expect(screen.getByRole('heading', { name: 'This identity, in words' })).toBeInTheDocument();
   expect(ledeRestatements(container)).toEqual([]);
   expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
-  expect(screen.getByRole('heading', { name: 'Held until 2030-03-18' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Term held until 2030-03-18' })).toBeInTheDocument();
   expect(Array.from(facts.querySelectorAll('dt')).map((dt) => dt.textContent)).toEqual([
     'Owner',
     'Expires',
@@ -250,7 +250,7 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
 it('puts the metrics row right after the header in reading order (ID-C11, C7)', async () => {
   render(<Page identityId={evidence.itemId} />);
   const facts = await screen.findByRole('region', { name: 'Metrics' }, { timeout: 4000 });
-  const term = screen.getByRole('heading', { name: /^Held until/ });
+  const term = screen.getByRole('heading', { name: /^Term held until/ });
   expect(facts.compareDocumentPosition(term) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 

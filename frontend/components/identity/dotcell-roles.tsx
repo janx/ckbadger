@@ -1,6 +1,7 @@
 import type { ItemProtocol, DotCellPartyRef } from '@/lib/api';
 import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ownerRun, ownerRuns } from '@/lib/identity-term';
 import { formatUtc8Date, truncateHash } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -70,12 +71,11 @@ export function DotcellRoles({
   ];
   return (
     <section aria-label="Owner and manager" className="min-w-0 space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-section font-medium">Owner and manager</h2>
-        <span className="text-text-dim text-small">
-          stored as 20-byte lock-hash prefixes in the name&apos;s cell
-        </span>
-      </div>
+      <PromptHeading
+        command="Roles"
+        args="owner · manager"
+        note="stored as 20-byte lock-hash prefixes in the name's cell"
+      />
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
         {cards.map((c) => (
           <div

@@ -9,6 +9,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { NamedParty } from '@/components/asset/identity-document';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -162,7 +163,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
     >
       {item.sale && (
         <section aria-label="For sale" className="space-y-3">
-          <h2 className="text-text-bright text-section font-medium">For sale</h2>
+          <PromptHeading command="For sale" />
           <ExactCkb shannons={BigInt(item.sale.priceShannons)} signed={false} tone="plain" wrap />
           <dl>
             <NamedParty party={item.sale.seller} label="Seller" />
