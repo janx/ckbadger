@@ -37,7 +37,7 @@ import {
 } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { formatEpochPosition } from '@/lib/epoch';
+import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -169,7 +169,14 @@ export default function BlockDetailPage() {
   const resources = activation?.resources?.length
     ? activation.resources
     : hardforkTimeline?.events.find((event) => event.id === activation?.id)?.resources;
-  const epochStart = block.number - block.epochIndex;
+  // The epoch the header states, by the one header-epoch rule: genesis's is the zero epoch, which
+  // states no length, so it has no bar (a fraction the header does not state).
+  const epoch = checkHeaderEpoch(
+    { number: block.epochNumber, index: block.epochIndex, length: block.epochLength },
+    block.number
+  );
+  const genesisEpoch = isGenesisEpoch(epoch);
+  const epochStart = block.number - epoch.index;
   const amount = (value: string, field: string) => (
     <ExactCkb
       shannons={parseShannons(value, `block ${block.number} ${field}`)}
@@ -305,18 +312,27 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim mb-1">Epoch</dt>
                   <dd className="flex items-center gap-2">
                     <Link href={`/blocks/${epochStart}`} className="text-text-bright">
-                      {block.epochNumber.toLocaleString('en-US')}
+                      {epoch.number.toLocaleString('en-US')}
                     </Link>
-                    <EpochBar index={block.epochIndex} length={block.epochLength}>
-                      Epoch {block.epochNumber.toLocaleString('en-US')}:{' '}
-                      {block.epochIndex.toLocaleString('en-US')} of{' '}
-                      {block.epochLength.toLocaleString('en-US')}
-                    </EpochBar>
+                    {!genesisEpoch && (
+                      <EpochBar index={epoch.index} length={epoch.length}>
+                        Epoch {epoch.number.toLocaleString('en-US')}:{' '}
+                        {epoch.index.toLocaleString('en-US')} of{' '}
+                        {epoch.length.toLocaleString('en-US')}
+                      </EpochBar>
+                    )}
                     <span>
-                      {block.epochIndex.toLocaleString('en-US')} /{' '}
-                      {block.epochLength.toLocaleString('en-US')}
+                      {epoch.index.toLocaleString('en-US')} / {epoch.length.toLocaleString('en-US')}
                     </span>
                   </dd>
+                  {genesisEpoch && (
+                    // What the header says, and why it reads 0 / 0: no length is invented for it.
+                    <dd data-testid="block-epoch-genesis" className="text-text-dim mt-1">
+                      the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
+                      epoch length; <Link href="/blocks/1">{formatBlockNumber(1)}</Link> is the
+                      first header to state epoch 0’s
+                    </dd>
+                  )}
                 </div>
                 <div>
                   <dt className="text-text-dim mb-1">Difficulty</dt>
@@ -546,12 +562,7 @@ export default function BlockDetailPage() {
                     {key === 'epoch' && (
                       <span className="text-text-dim">
                         {' '}
-                        ={' '}
-                        {formatEpochPosition({
-                          number: block.epochNumber,
-                          index: block.epochIndex,
-                          length: block.epochLength,
-                        })}
+                        = {formatEpochPosition(epoch, block.number)}
                       </span>
                     )}
                     {key === 'dao' && <DaoHeaderFields dao={dao} />}
@@ -727,9 +738,12 @@ export default function BlockDetailPage() {
                 <div>
                   <dt className="text-text-dim mb-1">Miner reward</dt>
                   <dd>
+                    {/* genesis is mined by no one: its reward is not pending, there is none */}
                     {block.miningReward !== null
                       ? amount(block.miningReward, 'reward')
-                      : 'Not finalized yet'}
+                      : block.number === 0
+                        ? 'None: genesis has no miner'
+                        : 'Not finalized yet'}
                   </dd>
                   {block.rewardPaidAtBlock !== null && (
                     <dd className="text-text-dim mt-1">

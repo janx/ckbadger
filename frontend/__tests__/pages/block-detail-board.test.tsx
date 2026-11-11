@@ -283,7 +283,9 @@ describe('Block board · first tier', () => {
   });
 
   it('stands the genesis block’s height first, its lone next link after it', async () => {
-    // Genesis as the API serves it: no parent, no miner, no reward, epoch 0's first block.
+    // Genesis as the API serves it: no parent, no miner, no reward, and the zero epoch its header
+    // states (number, index and length 0, packed 0x0; it said 0/1743, a length the header does not
+    // state, and so missed the page's crash on it).
     const genesis = {
       ...block,
       number: 0,
@@ -296,10 +298,11 @@ describe('Block board · first tier', () => {
       proposalsCount: 0,
       unclesCount: 0,
       uncles: [],
-      epoch: '0/1743',
+      epoch: '0/0',
       epochNumber: 0,
       epochIndex: 0,
-      epochLength: 1743,
+      epochLength: 0,
+      rawHeader: { ...block.rawHeader, epoch: '0x0' },
       minerAddress: null,
       minerMessage: null,
       minerMessageText: null,

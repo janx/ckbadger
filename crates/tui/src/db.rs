@@ -39,15 +39,29 @@ struct ApiNetworkStats {
     pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
 }
 
-fn parse_epoch_string(epoch: &str) -> Result<(i64, i32, i32)> {
-    let invalid =
-        || anyhow::anyhow!("invalid network epoch {epoch:?}; expected number(index/length)");
+/// The tip header's epoch from `/statistics/network`, block `block`'s (`latestBlock`), by the one
+/// header-epoch rule: an index inside its epoch, or the zero epoch CKB builds the genesis header
+/// with (`0(0/0)`, number, index and length 0), which is block 0's alone.
+fn parse_epoch_string(epoch: &str, block: i64) -> Result<(i64, i32, i32)> {
+    let invalid = || {
+        anyhow::anyhow!(
+            "invalid network epoch {epoch:?} at block {block}; expected number(index/length)"
+        )
+    };
     let (number, rest) = epoch.split_once('(').ok_or_else(invalid)?;
     let inner = rest.strip_suffix(')').ok_or_else(invalid)?;
     let (index, length) = inner.split_once('/').ok_or_else(invalid)?;
     let epoch_number: i64 = number.parse().map_err(|_| invalid())?;
     let epoch_index: i32 = index.parse().map_err(|_| invalid())?;
     let epoch_length: i32 = length.parse().map_err(|_| invalid())?;
+    if (epoch_number, epoch_index, epoch_length) == (0, 0, 0) {
+        if block != 0 {
+            return Err(anyhow::anyhow!(
+                "network epoch {epoch:?} at block {block}: the zero epoch is the genesis header's alone"
+            ));
+        }
+        return Ok((0, 0, 0));
+    }
     if epoch_number < 0 || epoch_index < 0 || epoch_length <= 0 || epoch_index >= epoch_length {
         return Err(invalid());
     }
@@ -148,7 +162,8 @@ fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> Result<ChainInfoData> {
         })
         .transpose()?
         .map(|value| value.to_string());
-    let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch)?;
+    let (epoch_number, epoch_index, epoch_length) =
+        parse_epoch_string(&stats.epoch, stats.latest_block)?;
 
     Ok(ChainInfoData {
         latest_block: stats.latest_block,
@@ -1004,21 +1019,34 @@ mod tests {
     #[test]
     fn parse_epoch_full() {
         assert_eq!(
-            parse_epoch_string("100(800/1800)").unwrap(),
+            parse_epoch_string("100(800/1800)", 180_800).unwrap(),
             (100, 800, 1800)
         );
     }
 
     #[test]
     fn parse_epoch_without_details() {
-        assert!(parse_epoch_string("101").is_err());
+        assert!(parse_epoch_string("101", 1).is_err());
     }
 
     #[test]
     fn parse_epoch_invalid() {
-        assert!(parse_epoch_string("bad").is_err());
-        assert!(parse_epoch_string("100(1800/1800)").is_err());
-        assert!(parse_epoch_string("100(1/0)").is_err());
+        assert!(parse_epoch_string("bad", 1).is_err());
+        assert!(parse_epoch_string("100(1800/1800)", 181_800).is_err());
+        assert!(parse_epoch_string("100(1/0)", 180_001).is_err());
+    }
+
+    /// Regression: with the tip at genesis the API serves the zero epoch the genesis header
+    /// states, `0(0/0)`; it is refused on any later tip.
+    #[test]
+    fn parse_epoch_reads_the_genesis_tips_zero_epoch_only_at_block_0() {
+        assert_eq!(parse_epoch_string("0(0/0)", 0).unwrap(), (0, 0, 0));
+        let err = parse_epoch_string("0(0/0)", 1).unwrap_err().to_string();
+        assert!(
+            err.contains("at block 1: the zero epoch is the genesis header's alone"),
+            "{err}"
+        );
+        assert!(parse_epoch_string("0(1/0)", 0).is_err());
     }
 
     #[test]

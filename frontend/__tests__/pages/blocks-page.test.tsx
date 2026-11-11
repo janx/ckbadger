@@ -1,5 +1,6 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+import { genesisNeighbours, genesisNeighboursPage } from '@/__tests__/msw/fixtures/genesis-block';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -167,6 +168,55 @@ describe('BlocksPage', () => {
     expect(screen.getByText('Blocks')).toBeInTheDocument();
     expect(screen.getAllByText('#8,775,638').length).toBeGreaterThan(0);
     expect(screen.getAllByText('HF · MIRANA')[0]).toBeInTheDocument();
+  });
+});
+
+// The chain's first page as the API lists it (GET /blocks?cursor=3&limit=50: blocks 2, 1, 0).
+// Genesis has no miner and no reward, the zero epoch, and 1,236,271 bytes against the 597,000-byte
+// limit; every form of the list writes it as what it is.
+describe('BlocksPage · the genesis row', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      ...genesisNeighboursPage,
+      data: genesisNeighbours,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('writes genesis as mined by no one and paid no reward, in the wide table', async () => {
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const [, , genesis] = Array.from(table.querySelectorAll('tbody tr')) as HTMLElement[];
+    expect(within(genesis).getByRole('link', { name: '#0' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/0'
+    );
+    expect(within(genesis).getAllByText('Genesis')).toHaveLength(2); // the miner and the reward
+    expect(within(genesis).getByRole('img', { name: /^Size, bytes: 1,236,271/ })).toBeVisible();
+    // consensus never checks genesis against the block limit: its share is stated exactly
+    expect(screen.getByText(/^Size and cycles · Fullest of these 3/)).toHaveTextContent(
+      /^Size and cycles · Fullest of these 3: 1,236,271 bytes, 207\.08% of the 597,000-byte limit/
+    );
+  });
+
+  it('writes genesis as mined by no one in the 608 px table and on a phone', async () => {
+    atContainerWidth(608);
+    const { unmount } = render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const [, , genesis] = Array.from(table.querySelectorAll('tbody tr')) as HTMLElement[];
+    expect(genesis).toHaveTextContent('Genesis');
+    unmount();
+    atContainerWidth(358);
+    render(<BlocksPage />);
+    const cards = await screen.findAllByTestId('block-row-mobile');
+    const lines = phoneLines(cards[2]).map((l) => [l.key, l.left, l.right]);
+    expect(lines[0]).toEqual(['identity', '#0', expect.stringMatching(/^2 txs · .+ ago$/)]);
+    expect(lines[1]).toEqual(['miner', 'miner Genesis', 'fees 0 CKB']);
+    expect(lines[2][1]).toMatch(/· 1,236,271 B, 1,235,678 B overhead · 0 cycles · Genesis$/);
   });
 });
 

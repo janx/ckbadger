@@ -91,7 +91,7 @@ export function FiberChannelStep({
           {formatBlockNumber(blockNumber)}
         </Link>
         {` · ${formatUtc8DateTime(timestamp)}`}
-        {epoch !== undefined && ` · epoch ${stageEpoch(epoch)}`}
+        {epoch !== undefined && ` · epoch ${stageEpoch(epoch, blockNumber)}`}
       </span>
     </h3>
   );

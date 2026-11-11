@@ -2700,6 +2700,37 @@ fn require_node_tip(result: Result<u64, String>) -> Result<u64, ApiRouteError> {
     result.map_err(|error| ApiError::internal(format!("failed to read CKB node tip: {error}")))
 }
 
+/// Blocks left in block `block`'s epoch, counting itself, by the one rule for the epoch a header
+/// states (the frontend's `checkHeaderEpoch`). Every header after genesis passes CKB's header
+/// verifier, whose `EpochNumberWithFraction::is_well_formed` asks index < length; the genesis
+/// header carries the zero epoch (`build_genesis`: `new_unchecked(0, 0, 0)`, CKB's `is_genesis`),
+/// the one header with no length. So the zero epoch is block 0's alone and leaves no count: `None`.
+/// The zero epoch on a later block, or any other index at or past its length, is an error naming
+/// the block.
+fn epoch_blocks_left(
+    block: i64,
+    number: i64,
+    index: i32,
+    length: i32,
+) -> Result<Option<u128>, ApiRouteError> {
+    let written = format!("{number}({index}/{length})");
+    if number == 0 && index == 0 && length == 0 {
+        if block != 0 {
+            return Err(ApiError::internal(format!(
+                "block {block}: epoch {written} is the genesis header's alone; every later \
+                 header states its epoch's length"
+            )));
+        }
+        return Ok(None);
+    }
+    if number < 0 || index < 0 || length <= 0 || index >= length {
+        return Err(ApiError::internal(format!(
+            "invalid epoch progress on block {block}: epoch {written}"
+        )));
+    }
+    Ok(Some((length - index) as u128))
+}
+
 async fn fetch_network_stats_from_db(
     state: &AppState,
 ) -> Result<
@@ -2810,10 +2841,8 @@ async fn fetch_network_stats_from_db(
         })?
     };
 
-    if epoch_length <= 0 || epoch_index < 0 || epoch_index >= epoch_length {
-        return Err(ApiError::internal(format!("invalid epoch progress on block {latest_block}: index={epoch_index}, length={epoch_length}")));
-    }
-    let remaining_blocks = (epoch_length - epoch_index) as u128;
+    let remaining_blocks =
+        epoch_blocks_left(latest_block, epoch_number, epoch_index, epoch_length)?;
     let avg_block_time = avg_block_span
         .map(|(span_ms, gaps)| {
             crate::utils::exact_ratio::format_ratio(span_ms as i128, gaps as i128 * 1_000, 2)
@@ -2821,8 +2850,11 @@ async fn fetch_network_stats_from_db(
                 .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
         })
         .transpose()?;
-    let estimated_epoch_time = avg_block_span
-        .map(|(span_ms, gaps)| {
+    // No estimate without both: the genesis tip's header states no epoch length, and fewer than
+    // two headers give no block time.
+    let estimated_epoch_time = remaining_blocks
+        .zip(avg_block_span)
+        .map(|(remaining_blocks, (span_ms, gaps))| {
             let numerator = remaining_blocks
                 .checked_mul(span_ms as u128)
                 .ok_or_else(|| {
