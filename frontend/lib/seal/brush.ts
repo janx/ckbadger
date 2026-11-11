@@ -4,10 +4,11 @@
  * end (the tip drawn out) or a blunt stop, horizontals a little thinner than verticals.
  *
  * A port of the parts of the design prototype's `brush.js` (2026-11-10 rubbing × Song print,
- * `docs/superpowers/design/2026-11-10-rubbing-song/src/brush.js`) that the three seal recipes
- * use: `sample`, `stroke`, `shape`, `chainSegs` (with seal3's `paths`), `orderStrokes`. Every
- * expression keeps the prototype's order of operations, so the same numbers come out; the
- * fidelity test (`__tests__/lib/talisman-fidelity.test.ts`) holds the port to the prototype.
+ * `docs/superpowers/design/2026-11-10-rubbing-song/src/brush.js`) that the seals use: `sample`,
+ * `stroke`, `shape`, `chainSegs` (with seal3's `paths`), `orderStrokes`. Every expression keeps
+ * the prototype's order of operations, so the same numbers come out; the fidelity tests
+ * (`__tests__/lib/seal-fidelity.test.ts`, and the talisman's while it stands) hold the port to
+ * the prototype.
  *
  * Not ported, because no recipe reaches it: the trembling line (tremor), per-unit pressure
  * (press / lift), mid-stroke thinning (thin), the random "life" of the width (mod, and with it
@@ -24,6 +25,11 @@ export type Exit = 'taper' | 'blunt';
 /** Two decimals, as the prototype's `f2` writes them (`Number#toString` of the rounded value). */
 export function f2(v: number): string {
   return (Math.round(v * 100) / 100).toString();
+}
+
+/** One decimal, as the prototype's `f1` writes it. */
+export function f1(v: number): string {
+  return (Math.round(v * 10) / 10).toString();
 }
 
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
@@ -66,7 +72,7 @@ export interface Sampled {
  * dense samples with arc length and tangent.
  */
 export function sample(P: readonly Pt[], o: SampleOptions): Sampled {
-  if (P.length < 2) throw new Error(`talisman: a stroke needs two points, got ${P.length}`);
+  if (P.length < 2) throw new Error(`seal: a stroke needs two points, got ${P.length}`);
   const pts: SamplePoint[] = [];
   const cornerS: number[] = [];
   let s = 0;
@@ -288,7 +294,7 @@ export function segmentPaths(segs: readonly Seg[]): Pt[][] {
   }
   const at = (k: string) => {
     const list = adj.get(k);
-    if (!list) throw new Error(`talisman: no lattice point ${k}`);
+    if (!list) throw new Error(`seal: no lattice point ${k}`);
     return list;
   };
   const deg = (k: string) => at(k).filter((e) => !edges[e.id].used).length;

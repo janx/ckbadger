@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { color } from '@/lib/palette';
-import { assertSealHash } from '@/lib/talisman/bits';
+import { assertSealHash } from '@/lib/seal/bits';
 import { compound } from '@/lib/talisman/compound';
 import { RECIPES } from '@/lib/talisman/recipes';
 import { cn } from '@/lib/utils';

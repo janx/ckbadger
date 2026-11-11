@@ -15,9 +15,9 @@
  * chosen by a bit (every recipe fixes it).
  */
 
-import type { BitReader, BitSlice } from '@/lib/talisman/bits';
-import type { BrushSpec, FigureStroke } from '@/lib/talisman/figures';
-import type { Pt } from '@/lib/talisman/brush';
+import type { BitReader, BitSlice } from '@/lib/seal/bits';
+import type { Pt } from '@/lib/seal/brush';
+import type { BrushSpec, FigureStroke } from '@/lib/seal/textures';
 
 export type HeadName = 'dots3' | 'bars3';
 export type FootName = 'doubleKnot' | 'knotSword';

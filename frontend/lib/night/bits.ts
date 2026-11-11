@@ -1,6 +1,6 @@
 /**
  * The hash as what it is: 256 bits, most significant first. The hash seal reads its strokes from
- * these (`lib/talisman/bits.ts`); nothing here is derived, it is the hash itself.
+ * these (`lib/seal/bits.ts`); nothing here is derived, it is the hash itself.
  */
 
 const HASH32 = /^0x[0-9a-fA-F]{64}$/;
