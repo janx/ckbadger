@@ -3,6 +3,7 @@ import { CollectionItems } from '@/components/asset/collection-gallery';
 import { api } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
 import { collectionGalleryFilteredProducer } from '@/__tests__/msw/fixtures/item-producer';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 beforeEach(mockItemReads);
 // F2 objects (round 2): the 24-card CollectionGallery was replaced by the Newest list; its two
 // tests moved to __tests__/components/collection-objects.test.tsx.
@@ -72,6 +73,47 @@ it('opens on live items, and keeps All and Inactive one choice away', async () =
       expect.objectContaining({ status: 'all', cursor: undefined })
     )
   );
+});
+
+// Rubbing × Song print, phase 5 (A12): the heading runs on the count the chosen status holds and
+// that status, in the select's own words; a search page has no total, so the status stands alone.
+it('runs the items command on the total and the chosen status, the controls beside it', async () => {
+  vi.mocked(api.getIdentityCollectionItems).mockImplementation(async (_id, params) =>
+    params?.search
+      ? { ...emptyPage([identityItem('dotbit')]), total: undefined }
+      : { ...emptyPage([identityItem('dotbit')]), total: params?.status === 'live' ? 1204 : 37 }
+  );
+  render(<CollectionItems id="dotbit" kind="identity" />);
+  const heading = await screen.findByRole('heading', { name: 'Identities 1,204 live' });
+  expectPrompt(heading, 'Identities', '1,204 live');
+  // the search and the status select stay the row's actions, outside the heading
+  const row = heading.parentElement!;
+  expect(row).toContainElement(screen.getByRole('combobox', { name: 'Item status' }));
+  expect(heading).not.toContainElement(screen.getByRole('textbox', { name: 'Search collection' }));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
+    target: { value: 'recycled' },
+  });
+  expect(
+    await screen.findByRole('heading', { name: 'Identities 37 inactive' })
+  ).toBeInTheDocument();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
+    target: { value: 'all' },
+  });
+  expect(await screen.findByRole('heading', { name: 'Identities 37 all' })).toBeInTheDocument();
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search collection' }), {
+    target: { value: 'alice' },
+  });
+  await waitFor(() =>
+    expectPrompt(screen.getByRole('heading', { name: 'Identities all' }), 'Identities', 'all')
+  );
+});
+it('names an object collection by its objects', async () => {
+  vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
+    ...emptyPage([identityItem('dotbit')]),
+    total: 8,
+  });
+  render(<CollectionItems id="0xabc" kind="object" />);
+  expect(await screen.findByRole('heading', { name: 'Objects 8 live' })).toBeInTheDocument();
 });
 
 // Round 3 (contracts R-A · R-1, OB-K3): an m-NFT class row reads "<class name> #<token index>".

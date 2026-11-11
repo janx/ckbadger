@@ -12,6 +12,7 @@ import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { ByteScaleMap } from '@/components/ui/hex-map';
 import { ReadoutRow } from '@/components/ui/readout-row';
@@ -190,15 +191,13 @@ export function ObjectGeneticsView({
   return (
     <>
       <section aria-labelledby="h-dna" className="min-w-0 space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 id="h-dna" className="text-text-bright text-section">
-            DNA
-          </h2>
-          <span className="text-text-dim text-small">
-            {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
-            {evidence.number !== null ? ` · number ${evidence.number}` : ''}
-          </span>
-        </div>
+        {/* Rubbing × Song print, phase 5 (A13): the DNA, run on its size, its genes and its
+            number; the section is named by it, args and all. */}
+        <PromptHeading
+          id="h-dna"
+          command="DNA"
+          args={`${layout.bytes.length} bytes · ${geneNames.length} gene${geneNames.length === 1 ? '' : 's'}${evidence.number !== null ? ` · number ${evidence.number}` : ''}`}
+        />
         {cached.status === 'pending' && (
           <p role="status" className="text-text-dim">
             Decode pending · awaiting DOB execution.

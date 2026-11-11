@@ -8,6 +8,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatStandard } from '@/components/activity-event-row';
@@ -63,6 +64,13 @@ function mnftRowTitle(item: CollectionItem): ReactNode {
   return item.name === null ? `#${item.tokenIndex}` : `${item.name} #${item.tokenIndex}`;
 }
 
+/** The status select's choices, as the heading's args say them (the options' own words). */
+const STATUS_WORDS: Record<ItemStatusFilter, string> = {
+  all: 'all',
+  live: 'live',
+  recycled: 'inactive',
+};
+
 export function CollectionItems({ id, kind }: CollectionItemsProps) {
   const [search, setSearch] = useState(''),
     // Live first: live cells are the state (DATA_DESIGN); a .bit collection is 97 % recycled names,
@@ -96,9 +104,17 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
   return (
     <section aria-label="Collection items" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-text-bright text-section">
-          {kind === 'identity' ? 'Identities' : 'Objects'}
-        </h2>
+        {/* Rubbing × Song print, phase 5 (A12): the items, run on how many the chosen status
+            holds and that status. Before the page loads, and on a search (the API gives a search
+            page no total), it names the status alone. The controls stay beside. */}
+        <PromptHeading
+          command={kind === 'identity' ? 'Identities' : 'Objects'}
+          args={
+            query.data?.total === undefined
+              ? STATUS_WORDS[status]
+              : `${query.data.total.toLocaleString('en-US')} ${STATUS_WORDS[status]}`
+          }
+        />
         <div className="flex max-w-full flex-wrap gap-3">
           <input
             aria-label="Search collection"

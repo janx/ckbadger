@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/te
 import Page from '@/app/identities/[collectionId]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 it('shows a collection 404 with its exact identity endpoint', async () => {
@@ -23,7 +24,8 @@ it('does not turn a collection source failure into 404', async () => {
 it('shows identities, exact created/live counts, capacity history and parallel record layers', async () => {
   render(<Page collectionId="dotbit" />);
   await screen.findByRole('heading', { name: '.bit' });
-  expect(await screen.findByRole('heading', { name: 'Identities' })).toBeInTheDocument();
+  // Phase 5 (A12): the items run on the live count (the one live .bit the page reads) and status.
+  expect(await screen.findByRole('heading', { name: 'Identities 1 live' })).toBeInTheDocument();
   // C7: the rail is the metrics row; "minted / created" is the Live metric's note.
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
     'of 2 minted / created'
@@ -102,6 +104,11 @@ it('uses whole-scope current DID documents for PDS grouping with explicit overla
     await within(pds).findByText(/An identity can name more than one endpoint/)
   ).toBeInTheDocument();
   expect(api.getDidPdsDistribution).toHaveBeenCalledOnce();
+  // Phase 5 (A16): one PromptHeading, no args (the groups are the section's body).
+  expectPrompt(
+    within(pds).getByRole('heading', { name: 'Personal data servers' }),
+    'Personal data servers'
+  );
 });
 
 // ── F2 identities (round 2): identity collection pages (ID-COL-1/2/3/5) ──

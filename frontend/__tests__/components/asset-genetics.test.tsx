@@ -14,6 +14,7 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { CurrentPattern, ObjectGenetics, ItemProtocol } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import {
   HEADWEAR_OBJECT,
@@ -382,7 +383,7 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
         tier="btc_ckb"
       />
     );
-    const section = screen.getByRole('region', { name: 'DNA' });
+    const section = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
     const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
     // no minimum width and no sideways scroller anywhere in the panel
     for (const el of [section, among].flatMap((s) => Array.from(s.querySelectorAll('[class]'))))
@@ -477,6 +478,20 @@ describe('The object page reads a declared pattern too (Nervape Headwear object)
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+  it('runs the DNA command on its number too, when the object has one (phase 5, A13)', () => {
+    render(
+      <ObjectGeneticsView
+        evidence={{ ...headwearGenetics, number: '17' }}
+        subject="Nervape Headwear"
+        description={headwearDescription}
+      />
+    );
+    expectPrompt(
+      screen.getByRole('heading', { name: 'DNA 83 bytes · 4 genes · number 17' }),
+      'DNA',
+      '83 bytes · 4 genes · number 17'
+    );
+  });
   it('maps the object’s 83 DNA bytes gene by gene in its DNA evidence and its sequencing gel', () => {
     render(
       <>
@@ -492,7 +507,9 @@ describe('The object page reads a declared pattern too (Nervape Headwear object)
         />
       </>
     );
-    expect(screen.getByRole('region', { name: 'DNA' })).toHaveTextContent('83 bytes · 4 genes');
+    // Phase 5 (A13): the size and the genes are the DNA command's args, and name its section.
+    const dna = screen.getByRole('region', { name: 'DNA 83 bytes · 4 genes' });
+    expectPrompt(within(dna).getByRole('heading', { level: 2 }), 'DNA', '83 bytes · 4 genes');
     const evidence = screen.getByLabelText('DNA evidence');
     const genes = within(evidence).getByRole('table', { name: 'DNA genes' });
     expect(

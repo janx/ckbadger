@@ -15,6 +15,7 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AlleleGel, NotGenesNote } from '@/components/ui/allele-gel';
 import { AppLink } from '@/components/ui/app-link';
+import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Address } from '@/components/ui/address';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
@@ -201,13 +202,13 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   const filtered = Object.keys(traits).length > 0;
   return (
     <section aria-label="Objects" className="min-w-0 space-y-[18px]">
-      <h2 id="h-objects" className="text-text-bright text-section font-medium">
-        Objects{' '}
-        <span className="text-text-dim text-small font-normal">
-          · {genetics.liveItems.toLocaleString('en-US')}
-          {ruled && ` · ${genesVary(ruled.lanes.length)}`}
-        </span>
-      </h2>
+      {/* Rubbing × Song print, phase 5 (A14): the objects, run on how many are live and how many
+          genes vary among them (the count and the genes once rode inside the h2). */}
+      <PromptHeading
+        id="h-objects"
+        command="Objects"
+        args={`${genetics.liveItems.toLocaleString('en-US')} live${ruled ? ` · ${genesVary(ruled.lanes.length)}` : ''}`}
+      />
       <div
         data-role="objects-columns"
         className={cn(
