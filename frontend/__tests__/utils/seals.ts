@@ -6,7 +6,7 @@ import {
   PAGE_SEAL_TILT,
   type PageSealScale,
 } from '@/components/ui/page-seal';
-import { ROW_SEAL_PX } from '@/components/ui/row-seal';
+import { ROW_SEAL, ROW_SEAL_PX } from '@/components/ui/row-seal';
 import {
   drawSeal,
   sealLabel,
@@ -166,6 +166,38 @@ export function expectOnePageSealOf(
   expect(head).toHaveAttribute('data-sealed-head', id.kind);
   // The seal leads its head: the stamp first, the identity beside it.
   expect(head?.firstElementChild).toBe(seal);
+  return seal;
+}
+
+/**
+ * `row` holds exactly one seal of the seals by kind, the row stone of `id` in `state` (pressed
+ * when not given): the drawing of that id (compared as markup with `drawSeal`'s), at its kind's
+ * row height and drawn width, with the 8 px gap after it; an image and not a link (the row's own
+ * link stays the row's link). Returns the seal's holder.
+ */
+export function expectOneRowSealOf(
+  row: Element,
+  id: SealId,
+  state: SealState = 'pressed'
+): HTMLElement {
+  const seals = row.querySelectorAll<HTMLElement>('[data-seal]');
+  expect(seals).toHaveLength(1);
+  const [seal] = Array.from(seals);
+  expect(seal).toHaveAttribute('data-seal', id.kind);
+  expect(seal).toHaveAttribute('data-seal-form', 'row');
+  expect(seal).toHaveAttribute('data-seal-state', state);
+  const { height, width } = ROW_SEAL[id.kind];
+  const svg = seal.querySelector('svg');
+  expect(svg).toHaveAttribute('role', 'img');
+  expect(svg).toHaveAttribute('aria-label', sealLabel(id));
+  expect(svg).toHaveAttribute('height', String(height));
+  expect(svg).toHaveAttribute('width', String(width));
+  expect(seal.innerHTML).toBe(
+    parsed(drawSeal(id, { form: 'row', height, state, ...SEAL_INKS }).svg)
+  );
+  expect(seal).toHaveClass('mr-2', '[&>svg]:block');
+  expect(seal.closest('a')).toBeNull();
+  expect(seal.querySelector('a')).toBeNull();
   return seal;
 }
 
