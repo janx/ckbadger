@@ -187,33 +187,84 @@ describe('Transactions pool view', () => {
     for (const amount of table.querySelectorAll('[data-ckb-amount]'))
       expect(amount).toHaveClass('flex-wrap');
     // The seals by kind (C2): the transaction's row stone's footprint (56.5 px) is 29.5 px more
-    // than the seal it replaced (27); the hash gave 4 characters (21 → 17 at 13 px, 31.2 px), so every
-    // column keeps its width, the table its 1,200 px and the most cycles still fit.
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1200);
-    const cols = Array.from(table.querySelectorAll('col')).map(
-      (c) => (c as HTMLElement).style.width
+    // than the seal it replaced (27). Old issue C: the hash keeps its 21 characters (12 + 6); the
+    // Transaction column's 30 px are the widest container's own (1,232 px, of which the columns
+    // took 1,200), so every other column keeps its width and the table is 1,230 px, the committed
+    // table's width; the most cycles still fit.
+    const cols = Array.from(table.querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.width)
     );
-    expect(cols).toEqual([
-      '207px',
-      '180px',
-      '150px',
-      '64px',
-      '164px',
-      '128px',
-      '123px',
-      '90px',
-      '94px',
-    ]);
-    // "0x" and 8 digits, the ellipsis, 4 digits: 17 characters of JetBrains Mono at 13 px (7.8)
+    expect(cols).toEqual([237, 180, 150, 64, 164, 128, 123, 90, 94]);
+    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1230);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
+    expect(1230).toBeLessThanOrEqual(1232);
+    // "0x" and 10 digits, the ellipsis, 6 digits: 21 characters of JetBrains Mono at 13 px (7.8)
     const shown = within(table).getByTitle(`0x${'ab'.repeat(32)}`);
-    expect(shown).toHaveTextContent(/^0xabababab\.\.\.abab$/);
+    expect(shown).toHaveTextContent(/^0xababababab\.\.\.ababab$/);
     const chars = shown.textContent!.length;
-    expect(chars).toBe(17);
-    // the stone, the hash and the 16 px gap fit the 207 px; one more character would not
+    expect(chars).toBe(21);
+    // the stone, the hash and the 16 px gap fit the 237 px; one more character would not
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(205.1, 6);
-    expect(used).toBeLessThanOrEqual(207);
-    expect(used + 7.8).toBeGreaterThan(207);
+    expect(used).toBeCloseTo(236.3, 6);
+    expect(used).toBeLessThanOrEqual(237);
+    expect(used + 7.8).toBeGreaterThan(237);
+  });
+
+  // Old issue C: the pool's table changes form at 1,230 px, where the committed one does; the
+  // widest container (1,232 px from 1280) holds both, the next (976 px at 1024) neither.
+  it('lays the pool out as a table from 1,230 px, as the committed list, phone rows below', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const poolPage = {
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'pending' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    };
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1230, 'table'],
+      [1229, 'rows'],
+      [976, 'rows'],
+    ] as const) {
+      vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
+      atContainerWidth(width);
+      const { unmount } = render(<TransactionsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+      const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
+      });
+      expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      // the table's hash is 12 + 6, the phone row's 10 + 6
+      expect(within(shown).getByTitle(`0x${'ab'.repeat(32)}`)).toHaveTextContent(
+        form === 'table' ? /^0xababababab\.\.\.ababab$/ : /^0xabababab\.\.\.ababab$/
+      );
+      unmount();
+      vi.unstubAllGlobals();
+    }
   });
 
   // The seals by kind (C2): a pool transaction's row leads with its stone (the stone its page
@@ -374,8 +425,8 @@ describe('Transactions pool view', () => {
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
       expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
       expect(hash).not.toHaveClass('text-small');
-      // the table's 17 characters (the stone took 4: see the width budget above)
-      expect(hash).toHaveTextContent(/^0xabababab\.\.\.abab$/);
+      // the table's 21 characters (old issue C: see the width budget above)
+      expect(hash).toHaveTextContent(/^0xababababab\.\.\.ababab$/);
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);
     }
