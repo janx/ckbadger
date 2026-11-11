@@ -5,23 +5,25 @@ import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import { drawSeal, type SealState } from '@/lib/seal/stones';
 import { expectBefore, parsed, SEAL_INKS, sealHash, sealIdsAt } from '@/__tests__/utils/seals';
+import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 
 const TX = sealHash('seam');
 const ID: TxSealId = { kind: 'tx', hash: TX, consumed: 1, created: 2 };
 
-const tile = (id: string): CellTileData => ({
-  id,
-  testId: id,
-  href: `/cell/${id}`,
-  label: id,
-  owner: 'owner',
-  lockKind: null,
-  kind: 'ckb',
-  content: 'CKB',
-  capacity: '20000000000',
-  occupied: '6100000000',
-  state: id.startsWith('in') ? 'consumed' : 'live',
-});
+const tile = (id: string): CellTileData =>
+  sealedTile({
+    id,
+    testId: id,
+    href: `/cell/${id}`,
+    label: id,
+    owner: 'owner',
+    lockKind: null,
+    kind: 'ckb',
+    content: 'CKB',
+    capacity: '20000000000',
+    occupied: '6100000000',
+    state: id.startsWith('in') ? 'consumed' : 'live',
+  });
 
 function structure(seamSeal?: { id: TxSealId; state?: SealState }) {
   return render(
@@ -50,7 +52,12 @@ describe('TxStructure seam seal (the seals by kind, C2)', () => {
   it('presses none unless the page gives one: every other page keeps its structure', () => {
     const { container } = structure();
     expect(container.querySelector('[data-seam-seal]')).toBeNull();
-    expect(container.querySelector('[data-seal]')).toBeNull();
+    // no stone of the transaction: the only seals are the cells' own and their owners' (C3), two
+    // to a tile
+    expect(container.querySelector('[data-seal="tx"]')).toBeNull();
+    expect(container.querySelectorAll('[data-seal]')).toHaveLength(
+      2 * container.querySelectorAll('[data-cell-id]').length
+    );
     const [consumed, pool, created] = columns(container);
     expect(within(pool).getByText('Capacity pool')).toHaveClass('lg:absolute', 'lg:top-0');
     for (const side of [consumed, created]) {

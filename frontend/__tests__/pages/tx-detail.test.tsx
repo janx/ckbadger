@@ -28,6 +28,14 @@ function expectHeadStone(state: SealState) {
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const TYPE_CODE_HASH = '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075';
+/**
+ * Script hashes as the API serves them, 32 bytes (seal kinds, C3: a cell's seal is drawn from its
+ * lock and type hash, which must be real hashes): blake2b of the input lock (args 0x11 × 20), the
+ * type script and the output lock (args 0x22 × 20) below.
+ */
+const INPUT_LOCK = '0x29e560749fc5c785e3c1cfc3e14c0e608ec87120f0c066facf023ee8bd569d84';
+const TYPE_SCRIPT = '0xba0286acbad839ae8a95e182d7698efdf654135d483b92863c55c80d170868ad';
+const OUTPUT_LOCK = '0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0';
 let mockSearchParams = new URLSearchParams();
 const mockPush = vi.fn();
 const mockReplace = vi.fn((url: string) => {
@@ -101,7 +109,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     ],
     scriptGroups: [
       {
-        scriptHash: '0xinputlock',
+        scriptHash: INPUT_LOCK,
         kind: 'lock',
         ran: true,
         inputIndices: [0],
@@ -115,7 +123,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
         cycles: '100',
       },
       {
-        scriptHash: '0xtypescript',
+        scriptHash: TYPE_SCRIPT,
         kind: 'type',
         ran: true,
         inputIndices: [0],
@@ -125,7 +133,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
         cycles: null,
       },
       {
-        scriptHash: '0xoutputlock',
+        scriptHash: OUTPUT_LOCK,
         kind: 'lock',
         ran: false,
         inputIndices: [],
@@ -1097,7 +1105,7 @@ describe('TransactionDetailPage', () => {
       'occupied 94 → 94 · common knowledge 0'
     );
     expect(
-      document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
+      document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
     ).toHaveTextContent('attached, runs when spent');
     expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('2 ran, 4,446,651 cycles');
     expect(await screen.findByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
@@ -1110,7 +1118,7 @@ describe('TransactionDetailPage', () => {
         outPointTxHash: '0xdep',
         outPointIndex: 2,
         depType: 'dep_group',
-        scriptHashes: ['0xinputlock'],
+        scriptHashes: [INPUT_LOCK],
         outputLockScriptHashes: [],
         resolvedCells: [
           {
@@ -1118,7 +1126,7 @@ describe('TransactionDetailPage', () => {
             index: 3,
             dataHash: '0xdata',
             typeHash: null,
-            scriptHashes: ['0xinputlock'],
+            scriptHashes: [INPUT_LOCK],
             outputLockScriptHashes: [],
             codeSize: 52048,
             scriptNames: ['Default Multisig'],
@@ -1142,14 +1150,13 @@ describe('TransactionDetailPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
     render(<TransactionDetailPage />);
     fireEvent.mouseEnter(await screen.findByTestId('tx-io-input-0'));
-    expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveAttribute(
+    expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveAttribute(
       'data-lit',
       'true'
     );
-    expect(document.querySelector('[data-group-row="lock:attached:0xinputlock"]')).toHaveAttribute(
-      'data-lit',
-      'false'
-    );
+    expect(
+      document.querySelector(`[data-group-row="lock:attached:${INPUT_LOCK}"]`)
+    ).toHaveAttribute('data-lit', 'false');
   });
 
   it('links one-to-one CKBFS file continuity to its cells and exact type group', async () => {
@@ -1159,7 +1166,7 @@ describe('TransactionDetailPage', () => {
     const display: TransactionCellDisplay = {
       kind: 'file',
       standard: 'ckbfs',
-      id: '0xtypescript',
+      id: TYPE_SCRIPT,
       name: '3X0125NMNVAP033202.LOGS',
       collectionId: null,
       collectionName: null,
@@ -1182,7 +1189,7 @@ describe('TransactionDetailPage', () => {
       'stroke',
       'var(--c-text)'
     );
-    expect(document.querySelector('[data-group-row="type:run:0xtypescript"]')).toHaveAttribute(
+    expect(document.querySelector(`[data-group-row="type:run:${TYPE_SCRIPT}"]`)).toHaveAttribute(
       'data-lit',
       'true'
     );
@@ -1226,7 +1233,7 @@ describe('TransactionDetailPage', () => {
       const display: TransactionCellDisplay = {
         kind: 'file',
         standard: 'ckbfs',
-        id: '0xtypescript',
+        id: TYPE_SCRIPT,
         name: 'identical-name.txt',
         collectionId: null,
         collectionName: null,
@@ -1242,6 +1249,8 @@ describe('TransactionDetailPage', () => {
       if (reason === 'multiple outputs') {
         tx.outputs!.push({ ...tx.outputs![0] });
         tx.scriptGroups![1].outputIndices = [0, 1];
+        // the pushed output's lock is the first output's: the same group lists it
+        tx.scriptGroups![2].outputIndices = [0, 1];
       }
       vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
       render(<TransactionDetailPage />);

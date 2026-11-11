@@ -5,6 +5,9 @@ import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import type { TransactionDetail } from '@/lib/api';
 
 const TYPE_ID = '0x00000000000000000000000000000000000000000000000000545950455f4944';
+/** The real script hashes (blake2b, CKB) of the lock and of the Type ID type below. */
+const LOCK_HASH = '0x82cbea9785c59f24117b45294cff296e8ab0ac2f29bbfa78af6b01e4d5325644';
+const TYPE_ID_HASH = '0x8f20ed3602ef8465071bf7b91d6444fe04f3035daa0f93599c7f665eebb11761';
 const output = (over: Record<string, unknown> = {}) => ({
   capacity: '10043800000000',
   commonKnowledgeSize: '100438',
@@ -19,9 +22,33 @@ const output = (over: Record<string, unknown> = {}) => ({
 const tx = (outputs: ReturnType<typeof output>[]) =>
   ({
     hash: `0x${'ee'.repeat(32)}`,
+    status: 'committed',
     isCellbase: false,
     inputs: [],
     outputs,
+    // as the API lists them: the output's Type ID ran; its lock did not
+    scriptGroups: [
+      {
+        scriptHash: TYPE_ID_HASH,
+        kind: 'type',
+        ran: true,
+        inputIndices: [],
+        outputIndices: outputs.map((_, i) => i),
+        witnessIndex: 0,
+        script: outputs[0].type,
+        cycles: null,
+      },
+      {
+        scriptHash: LOCK_HASH,
+        kind: 'lock',
+        ran: false,
+        inputIndices: [],
+        outputIndices: outputs.map((_, i) => i),
+        witnessIndex: null,
+        script: outputs[0].lock,
+        cycles: null,
+      },
+    ],
   }) as unknown as TransactionDetail;
 
 function tileContent(o: ReturnType<typeof output>) {

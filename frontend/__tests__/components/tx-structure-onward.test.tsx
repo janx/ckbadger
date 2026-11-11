@@ -2,19 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { CellTileData } from '@/components/ui/cell-tile';
+import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 
-const tile = (id: string, state: string): CellTileData => ({
-  id,
-  href: `/cell/0xabc:${id}`,
-  label: id,
-  owner: 'Alice',
-  lockKind: 'Fiber Commitment Lock',
-  kind: 'ckb',
-  content: 'CKB',
-  capacity: '106200000000',
-  occupied: '6100000000',
-  state,
-});
+const tile = (id: string, state: string): CellTileData =>
+  sealedTile({
+    id,
+    href: `/cell/0xabc:${id}`,
+    label: id,
+    owner: 'Alice',
+    lockKind: 'Fiber Commitment Lock',
+    kind: 'ckb',
+    content: 'CKB',
+    capacity: '106200000000',
+    occupied: '6100000000',
+    state,
+  });
 
 describe('TxStructure onward / me_out variant (txviz)', () => {
   it('carries the focused output onward with a dashed bridge and a legend', () => {

@@ -2,20 +2,22 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { CellTileData } from '@/components/ui/cell-tile';
+import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 
-const tile = (id: string, capacity: string): CellTileData => ({
-  id,
-  testId: id,
-  href: `/cell/${id}`,
-  label: id,
-  owner: 'owner',
-  lockKind: null,
-  kind: 'ckb',
-  content: 'CKB',
-  capacity,
-  occupied: '6100000000',
-  state: id.startsWith('in') ? 'consumed' : 'live',
-});
+const tile = (id: string, capacity: string): CellTileData =>
+  sealedTile({
+    id,
+    testId: id,
+    href: `/cell/${id}`,
+    label: id,
+    owner: 'owner',
+    lockKind: null,
+    kind: 'ckb',
+    content: 'CKB',
+    capacity,
+    occupied: '6100000000',
+    state: id.startsWith('in') ? 'consumed' : 'live',
+  });
 
 describe('TxStructure page-owned linking (F2-tx, TX-14)', () => {
   it('lights only the cells the page links, never the continuity partner on its own', () => {

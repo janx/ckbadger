@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
+import { expectOnePageSealOf } from '@/__tests__/utils/seals';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -66,6 +67,26 @@ describe('Cell page against the Cell board', () => {
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
     mockObjectReads();
+  });
+
+  it('presses the cell’s own seal: a Spore object, its hexagon window and type glyph (seal kinds, C3)', async () => {
+    const { container } = view();
+    await screen.findByRole('heading', { level: 1 }, { timeout: 5000 });
+    // the class is the transaction page's: kindOf() of the API's typeCellType and display
+    const seal = expectOnePageSealOf(container, {
+      kind: 'cell',
+      tx: cell.txHash,
+      index: 1,
+      lock: cell.lockScriptHash,
+      type: { class: 'objects', hash: cell.typeScriptHash! },
+      capacity: BigInt(32000000000),
+    });
+    expect(seal.querySelector('svg')).toHaveAttribute(
+      'aria-label',
+      `Cell seal ${cell.txHash.slice(0, 10)}:1, objects, 320.00000000 CKB`
+    );
+    // the objects' window, a hexagon: one closed six-sided outline among the open strokes
+    expect(seal.querySelector('path[fill="none"][d$="Z"]')).not.toBeNull();
   });
 
   it('says what inventory item the cell is, in one line right under the h1 (lane U, U6)', async () => {

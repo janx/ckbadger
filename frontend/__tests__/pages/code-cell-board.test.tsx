@@ -6,6 +6,7 @@ import { api, type Cell } from '@/lib/api';
 import { elfParts } from '@/lib/cell-parts';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
+import { expectOnePageSealOf } from '@/__tests__/utils/seals';
 
 // The CellCode board's cell: JoyID v5, 0x673e1843…55f9:0 — 100,438 CKB, a 100,312-byte RISC-V
 // ELF. Its layout is the chain's (program headers, sections, the 4-byte gap); only the payload
@@ -44,6 +45,19 @@ describe('code cell page against the CellCode board', () => {
   beforeEach(() => {
     vi.mocked(api.getCell).mockResolvedValue(cell);
     vi.mocked(api.lookupScripts).mockResolvedValue({ [MULTISIG]: { name: 'Multisig' } } as never);
+  });
+
+  it('presses the code cell’s own seal: its Type ID an unregistered type, class other (seal kinds, C3)', async () => {
+    const { container } = view();
+    await screen.findByTestId('code-cell-of', undefined, wait);
+    expectOnePageSealOf(container, {
+      kind: 'cell',
+      tx: codeCellFixture.txHash,
+      index: 0,
+      lock: codeCellFixture.lockScriptHash,
+      type: { class: 'other', hash: codeCellFixture.typeScriptHash },
+      capacity: BigInt(codeCellFixture.capacity),
+    });
   });
 
   it('says whose code it is in the header and names lock and type (SC-K2)', async () => {

@@ -1088,7 +1088,26 @@ interface Cell {
   isDepGroup?: boolean;
   depGroupItems?: DepGroupItem[];
   codeCellOf?: CodeCellScript[];
+  /**
+   * The genesis burn marker: `"genesis_special_burn"` on the genesis Satoshi cell, absent on every
+   * other cell. Not the cell's class: that is `typeCellType`.
+   */
   cellType?: string;
+  /**
+   * `/cells/{tx}/{index}` only (always sent there; list rows of `/cells` and `/cells/by-script`
+   * have none): the class vocabulary of the transaction detail's `cellType` for this cell (the
+   * API's one `cell_type()`): `plain` (no type script), `sudt` / `xudt`, a registry slug
+   * (`nervos-dao`, `spore`, `m-nft`, `did-ckb`, `bit-cell`, `bit-account`, `dotcell-account`,
+   * `ckbfs`, …) or `typed` (an unregistered type script). With `display`, what `kindOf()` classes
+   * the cell by, the same class it has on the transaction page.
+   */
+  typeCellType?: string;
+  /**
+   * `/cells/{tx}/{index}` only (always sent there, `null` included): the transaction tile's
+   * display of this cell (a token, object, identity or file), built by the API's one rule; null
+   * when its type has none.
+   */
+  display?: TransactionCellDisplay | null;
   virtualCommonKnowledgeSize?: string;
   udtAmount?: string;
   daoInfo?: CellDaoInfo;
