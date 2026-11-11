@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api, LabelCount } from '@/lib/api';
 import { DATA_COLOR } from '@/lib/design-tokens';
+import { fade } from '@/lib/palette';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -18,8 +19,7 @@ const LABEL_PAD = 10;
 
 /** The data hue at `alpha`, as a background, so a segment's words keep their full ink. */
 function dataHue(alpha: number): string {
-  const channel = (i: number) => parseInt(DATA_COLOR.slice(i, i + 2), 16);
-  return `rgba(${channel(1)}, ${channel(3)}, ${channel(5)}, ${alpha})`;
+  return fade(DATA_COLOR, alpha);
 }
 
 function useDistributions() {

@@ -565,7 +565,9 @@ describe('HardforksPage', () => {
     );
     expect(coloured.map((el) => `${el.tagName} ${el.textContent}`)).toEqual([]);
     for (const t of Array.from(tier1.querySelectorAll('svg text, svg tspan')))
-      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(/#2edba3|#f2c55c|#e8555a/);
+      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(
+        /var(--c-jade)|var(--c-gold)|var(--c-rouge)/
+      );
   });
 
   it('keeps tier 1 within the prose budget: at most three caption-length blocks (§0, §4)', async () => {

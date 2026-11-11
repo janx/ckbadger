@@ -41,52 +41,61 @@
 }
 
 :root {
-  --color-class-dao: #f2c55c;
-  --color-class-token: #5aa6f5;
-  --color-class-object: #a98cf5;
-  --color-class-identity: #f08aa8;
-  --color-bitcoin: #dc8a5a;
-  --color-cell-capacity: #dee2ec;
-  --color-cell-lock: #7aa7d6;
-  --color-cell-type: #b5c77a;
-  --color-cell-data: #6fc3d9;
-  --foreground: #dee2ec;
-  --background: #08090e;
-  --color-surface: #10131c;
-  --color-elevated: #161a25;
-  --color-border: #222840;
-  --color-border-subtle: #1a1f30;
-  --color-emphasis: #2edba3;
-  --color-emphasis-dim: #1fb88a;
-  --color-interactive: #68ccf0;
-  --color-interactive-hover: #2edba3;
+  /* The colours and materials of both themes — `--c-<key>`, `--rgb-<key>`, `--m-<key>` — are
+     declared from lib/palette.ts by tailwind.config.ts (the dark theme on :root, the light one
+     under :root[data-theme='light']); below are the older names the rules and the pipeline
+     read, each pointing at a theme variable. */
+  --color-class-dao: var(--c-gold);
+  --color-class-token: var(--c-token);
+  --color-class-object: var(--c-object);
+  --color-class-identity: var(--c-identity);
+  --color-bitcoin: var(--c-copper);
+  --color-cell-capacity: var(--c-cell-capacity);
+  --color-cell-lock: var(--c-cell-lock);
+  --color-cell-type: var(--c-cell-type);
+  --color-cell-data: var(--c-cell-data);
+  --foreground: var(--c-text-bright);
+  --background: var(--c-base-void);
+  --color-surface: var(--c-base-surface);
+  --color-elevated: var(--c-base-elevated);
+  --color-border: var(--c-base-border);
+  --color-border-subtle: var(--c-base-border-subtle);
+  --color-emphasis: var(--c-jade);
+  --color-emphasis-dim: var(--c-jade-dim);
+  --color-interactive: var(--c-aqua);
+  --color-interactive-hover: var(--c-jade);
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
 
   /* Material pass v2 (move 1): the three ambient pools, jade by default (the approved .10 / .07 /
      .07); a page root's data-tint gives the first pool the page's class hue (below). */
-  --pool-1: rgba(46, 219, 163, 0.1);
-  --pool-2: rgba(104, 204, 240, 0.07);
-  --pool-3: rgba(242, 197, 92, 0.07);
+  --pool-1: rgb(var(--rgb-jade) / 0.1);
+  --pool-2: rgb(var(--rgb-aqua) / 0.07);
+  --pool-3: rgb(var(--rgb-gold) / 0.07);
 
   /* Transaction pipeline (components/pipeline): painted through lib/pipeline/encoding.ts. */
   --pipeline-surface: var(--color-surface);
   --pipeline-elevated: var(--color-elevated);
   --pipeline-border: var(--color-border);
   --pipeline-border-subtle: var(--color-border-subtle);
-  --pipeline-ink-bright: #dee2ec;
-  --pipeline-ink: #a0a8be;
-  --pipeline-ink-dim: #606880;
+  --pipeline-ink-bright: var(--c-text-bright);
+  --pipeline-ink: var(--c-text);
+  --pipeline-ink-dim: var(--c-ink-muted);
   --pipeline-jade: var(--color-emphasis);
   --pipeline-aqua: var(--color-interactive);
-  --pipeline-gold: #f2c55c;
-  /* Stage fills: aqua / gold / jade stepped to OKLCH L≈0.66 for filled marks on dark. */
-  --pipeline-pending: #3e9dca;
-  --pipeline-proposed: #bb881a;
-  --pipeline-committed: #00ac7c;
-  --pipeline-ember: #d4883a;
+  --pipeline-gold: var(--c-gold);
+  /* Stage fills: aqua / gold / jade stepped to OKLCH L≈0.66 for filled marks on dark; the light
+     theme steps them down to the same contrast on paper (lib/palette.ts). */
+  --pipeline-pending: var(--c-pipeline-pending);
+  --pipeline-proposed: var(--c-pipeline-proposed);
+  --pipeline-committed: var(--c-pipeline-committed);
+  --pipeline-ember: var(--c-amber);
+  /* The pools are wells, recessed below the surface. */
+  --pipeline-well: var(--c-pipeline-well);
+  /* What a stage hue is mixed toward as cycles rise: white at night, the ink by day. */
+  --pipeline-step-to: var(--c-pipeline-step-to);
   /* A dropped tx greys out toward ember: a neutral at the stage fills' luma, half ember. */
-  --pipeline-drop: color-mix(in srgb, #898989, var(--pipeline-ember));
+  --pipeline-drop: color-mix(in srgb, var(--c-pipeline-drop-neutral), var(--pipeline-ember));
 }
 
 body {
@@ -105,7 +114,7 @@ body {
  * the bars inside the page are thin.
  */
 :root {
-  scrollbar-color: #343c50 transparent; /* text.ghost thumb on a bare track */
+  scrollbar-color: var(--c-text-ghost) transparent; /* text.ghost thumb on a bare track */
 }
 body * {
   scrollbar-width: thin;
@@ -122,20 +131,23 @@ body * {
 @layer base {
   :root {
     color-scheme: dark;
-    accent-color: #2edba3;
+    accent-color: var(--c-jade);
+  }
+  :root[data-theme='light'] {
+    color-scheme: light;
   }
   ::selection {
-    background: rgba(46, 219, 163, 0.28);
-    color: #e9fff6;
+    background: rgb(var(--rgb-jade) / 0.28);
+    color: var(--c-selection-ink);
   }
   :focus-visible {
-    outline: 1px solid #2edba3;
+    outline: 1px solid var(--c-jade);
     outline-offset: 2px;
-    box-shadow: 0 0 6px rgba(46, 219, 163, 0.45);
+    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
   }
   input,
   textarea {
-    caret-color: #2edba3;
+    caret-color: var(--c-jade);
   }
 }
 
@@ -150,13 +162,13 @@ body * {
   }
 
   .terminal-text {
-    color: #2edba3;
-    text-shadow: 0 0 6px #2edba340;
+    color: var(--c-jade);
+    text-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   }
 
   .terminal-text-dim {
-    color: #1fb88a;
-    text-shadow: 0 0 4px #1fb88a30;
+    color: var(--c-jade-dim);
+    text-shadow: 0 0 4px rgb(var(--rgb-jade-dim) / calc(0.19 * var(--m-glow)));
   }
 
   .crt-screen {
@@ -170,8 +182,8 @@ body * {
     inset: 0;
     background: repeating-linear-gradient(
       0deg,
-      rgba(0, 0, 0, 0.08) 0px,
-      rgba(0, 0, 0, 0.08) 1px,
+      var(--m-inset-scan) 0px,
+      var(--m-inset-scan) 1px,
       transparent 1px,
       transparent 2px
     );
@@ -183,7 +195,7 @@ body * {
     content: '';
     position: absolute;
     inset: 0;
-    background: radial-gradient(ellipse at center, transparent 0%, rgba(0, 0, 0, 0.15) 100%);
+    background: radial-gradient(ellipse at center, transparent 0%, var(--m-vignette) 100%);
     pointer-events: none;
     z-index: 10;
   }
@@ -194,7 +206,7 @@ body * {
     left: 0;
     width: 100%;
     height: 4px;
-    background: linear-gradient(to bottom, transparent, rgba(46, 219, 163, 0.01), transparent);
+    background: linear-gradient(to bottom, transparent, rgb(var(--rgb-jade) / 0.01), transparent);
     animation: scan-line 8s linear infinite;
     pointer-events: none;
     z-index: 9999;
@@ -242,7 +254,7 @@ body * {
     background-image: linear-gradient(
       90deg,
       transparent 33.333%,
-      rgba(46, 219, 163, 0.07) 50%,
+      rgb(var(--rgb-jade) / 0.07) 50%,
       transparent 66.667%
     );
     background-size: 300% 100%;
@@ -259,16 +271,16 @@ body * {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #2edba3;
+    background: var(--c-jade);
     box-shadow:
-      0 0 4px #2edba380,
-      0 0 8px #2edba340;
+      0 0 4px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow))),
+      0 0 8px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
     animation: glow-pulse 1.5s ease-in-out infinite;
   }
 
   .indicator-light-gold {
-    background: #f2c55c;
-    box-shadow: 0 0 6px #f2c55c;
+    background: var(--c-gold);
+    box-shadow: 0 0 6px rgb(var(--rgb-gold) / calc(1 * var(--m-glow)));
   }
 
   .indicator-light-static {
@@ -283,8 +295,10 @@ body * {
 
   .logo-image:hover {
     animation-play-state: paused;
-    filter: saturate(1.3) brightness(1.08) drop-shadow(0 0 4px rgba(46, 219, 163, 0.85))
-      drop-shadow(0 0 14px rgba(46, 219, 163, 0.45)) drop-shadow(0 0 8px rgba(104, 204, 240, 0.4));
+    filter: saturate(1.3) brightness(1.08)
+      drop-shadow(0 0 4px rgb(var(--rgb-jade) / calc(0.85 * var(--m-glow))))
+      drop-shadow(0 0 14px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
+      drop-shadow(0 0 8px rgb(var(--rgb-aqua) / calc(0.4 * var(--m-glow))));
   }
 
   /* One flicker per new block. */
@@ -298,7 +312,12 @@ body * {
 
   .status-marquee-shine {
     display: inline-block;
-    background-image: linear-gradient(90deg, #606880 0%, #dee2ec 45%, #606880 100%);
+    background-image: linear-gradient(
+      90deg,
+      var(--c-ink-muted) 0%,
+      var(--c-text-bright) 45%,
+      var(--c-ink-muted) 100%
+    );
     background-size: 220% 100%;
     background-position: 220% 0;
     background-clip: text;
@@ -310,7 +329,12 @@ body * {
 
   .cycles-calculating-marquee {
     display: inline-block;
-    background-image: linear-gradient(90deg, #606880 0%, #dee2ec 45%, #606880 100%);
+    background-image: linear-gradient(
+      90deg,
+      var(--c-ink-muted) 0%,
+      var(--c-text-bright) 45%,
+      var(--c-ink-muted) 100%
+    );
     background-size: 220% 100%;
     background-position: 220% 0;
     background-clip: text;
@@ -325,12 +349,15 @@ body * {
 @keyframes logo-breathe {
   0%,
   100% {
-    filter: saturate(1.15) drop-shadow(0 0 2px rgba(46, 219, 163, 0.45))
-      drop-shadow(0 0 8px rgba(46, 219, 163, 0.18)) drop-shadow(0 0 4px rgba(104, 204, 240, 0.18));
+    filter: saturate(1.15) drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
+      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow))))
+      drop-shadow(0 0 4px rgb(var(--rgb-aqua) / calc(0.18 * var(--m-glow))));
   }
   50% {
-    filter: saturate(1.2) brightness(1.02) drop-shadow(0 0 3px rgba(46, 219, 163, 0.6))
-      drop-shadow(0 0 12px rgba(46, 219, 163, 0.26)) drop-shadow(0 0 6px rgba(104, 204, 240, 0.24));
+    filter: saturate(1.2) brightness(1.02)
+      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow))))
+      drop-shadow(0 0 12px rgb(var(--rgb-jade) / calc(0.26 * var(--m-glow))))
+      drop-shadow(0 0 6px rgb(var(--rgb-aqua) / calc(0.24 * var(--m-glow))));
   }
 }
 
@@ -338,54 +365,66 @@ body * {
 @keyframes neon-flicker-anim {
   0% {
     opacity: 1;
-    filter: saturate(1.2) brightness(1.05) drop-shadow(0 0 2px rgba(46, 219, 163, 0.6))
-      drop-shadow(0 0 6px rgba(46, 219, 163, 0.25));
+    filter: saturate(1.2) brightness(1.05)
+      drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow))))
+      drop-shadow(0 0 6px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
   }
   6% {
     opacity: 0.55;
-    filter: saturate(1.05) brightness(0.85) drop-shadow(0 0 1px rgba(46, 219, 163, 0.3));
+    filter: saturate(1.05) brightness(0.85)
+      drop-shadow(0 0 1px rgb(var(--rgb-jade) / calc(0.3 * var(--m-glow))));
   }
   12% {
     opacity: 1;
-    filter: saturate(1.5) brightness(1.65) drop-shadow(0 0 3px rgba(46, 219, 163, 0.95))
-      drop-shadow(0 0 8px rgba(46, 219, 163, 0.4)) drop-shadow(0 0 5px rgba(104, 204, 240, 0.55));
+    filter: saturate(1.5) brightness(1.65)
+      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.95 * var(--m-glow))))
+      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.4 * var(--m-glow))))
+      drop-shadow(0 0 5px rgb(var(--rgb-aqua) / calc(0.55 * var(--m-glow))));
   }
   18% {
     opacity: 0.8;
-    filter: saturate(1.15) brightness(1) drop-shadow(0 0 2px rgba(46, 219, 163, 0.4));
+    filter: saturate(1.15) brightness(1)
+      drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.4 * var(--m-glow))));
   }
   26% {
     opacity: 1;
-    filter: saturate(1.6) brightness(1.8) drop-shadow(0 0 4px rgba(46, 219, 163, 1))
-      drop-shadow(0 0 10px rgba(46, 219, 163, 0.5)) drop-shadow(0 0 6px rgba(104, 204, 240, 0.7));
+    filter: saturate(1.6) brightness(1.8)
+      drop-shadow(0 0 4px rgb(var(--rgb-jade) / calc(1 * var(--m-glow))))
+      drop-shadow(0 0 10px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow))))
+      drop-shadow(0 0 6px rgb(var(--rgb-aqua) / calc(0.7 * var(--m-glow))));
   }
   34% {
     opacity: 0.5;
-    filter: saturate(1) brightness(0.8) drop-shadow(0 0 1px rgba(46, 219, 163, 0.25));
+    filter: saturate(1) brightness(0.8)
+      drop-shadow(0 0 1px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
   }
   44% {
     opacity: 1;
-    filter: saturate(1.55) brightness(1.7) drop-shadow(0 0 4px rgba(46, 219, 163, 0.95))
-      drop-shadow(0 0 9px rgba(46, 219, 163, 0.45));
+    filter: saturate(1.55) brightness(1.7)
+      drop-shadow(0 0 4px rgb(var(--rgb-jade) / calc(0.95 * var(--m-glow))))
+      drop-shadow(0 0 9px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))));
   }
   56% {
     opacity: 0.7;
-    filter: saturate(1.1) brightness(0.95) drop-shadow(0 0 2px rgba(46, 219, 163, 0.35));
+    filter: saturate(1.1) brightness(0.95)
+      drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.35 * var(--m-glow))));
   }
   68% {
     opacity: 1;
-    filter: saturate(1.45) brightness(1.5) drop-shadow(0 0 3px rgba(46, 219, 163, 0.9))
-      drop-shadow(0 0 7px rgba(46, 219, 163, 0.4));
+    filter: saturate(1.45) brightness(1.5)
+      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.9 * var(--m-glow))))
+      drop-shadow(0 0 7px rgb(var(--rgb-jade) / calc(0.4 * var(--m-glow))));
   }
   82% {
     opacity: 0.95;
-    filter: saturate(1.3) brightness(1.25) drop-shadow(0 0 3px rgba(46, 219, 163, 0.75))
-      drop-shadow(0 0 6px rgba(46, 219, 163, 0.3));
+    filter: saturate(1.3) brightness(1.25)
+      drop-shadow(0 0 3px rgb(var(--rgb-jade) / calc(0.75 * var(--m-glow))))
+      drop-shadow(0 0 6px rgb(var(--rgb-jade) / calc(0.3 * var(--m-glow))));
   }
   100% {
     opacity: 1;
-    filter: saturate(1.15) drop-shadow(0 0 2px rgba(46, 219, 163, 0.45))
-      drop-shadow(0 0 8px rgba(46, 219, 163, 0.18));
+    filter: saturate(1.15) drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
+      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow))));
   }
 }
 
@@ -394,8 +433,8 @@ body * {
   .logo-image,
   .logo-image.neon-flicker {
     animation: none;
-    filter: saturate(1.15) drop-shadow(0 0 2px rgba(46, 219, 163, 0.45))
-      drop-shadow(0 0 8px rgba(46, 219, 163, 0.18));
+    filter: saturate(1.15) drop-shadow(0 0 2px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))))
+      drop-shadow(0 0 8px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow))));
   }
 }
 
@@ -492,11 +531,11 @@ body * {
 @layer components {
   .terminal-card {
     @apply relative overflow-hidden rounded-lg border;
-    border-color: #222840;
-    background: #0c0e15;
+    border-color: var(--c-base-border);
+    background: var(--c-base-bg);
     box-shadow:
-      inset 0 0 30px rgba(46, 219, 163, 0.02),
-      0 0 10px rgba(46, 219, 163, 0.04);
+      inset 0 0 30px rgb(var(--rgb-jade) / calc(0.02 * var(--m-glow))),
+      0 0 10px rgb(var(--rgb-jade) / calc(0.04 * var(--m-glow)));
   }
 
   .terminal-card::before {
@@ -505,8 +544,8 @@ body * {
     inset: 0;
     background: repeating-linear-gradient(
       0deg,
-      rgba(0, 0, 0, 0.06) 0px,
-      rgba(0, 0, 0, 0.06) 1px,
+      var(--m-inset-scan) 0px,
+      var(--m-inset-scan) 1px,
       transparent 1px,
       transparent 2px
     );
@@ -516,8 +555,8 @@ body * {
 
   .terminal-card-header {
     @apply relative z-10 border-b px-4 py-3;
-    border-color: #222840;
-    background: linear-gradient(to bottom, rgba(46, 219, 163, 0.03), transparent);
+    border-color: var(--c-base-border);
+    background: linear-gradient(to bottom, rgb(var(--rgb-jade) / 0.03), transparent);
   }
 
   .terminal-card-content {
@@ -536,9 +575,9 @@ body * {
     padding: 1px;
     background: linear-gradient(
       135deg,
-      rgba(46, 219, 163, 0.15),
+      rgb(var(--rgb-jade) / 0.15),
       transparent 50%,
-      rgba(46, 219, 163, 0.06)
+      rgb(var(--rgb-jade) / 0.06)
     );
     mask:
       linear-gradient(#fff 0 0) content-box,
@@ -569,8 +608,8 @@ body * {
     0deg,
     transparent 0px,
     transparent 2px,
-    rgba(10, 14, 28, 0.06) 2px,
-    rgba(10, 14, 28, 0.06) 3px
+    var(--m-scanline-ink) 2px,
+    var(--m-scanline-ink) 3px
   );
   pointer-events: none;
   z-index: 9999;
@@ -579,20 +618,26 @@ body * {
 .crt-vignette {
   position: fixed;
   inset: 0;
-  background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
+  background: radial-gradient(ellipse at center, transparent 45%, var(--m-vignette) 100%);
   pointer-events: none;
   z-index: -1;
 }
 
-/* The night sky (material pass v2, move 1): the ground is a gradient — #0b0d17 at the top,
-   #08090e past the middle, a hair warmer at the foot — not one hex; body keeps #08090e behind it.
-   A page paints no opaque ground of its own over it. */
+/* The sky (material pass v2, move 1): the ground is a gradient — the night #0b0d17 at the top,
+   #08090e past the middle, a hair warmer at the foot — not one hex; body keeps the void behind it.
+   By day the same three stops are paper (lib/palette.ts: sky-top, sky-mid, sky-bottom). A page
+   paints no opaque ground of its own over it. */
 .ambient-glow {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: -1;
-  background: linear-gradient(180deg, #0b0d17 0%, #08090e 55%, #09090d 100%);
+  background: linear-gradient(
+    180deg,
+    var(--c-sky-top) 0%,
+    var(--c-sky-mid) 55%,
+    var(--c-sky-bottom) 100%
+  );
 }
 .ambient-glow::before {
   content: '';
@@ -608,23 +653,23 @@ body * {
    other two pools keep jade's companions, jade itself stepping in where its hue moved. */
 [data-tint='gold'] {
   --pool-1: color-mix(in srgb, var(--color-class-dao) 10%, transparent);
-  --pool-2: rgba(104, 204, 240, 0.07);
-  --pool-3: rgba(46, 219, 163, 0.07);
+  --pool-2: rgb(var(--rgb-aqua) / 0.07);
+  --pool-3: rgb(var(--rgb-jade) / 0.07);
 }
 [data-tint='azure'] {
   --pool-1: color-mix(in srgb, var(--color-class-token) 10%, transparent);
-  --pool-2: rgba(46, 219, 163, 0.07);
-  --pool-3: rgba(242, 197, 92, 0.07);
+  --pool-2: rgb(var(--rgb-jade) / 0.07);
+  --pool-3: rgb(var(--rgb-gold) / 0.07);
 }
 [data-tint='violet'] {
   --pool-1: color-mix(in srgb, var(--color-class-object) 10%, transparent);
-  --pool-2: rgba(104, 204, 240, 0.07);
-  --pool-3: rgba(46, 219, 163, 0.07);
+  --pool-2: rgb(var(--rgb-aqua) / 0.07);
+  --pool-3: rgb(var(--rgb-jade) / 0.07);
 }
 [data-tint='rose'] {
   --pool-1: color-mix(in srgb, var(--color-class-identity) 10%, transparent);
-  --pool-2: rgba(104, 204, 240, 0.07);
-  --pool-3: rgba(46, 219, 163, 0.07);
+  --pool-2: rgb(var(--rgb-aqua) / 0.07);
+  --pool-3: rgb(var(--rgb-jade) / 0.07);
 }
 /* The grain of a CRT (visual finish V3): a 128 px tile of Gaussian white noise (public/noise.png,
    8-bit grey, mean 128, sigma 28, fixed seed — one value per pixel, so it reads as grain, not the
@@ -636,8 +681,8 @@ body * {
   background-image: url('/noise.png');
   background-repeat: repeat;
   background-size: 128px 128px;
-  opacity: 0.03;
-  mix-blend-mode: screen;
+  opacity: var(--m-grain-opacity);
+  mix-blend-mode: var(--m-grain-blend);
   pointer-events: none;
   z-index: 9997;
 }
@@ -656,10 +701,10 @@ h2.text-section::before {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #2edba3;
+  background: var(--c-jade);
   box-shadow:
-    0 0 4px rgba(46, 219, 163, 0.6),
-    0 0 10px rgba(46, 219, 163, 0.25);
+    0 0 4px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow))),
+    0 0 10px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   vertical-align: middle;
 }
 h2.text-section::before {
@@ -674,10 +719,10 @@ h2.text-section::before {
   animation: live-pulse 1.5s ease-in-out infinite;
 }
 .section-mark-gold {
-  background: #f2c55c;
+  background: var(--c-gold);
   box-shadow:
-    0 0 4px rgba(242, 197, 92, 0.6),
-    0 0 10px rgba(242, 197, 92, 0.25);
+    0 0 4px rgb(var(--rgb-gold) / calc(0.6 * var(--m-glow))),
+    0 0 10px rgb(var(--rgb-gold) / calc(0.25 * var(--m-glow)));
 }
 
 /* Move 1b — one lit figure per page: the display figure, an entity page's h1, an index page's h1.
@@ -689,9 +734,9 @@ h2.text-section::before {
 h1.text-entity,
 h1.text-index {
   text-shadow:
-    0 0 1px rgba(222, 226, 236, 0.6),
-    0 0 14px rgba(46, 219, 163, 0.28),
-    0 0 32px rgba(46, 219, 163, 0.12);
+    0 0 1px rgb(var(--rgb-text-bright) / calc(0.6 * var(--m-glow))),
+    0 0 14px rgb(var(--rgb-jade) / calc(0.28 * var(--m-glow))),
+    0 0 32px rgb(var(--rgb-jade) / calc(0.12 * var(--m-glow)));
 }
 :is(.text-display, .sm\:text-display, h1.text-entity, h1.text-index)
   :is(
@@ -711,16 +756,16 @@ h1.text-index {
 /* Move 1c — hover: a link (and, through `.hover-lit`, a copyable hash) turns jade and glows. SVG
    links (the pipeline's cards) keep their own hover design. */
 a:hover {
-  color: #2edba3;
-  text-shadow: 0 0 8px rgba(46, 219, 163, 0.45);
+  color: var(--c-jade);
+  text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
 }
 svg a:hover {
   color: inherit;
   text-shadow: none;
 }
 .hover-lit:hover {
-  color: #2edba3;
-  text-shadow: 0 0 8px rgba(46, 219, 163, 0.45);
+  color: var(--c-jade);
+  text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
 }
 
 /* Move 2 — hairlines are tubes: a 1 px jade line lit from the left (where the mark is), fading
@@ -733,16 +778,16 @@ svg a:hover {
   height: 1px;
   background: linear-gradient(
     90deg,
-    rgba(46, 219, 163, 0.55),
-    rgba(46, 219, 163, 0.14) 45%,
+    rgb(var(--rgb-jade) / 0.55),
+    rgb(var(--rgb-jade) / 0.14) 45%,
     transparent 90%
   );
 }
 .hairline-tube-border {
   border-image: linear-gradient(
       90deg,
-      rgba(46, 219, 163, 0.55),
-      rgba(46, 219, 163, 0.14) 45%,
+      rgb(var(--rgb-jade) / 0.55),
+      rgb(var(--rgb-jade) / 0.14) 45%,
       transparent 90%
     )
     1;
@@ -750,9 +795,9 @@ svg a:hover {
 .hairline-tube-header {
   border-image: linear-gradient(
       90deg,
-      rgba(46, 219, 163, 0.6),
-      rgba(46, 219, 163, 0.18) 30%,
-      #1a1f30 70%
+      rgb(var(--rgb-jade) / 0.6),
+      rgb(var(--rgb-jade) / 0.18) 30%,
+      var(--c-base-border-subtle) 70%
     )
     1;
 }
@@ -763,9 +808,9 @@ svg a:hover {
   display: inline-block;
   width: 7px;
   height: 14px;
-  background: #2edba3;
+  background: var(--c-jade);
   vertical-align: -2px;
-  box-shadow: 0 0 6px rgba(46, 219, 163, 0.6);
+  box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.6 * var(--m-glow)));
   animation: cursor-blink 1s step-end infinite;
 }
 @keyframes cursor-blink {
@@ -790,7 +835,27 @@ svg a:hover {
 /* Move 5 — a chart's primary data line is a tube, not a stroke: a 2.5 px halo in the line's own
    colour (jade unless the series says otherwise). Bars and areas have none. */
 .chart-line-halo {
-  filter: drop-shadow(0 0 2.5px var(--halo-color, rgba(46, 219, 163, 0.55)));
+  filter: drop-shadow(0 0 2.5px var(--halo-color, rgb(var(--rgb-jade) / 0.55)));
+}
+
+/*
+ * By day (data-theme='light', lib/theme.ts) nothing glows: every halo written above is an alpha
+ * multiplied by `--m-glow`, which the light theme sets to 0. The halos below take their colour
+ * from a variable a component sets, which a rule cannot scale, so the light theme turns them off
+ * here instead.
+ */
+:root[data-theme='light'] .chart-line-halo {
+  filter: none;
+}
+:root[data-theme='light'] .neon-bar-left::before {
+  box-shadow: none;
+}
+:root[data-theme='light'] .glow-neon,
+:root[data-theme='light'] .glow-soft {
+  text-shadow: none;
+}
+:root[data-theme='light'] .hex-char:hover {
+  text-shadow: none;
 }
 
 /* Reduced motion: no sweep, no blink; the halos are static anyway. */
@@ -817,7 +882,7 @@ svg a:hover {
   background: linear-gradient(
     90deg,
     transparent,
-    var(--neon-color, rgba(46, 219, 163, 0.45)),
+    var(--neon-color, rgb(var(--rgb-jade) / 0.45)),
     transparent
   );
   pointer-events: none;
@@ -833,43 +898,43 @@ svg a:hover {
   left: 0;
   width: 3px;
   height: 100%;
-  background: var(--bar-color, #2edba3);
+  background: var(--bar-color, var(--c-jade));
   box-shadow:
-    0 0 20px var(--bar-color, #2edba3),
-    0 0 40px var(--bar-glow, rgba(46, 219, 163, 0.25));
+    0 0 20px var(--bar-color, var(--c-jade)),
+    0 0 40px var(--bar-glow, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow))));
 }
 
 .glow-neon {
   text-shadow:
     0 0 10px var(--glow-color),
-    0 0 30px var(--glow-color-mid, rgba(46, 219, 163, 0.25)),
-    0 0 60px var(--glow-color-far, rgba(46, 219, 163, 0.15));
+    0 0 30px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
+    0 0 60px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
 }
 .glow-soft {
   text-shadow:
-    0 0 20px var(--glow-color-mid, rgba(46, 219, 163, 0.25)),
-    0 0 40px var(--glow-color-far, rgba(46, 219, 163, 0.15));
+    0 0 20px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
+    0 0 40px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
 }
 
 .live-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #2edba3;
+  background: var(--c-jade);
   box-shadow:
-    0 0 8px #2edba3,
-    0 0 16px rgba(46, 219, 163, 0.25);
+    0 0 8px rgb(var(--rgb-jade) / calc(1 * var(--m-glow))),
+    0 0 16px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   animation: live-pulse 1.5s ease-in-out infinite;
 }
 @keyframes live-pulse {
   0%,
   100% {
-    box-shadow: 0 0 4px #2edba3;
+    box-shadow: 0 0 4px rgb(var(--rgb-jade) / calc(1 * var(--m-glow)));
   }
   50% {
     box-shadow:
-      0 0 10px #2edba3,
-      0 0 20px rgba(46, 219, 163, 0.25);
+      0 0 10px rgb(var(--rgb-jade) / calc(1 * var(--m-glow))),
+      0 0 20px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   }
 }
 
@@ -877,7 +942,7 @@ svg a:hover {
   0%,
   49% {
     opacity: 1;
-    background-color: #00ffaa;
+    background-color: var(--c-jade-bright);
   }
   50%,
   100% {
@@ -905,44 +970,50 @@ svg a:hover {
 @keyframes storage-breathe-ckb {
   0%,
   100% {
-    border-color: rgba(46, 219, 163, 0.25);
-    box-shadow: 0 0 0 rgba(46, 219, 163, 0);
+    border-color: rgb(var(--rgb-jade) / 0.25);
+    box-shadow: 0 0 0 rgb(var(--rgb-jade) / calc(0 * var(--m-glow)));
   }
   50% {
-    border-color: rgba(46, 219, 163, 0.5);
-    box-shadow: 0 0 6px rgba(46, 219, 163, 0.08);
+    border-color: rgb(var(--rgb-jade) / 0.5);
+    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.08 * var(--m-glow)));
   }
 }
 @keyframes storage-breathe-both {
   0%,
   100% {
-    border-color: rgba(138, 184, 112, 0.25);
-    box-shadow: 0 0 0 rgba(138, 184, 112, 0);
+    border-color: rgb(var(--rgb-tier-btc-edge-lit) / 0.25);
+    box-shadow: 0 0 0 rgb(var(--rgb-tier-btc-edge-lit) / calc(0 * var(--m-glow)));
   }
   50% {
-    border-color: rgba(138, 184, 112, 0.5);
-    box-shadow: 0 0 6px rgba(138, 184, 112, 0.08);
+    border-color: rgb(var(--rgb-tier-btc-edge-lit) / 0.5);
+    box-shadow: 0 0 6px rgb(var(--rgb-tier-btc-edge-lit) / calc(0.08 * var(--m-glow)));
   }
 }
 
 /* Storage tier text effects */
 .storage-text-gem {
-  color: #40e8b0;
+  color: var(--c-gem-jade-1);
   text-shadow:
-    0 0 4px rgba(64, 232, 176, 0.6),
-    0 0 12px rgba(64, 232, 176, 0.4),
-    0 0 28px rgba(80, 240, 200, 0.2),
-    0 0 50px rgba(104, 220, 240, 0.1);
+    0 0 4px rgb(var(--rgb-gem-jade-1) / calc(0.6 * var(--m-glow))),
+    0 0 12px rgb(var(--rgb-gem-jade-1) / calc(0.4 * var(--m-glow))),
+    0 0 28px rgb(var(--rgb-jade-bright) / calc(0.2 * var(--m-glow))),
+    0 0 50px rgb(var(--rgb-aqua) / calc(0.1 * var(--m-glow)));
 }
 /* Both text: gold→emerald split */
 .storage-text-split {
-  background: linear-gradient(135deg, #f0d060 0%, #d4b850 40%, #60d0a8 60%, #40e8b0 100%);
+  background: linear-gradient(
+    135deg,
+    var(--c-gem-gold-0) 0%,
+    var(--c-gem-gold-1) 40%,
+    var(--c-gem-jade-0) 60%,
+    var(--c-gem-jade-1) 100%
+  );
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 -1px 0 rgba(255, 230, 140, 0.25))
-    drop-shadow(0 0 8px rgba(80, 220, 180, 0.25));
+  filter: drop-shadow(0 -1px 0 rgb(var(--rgb-gold-bright) / calc(0.25 * var(--m-glow))))
+    drop-shadow(0 0 8px rgb(var(--rgb-jade-bright) / calc(0.25 * var(--m-glow))));
 }
 
 /* Ambient glow breathing animation for on-chain preview */
@@ -1025,12 +1096,11 @@ svg a:hover {
    detail to blur (the ground is a gradient, the pools 300 px soft, the grain 3 %), so a blur
    would buy a compositing layer and a re-blur on every scroll for no visible gain. */
 .glass {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 56px), rgba(16, 19, 28, 0.72);
+  background: linear-gradient(180deg, var(--m-glass-sheen), transparent 56px), var(--m-glass-fill);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(0, 0, 0, 0.45);
+    inset 0 1px 0 var(--m-glass-top-edge),
+    inset 0 -1px 0 var(--m-glass-bottom-edge),
+    0 0 0 1px var(--m-glass-ring);
 }
 
 /* Move 2b — a well: dark glass, inset, for what is typed into (the search field, a filter, the
@@ -1038,18 +1108,18 @@ svg a:hover {
    ink; `--well-radius` lets the header's search field keep the board's 6 px. Its lower lip (visual
    finish V4) is a 4 % white line under the border: the light the inset edge catches. */
 .well {
-  background: #0a0c12;
-  border: 1px solid #1a1f30;
+  background: var(--c-well-bg);
+  border: 1px solid var(--c-base-border-subtle);
   border-radius: var(--well-radius, 3px);
   box-shadow:
-    inset 0 1px 3px rgba(0, 0, 0, 0.65),
-    0 1px 0 rgba(255, 255, 255, 0.04);
+    inset 0 1px 3px var(--m-well-inset),
+    0 1px 0 var(--m-well-lip);
 }
 
 /* Move 2c — tier-2 ground: the evidence tier sits one step deeper, its ground bleeding through
    the page gutters (the container's 16 px, 24 px from lg) under the tube. */
 .tier2-ground {
-  background: rgba(6, 7, 11, 0.9);
+  background: var(--m-tier2-ground);
   margin-left: -1rem;
   margin-right: -1rem;
   padding-left: 1rem;
@@ -1099,11 +1169,11 @@ h1.text-index {
    element's own). `usePhosphor` sets the class for 1.2 s after a change, never on mount. */
 @keyframes phosphor-flare {
   from {
-    color: #e9fff6;
+    color: var(--c-neon-white);
     text-shadow:
-      0 0 2px rgba(233, 255, 246, 0.9),
-      0 0 10px rgba(46, 219, 163, 0.55),
-      0 0 28px rgba(46, 219, 163, 0.3);
+      0 0 2px rgb(var(--rgb-neon-white) / calc(0.9 * var(--m-glow))),
+      0 0 10px rgb(var(--rgb-jade) / calc(0.55 * var(--m-glow))),
+      0 0 28px rgb(var(--rgb-jade) / calc(0.3 * var(--m-glow)));
   }
 }
 .phosphor-flare {
@@ -1117,7 +1187,7 @@ h1.text-index {
   letter-spacing: 0.04em;
 }
 .this-address {
-  border-bottom: 1px solid rgba(46, 219, 163, 0.6);
+  border-bottom: 1px solid rgb(var(--rgb-jade) / 0.6);
 }
 
 /* Reduced motion: no flare (the hook is a no-op too; the figure still updates). */
@@ -1155,7 +1225,7 @@ h1.text-index {
   font-size: 14px;
   line-height: 1.7;
   max-width: 64ch;
-  color: #7c849c;
+  color: var(--c-text-dim);
 }
 .prose-tier2 p + p {
   margin-top: 14px;
@@ -1194,13 +1264,13 @@ h1.text-index {
   background:
     radial-gradient(
       ellipse 620px 300px at 84% 100%,
-      rgba(255, 132, 176, 0.11),
-      rgba(255, 132, 176, 0) 70%
+      rgb(var(--rgb-night-rose) / 0.11),
+      rgb(var(--rgb-night-rose) / 0) 70%
     ),
     radial-gradient(
       ellipse 760px 420px at 72% 0%,
-      rgba(122, 82, 172, 0.1),
-      rgba(122, 82, 172, 0) 70%
+      rgb(var(--rgb-night-violet) / 0.1),
+      rgb(var(--rgb-night-violet) / 0) 70%
     );
 }
 .error-night-glow {
@@ -1212,8 +1282,8 @@ h1.text-index {
   background: linear-gradient(
     180deg,
     transparent,
-    rgba(168, 110, 205, 0.1) 50%,
-    rgba(255, 132, 176, 0.12) 72%,
+    rgb(var(--rgb-night-violet) / 0.1) 50%,
+    rgb(var(--rgb-night-rose) / 0.12) 72%,
     transparent
   );
   -webkit-mask-image: linear-gradient(90deg, transparent 10%, #000 60%);
@@ -1249,17 +1319,17 @@ h1.text-index {
   margin: 14%;
 }
 .error-night-bits i.one {
-  background: rgba(46, 219, 163, 0.72);
+  background: rgb(var(--rgb-jade) / 0.72);
   box-shadow:
-    0 0 6px rgba(46, 219, 163, 0.45),
-    0 0 18px rgba(46, 219, 163, 0.18);
+    0 0 6px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))),
+    0 0 18px rgb(var(--rgb-jade) / calc(0.18 * var(--m-glow)));
 }
 .error-night-bits i.zero {
-  background: rgba(168, 110, 205, 0.36);
+  background: rgb(var(--rgb-night-violet) / 0.36);
 }
 .sign-inverted .error-night-bits i.one {
-  background: rgba(255, 132, 176, 0.72);
-  box-shadow: 0 0 6px rgba(255, 132, 176, 0.45);
+  background: rgb(var(--rgb-night-rose) / 0.72);
+  box-shadow: 0 0 6px rgb(var(--rgb-night-rose) / calc(0.45 * var(--m-glow)));
 }
 .sign {
   margin: 0;
@@ -1292,20 +1362,20 @@ h1.text-index {
   opacity: 1;
 }
 .neon.jade {
-  color: rgba(216, 246, 234, 0.72);
+  color: rgb(var(--rgb-neon-white) / 0.72);
   text-shadow:
-    0 0 3px rgba(46, 219, 163, 0.45),
-    0 0 12px rgba(46, 219, 163, 0.22);
+    0 0 3px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow))),
+    0 0 12px rgb(var(--rgb-jade) / calc(0.22 * var(--m-glow)));
 }
 .neon.aqua {
-  color: rgba(220, 240, 250, 0.68);
+  color: rgb(var(--rgb-aqua-bright) / 0.68);
   text-shadow:
-    0 0 3px rgba(104, 204, 240, 0.42),
-    0 0 12px rgba(104, 204, 240, 0.2);
+    0 0 3px rgb(var(--rgb-aqua) / calc(0.42 * var(--m-glow))),
+    0 0 12px rgb(var(--rgb-aqua) / calc(0.2 * var(--m-glow)));
 }
 .neon.off {
-  color: rgba(222, 226, 236, 0.035);
-  -webkit-text-stroke: 0.6px rgba(222, 226, 236, 0.18);
+  color: rgb(var(--rgb-text-bright) / 0.035);
+  -webkit-text-stroke: 0.6px rgb(var(--rgb-text-bright) / 0.18);
   text-shadow: none;
   transition:
     color 0.45s,
@@ -1365,24 +1435,24 @@ h1.text-index {
 }
 @keyframes sign-try {
   0% {
-    color: rgba(222, 226, 236, 0.035);
+    color: rgb(var(--rgb-text-bright) / 0.035);
     text-shadow: none;
   }
   18% {
-    color: rgba(216, 246, 234, 0.5);
-    text-shadow: 0 0 6px rgba(46, 219, 163, 0.5);
+    color: rgb(var(--rgb-neon-white) / 0.5);
+    text-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow)));
   }
   28% {
-    color: rgba(222, 226, 236, 0.06);
+    color: rgb(var(--rgb-text-bright) / 0.06);
     text-shadow: none;
   }
   52% {
-    color: rgba(216, 246, 234, 0.35);
-    text-shadow: 0 0 6px rgba(46, 219, 163, 0.35);
+    color: rgb(var(--rgb-neon-white) / 0.35);
+    text-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.35 * var(--m-glow)));
   }
   66%,
   100% {
-    color: rgba(222, 226, 236, 0.035);
+    color: rgb(var(--rgb-text-bright) / 0.035);
     text-shadow: none;
   }
 }
@@ -1426,29 +1496,29 @@ h1.text-index {
   opacity: 0.06;
 }
 .sign-inverted .neon.off {
-  color: rgba(216, 246, 234, 0.8);
+  color: rgb(var(--rgb-neon-white) / 0.8);
   -webkit-text-stroke: 0;
   text-shadow:
-    0 0 3px rgba(46, 219, 163, 0.5),
-    0 0 12px rgba(46, 219, 163, 0.25);
+    0 0 3px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow))),
+    0 0 12px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
 }
 .sign-inverted .neon.off:hover {
   animation: none;
 }
 @keyframes sign-once {
   0% {
-    color: rgba(222, 226, 236, 0.035);
+    color: rgb(var(--rgb-text-bright) / 0.035);
     text-shadow: none;
   }
   10%,
   72% {
-    color: rgba(216, 246, 234, 0.8);
+    color: rgb(var(--rgb-neon-white) / 0.8);
     text-shadow:
-      0 0 3px rgba(46, 219, 163, 0.5),
-      0 0 12px rgba(46, 219, 163, 0.25);
+      0 0 3px rgb(var(--rgb-jade) / calc(0.5 * var(--m-glow))),
+      0 0 12px rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)));
   }
   100% {
-    color: rgba(222, 226, 236, 0.035);
+    color: rgb(var(--rgb-text-bright) / 0.035);
     text-shadow: none;
   }
 }

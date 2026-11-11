@@ -279,7 +279,7 @@ describe('Its transactions against the Cell board', () => {
     ).toHaveTextContent('in:2 → out:1 · same type id continues');
     expect(structure.querySelector('[data-continuity-kind="type-id"]')).toHaveAttribute(
       'stroke',
-      '#b5c77a'
+      'var(--c-cell-type)'
     );
     const box = screen.getByTestId('not-spent-yet');
     expect(box).toHaveTextContent('Not replaced yet');

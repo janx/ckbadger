@@ -7,11 +7,7 @@ export const VERTEX = `#version 300 es
 precision highp float; const vec2 V[3]=vec2[3](vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.)); out vec2 v_uv;
 void main(){ vec2 p=V[gl_VertexID]; v_uv=p*0.5+0.5; gl_Position=vec4(p,0.,1.); }`;
 
-const JADE = 'vec3(0.18,0.86,0.64)';
-const AQUA = 'vec3(0.41,0.80,0.94)';
-const ROSE = 'vec3(1.0,0.52,0.69)';
-const VIOL = 'vec3(0.66,0.43,0.80)';
-const BASE = 'vec3(.030,.034,.058)';
+import type { NightColors } from '@/lib/night/colors';
 
 /** The shared current: two fields blended, drifting and swaying — the same formula as `Current.sample`. */
 const FIELD = `
@@ -32,21 +28,37 @@ export const FADE = `#version 300 es
 precision highp float; in vec2 v_uv; out vec4 o; uniform sampler2D u_prev; uniform float u_fade;
 void main(){ vec3 c=texture(u_prev,v_uv).rgb*u_fade; if(any(isnan(c))) c=vec3(0.); o=vec4(c,1.); }`;
 
-/** The night as shown: the theme's base, the ink, the trails, a vignette. */
+/**
+ * The night as shown: the theme's base (`u_base`), the ink, the trails, a vignette. At night the
+ * ink is light added to the base; by day (`u_day` = 1) it is pigment taken from the paper — the
+ * point shader then draws each hue's complement, so what is subtracted leaves the hue.
+ */
 export const SHOW = `#version 300 es
-precision highp float; in vec2 v_uv; out vec4 o; uniform sampler2D u_ink; uniform sampler2D u_trails;
-void main(){ float vig=1.-.45*pow(length(v_uv-.5)*1.1,2.2); vec3 col=${BASE};
-  col+=texture(u_ink,v_uv).rgb*1.3; col+=texture(u_trails,v_uv).rgb;
-  o=vec4(col*vig+${BASE}*(1.-vig),1.); }`;
+precision highp float; in vec2 v_uv; out vec4 o; uniform sampler2D u_ink; uniform sampler2D u_trails; uniform vec3 u_base; uniform float u_day;
+void main(){ float vig=1.-.45*pow(length(v_uv-.5)*1.1,2.2); vec3 ink=texture(u_ink,v_uv).rgb*1.3+texture(u_trails,v_uv).rgb;
+  vec3 col=u_base+mix(ink,-ink,u_day);
+  o=vec4(col*vig+u_base*(1.-vig),1.); }`;
 
 export const POINT_VS = `#version 300 es
 precision highp float; layout(location=0) in vec2 a_pos; layout(location=1) in float a_c; layout(location=2) in float a_a; uniform float u_size; out float v_c; out float v_a;
 void main(){ v_c=a_c; v_a=a_a; gl_Position=vec4(a_pos*2.-1.,0.,1.); gl_PointSize=u_size; }`;
 
-/** Points in the four hues: 0 jade, .5 aqua, 1 rose, 1.5 violet. */
+/** Points in the four hues: 0 jade, .5 aqua, 1 rose, 1.5 violet; by day, each hue's complement. */
 export const POINT_FS = `#version 300 es
-precision highp float; in float v_c; in float v_a; out vec4 o; uniform float u_gain;
-void main(){ if(v_a<=0.) discard; vec3 c = v_c<.25 ? ${JADE} : (v_c<.75 ? ${AQUA} : (v_c<1.25 ? ${ROSE} : ${VIOL})); o=vec4(c*u_gain*v_a,1.); }`;
+precision highp float; in float v_c; in float v_a; out vec4 o; uniform float u_gain; uniform vec3 u_jade; uniform vec3 u_aqua; uniform vec3 u_rose; uniform vec3 u_violet; uniform float u_day;
+void main(){ if(v_a<=0.) discard; vec3 c = v_c<.25 ? u_jade : (v_c<.75 ? u_aqua : (v_c<1.25 ? u_rose : u_violet)); c=mix(c,1.-c,u_day); o=vec4(c*u_gain*v_a,1.); }`;
+
+/** Sets the night's colours on a program that declares them (SHOW, POINT_FS). */
+export function setColors(gl: WebGL2RenderingContext, p: WebGLProgram, colors: NightColors): void {
+  uniforms(gl, p, {
+    u_base: colors.base,
+    u_jade: colors.jade,
+    u_aqua: colors.aqua,
+    u_rose: colors.rose,
+    u_violet: colors.violet,
+    u_day: colors.day,
+  });
+}
 
 export type Format = 'u8' | 'f16' | 'f32';
 
@@ -185,12 +197,18 @@ export interface Points {
   ): void;
 }
 
-/** N points with a position, a hue index and an alpha each, drawn additively. */
-export function points(gl: WebGL2RenderingContext, N: number, size: number): Points {
+/** N points with a position, a hue index and an alpha each, drawn additively in `colors`. */
+export function points(
+  gl: WebGL2RenderingContext,
+  N: number,
+  size: number,
+  colors: NightColors
+): Points {
   const pos = new Float32Array(N * 2);
   const col = new Float32Array(N);
   const alp = new Float32Array(N);
   const p = program(gl, POINT_FS, POINT_VS);
+  setColors(gl, p, colors);
   const vao = gl.createVertexArray();
   if (!vao) throw new Error('night: createVertexArray failed');
   gl.bindVertexArray(vao);

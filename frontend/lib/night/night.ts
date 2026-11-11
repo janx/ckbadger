@@ -11,6 +11,7 @@
  */
 
 import { bitsOf, gridCell, seedOf, type Grid } from '@/lib/night/bits';
+import type { NightColors } from '@/lib/night/colors';
 import { Current, FIELD_H, FIELD_W } from '@/lib/night/field';
 import {
   bindTex,
@@ -20,6 +21,7 @@ import {
   INK_STEP,
   points,
   program,
+  setColors,
   SHOW,
   target,
   texture,
@@ -35,6 +37,8 @@ export interface NightOptions {
   /** The first grid: the hash this page is about, or null for no grid until the first block. */
   hash: string | null;
   grid: Grid;
+  /** The theme's colours (lib/night/colors.ts): the base, the four hues, night or day. */
+  colors: NightColors;
   /** Half-resolution ink and trails (phones). */
   half?: boolean;
   /** Reduced motion: one frame, nothing moves, no ticks. */
@@ -88,6 +92,7 @@ export function createNight(canvas: HTMLCanvasElement, opts: NightOptions): Nigh
   const aspect = W / H;
   const half = !!opts.half;
   const grid = opts.grid;
+  const colors = opts.colors;
   const scene = canvas.parentElement ?? canvas;
   const t0 = performance.now();
   let lastT = t0;
@@ -113,11 +118,12 @@ export function createNight(canvas: HTMLCanvasElement, opts: NightOptions): Nigh
       inkStep: program(gl, INK_STEP),
       fade: program(gl, FADE),
       show: program(gl, SHOW),
-      stamp: points(gl, 256, half ? grid.pitch * 0.32 : grid.pitch * 0.64),
-      motePoints: points(gl, motes.N, half ? 1.1 : 2.0),
+      stamp: points(gl, 256, half ? grid.pitch * 0.32 : grid.pitch * 0.64, colors),
+      motePoints: points(gl, motes.N, half ? 1.1 : 2.0, colors),
       fieldA: texture(gl, FIELD_W, FIELD_H, 'u8', null, gl.REPEAT),
       fieldB: texture(gl, FIELD_W, FIELD_H, 'u8', null, gl.REPEAT),
     };
+    setColors(gl, built.show, colors);
     current.dirty = true;
     if (hash) stampGrid(built, bitsOf(hash));
     else stain(built);

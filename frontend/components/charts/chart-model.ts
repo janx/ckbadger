@@ -244,14 +244,14 @@ function singleChart(
       key: 'primary',
       label:
         primaryField === 'value2' ? (payload.y2AxisLabel ?? definition.title) : payload.yAxisLabel,
-      color: '#2edba3',
+      color: 'var(--c-jade)',
     },
   ];
   if (hasSecond && !definition.secondaryUnit)
     series.push({
       key: 'companion',
       label: primaryField === 'value2' ? payload.yAxisLabel : (payload.y2AxisLabel ?? 'Companion'),
-      color: '#68ccf0',
+      color: 'var(--c-aqua)',
       // A companion reading of the same unit (real inflation, daily turnover) is dashed (CH-12).
       dashed: true,
     });
@@ -272,7 +272,7 @@ function singleChart(
             {
               key: 'secondary',
               label: definition.secondaryLabel ?? payload.y2AxisLabel ?? 'Secondary',
-              color: '#68ccf0',
+              color: 'var(--c-aqua)',
             },
           ],
           unit: definition.secondaryUnit,
@@ -329,7 +329,7 @@ function singleChart(
         ? {
             title: 'Net knowledge flow',
             unit: 'CKB/day',
-            series: [{ key: 'flow', label: 'Daily net flow', color: '#68ccf0' }],
+            series: [{ key: 'flow', label: 'Daily net flow', color: 'var(--c-aqua)' }],
             points: points.slice(1).map((point, index) => ({
               label: point.label,
               values: {
@@ -554,7 +554,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
       ? {
           title: 'Holder count',
           unit: 'holders',
-          series: [{ key: 'holders', label: 'Holders', color: '#68ccf0' }],
+          series: [{ key: 'holders', label: 'Holders', color: 'var(--c-aqua)' }],
           points: payload.data.map((point) => ({
             label: point.date,
             values: {
@@ -695,7 +695,7 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
     secondary: {
       title: 'Consumed cells, cumulative',
       unit: 'cells',
-      series: [{ key: 'secondary', label: 'Consumed cells', color: '#68ccf0' }],
+      series: [{ key: 'secondary', label: 'Consumed cells', color: 'var(--c-aqua)' }],
       points: payload.data.map((point) => ({
         label: point.date,
         values: { secondary: read(point, 'deadCells') },
@@ -792,14 +792,14 @@ function shareRows(
       key: series.key,
       label: series.label,
       color: [
-        '#2edba3',
-        '#68ccf0',
-        '#8f9cdb',
-        '#52b8a7',
-        '#547fae',
-        '#6fcfc2',
-        '#879abb',
-        '#a0a8be',
+        'var(--c-jade)',
+        'var(--c-aqua)',
+        'var(--c-lavender)',
+        'var(--c-jade-dim)',
+        'var(--c-cell-lock)',
+        'var(--c-cell-data)',
+        'var(--c-flow-ckb)',
+        'var(--c-text)',
       ][index % 8],
     })),
     points: history.data.map((point) => ({

@@ -30,7 +30,7 @@ export interface TxContinuity {
 /** The dashed stroke of a continuity link, on the structure and in any legend beside it. */
 export function continuityColor(kind: TxContinuity['kind']): string {
   return kind === 'file'
-    ? '#a0a8be'
+    ? 'var(--c-text)'
     : kind === 'type-id'
       ? CELL_COLORS.type
       : kind
@@ -232,7 +232,7 @@ export function TxStructure({
                       <path
                         key={cell.id}
                         d={`M0 ${centers[cell.id]}H46`}
-                        stroke={linked.has(cell.id) ? '#dee2ec' : '#4b5266'}
+                        stroke={linked.has(cell.id) ? 'var(--c-text-bright)' : 'var(--c-ink-quiet)'}
                         strokeWidth="1.5"
                       />
                     ))}
@@ -249,7 +249,11 @@ export function TxStructure({
                       <path
                         key={cell.id}
                         d={`M66 ${centers[cell.id]}H112`}
-                        stroke={linked.has(cell.id) || cell.id === meOut ? '#dee2ec' : '#4b5266'}
+                        stroke={
+                          linked.has(cell.id) || cell.id === meOut
+                            ? 'var(--c-text-bright)'
+                            : 'var(--c-ink-quiet)'
+                        }
                         strokeWidth="1.5"
                       />
                     ))}
@@ -259,10 +263,10 @@ export function TxStructure({
                       width="20"
                       height={poolBottom - poolTop}
                       rx="4"
-                      fill="#181d2b"
-                      stroke="#4b5266"
+                      fill="var(--c-tile)"
+                      stroke="var(--c-ink-quiet)"
                     />
-                    <path d={`M56 ${poolBottom}v16`} stroke="#4b5266" />
+                    <path d={`M56 ${poolBottom}v16`} stroke="var(--c-ink-quiet)" />
                     {continuity.map((link) => (
                       <path
                         key={`${link.from}:${link.to}`}

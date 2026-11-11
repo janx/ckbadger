@@ -46,8 +46,8 @@ describe('TotalSupplyPage', () => {
       ],
       // F2 charts: the DAO band is gold, the class colour, not the API's blue (CH-06).
       series: [
-        { label: 'Circulating', color: '#2edba3' },
-        { label: 'Nervos DAO', color: '#f2c55c' },
+        { label: 'Circulating', color: 'var(--c-jade)' },
+        { label: 'Nervos DAO', color: 'var(--c-gold)' },
       ],
     });
     // The head reading (CH-21): CKB stays exact, every digit.

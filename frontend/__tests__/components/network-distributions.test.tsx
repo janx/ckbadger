@@ -452,7 +452,7 @@ describe('NetworkTrends', () => {
       })
     ).toBeInTheDocument();
     expect(first.querySelector('[data-segment="leader"]')).toHaveStyle({
-      backgroundColor: 'rgb(46, 219, 163)',
+      backgroundColor: 'var(--c-jade)',
     });
     expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
     const cells = within(first).getAllByRole('cell');

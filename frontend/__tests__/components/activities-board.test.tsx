@@ -90,10 +90,10 @@ describe('Activities board (TX-30, TX-32, TX-29)', () => {
     ]);
     expect(
       within(group).getByRole('button', { name: 'CKB transfers' }).querySelector('[data-swatch]')
-    ).toHaveStyle({ backgroundColor: 'rgb(46, 219, 163)' });
+    ).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
     expect(
       within(group).getByRole('button', { name: 'Script calls' }).querySelector('[data-swatch]')
-    ).toHaveStyle({ backgroundColor: 'rgb(58, 66, 88)' });
+    ).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
     expect(screen.queryByText(/loaded$/)).not.toBeInTheDocument();
   });
 

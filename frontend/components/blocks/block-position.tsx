@@ -271,7 +271,7 @@ export function BlockPosition({
             <g key={number}>
               <path
                 d={`M${x(ordered[index]) + tileWidth} ${tileTop + 44}H${x(number)}`}
-                stroke="#2c3348"
+                stroke="var(--c-slate-other)"
                 fill="none"
               />
               {number - ordered[index] > 1 && (
@@ -279,7 +279,7 @@ export function BlockPosition({
                   x={x(number) - 22}
                   y={tileTop + 38}
                   textAnchor="middle"
-                  fill="#7c849c"
+                  fill="var(--c-text-dim)"
                   fontSize="11"
                 >
                   …
@@ -307,7 +307,7 @@ export function BlockPosition({
                 <path
                   d={`M${from} ${tileTop}C${from} ${top} ${to} ${top} ${to} ${tileTop}`}
                   fill="none"
-                  stroke="#f2c55c"
+                  stroke="var(--c-gold)"
                   strokeWidth="1.5"
                   opacity="0.75"
                 />
@@ -315,7 +315,7 @@ export function BlockPosition({
                   x={(from + to) / 2}
                   y={top - 4}
                   textAnchor="middle"
-                  fill="#a0a8be"
+                  fill="var(--c-text)"
                   fontSize="11"
                 >
                   {arc.hashes.size} proposed → committed +{arc.to - arc.from}
@@ -341,13 +341,18 @@ export function BlockPosition({
                     width={tileWidth}
                     height="88"
                     rx="6"
-                    fill={current ? BLOCK_POSITION_COLORS.currentTile : '#131826'}
+                    fill={current ? BLOCK_POSITION_COLORS.currentTile : 'var(--c-tile)'}
                   />
-                  <text x="10" y="20" fill={current ? '#dee2ec' : '#a0a8be'} fontSize="12">
+                  <text
+                    x="10"
+                    y="20"
+                    fill={current ? 'var(--c-text-bright)' : 'var(--c-text)'}
+                    fontSize="12"
+                  >
                     {formatBlockNumber(number)}
                   </text>
                   {timestamp && (
-                    <text data-tile-time x="10" y="39" fill="#7c849c" fontSize="11">
+                    <text data-tile-time x="10" y="39" fill="var(--c-text-dim)" fontSize="11">
                       {formatUtc8Time(timestamp)}
                     </text>
                   )}
@@ -375,14 +380,14 @@ export function BlockPosition({
                   <path
                     data-uncle-fork-from={from}
                     d={`M${x(from) + tileWidth} ${tileTop + 44}C${x(from) + tileWidth + 25} ${tileTop + 44} ${uncleX - 25} ${top + 36} ${uncleX} ${top + 36}`}
-                    stroke="#2c3348"
+                    stroke="var(--c-slate-other)"
                     strokeWidth="1.5"
                     fill="none"
                   />
                   <path
                     d={`M${currentX + tileWidth / 2} ${tileBottom}C${currentX + tileWidth / 2} ${top + 36} ${uncleX + tileWidth + 36} ${top + 36} ${uncleX + tileWidth} ${top + 36}`}
                     fill="none"
-                    stroke="#7c849c"
+                    stroke="var(--c-text-dim)"
                     strokeDasharray="3 3"
                   />
                   <Link
@@ -396,16 +401,22 @@ export function BlockPosition({
                       height="71"
                       rx="6"
                       fill="none"
-                      stroke="#4b5266"
+                      stroke="var(--c-ink-quiet)"
                       strokeDasharray="3 3"
                     />
-                    <text x={uncleX + 10} y={top + 20} fill="#a0a8be" fontSize="11">
+                    <text x={uncleX + 10} y={top + 20} fill="var(--c-text)" fontSize="11">
                       uncle {formatBlockNumber(uncle.number)}
                     </text>
-                    <text x={uncleX + 10} y={top + 39} fill="#7c849c" fontSize="11">
+                    <text x={uncleX + 10} y={top + 39} fill="var(--c-text-dim)" fontSize="11">
                       {uncle.hash.slice(0, 6)}…{uncle.hash.slice(-4)}
                     </text>
-                    <text data-uncle-time x={uncleX + 10} y={top + 58} fill="#7c849c" fontSize="11">
+                    <text
+                      data-uncle-time
+                      x={uncleX + 10}
+                      y={top + 58}
+                      fill="var(--c-text-dim)"
+                      fontSize="11"
+                    >
                       {formatUtc8Time(uncle.timestamp)}
                     </text>
                   </Link>
@@ -416,22 +427,33 @@ export function BlockPosition({
             const uncleX = 230;
             return (
               <g key={uncle.hash} data-uncle-hash={uncle.hash}>
-                <path d={`M${parentX + 178} ${top + 28}H${uncleX}`} stroke="#4b5266" fill="none" />
+                <path
+                  d={`M${parentX + 178} ${top + 28}H${uncleX}`}
+                  stroke="var(--c-ink-quiet)"
+                  fill="none"
+                />
                 <path
                   d={`M${uncleX + 178} ${top + 28}C${uncleX + 216} ${top + 28} ${currentX + 74} ${tileBottom + 12} ${currentX + 74} ${tileBottom}`}
                   fill="none"
-                  stroke="#7c849c"
+                  stroke="var(--c-text-dim)"
                   strokeDasharray="3 3"
                 />
                 <Link
                   href={`/blocks/${uncle.parentHash}`}
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
-                  <rect x={parentX} y={top} width="178" height="58" rx="6" fill="#10131c" />
-                  <text x={parentX + 10} y={top + 21} fill="#7c849c" fontSize="11">
+                  <rect
+                    x={parentX}
+                    y={top}
+                    width="178"
+                    height="58"
+                    rx="6"
+                    fill="var(--c-base-surface)"
+                  />
+                  <text x={parentX + 10} y={top + 21} fill="var(--c-text-dim)" fontSize="11">
                     Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
-                  <text x={parentX + 10} y={top + 41} fill="#a0a8be" fontSize="11">
+                  <text x={parentX + 10} y={top + 41} fill="var(--c-text)" fontSize="11">
                     {uncle.parentHash.slice(0, 12)}…{uncle.parentHash.slice(-6)}
                   </text>
                 </Link>
@@ -446,13 +468,13 @@ export function BlockPosition({
                     height="58"
                     rx="6"
                     fill="none"
-                    stroke="#4b5266"
+                    stroke="var(--c-ink-quiet)"
                     strokeDasharray="3 3"
                   />
-                  <text x={uncleX + 10} y={top + 21} fill="#a0a8be" fontSize="11">
+                  <text x={uncleX + 10} y={top + 21} fill="var(--c-text)" fontSize="11">
                     Uncle {formatBlockNumber(uncle.number)}
                   </text>
-                  <text x={uncleX + 10} y={top + 41} fill="#7c849c" fontSize="11">
+                  <text x={uncleX + 10} y={top + 41} fill="var(--c-text-dim)" fontSize="11">
                     {uncle.hash.slice(0, 12)}…{uncle.hash.slice(-6)}
                   </text>
                 </Link>

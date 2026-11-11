@@ -52,7 +52,7 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
     const { container } = render(<ScriptCodeClassBar classes={classes} />);
     const segment = (cls: string) =>
       container.querySelector<HTMLElement>(`[data-code-class-segment="${cls}"]`)!;
-    expect(segment('fixed').style.backgroundColor).toBe(hexToRgb(CODE_CLASS_COLORS.fixed.fill));
+    expect(segment('fixed').style.backgroundColor).toBe(CODE_CLASS_COLORS.fixed.fill);
     expect(hasEdge(segment('multisig'), CODE_CLASS_COLORS.multisig.edge)).toBe(true);
     expect(hasEdge(segment('one_key'), CODE_CLASS_COLORS.one_key.edge)).toBe(true);
     // Bar order follows the class order immutable → multisig → one key, whatever the API order.
@@ -92,14 +92,9 @@ describe('scriptShare (SC-L6)', () => {
   });
 });
 
-function hasEdge(node: HTMLElement, hex: string): boolean {
-  const shadow = node.style.boxShadow;
-  return shadow.includes(hex) || shadow.includes(hexToRgb(hex));
-}
-
-function hexToRgb(hex: string): string {
-  const h = hex.replace('#', '');
-  return `rgb(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)})`;
+/** The segment's edge is drawn as a box-shadow in the class's edge colour (a theme reference). */
+function hasEdge(node: HTMLElement, color: string): boolean {
+  return node.style.boxShadow.includes(color);
 }
 
 describe('ScriptCodeClassSummary · visual pass (R2b-b familyCount, D6, 390 px)', () => {

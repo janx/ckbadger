@@ -226,7 +226,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(rows[1]).toHaveTextContent('COTA');
     expect(rows[1]).not.toHaveTextContent('0x1122a4fb');
     expect(rows[0].querySelector('[data-part="free"]')).not.toBeNull();
-    expect(rows[0].innerHTML).not.toMatch(/#f2c55c|text-gold|text-dao/);
+    expect(rows[0].innerHTML).not.toMatch(/var(--c-gold)|text-gold|text-dao/);
     expect(rows[0].textContent).not.toContain(
       'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq03dwzcucjtl5qcg72kxx9euah4avhq3dv77xsf8'
     );
@@ -298,7 +298,7 @@ describe('JoyID script page · visual pass', () => {
     for (const l of labels) {
       // the quiet slate (#4b5266), a text ink with no theme token (visual finish V11)
       expect(l).toHaveClass('text-meta', 'text-[color:var(--ink)]');
-      expect(l.style.getPropertyValue('--ink')).toBe('#4b5266');
+      expect(l.style.getPropertyValue('--ink')).toBe('var(--c-ink-quiet)');
     }
     // The first day sits under the plot's name at the left edge: its line, not its label.
     expect(history.querySelector('[data-upgrade-label="2023-10-07"]')).toBeNull();

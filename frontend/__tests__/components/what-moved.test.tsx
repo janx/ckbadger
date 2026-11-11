@@ -215,7 +215,7 @@ describe('WhatMoved, the ribbon form', () => {
     expect(first.querySelector('.text-gold')).not.toBeNull();
     expect(ckb.querySelector('svg [data-ribbon="compensation"] path')).toHaveAttribute(
       'stroke',
-      '#f2c55c'
+      'var(--c-gold)'
     );
   });
 

@@ -13,7 +13,7 @@ const base: ChartProps = {
   title: 'Hash rate',
   subtitle: 'daily',
   data: points,
-  series: [{ key: 'rate', label: 'Hash rate', color: '#2edba3' }],
+  series: [{ key: 'rate', label: 'Hash rate', color: 'var(--c-jade)' }],
   unit: 'PH/s',
   formatValue: (v) => v,
   hideCaption: true,
@@ -79,8 +79,8 @@ describe('Chart tap to pin (R6)', () => {
       ...base,
       data: points.map((p) => ({ ...p, values: { rate: p.values.rate, peak: '9' } })),
       series: [
-        { key: 'rate', label: 'Rate', color: '#2edba3' },
-        { key: 'peak', label: 'Peak', color: '#68ccf0' },
+        { key: 'rate', label: 'Rate', color: 'var(--c-jade)' },
+        { key: 'peak', label: 'Peak', color: 'var(--c-aqua)' },
       ],
     };
     const { unmount } = render(<Chart {...two} pinnedReadout={{ label: 'Hash rate readout' }} />);
@@ -98,7 +98,7 @@ describe('Chart tap to pin (R6)', () => {
     fireEvent.click(plot(), { clientX: LAST });
     fireEvent.pointerLeave(plot());
     expect(screen.queryByRole('status')).toBeNull();
-    expect(plot().querySelector('line[stroke="#a0a8be"]')).toBeNull();
+    expect(plot().querySelector('line[stroke="var(--c-text)"]')).toBeNull();
   });
 
   it('hovers and pins through a caller’s pin state, which reads it', () => {

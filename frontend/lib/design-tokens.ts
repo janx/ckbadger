@@ -1,28 +1,36 @@
 import type { CSSProperties } from 'react';
+import { alpha, color } from '@/lib/palette';
+
+/**
+ * The named colours the boards and graphics draw with. Every value is a CSS reference into the
+ * theme (`var(--c-<key>)`, lib/palette.ts), so a page switches theme without re-rendering; the
+ * dark theme's values are the ones the site was designed in, and the light theme's sit at the
+ * same roles on paper. A drawer that needs a concrete hex (a canvas) uses `useThemePalette()`.
+ */
 
 /** Canonical semantic encodings from the approved site review. */
 export const CLASS_COLORS = {
-  dao: '#f2c55c',
-  tokens: '#5aa6f5',
-  objects: '#a98cf5',
-  identities: '#f08aa8',
-  ckb: '#3a4258',
-  other: '#2c3348',
+  dao: color('gold'),
+  tokens: color('token'),
+  objects: color('object'),
+  identities: color('identity'),
+  ckb: color('slate-ckb'),
+  other: color('slate-other'),
 } as const;
 export type AssetClass = keyof typeof CLASS_COLORS;
 export const CELL_COLORS = {
-  capacity: '#dee2ec',
-  lock: '#7aa7d6',
-  type: '#b5c77a',
-  data: '#6fc3d9',
+  capacity: color('cell-capacity'),
+  lock: color('cell-lock'),
+  type: color('cell-type'),
+  data: color('cell-data'),
 } as const;
 export const BITCOIN_COLORS = {
-  copper: '#dc8a5a',
-  light: '#ffe1cc',
-  dark: '#a95a32',
-  inner: '#1a110d',
+  copper: color('copper'),
+  light: color('bitcoin-light'),
+  dark: color('bitcoin-dark'),
+  inner: color('badge-inner-btc'),
 } as const;
-export const DATA_COLOR = '#2edba3';
+export const DATA_COLOR = color('jade');
 /**
  * The ribbons of the tx page's "What moved" flows (review 2026-11-03 v2): the class colours for
  * items; CKB a neutral grey bright enough for a stroke on the night sky (CLASS_COLORS.ckb is the
@@ -32,29 +40,37 @@ export const FLOW_COLORS = {
   tokens: CLASS_COLORS.tokens,
   objects: CLASS_COLORS.objects,
   identities: CLASS_COLORS.identities,
-  ckb: '#8e97ad',
-  fee: '#5a6378',
+  ckb: color('flow-ckb'),
+  fee: color('flow-fee'),
   compensation: CLASS_COLORS.dao,
 } as const;
 /** Ended states (an expired identity term): neutral grey, never gold or the class colour. */
-export const EXPIRED_COLOR = '#7c849c';
-export const HUE_RAMP = ['#2edba3', '#24b68a', '#259775', '#287b64', '#2b6054', '#344e48'] as const;
+export const EXPIRED_COLOR = color('text-dim');
+export const HUE_RAMP = [
+  DATA_COLOR,
+  color('ramp-1'),
+  color('ramp-2'),
+  color('ramp-3'),
+  color('ramp-4'),
+  color('ramp-5'),
+] as const;
 
 /**
  * `n` distinct shades of the jade ramp, brightest first, for `n` bands of one split: the designed
  * stops while they last; more bands (the HODL wave's eight) take `n` stops spread evenly along the
- * same ramp, so no two bands share a colour and the order stays bright to dark (review C#4).
+ * same ramp, so no two bands share a colour and the order stays bright to dark (review C#4). A
+ * stop between two designed ones is a `color-mix` of them, so it follows the theme too.
  */
 export function jadeRamp(n: number): string[] {
   if (!Number.isSafeInteger(n) || n < 1) throw new Error(`jade ramp of ${n} shades`);
   if (n <= HUE_RAMP.length) return HUE_RAMP.slice(0, n);
-  const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
   return Array.from({ length: n }, (_, k) => {
     const t = (k / (n - 1)) * (HUE_RAMP.length - 1);
     const i = Math.min(Math.floor(t), HUE_RAMP.length - 2);
-    const [a, b] = [rgb(HUE_RAMP[i]), rgb(HUE_RAMP[i + 1])];
-    const mix = a.map((v, c) => Math.round(v + (b[c] - v) * (t - i)));
-    return `#${mix.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+    const share = Math.round((t - i) * 1000) / 10;
+    if (share === 0) return HUE_RAMP[i];
+    if (share === 100) return HUE_RAMP[i + 1];
+    return `color-mix(in srgb, ${HUE_RAMP[i + 1]} ${share}%, ${HUE_RAMP[i]})`;
   });
 }
 
@@ -64,39 +80,38 @@ export function jadeRamp(n: number): string[] {
  */
 export const COMPOSITION_COLORS = {
   crystal: {
-    top: '#a8f6de',
-    topLight: '#e4fff6',
-    left: '#3fd3a8',
-    right: '#86ecce',
-    edge: '#0b3b30',
-    glint: '#ffffff',
+    top: color('crystal-top'),
+    topLight: color('crystal-top-light'),
+    left: color('crystal-left'),
+    right: color('crystal-right'),
+    edge: color('crystal-edge'),
+    glint: color('crystal-glint'),
   },
   copperMount: {
-    topLight: '#ffeadf',
-    topMid: '#efa682',
-    topDark: '#c86f45',
-    frontLight: '#df8b5f',
+    topLight: color('mount-top-light'),
+    topMid: color('mount-top-mid'),
+    topDark: color('mount-top-dark'),
+    frontLight: color('mount-front-light'),
     frontMid: BITCOIN_COLORS.dark,
-    frontDark: '#82422a',
-    edge: '#55291a',
+    frontDark: color('mount-front-dark'),
+    edge: color('mount-edge'),
   },
   /** Off-chain tier icons: the dim text ink, on the page background. */
-  offchain: '#7c849c',
-  offchainFill: '#0c0e15',
+  offchain: color('text-dim'),
+  offchainFill: color('base-bg'),
 } as const;
 /** Badge frames and inks for the two fully on-chain tiers (one drawing everywhere, IV-24). */
 export const COMPOSITION_BADGES = {
   pure_ckb: {
     /** Two layers: the inner fill (clipped to the padding box) over the gradient frame. */
-    frame:
-      'linear-gradient(#0b1d1a, #0b1d1a), linear-gradient(135deg, #f0fffa, #8ff3d6 40%, #1fb88a 85%)',
-    ink: 'linear-gradient(90deg, #f3fffb, #9df6dc 50%, #3ee0b0)',
-    bar: 'linear-gradient(90deg, #3ee0b0, #f0fffa, #8ff3d6)',
+    frame: `linear-gradient(${color('badge-inner-pure')}, ${color('badge-inner-pure')}), linear-gradient(135deg, ${color('badge-jade-pale')}, ${color('badge-jade-light')} 40%, ${color('jade-dim')} 85%)`,
+    ink: `linear-gradient(90deg, ${color('gel-ink-pure-0')}, ${color('gel-ink-pure-1')} 50%, ${color('gel-ink-pure-2')})`,
+    bar: `linear-gradient(90deg, ${color('gel-ink-pure-2')}, ${color('badge-jade-pale')}, ${color('badge-jade-light')})`,
   },
   btc_ckb: {
-    frame: `linear-gradient(${BITCOIN_COLORS.inner}, ${BITCOIN_COLORS.inner}), linear-gradient(135deg, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper} 35%, #8ff3d6 72%, #1fb88a)`,
-    ink: `linear-gradient(90deg, #ffe7d8, ${BITCOIN_COLORS.copper} 45%, #9df6dc 92%)`,
-    bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, #8ff3d6)`,
+    frame: `linear-gradient(${BITCOIN_COLORS.inner}, ${BITCOIN_COLORS.inner}), linear-gradient(135deg, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper} 35%, ${color('badge-jade-light')} 72%, ${color('jade-dim')})`,
+    ink: `linear-gradient(90deg, ${color('badge-copper-pale')}, ${BITCOIN_COLORS.copper} 45%, ${color('badge-jade-mid')} 92%)`,
+    bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, ${color('badge-jade-light')})`,
   },
 } as const;
 
@@ -104,12 +119,12 @@ export const COMPOSITION_BADGES = {
 // fees ink, proposal fees gold — gold only for what was proposed). ----
 export const REWARD_COLORS = {
   primary: DATA_COLOR,
-  secondary: '#17775c',
-  committed: '#a0a8be',
+  secondary: color('reward-secondary'),
+  committed: color('text'),
   proposal: CLASS_COLORS.dao,
 } as const;
 /** The Block board's position diagram: the current block's tile (the SVG and the phone list). */
-export const BLOCK_POSITION_COLORS = { currentTile: '#123029' } as const;
+export const BLOCK_POSITION_COLORS = { currentTile: color('tile-current') } as const;
 
 // ---- F2 group dao (round-2 fix) ----
 /**
@@ -117,8 +132,8 @@ export const BLOCK_POSITION_COLORS = { currentTile: '#123029' } as const;
  * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
  */
 export const DAO_ISSUANCE_COLORS = {
-  total: '#4b5266',
-  miners: '#a0a8be',
+  total: color('ink-quiet'),
+  miners: color('text'),
   compensation: CLASS_COLORS.dao,
   burnt: CLASS_COLORS.other,
 } as const;
@@ -127,37 +142,37 @@ export const DAO_ISSUANCE_COLORS = {
 /** Jade = open now / CKB locked now; grey ink = history; a dashed light line = forced. */
 export const FIBER_COLORS = {
   open: DATA_COLOR,
-  openFill: 'rgba(46,219,163,.28)',
-  history: '#a0a8be',
-  historyFill: 'rgba(160,168,190,.3)',
-  forced: '#dee2ec',
-  nodeFill: '#141826',
-  nodeStroke: '#a0a8be',
-  label: '#a0a8be',
-  count: '#dee2ec',
-  halo: '#0c0e15',
-  note: '#7c849c',
+  openFill: alpha('jade', 0.28),
+  history: color('text'),
+  historyFill: alpha('text', 0.3),
+  forced: color('text-bright'),
+  nodeFill: color('tile'),
+  nodeStroke: color('text'),
+  label: color('text'),
+  count: color('text-bright'),
+  halo: color('base-bg'),
+  note: color('text-dim'),
   /** The edge of the pressed state filter on the channels list (the "other" slate). */
-  filterOn: '#2c3348',
+  filterOn: color('slate-other'),
 } as const;
 /** Uncles on chain are grey ink; this node's view and an uncle inclusion are jade. */
 export const FORK_COLORS = {
-  uncles: '#a0a8be',
+  uncles: color('text'),
   nodeSwitches: DATA_COLOR,
   uncleLink: DATA_COLOR,
-  dropped: '#dee2ec',
-  spine: '#343c50',
-  edge: '#4b5266',
-  tileFill: '#141826',
-  tileStroke: '#2c3348',
-  tileStrokeLit: '#dee2ec',
-  /** The row-rule ink: every chart's grid is 1 px solid #1a1f30 (visual finish V13 b). */
-  grid: '#1a1f30',
-  axis: '#1a1f30',
-  tick: '#7c849c',
-  ink: '#dee2ec',
-  dim: '#a0a8be',
-  halo: '#0c0e15',
+  dropped: color('text-bright'),
+  spine: color('text-ghost'),
+  edge: color('ink-quiet'),
+  tileFill: color('tile'),
+  tileStroke: color('slate-other'),
+  tileStrokeLit: color('text-bright'),
+  /** The row-rule ink: every chart's grid is 1 px solid border-subtle (visual finish V13 b). */
+  grid: color('base-border-subtle'),
+  axis: color('base-border-subtle'),
+  tick: color('text-dim'),
+  ink: color('text-bright'),
+  dim: color('text'),
+  halo: color('base-bg'),
 } as const;
 
 // ---- group scripts (F2-4 / F2-5) -------------------------------------------------------------
@@ -166,30 +181,30 @@ export const FORK_COLORS = {
  * is filled grey, replaceable code is an outline (lighter edge = fewer signers), never by index.
  */
 export const CODE_CLASS_COLORS = {
-  fixed: { fill: '#8a91a6', edge: '#a0a8be' },
-  unspendable: { fill: '#5c6378', edge: '#7c849c' },
-  multisig: { fill: '#0c0e15', edge: '#a0a8be' },
-  one_key: { fill: '#0c0e15', edge: '#dee2ec' },
-  unsupported: { fill: '#0c0e15', edge: '#4b5266' },
-  mixed: { fill: '#0c0e15', edge: '#6aa9c4' },
-  ambiguous: { fill: '#0c0e15', edge: '#f08aa8' },
-  retired: { fill: '#1a1f30', edge: '#343c50' },
+  fixed: { fill: color('code-fixed-fill'), edge: color('text') },
+  unspendable: { fill: color('code-unspendable-fill'), edge: color('text-dim') },
+  multisig: { fill: color('base-bg'), edge: color('text') },
+  one_key: { fill: color('base-bg'), edge: color('text-bright') },
+  unsupported: { fill: color('base-bg'), edge: color('ink-quiet') },
+  mixed: { fill: color('base-bg'), edge: color('board-link') },
+  ambiguous: { fill: color('base-bg'), edge: color('identity') },
+  retired: { fill: color('base-border-subtle'), edge: color('text-ghost') },
 } as const;
 /** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
-export const FREE_CAPACITY_COLOR = '#1a1f30';
+export const FREE_CAPACITY_COLOR = color('base-border-subtle');
 /** The neutral of plain CKB held: the area under occupied in a script's history. */
 export const HELD_CAPACITY_COLOR = CLASS_COLORS.ckb;
 /** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */
 export const ELF_REGION_COLORS = {
-  header: '#5f9fb2',
-  programHeaders: '#7fb0c0',
-  rodata: '#8fd6a8',
-  ehFrame: '#9ab0a0',
-  text: '#6fc3d9',
-  data: '#d9c38f',
-  meta: '#c9b3d9',
-  sectionHeaders: '#5f9fb2',
-  padding: '#4b5266',
+  header: color('elf-header'),
+  programHeaders: color('elf-program-headers'),
+  rodata: color('elf-rodata'),
+  ehFrame: color('elf-eh-frame'),
+  text: color('cell-data'),
+  data: color('elf-data'),
+  meta: color('elf-meta'),
+  sectionHeaders: color('elf-header'),
+  padding: color('ink-quiet'),
 } as const;
 
 // ---- F2 group `objects` (Object sequencing gel, collection allele gel, Inventory bars) ----
@@ -200,24 +215,24 @@ export const ELF_REGION_COLORS = {
  */
 export const GENE_COLORS = {
   bitcoin: BITCOIN_COLORS.copper,
-  cycle: ['#68ccf0', '#a98cf5', '#7c849c'],
-  shared: '#dee2ec',
+  cycle: [color('aqua'), color('object'), color('text-dim')],
+  shared: color('text-bright'),
 } as const;
 /** The gel plate: faint copper lanes, light wells, the byte ruler and the genotype overlay. */
 export const GEL_COLORS = {
   lane: BITCOIN_COLORS.copper,
-  well: '#dee2ec',
-  ruler: '#343c50',
-  rulerText: '#4b5266',
-  label: '#7c849c',
-  heading: '#a0a8be',
-  overlay: '#ffffff',
-  bandText: '#17170c',
+  well: color('text-bright'),
+  ruler: color('text-ghost'),
+  rulerText: color('ink-quiet'),
+  label: color('text-dim'),
+  heading: color('text'),
+  overlay: color('gel-overlay'),
+  bandText: color('gel-band-text'),
 } as const;
 /** Allele ink by the collection's composition (board `url(#ink)`, copper since FINAL_REVIEW 3). */
 export const GEL_INK = {
-  btc_ckb: ['#ffe7d8', BITCOIN_COLORS.copper, '#9df6dc'],
-  pure_ckb: ['#f3fffb', '#9df6dc', '#3ee0b0'],
+  btc_ckb: [color('gel-ink-btc-0'), color('gel-ink-btc-1'), color('gel-ink-btc-2')],
+  pure_ckb: [color('gel-ink-pure-0'), color('gel-ink-pure-1'), color('gel-ink-pure-2')],
   other: [CLASS_COLORS.objects, CLASS_COLORS.objects, CLASS_COLORS.objects],
 } as const;
 
@@ -242,27 +257,30 @@ export function inkStyle(color: string): CSSProperties {
 /** Inks the boards share. */
 export const BOARD_INKS = {
   /**
-   * The quiet slate between text.ghost (#343c50) and text.dim (#7c849c): separators (↔, vs, —,
-   * →), byte offsets, the version ruler's dates and day labels, the dashed frame of a note.
+   * The quiet slate between text.ghost and text.dim: separators (↔, vs, —, →), byte offsets, the
+   * version ruler's dates and day labels, the dashed frame of a note.
    */
-  quiet: '#4b5266',
+  quiet: color('ink-quiet'),
   /** A link on the cell, fiber and fork boards (hashes, outputs, a script): cyan under aqua. */
-  link: '#6aa9c4',
+  link: color('board-link'),
   /** A cell or script link on the cell boards: the lock blue. */
   cellLink: CELL_COLORS.lock,
 } as const;
 
 // ---- Chrome inks (visual finish V11) ----
 /** The accent row tag's deep jade edge under its jade ink (table-rows T5). */
-export const ROW_TAG_COLORS = { accentEdge: '#1f5a46' } as const;
+export const ROW_TAG_COLORS = { accentEdge: color('row-tag-accent-edge') } as const;
 /** The header search's results: a well deeper than the page, its selected row and a hovered one. */
 export const SEARCH_RESULT_COLORS = {
-  panel: '#06090f',
-  selected: '#091217',
-  hover: '#070e13',
+  panel: color('search-panel'),
+  selected: color('search-selected'),
+  hover: color('search-hover'),
 } as const;
 /** The activity stream's "n new activities" bar and its hover. */
-export const STREAM_COLORS = { pending: '#04070d', pendingHover: '#060a11' } as const;
+export const STREAM_COLORS = {
+  pending: color('stream-pending'),
+  pendingHover: color('stream-pending-hover'),
+} as const;
 
 // ---- Storage tiers (composition card, content preview; visual finish V11) ----
 /**
@@ -272,18 +290,18 @@ export const STREAM_COLORS = { pending: '#04070d', pendingHover: '#060a11' } as 
  */
 export const STORAGE_TIER_COLORS = {
   btc_ckb: {
-    ink: '#a0b880',
-    inkLit: '#c0d8a0',
-    edge: '#4a6838',
-    edgeLit: '#6a8850',
-    wash: 'rgba(74, 58, 18, 0.5)',
+    ink: color('tier-btc-ink'),
+    inkLit: color('tier-btc-ink-lit'),
+    edge: color('tier-btc-edge'),
+    edgeLit: color('tier-btc-edge-lit'),
+    wash: alpha('tier-btc-wash', 0.5),
   },
   pure_ckb: {
-    ink: '#5abfa0',
-    inkLit: '#40e8b0',
-    edge: '#1a6050',
-    edgeLit: '#2a8068',
-    wash: 'rgba(14, 56, 48, 0.5)',
+    ink: color('tier-pure-ink'),
+    inkLit: color('tier-pure-ink-lit'),
+    edge: color('tier-pure-edge'),
+    edgeLit: color('tier-pure-edge-lit'),
+    wash: alpha('tier-pure-wash', 0.5),
   },
-  centralized_mixture: { edge: '#5a2020' },
+  centralized_mixture: { edge: color('tier-centralized-edge') },
 } as const;

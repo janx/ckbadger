@@ -23,7 +23,7 @@ const NAME_LINE_2 = 16;
 /** Under the bars: the first and last day's labels. */
 const AXIS = 22;
 /** Ghost ink for the values written inside the plot (as the DAO page's charts, v3). */
-const GHOST = '#343c50';
+const GHOST = 'var(--c-text-ghost)';
 /** About 6.6 px a character at 11 px in the app's mono face. */
 const CHAR = 6.6;
 const UNCLES_KEY = 'uncles on chain, per day';

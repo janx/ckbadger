@@ -18,6 +18,7 @@ import {
   Transaction,
 } from '@/lib/api';
 import { buildMetricDomain, mapTxToScatterPoint } from './flow-metrics';
+import { color, fade } from '@/lib/palette';
 import { formatBlockNumber } from '@/lib/format-block';
 
 interface ChainWaveProps {
@@ -92,12 +93,13 @@ function stagePillClass(stage: FlowStage): string {
 }
 
 function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): string {
-  if (missing) return 'rgba(176, 168, 152, 0.6)';
+  if (missing) return fade(color('text-dim'), 0.6);
 
+  // the stage hues of the pipeline, deeper by the fee: gold for the pool, jade once proposed
   const alpha = 0.4 + feeScore * 0.4;
-  if (stage === 'mempool') return `rgba(184, 132, 32, ${alpha})`;
-  if (stage === 'proposed') return `rgba(74, 140, 92, ${alpha})`;
-  return `rgba(30, 122, 106, ${alpha})`;
+  if (stage === 'mempool') return fade(color('gold-dim'), alpha);
+  if (stage === 'proposed') return fade(color('jade-dim'), alpha);
+  return fade(color('reward-secondary'), alpha);
 }
 
 function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
@@ -249,8 +251,8 @@ function TxMetricScatter({
                   top: `calc(${point.y * 100}% - ${point.radius}px)`,
                   backgroundColor: bubbleColor(point.feeScore, stage, point.missingFeeRate),
                   border: point.missingCycles
-                    ? '1px dashed rgba(176, 168, 152, 0.9)'
-                    : '1px solid rgba(200, 192, 176, 0.5)',
+                    ? `1px dashed ${fade(color('text'), 0.9)}`
+                    : `1px solid ${fade(color('text-bright'), 0.5)}`,
                   opacity: point.missingCycles ? 0.55 : 0.86,
                 }}
                 title={title}

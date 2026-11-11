@@ -274,7 +274,7 @@ describe('Token board (F2 objects)', () => {
       { name: /Largest holder 94.49%/ },
       { timeout: 5000 }
     );
-    expect(bar.querySelector('[data-segment]')).toHaveStyle({ backgroundColor: '#5aa6f5' });
+    expect(bar.querySelector('[data-segment]')).toHaveStyle({ backgroundColor: 'var(--c-token)' });
     expect(bar).toHaveAccessibleName(/Other 710 1.70%/);
     expect(screen.queryByText('Remaining holders')).not.toBeInTheDocument();
   });

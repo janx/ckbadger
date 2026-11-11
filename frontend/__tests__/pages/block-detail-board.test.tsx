@@ -406,7 +406,7 @@ describe('BlockTxs board', () => {
     expect(cellbase).toHaveTextContent('cellbase');
     expect(cellbase).toHaveTextContent('0→1');
     expect((cellbase.querySelector('[data-segment]') as HTMLElement).style.backgroundColor).toBe(
-      'rgb(58, 66, 88)'
+      'var(--c-slate-ckb)'
     );
   });
 });

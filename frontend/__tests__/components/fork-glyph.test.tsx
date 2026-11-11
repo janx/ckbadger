@@ -12,7 +12,7 @@ describe('ForkGlyph (Forks V67 row shape, FF-L3)', () => {
     expect(svg.querySelectorAll('[data-dropped]')).toHaveLength(1);
     expect(svg.querySelector('[data-dropped]')).toHaveAttribute('stroke-dasharray', '2 2');
     const link = svg.querySelector('[data-uncle-link]')!;
-    expect(link).toHaveAttribute('stroke', '#2edba3');
+    expect(link).toHaveAttribute('stroke', 'var(--c-jade)');
     expect(link).toHaveAttribute('data-uncle-slot', '3');
   });
 

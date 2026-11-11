@@ -33,7 +33,7 @@ describe('RowTag (table-rows R3)', () => {
     // Lane F follow-up: the dashed border sets it apart; the ink is the readable dim (#7c849c,
     // ≥ 4.5:1 on the page), not the faint #4b5266 it was, which the user could not read.
     expect(tag).toHaveClass('border-dashed', 'text-text-dim');
-    expect(tag.className).not.toMatch(/#4b5266/);
+    expect(tag.className).not.toMatch(/var(--c-ink-quiet)/);
   });
 
   // Lane F follow-up 2 (user: the dim "deprecated" did not warn): red is reserved for negative
@@ -52,7 +52,7 @@ describe('RowTag (table-rows R3)', () => {
     expect(tag).toHaveAttribute('data-row-tag', 'accent');
     expect(tag).toHaveClass('text-meta', 'leading-4', 'border', 'text-jade');
     // the deep jade edge has no theme class: a named ink (ROW_TAG_COLORS), a style (V11)
-    expect(tag).toHaveStyle({ borderColor: '#1f5a46' });
+    expect(tag).toHaveStyle({ borderColor: 'var(--c-row-tag-accent-edge)' });
     expect(tag.className).not.toMatch(/\[#/);
     expect(tag).not.toHaveClass('text-text-dim');
     expect(tag).not.toHaveClass('border-base-border');

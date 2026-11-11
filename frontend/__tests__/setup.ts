@@ -52,6 +52,9 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
     else if (query === '(prefers-reduced-motion: reduce)') matches = false;
     // a mouse, not a touch screen (C11: a pinned reading is "selected", not "tapped")
     else if (query === '(pointer: coarse)') matches = false;
+    // the OS scheme is dark (lib/theme.ts asks for light); a test of `system` stubs its own
+    else if (query === '(prefers-color-scheme: light)') matches = false;
+    else if (query === '(prefers-color-scheme: dark)') matches = true;
     else throw new Error(`setup.ts matchMedia: unsupported query ${query}`);
     return {
       matches,

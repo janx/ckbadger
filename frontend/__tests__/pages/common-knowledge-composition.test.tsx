@@ -42,8 +42,8 @@ describe('CommonKnowledgeCompositionPage', () => {
       unit: 'CKB',
       data: [{ label: '2026-02-23', values: { transfer: '100.00000001', dao: '50.00000002' } }],
       series: [
-        { label: 'Plain CKB', color: '#3a4258' },
-        { label: 'Nervos DAO', color: '#f2c55c' },
+        { label: 'Plain CKB', color: 'var(--c-slate-ckb)' },
+        { label: 'Nervos DAO', color: 'var(--c-gold)' },
       ],
     });
   });

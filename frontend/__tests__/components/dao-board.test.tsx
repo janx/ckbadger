@@ -1390,7 +1390,9 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     // SVG text: none drawn in gold (the plots' fills, strokes and bars may be gold).
     for (const t of Array.from(tier1.querySelectorAll('svg text, svg tspan'))) {
       expect(t.getAttribute('class') ?? '').not.toMatch(/fill-gold/);
-      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(/#f2c55c|#d0a840/);
+      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(
+        /var(--c-gold)|var(--c-gold-dim)/
+      );
     }
   });
 

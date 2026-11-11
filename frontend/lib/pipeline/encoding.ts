@@ -80,7 +80,8 @@ export type PipelineToken =
   | 'proposed'
   | 'committed'
   | 'ember'
-  | 'drop';
+  | 'drop'
+  | 'well';
 
 export const tok = (name: PipelineToken) => `var(--pipeline-${name})`;
 
@@ -98,7 +99,7 @@ export function mixColor(a: string, b: string, t: number): string {
  * mined block a tile (the elevated surface with a trace of jade, no outline at rest), and NEXT the
  * only dashed outline (`GHOST`, predicted).
  */
-export const WELL_FILL = mixColor(tok('surface'), 'black', 0.22);
+export const WELL_FILL = tok('well');
 export const TILE_FILL = mixColor(tok('elevated'), tok('jade'), 0.07);
 
 /** How many blocks behind the tip the age fade bottoms out. */

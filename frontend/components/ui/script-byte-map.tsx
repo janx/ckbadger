@@ -8,9 +8,9 @@ import { cn } from '@/lib/utils';
 
 /** The Address board's inks for the three parts of a script. */
 export const SCRIPT_INKS = {
-  codeHash: '#7aa7d6',
-  hashType: '#dee2ec',
-  args: '#2edba3',
+  codeHash: 'var(--c-cell-lock)',
+  hashType: 'var(--c-text-bright)',
+  args: 'var(--c-jade)',
 } as const;
 
 /**

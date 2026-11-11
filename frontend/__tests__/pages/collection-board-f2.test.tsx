@@ -188,7 +188,7 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
   );
   expect(container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')).toHaveAttribute(
     'stroke',
-    '#ffffff'
+    'var(--c-gel-overlay)'
   );
   fireEvent.click(chip);
   // back to the unfiltered list (served from the query cache)

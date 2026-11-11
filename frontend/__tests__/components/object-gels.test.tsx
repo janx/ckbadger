@@ -181,7 +181,7 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
     );
     expect(
       container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')
-    ).toHaveAttribute('stroke', '#ffffff');
+    ).toHaveAttribute('stroke', 'var(--c-gel-overlay)');
   });
 });
 

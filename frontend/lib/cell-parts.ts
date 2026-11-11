@@ -28,9 +28,9 @@ export interface CellPart {
   indexed: boolean;
 }
 
-const FRAMING = '#4b5266';
+const FRAMING = 'var(--c-ink-quiet)';
 /** SporeData-style framing inside the data: occupied, but structure rather than content. */
-const DATA_FRAMING = '#5f9fb2';
+const DATA_FRAMING = 'var(--c-data-framing)';
 
 function u32le(bytes: readonly string[], at: number): number {
   return Number.parseInt(

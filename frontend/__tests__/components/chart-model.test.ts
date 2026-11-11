@@ -466,8 +466,8 @@ describe('28 chart variants', () => {
     const model = chartModel(CHART_BY_SLUG.get('secondary-issuance')!, {
       title: 'Secondary issuance',
       series: [
-        { key: 'compensation', label: 'Compensation', color: '#2edba3' },
-        { key: 'burnt', label: 'Treasury', color: '#68ccf0' },
+        { key: 'compensation', label: 'Compensation', color: 'var(--c-jade)' },
+        { key: 'burnt', label: 'Treasury', color: 'var(--c-aqua)' },
       ],
       data: [
         {

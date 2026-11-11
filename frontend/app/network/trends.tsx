@@ -350,7 +350,7 @@ function usePeerHistories() {
 /** The board: reachable a jade area, verified a white line over it (CH-58). */
 const PEER_SERIES: ChartSeries[] = [
   { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
-  { key: 'verified', label: 'Verified (retained)', color: '#dee2ec', lineOnly: true },
+  { key: 'verified', label: 'Verified (retained)', color: 'var(--c-text-bright)', lineOnly: true },
 ];
 const PEER_UNIT = 'peers';
 const formatPeers = (value: string) => formatExactDecimal(value, 'peer count');

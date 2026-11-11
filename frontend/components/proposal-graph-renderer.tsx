@@ -5,6 +5,8 @@ import type { GraphNode, GraphLink, ProposalGraphMetadata } from '@/lib/api';
 import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import { useRouter } from '@/src/navigation';
 import dynamic from '@/lib/dynamic-client';
+import { useThemePalette } from '@/hooks/useThemePalette';
+import { hexAlpha, type Palette } from '@/lib/palette';
 
 type ForceNode = NodeObject;
 type ForceLink = LinkObject;
@@ -27,20 +29,27 @@ export interface ProposalGraphProps {
   height?: number;
 }
 
-const NODE_COLORS = {
-  source_block: '#8b5cf6',
-  proposal: '#6b7280',
-  commit_block: {
-    fast: '#22c55e',
-    medium: '#eab308',
-    slow: '#ef4444',
-  } as Record<string, string>,
-};
-
-const LINK_COLORS: Record<string, string> = {
-  proposes: '#8b5cf6',
-  commits: '#3b82f6',
-};
+/**
+ * The graph's inks in the current theme, as the canvas needs them (concrete hex from the
+ * palette, useThemePalette): the source block violet, a proposal the dim ink, a commit block
+ * jade / gold / rouge by how fast it came; the proposing edges violet, the committing edges aqua.
+ */
+function graphInks(palette: Palette) {
+  return {
+    source_block: palette.object,
+    proposal: palette['text-dim'],
+    commit_block: {
+      fast: palette.jade,
+      medium: palette.gold,
+      slow: palette.rouge,
+    } as Record<string, string>,
+    links: { proposes: palette.object, commits: palette.aqua } as Record<string, string>,
+    fallback: palette['text-dim'],
+    nodeEdge: hexAlpha(palette['text-bright'], 0.3),
+    label: palette.text,
+    background: palette['base-surface'],
+  };
+}
 
 export function ProposalGraphRenderer({
   nodes,
@@ -64,25 +73,34 @@ export function ProposalGraphRenderer({
     [nodes, links]
   );
 
-  const getNodeColor = useCallback((node: ForceNode) => {
-    if (node.nodeType === 'source_block') {
-      return NODE_COLORS.source_block;
-    }
-    if (node.nodeType === 'proposal') {
-      return NODE_COLORS.proposal;
-    }
-    if (node.nodeType === 'commit_block') {
-      const data = node.data as Record<string, unknown> | undefined;
-      const speed = (data?.speedCategory as string) || 'slow';
-      return NODE_COLORS.commit_block[speed];
-    }
-    return '#6b7280';
-  }, []);
+  const { palette } = useThemePalette();
+  const inks = useMemo(() => graphInks(palette), [palette]);
 
-  const getLinkColor = useCallback((link: ForceLink) => {
-    const linkType = link.linkType as string;
-    return LINK_COLORS[linkType] || '#6b7280';
-  }, []);
+  const getNodeColor = useCallback(
+    (node: ForceNode) => {
+      if (node.nodeType === 'source_block') {
+        return inks.source_block;
+      }
+      if (node.nodeType === 'proposal') {
+        return inks.proposal;
+      }
+      if (node.nodeType === 'commit_block') {
+        const data = node.data as Record<string, unknown> | undefined;
+        const speed = (data?.speedCategory as string) || 'slow';
+        return inks.commit_block[speed];
+      }
+      return inks.fallback;
+    },
+    [inks]
+  );
+
+  const getLinkColor = useCallback(
+    (link: ForceLink) => {
+      const linkType = link.linkType as string;
+      return inks.links[linkType] || inks.fallback;
+    },
+    [inks]
+  );
 
   const drawNode = useCallback(
     (node: ForceNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -110,7 +128,7 @@ export function ProposalGraphRenderer({
       ctx.fillStyle = getNodeColor(node);
       ctx.fill();
 
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.strokeStyle = inks.nodeEdge;
       ctx.lineWidth = 1 / globalScale;
       ctx.stroke();
 
@@ -118,12 +136,12 @@ export function ProposalGraphRenderer({
         ctx.font = `${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillStyle = '#d1d5db';
+        ctx.fillStyle = inks.label;
         const labelY = node.nodeType === 'source_block' ? y + 14 : y + 8;
         ctx.fillText(label, x, labelY);
       }
     },
-    [getNodeColor]
+    [getNodeColor, inks]
   );
 
   const handleNodeClick = useCallback(
@@ -169,10 +187,7 @@ export function ProposalGraphRenderer({
     <div className="space-y-4">
       <div className="text-text-dim text-body flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
-          <div
-            className="h-3 w-3 rotate-45"
-            style={{ backgroundColor: NODE_COLORS.source_block }}
-          />
+          <div className="h-3 w-3 rotate-45" style={{ backgroundColor: inks.source_block }} />
           <span>Source Block</span>
         </div>
         <div className="flex items-center gap-2">
@@ -180,18 +195,15 @@ export function ProposalGraphRenderer({
           <span>Proposal</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="h-2.5 w-2.5" style={{ backgroundColor: NODE_COLORS.commit_block.fast }} />
+          <div className="h-2.5 w-2.5" style={{ backgroundColor: inks.commit_block.fast }} />
           <span>Fast (+2-4)</span>
         </div>
         <div className="flex items-center gap-2">
-          <div
-            className="h-2.5 w-2.5"
-            style={{ backgroundColor: NODE_COLORS.commit_block.medium }}
-          />
+          <div className="h-2.5 w-2.5" style={{ backgroundColor: inks.commit_block.medium }} />
           <span>Medium (+5-7)</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="h-2.5 w-2.5" style={{ backgroundColor: NODE_COLORS.commit_block.slow }} />
+          <div className="h-2.5 w-2.5" style={{ backgroundColor: inks.commit_block.slow }} />
           <span>Slow (+8-10)</span>
         </div>
       </div>
@@ -222,7 +234,7 @@ export function ProposalGraphRenderer({
           graphData={graphData}
           width={width}
           height={height}
-          backgroundColor="#0f0f1a"
+          backgroundColor={inks.background}
           nodeCanvasObject={drawNode}
           nodePointerAreaPaint={nodePointerAreaPaint}
           linkColor={getLinkColor}

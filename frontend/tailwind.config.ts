@@ -1,9 +1,20 @@
 import type { Config } from 'tailwindcss';
+import plugin from 'tailwindcss/plugin';
 import { TYPE_SCALE } from './lib/type-scale';
+import { glowAlpha, themeBaseStyles, twColor } from './lib/palette';
+
+/**
+ * A glow shadow: two halos in one hue, their alphas scaled by the theme's glow factor
+ * (`--m-glow`: 1 at night, 0 by day — see lib/palette.ts).
+ */
+const glow = (key: Parameters<typeof glowAlpha>[0], near: number, far: number) =>
+  `0 0 10px ${glowAlpha(key, near)}, 0 0 20px ${glowAlpha(key, far)}`;
 
 export default {
   content: ['./app/**/*.{js,ts,jsx,tsx,mdx}', './components/**/*.{js,ts,jsx,tsx,mdx}'],
-  darkMode: 'class',
+  // The theme is the `data-theme` attribute on <html> (lib/theme.ts); `dark:` variants, should a
+  // page ever need one, follow it rather than the OS.
+  darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
     // The one type scale (hierarchy plan R1, S8): `text-meta` … `text-display`, defined in lib. Set
     // as the whole theme, not under `extend`, so Tailwind's default sizes (text-xs …) do not exist.
@@ -24,101 +35,103 @@ export default {
       },
     },
     extend: {
+      // Every colour resolves through the theme's CSS variables (lib/palette.ts declares both
+      // themes; `twColor` keeps the class's opacity modifier working). The names are the
+      // Chinese traditional palette — ink and silk in midnight, the same ink on paper by day.
       colors: {
-        // Chinese traditional palette — ink and silk in midnight
         base: {
-          void: '#08090e',
-          bg: '#0c0e15',
-          surface: '#10131c',
-          elevated: '#161a25',
-          border: '#222840',
-          'border-subtle': '#1a1f30',
+          void: twColor('base-void'),
+          bg: twColor('base-bg'),
+          surface: twColor('base-surface'),
+          elevated: twColor('base-elevated'),
+          border: twColor('base-border'),
+          'border-subtle': twColor('base-border-subtle'),
         },
         text: {
-          bright: '#dee2ec',
-          DEFAULT: '#a0a8be',
-          // ≥ 4.5:1 on base.surface (#10131c) and base.bg; the pipeline keeps --pipeline-ink-dim.
-          dim: '#7c849c',
-          ghost: '#343c50',
+          bright: twColor('text-bright'),
+          DEFAULT: twColor('text'),
+          // ≥ 4.5:1 on base.surface and base.bg in both themes (__tests__/lib/palette.test.ts).
+          dim: twColor('text-dim'),
+          ghost: twColor('text-ghost'),
         },
         interactive: {
-          DEFAULT: '#68ccf0',
-          hover: '#2edba3',
-          muted: '#68ccf020',
-          dim: '#4aa8d0',
+          DEFAULT: twColor('aqua'),
+          hover: twColor('jade'),
+          muted: 'rgb(var(--rgb-aqua) / 0.125)',
+          dim: twColor('aqua-dim'),
         },
         emphasis: {
-          DEFAULT: '#2edba3',
-          dim: '#1fb88a',
-          glow: '#2edba340',
-          bright: '#3ef0b8',
+          DEFAULT: twColor('jade'),
+          dim: twColor('jade-dim'),
+          glow: 'rgb(var(--rgb-jade) / 0.25)',
+          bright: twColor('jade-bright'),
         },
         positive: {
-          DEFAULT: '#2edba3',
-          dim: '#1fb88a',
-          bright: '#3ef0b8',
+          DEFAULT: twColor('jade'),
+          dim: twColor('jade-dim'),
+          bright: twColor('jade-bright'),
         },
         negative: {
-          DEFAULT: '#e8555a',
-          dim: '#c04048',
-          bright: '#f06668',
+          DEFAULT: twColor('rouge'),
+          dim: twColor('rouge-dim'),
+          bright: twColor('rouge-bright'),
         },
         warning: {
-          DEFAULT: '#f2c55c',
-          dim: '#d0a840',
-          bright: '#f8d878',
+          DEFAULT: twColor('gold'),
+          dim: twColor('gold-dim'),
+          bright: twColor('gold-bright'),
         },
         info: {
-          DEFAULT: '#68ccf0',
-          dim: '#4aa8d0',
-          bright: '#88ddf8',
+          DEFAULT: twColor('aqua'),
+          dim: twColor('aqua-dim'),
+          bright: twColor('aqua-bright'),
         },
         // Chinese traditional named colors
         jade: {
-          DEFAULT: '#2edba3',
-          dim: '#1fb88a',
+          DEFAULT: twColor('jade'),
+          dim: twColor('jade-dim'),
         },
         rouge: {
-          DEFAULT: '#e8555a',
-          dim: '#c04048',
+          DEFAULT: twColor('rouge'),
+          dim: twColor('rouge-dim'),
         },
         aqua: {
-          DEFAULT: '#68ccf0',
-          dim: '#4aa8d0',
+          DEFAULT: twColor('aqua'),
+          dim: twColor('aqua-dim'),
         },
         gold: {
-          DEFAULT: '#f2c55c',
-          dim: '#d0a840',
+          DEFAULT: twColor('gold'),
+          dim: twColor('gold-dim'),
         },
         lavender: {
-          DEFAULT: '#b8a9e8',
-          dim: '#9888c8',
+          DEFAULT: twColor('lavender'),
+          dim: twColor('lavender-dim'),
         },
         amber: {
-          DEFAULT: '#d4883a',
-          dim: '#b07028',
+          DEFAULT: twColor('amber'),
+          dim: twColor('amber-dim'),
         },
         // Activity type semantic colors
         token: {
-          DEFAULT: '#5aa6f5',
-          bright: '#8cc3ff',
+          DEFAULT: twColor('token'),
+          bright: twColor('token-bright'),
         },
-        object: '#a98cf5',
-        identity: '#f08aa8',
-        copper: '#dc8a5a',
+        object: twColor('object'),
+        identity: twColor('identity'),
+        copper: twColor('copper'),
         // Legacy chart aliases
-        'accent-1': '#2edba3',
-        'accent-2': '#e8555a',
-        'accent-3': '#68ccf0',
-        'accent-4': '#f2c55c',
-        'accent-5': '#b8a9e8',
-        'accent-6': '#d4883a',
-        'accent-7': '#1fb88a',
-        'accent-8': '#c04048',
-        'accent-9': '#4aa8d0',
-        'accent-10': '#d0a840',
-        'accent-11': '#9888c8',
-        'accent-12': '#b07028',
+        'accent-1': twColor('jade'),
+        'accent-2': twColor('rouge'),
+        'accent-3': twColor('aqua'),
+        'accent-4': twColor('gold'),
+        'accent-5': twColor('lavender'),
+        'accent-6': twColor('amber'),
+        'accent-7': twColor('jade-dim'),
+        'accent-8': twColor('rouge-dim'),
+        'accent-9': twColor('aqua-dim'),
+        'accent-10': twColor('gold-dim'),
+        'accent-11': twColor('lavender-dim'),
+        'accent-12': twColor('amber-dim'),
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
@@ -128,15 +141,15 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 8px #2edba320, 0 0 20px #2edba312',
-        'glow-strong': '0 0 8px #2edba330, 0 0 20px #2edba320',
-        'glow-inset': 'inset 0 1px 10px #2edba310',
-        'glow-jade': '0 0 10px #2edba328, 0 0 20px #2edba314',
-        'glow-rouge': '0 0 10px #e8555a28, 0 0 20px #e8555a14',
-        'glow-aqua': '0 0 10px #68ccf028, 0 0 20px #68ccf014',
-        'glow-gold': '0 0 10px #f2c55c28, 0 0 20px #f2c55c14',
-        'glow-lavender': '0 0 10px #b8a9e828, 0 0 20px #b8a9e814',
-        'glow-amber': '0 0 10px #d4883a28, 0 0 20px #d4883a14',
+        glow: `0 0 8px ${glowAlpha('jade', 0.125)}, 0 0 20px ${glowAlpha('jade', 0.07)}`,
+        'glow-strong': `0 0 8px ${glowAlpha('jade', 0.19)}, 0 0 20px ${glowAlpha('jade', 0.125)}`,
+        'glow-inset': `inset 0 1px 10px ${glowAlpha('jade', 0.063)}`,
+        'glow-jade': glow('jade', 0.157, 0.078),
+        'glow-rouge': glow('rouge', 0.157, 0.078),
+        'glow-aqua': glow('aqua', 0.157, 0.078),
+        'glow-gold': glow('gold', 0.157, 0.078),
+        'glow-lavender': glow('lavender', 0.157, 0.078),
+        'glow-amber': glow('amber', 0.157, 0.078),
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',
@@ -196,5 +209,11 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Both themes' variables, as base styles: the dark theme on :root, the light one under
+    // :root[data-theme='light'] (lib/palette.ts is the one place the values live).
+    plugin(({ addBase }) => {
+      addBase(themeBaseStyles());
+    }),
+  ],
 } satisfies Config;

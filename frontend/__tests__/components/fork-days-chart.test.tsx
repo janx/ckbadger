@@ -41,8 +41,8 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     expect(grey).toHaveLength(3);
     expect(jade).toHaveLength(2);
     expect(Number(grey[0].getAttribute('width'))).toBeGreaterThan(300);
-    expect(grey[0]).toHaveAttribute('fill', '#a0a8be');
-    expect(jade[0]).toHaveAttribute('fill', '#2edba3');
+    expect(grey[0]).toHaveAttribute('fill', 'var(--c-text)');
+    expect(jade[0]).toHaveAttribute('fill', 'var(--c-jade)');
     // jade sits inside its day's grey bar, from the baseline up
     expect(jade[0].getAttribute('x')).toBe(grey[1].getAttribute('x'));
     expect(Number(jade[0].getAttribute('y')) + Number(jade[0].getAttribute('height'))).toBeCloseTo(
@@ -55,7 +55,7 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     const grid = [...container.querySelectorAll('svg line[data-role="grid"]')];
     expect(grid).toHaveLength(3);
     for (const line of grid) {
-      expect(line).toHaveAttribute('stroke', '#1a1f30');
+      expect(line).toHaveAttribute('stroke', 'var(--c-base-border-subtle)');
       expect(line).not.toHaveAttribute('stroke-dasharray');
     }
     expect(container.querySelectorAll('svg line[stroke-dasharray]')).toHaveLength(0);
@@ -81,7 +81,7 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     expect(ticks.map((t) => t.textContent)).toEqual(['100', '200']);
     for (const t of ticks) expect(Number(t.getAttribute('y')) - 11).toBeGreaterThanOrEqual(28);
     for (const t of ticks) {
-      expect(t).toHaveAttribute('fill', '#343c50');
+      expect(t).toHaveAttribute('fill', 'var(--c-text-ghost)');
       expect(Number(t.getAttribute('x'))).toBe(0);
     }
     // the bars start right of the ticks, and the data clears the name's band

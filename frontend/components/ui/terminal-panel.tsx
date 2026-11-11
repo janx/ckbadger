@@ -12,12 +12,12 @@ type AccentColor = 'jade' | 'aqua' | 'gold' | 'rouge' | 'lavender' | 'amber';
  * outside the graphics" checks count. Jade is the approved .45; the others keep their .4.
  */
 const accentClass: Record<AccentColor, string> = {
-  jade: '[--neon-color:rgba(46,219,163,0.45)]',
-  aqua: '[--neon-color:rgba(104,204,240,0.4)]',
-  gold: '[--neon-color:rgba(242,197,92,0.4)]',
-  rouge: '[--neon-color:rgba(232,85,90,0.4)]',
-  lavender: '[--neon-color:rgba(184,169,232,0.4)]',
-  amber: '[--neon-color:rgba(212,136,58,0.4)]',
+  jade: '[--neon-color:rgb(var(--rgb-jade)/0.45)]',
+  aqua: '[--neon-color:rgb(var(--rgb-aqua)/0.4)]',
+  gold: '[--neon-color:rgb(var(--rgb-gold)/0.4)]',
+  rouge: '[--neon-color:rgb(var(--rgb-rouge)/0.4)]',
+  lavender: '[--neon-color:rgb(var(--rgb-lavender)/0.4)]',
+  amber: '[--neon-color:rgb(var(--rgb-amber)/0.4)]',
 };
 
 interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
@@ -70,7 +70,7 @@ export function TerminalPanel({
           className="absolute inset-0"
           style={{
             background:
-              'repeating-linear-gradient(0deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 2px)',
+              'repeating-linear-gradient(0deg, color-mix(in srgb, var(--m-inset-scan) 50%, transparent) 0px, color-mix(in srgb, var(--m-inset-scan) 50%, transparent) 1px, transparent 1px, transparent 2px)',
           }}
         />
       </div>

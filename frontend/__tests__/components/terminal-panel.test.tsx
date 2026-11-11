@@ -44,20 +44,20 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
       unmount();
     }
     // the jade edge's colour, at the approved .45, as a class: the frame carries no inline ink
-    expect(frame).toHaveClass('[--neon-color:rgba(46,219,163,0.45)]');
+    expect(frame).toHaveClass('[--neon-color:rgb(var(--rgb-jade)/0.45)]');
     expect(frame).not.toHaveAttribute('style');
-    // the inset scanlines, 1 px on, 1 px off, under the content
+    // the inset scanlines, 1 px on, 1 px off, under the content, in the theme's inset ink
     const scan = container.querySelector('.pointer-events-none > div') as HTMLElement;
     expect(scan.style.background).toContain('repeating-linear-gradient');
-    expect(scan.style.background).toContain('rgba(0,0,0,0.03)');
+    expect(scan.style.background).toContain('var(--m-inset-scan)');
     expect(screen.getByText('inside').parentElement).toHaveClass('relative', 'z-10');
   });
 
   it('colours the edge by accent, still without an inline style', () => {
     render(<TerminalPanel accentColor="gold" data-testid="frame" children="x" />);
     const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('[--neon-color:rgba(242,197,92,0.4)]');
-    expect(frame).not.toHaveClass('[--neon-color:rgba(46,219,163,0.45)]');
+    expect(frame).toHaveClass('[--neon-color:rgb(var(--rgb-gold)/0.4)]');
+    expect(frame).not.toHaveClass('[--neon-color:rgb(var(--rgb-jade)/0.45)]');
     expect(frame).not.toHaveAttribute('style');
   });
 

@@ -53,7 +53,7 @@ describe('mini charts', () => {
     const svg = screen.getByRole('img', { name: 'Uncle rate' });
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['2.3', '2.5', '2.7', '2.9']);
     const emphasised = [...svg.querySelectorAll('[data-axis="y"] text')].find(
-      (t) => t.getAttribute('fill') === '#a0a8be'
+      (t) => t.getAttribute('fill') === 'var(--c-text)'
     );
     expect(emphasised).toHaveTextContent('2.5');
     expect(svg.querySelector('[data-role="reference"]')).toHaveAttribute('stroke-dasharray', '4 3');
@@ -68,7 +68,10 @@ describe('mini charts', () => {
     render(<BarChart bars={bars} ariaLabel="Transactions" formatValue={String} />);
     const svg = screen.getByRole('img', { name: 'Transactions' });
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['0', '500', '1k']);
-    expect(svg.querySelector('[data-role="base"]')).toHaveAttribute('stroke', '#343c50');
+    expect(svg.querySelector('[data-role="base"]')).toHaveAttribute(
+      'stroke',
+      'var(--c-text-ghost)'
+    );
 
     const solid = svg.querySelectorAll('rect[data-bar="complete"], rect[data-bar="highlight"]');
     for (const r of solid) {
@@ -109,21 +112,30 @@ describe('mini charts', () => {
     const clipped = svg.querySelectorAll('[data-clipped="true"]');
     expect(clipped).toHaveLength(1);
     expect(clipped[0]).toHaveAttribute('data-bar', 'down');
-    expect(clipped[0].querySelector('[data-role="break"]')).toHaveAttribute('stroke', '#0c0e15');
+    expect(clipped[0].querySelector('[data-role="break"]')).toHaveAttribute(
+      'stroke',
+      'var(--c-base-bg)'
+    );
     expect(clipped[0].querySelector('[data-role="clip-label"]')).toHaveTextContent(`${MINUS}8.94M`);
     // The clipped bar ends exactly at the axis floor.
     const rect = clipped[0].querySelector('rect') as SVGRectElement;
     expect(Number(rect.getAttribute('y')) + Number(rect.getAttribute('height'))).toBeCloseTo(84, 5);
 
-    expect(svg.querySelectorAll('[data-bar="up"] rect')[0]).toHaveAttribute('fill', '#2edba3');
-    expect(svg.querySelectorAll('[data-bar="down"] rect')[0]).toHaveAttribute('fill', '#e8555a');
+    expect(svg.querySelectorAll('[data-bar="up"] rect')[0]).toHaveAttribute(
+      'fill',
+      'var(--c-jade)'
+    );
+    expect(svg.querySelectorAll('[data-bar="down"] rect')[0]).toHaveAttribute(
+      'fill',
+      'var(--c-rouge)'
+    );
   });
 
   // Visual finish V13(b), every chart: a dash means a reference, never the grid. The ±cap lines of
   // the signed axis are its grid (the scale's ends, labelled), solid like the line and bar charts'
   // grids, all in the row-rule ink #1a1f30; the zero line is the solid base, the line chart's
   // reference (a target) keeps its dash.
-  it('draws every mini chart grid solid in #1a1f30; only the reference is dashed', () => {
+  it('draws every mini chart grid solid in var(--c-base-border-subtle); only the reference is dashed', () => {
     const changes = [0.3e6, -0.25e6, 0.4e6].map((value, i) => ({
       label: `10/${18 + i}`,
       value,
@@ -143,7 +155,7 @@ describe('mini charts', () => {
     const grids = [...container.querySelectorAll('[data-role="grid"]')];
     expect(grids).toHaveLength(3);
     for (const grid of grids) {
-      expect(grid).toHaveAttribute('stroke', '#1a1f30');
+      expect(grid).toHaveAttribute('stroke', 'var(--c-base-border-subtle)');
       expect(grid).not.toHaveAttribute('stroke-dasharray');
     }
     const signed = screen.getByRole('img', { name: 'Signed' });
@@ -251,7 +263,7 @@ describe('mini chart hover', () => {
     expect(svg.querySelector('[data-bar="complete"]')).toHaveAttribute('fill-opacity', '1');
     const guide = svg.querySelector('[data-role="guide"]') as SVGLineElement;
     expect(Number(guide.getAttribute('x1'))).toBeCloseTo(73.7, 0);
-    expect(guide).toHaveAttribute('stroke', '#7c849c');
+    expect(guide).toHaveAttribute('stroke', 'var(--c-text-dim)');
 
     fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 153
     expect(headline()).toHaveTextContent('731');

@@ -207,14 +207,20 @@ export function VmLaneTimeline({
             const at = yearX(year);
             return (
               <g key={year}>
-                <line x1={at} x2={at} y1={top - 8} y2={bottom} stroke="#141826" />
-                <text data-year x={at + 3} y={bottom + 16} fontSize="11" fill="#7c849c">
+                <line x1={at} x2={at} y1={top - 8} y2={bottom} stroke="var(--c-tile)" />
+                <text data-year x={at + 3} y={bottom + 16} fontSize="11" fill="var(--c-text-dim)">
                   {year}
                 </text>
               </g>
             );
           })}
-          <text data-role="chart-name" x="0" y={PLOT_NAME_Y} fontSize={NAME_PX} fill="#7c849c">
+          <text
+            data-role="chart-name"
+            x="0"
+            y={PLOT_NAME_Y}
+            fontSize={NAME_PX}
+            fill="var(--c-text-dim)"
+          >
             {nameOneLine ? (
               `${PLOT_TITLE} · ${PLOT_HINT}`
             ) : (
@@ -226,10 +232,10 @@ export function VmLaneTimeline({
               </>
             )}
           </text>
-          <text x={left} y={band + NAME_Y} fontSize="12.5" fill="#dee2ec">
+          <text x={left} y={band + NAME_Y} fontSize="12.5" fill="var(--c-text-bright)">
             genesis
           </text>
-          <text x={left} y={band + SUB_Y} fontSize="10.5" fill="#7c849c">
+          <text x={left} y={band + SUB_Y} fontSize="10.5" fill="var(--c-text-dim)">
             {genesisDate}
           </text>
           {editionLabels.map(({ edition, at, sub, turn, row }) => {
@@ -241,7 +247,7 @@ export function VmLaneTimeline({
                   x2={at}
                   y1={band + 10}
                   y2={bottom}
-                  stroke="#dee2ec"
+                  stroke="var(--c-text-bright)"
                   strokeWidth="1.2"
                 />
                 <text
@@ -249,7 +255,7 @@ export function VmLaneTimeline({
                   y={band + NAME_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
                   fontSize="12.5"
-                  fill="#dee2ec"
+                  fill="var(--c-text-bright)"
                 >
                   {edition.shortName}
                 </text>
@@ -258,7 +264,7 @@ export function VmLaneTimeline({
                   y={band + SUB_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
                   fontSize="10.5"
-                  fill="#7c849c"
+                  fill="var(--c-text-dim)"
                 >
                   {sub}
                 </text>
@@ -267,7 +273,7 @@ export function VmLaneTimeline({
           })}
           {/* On a phone each lane's header carries its own count. */}
           {!narrow && (
-            <text x={width} y={top - 12} textAnchor="end" fontSize="10.5" fill="#7c849c">
+            <text x={width} y={top - 12} textAnchor="end" fontSize="10.5" fill="var(--c-text-dim)">
               live references
             </text>
           )}
@@ -290,8 +296,8 @@ export function VmLaneTimeline({
                       x="0"
                       y={y + 11}
                       fontSize="11"
-                      fill="#dee2ec"
-                      stroke="#0c0e15"
+                      fill="var(--c-text-bright)"
+                      stroke="var(--c-base-bg)"
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
@@ -302,8 +308,8 @@ export function VmLaneTimeline({
                       y={y + 11}
                       textAnchor="end"
                       fontSize="10.5"
-                      fill="#a0a8be"
-                      stroke="#0c0e15"
+                      fill="var(--c-text)"
+                      stroke="var(--c-base-bg)"
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
@@ -312,16 +318,28 @@ export function VmLaneTimeline({
                   </>
                 ) : (
                   <>
-                    <text x="0" y={y + 17} fontSize="12" fill="#dee2ec">
+                    <text x="0" y={y + 17} fontSize="12" fill="var(--c-text-bright)">
                       {`hash_type ${hashType}`}
                     </text>
-                    <text x="0" y={y + 31} fontSize="10.5" fill="#7c849c">
+                    <text x="0" y={y + 31} fontSize="10.5" fill="var(--c-text-dim)">
                       {LANE_TEXT[hashType]}
                     </text>
-                    <text x={width} y={y + 17} textAnchor="end" fontSize="12" fill="#dee2ec">
+                    <text
+                      x={width}
+                      y={y + 17}
+                      textAnchor="end"
+                      fontSize="12"
+                      fill="var(--c-text-bright)"
+                    >
                       {live}
                     </text>
-                    <text x={width} y={y + 31} textAnchor="end" fontSize="10.5" fill="#7c849c">
+                    <text
+                      x={width}
+                      y={y + 31}
+                      textAnchor="end"
+                      fontSize="10.5"
+                      fill="var(--c-text-dim)"
+                    >
                       {versions}
                     </text>
                   </>
@@ -333,7 +351,7 @@ export function VmLaneTimeline({
                       x2={x(pinnedFrom)}
                       y1={y + bar.y + bar.h / 2}
                       y2={y + bar.y + bar.h / 2}
-                      stroke="#343c50"
+                      stroke="var(--c-text-ghost)"
                       strokeDasharray="2 4"
                     />
                     {!narrow && (
@@ -342,7 +360,7 @@ export function VmLaneTimeline({
                         y={y + 30}
                         textAnchor="middle"
                         fontSize="10"
-                        fill="#4b5266"
+                        fill="var(--c-ink-quiet)"
                       >
                         not valid before {pinnedBy}
                       </text>
@@ -360,7 +378,12 @@ export function VmLaneTimeline({
                       fill={DATA_COLOR}
                       fillOpacity={VM_OPACITY[vm]}
                     />
-                    <text x={x(from) + 6} y={y + bar.y + bar.h - 4} fontSize="10.5" fill="#dee2ec">
+                    <text
+                      x={x(from) + 6}
+                      y={y + bar.y + bar.h - 4}
+                      fontSize="10.5"
+                      fill="var(--c-text-bright)"
+                    >
                       {vm}
                     </text>
                   </g>
@@ -371,7 +394,7 @@ export function VmLaneTimeline({
                     y={y + bar.y + bar.h - 4}
                     textAnchor={narrow ? 'end' : 'start'}
                     fontSize="10.5"
-                    fill="#dee2ec"
+                    fill="var(--c-text-bright)"
                   >
                     no known script yet
                   </text>
@@ -393,8 +416,8 @@ export function VmLaneTimeline({
                         cx={x(deployment.timestampMs)}
                         cy={y + bar.dots[rows[k]]}
                         r="3"
-                        fill={active ? DATA_COLOR : '#0c0e15'}
-                        stroke={active ? DATA_COLOR : '#dee2ec'}
+                        fill={active ? DATA_COLOR : 'var(--c-base-bg)'}
+                        stroke={active ? DATA_COLOR : 'var(--c-text-bright)'}
                         strokeWidth="1"
                       />
                     </g>
@@ -403,7 +426,13 @@ export function VmLaneTimeline({
               </g>
             );
           })}
-          <text x={width} y={bottom + 32} textAnchor="end" fontSize="11" fill="#dee2ec">
+          <text
+            x={width}
+            y={bottom + 32}
+            textAnchor="end"
+            fontSize="11"
+            fill="var(--c-text-bright)"
+          >
             now · epoch {formatExactDecimal(String(tipEpoch), 'tip epoch')}
           </text>
         </svg>

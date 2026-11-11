@@ -99,7 +99,7 @@ it('lists readable traits only and reports hover', () => {
         { name: 'Color', value: 'Nature Green' },
         { name: 'IMAGE', value: '<svg xmlns="x"></svg>' },
       ]}
-      colors={new Map([['Color', '#68ccf0']])}
+      colors={new Map([['Color', 'var(--c-aqua)']])}
       active={null}
       onActive={onActive}
     />

@@ -1,8 +1,25 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The theme before the first paint: the stored preference (lib/theme.ts keeps the same
+         key and rules), light when it says so or when it says "system" and the OS does; dark
+         otherwise, the default. -->
+    <script>
+      (function () {
+        var theme = 'dark';
+        try {
+          var stored = localStorage.getItem('ckbadger.theme');
+          if (stored === 'light' || stored === 'dark') theme = stored;
+          else if (stored === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
+            theme = 'light';
+        } catch (e) {
+          /* no storage: the default */
+        }
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
     <title>CKBadger — Local-first CKB-native Explorer</title>
     <meta
       name="description"

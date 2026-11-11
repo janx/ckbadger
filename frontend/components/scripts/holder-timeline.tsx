@@ -29,8 +29,8 @@ export interface HolderTimelineProps {
 }
 
 /** Past holders alternate two greys; the holder now is the lightest, with the left rule. */
-const PAST_FILL = ['#222840', '#2a3146'] as const;
-const CURRENT_FILL = '#3a4258';
+const PAST_FILL = ['var(--c-base-border)', 'var(--c-slate-other)'] as const;
+const CURRENT_FILL = 'var(--c-slate-ckb)';
 /** Monospace advance in px at a font size: whole pixels where Chromium snaps them. */
 const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
 /** A segment's words: 12 px with 6 px each side. */

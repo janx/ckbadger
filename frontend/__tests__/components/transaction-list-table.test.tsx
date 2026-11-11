@@ -148,7 +148,7 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     );
 
     expect(row.querySelector('[data-segment="value"]')).toHaveStyle({
-      backgroundColor: 'rgb(58, 66, 88)',
+      backgroundColor: 'var(--c-slate-ckb)',
     });
   });
 

@@ -199,11 +199,11 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               'text-text-bright w-full font-mono transition-colors focus-visible:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
-                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-lg border pl-8 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-lg border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
-                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-9 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
-                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)] sm:py-3 sm:pl-8 sm:pr-4'
+                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-9 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]'
+                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
             )}
           />
           <span
@@ -262,7 +262,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           className={cn(
             'absolute z-50 mt-1 w-full border',
             isCompact
-              ? 'border-jade/12 rounded-none shadow-[0_14px_32px_rgba(0,0,0,0.68)]'
+              ? 'border-jade/12 rounded-none shadow-[var(--m-drop-shadow)]'
               : 'border-base-border bg-base-surface rounded-lg shadow-lg'
           )}
           style={isCompact ? { backgroundColor: SEARCH_RESULT_COLORS.panel } : undefined}

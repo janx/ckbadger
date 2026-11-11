@@ -9,20 +9,28 @@ import {
   getInterval,
   SHAPE_DRAW_FNS,
 } from '@/lib/game-of-life';
+import { useThemePalette } from '@/hooks/useThemePalette';
+import { alpha, color, hexAlpha, hexToRgb, type Palette } from '@/lib/palette';
 
 /* ---------- Colors ---------- */
 
-const CKB_COLOR = { r: 46, g: 219, b: 163 };
-const BTC_COLOR = { r: 242, g: 197, b: 92 };
+/**
+ * The tile's colours in the current theme. The canvas needs concrete values, so they come from
+ * the palette's hex (useThemePalette) rather than variables: CKB cells jade, Bitcoin cells gold,
+ * the ground and the grid lines the tile's own.
+ */
+function lifeInks(palette: Palette, isDualChain: boolean) {
+  return {
+    ckb: hexToRgb(palette.jade),
+    btc: hexToRgb(palette.gold),
+    bg: isDualChain ? palette['life-bg-dual'] : palette['life-bg-ckb'],
+    gridLine: isDualChain ? hexAlpha(palette['gold-dim'], 0.04) : hexAlpha(palette.jade, 0.05),
+  };
+}
 
-const BG_CKB = '#0a0f12';
-const BG_DUAL = '#0c0b08';
-
-const GRID_LINE_CKB = 'rgba(46,219,163,0.05)';
-const GRID_LINE_DUAL = 'rgba(180,170,120,0.04)';
-
-const GLOW_CKB = 'rgba(46,219,163,0.08)';
-const GLOW_DUAL = 'linear-gradient(135deg, rgba(242,197,92,0.06), rgba(46,219,163,0.06))';
+/** The outer glow is CSS, so it reads the theme's variables and breathes with the page. */
+const GLOW_CKB = alpha('jade', 0.08);
+const GLOW_DUAL = `linear-gradient(135deg, ${alpha('gold', 0.06)}, ${alpha('jade', 0.06)})`;
 
 /* ---------- CellLifePlaceholder ---------- */
 
@@ -37,13 +45,13 @@ export function CellLifePlaceholder({ size = 56 }: CellLifePlaceholderProps) {
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        background: '#0f0f0f',
-        border: '1px solid #222840',
+        background: color('base-surface'),
+        border: `1px solid ${color('base-border')}`,
         borderRadius: `${size * 0.14}px`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: '#343c50',
+        color: color('text-ghost'),
         fontFamily: 'monospace',
         lineHeight: 1,
         flexShrink: 0,
@@ -83,14 +91,18 @@ export function CellLife({ hash, size = 56, gridSize = 8, isDualChain = false }:
     return -((b % 40) / 10);
   }, [bytes]);
 
-  const bg = isDualChain ? BG_DUAL : BG_CKB;
-  const gridLineColor = isDualChain ? GRID_LINE_DUAL : GRID_LINE_CKB;
+  const { palette } = useThemePalette();
+  const inks = useMemo(() => lifeInks(palette, isDualChain), [palette, isDualChain]);
+  const { bg, gridLine: gridLineColor } = inks;
   const glowBg = isDualChain ? GLOW_DUAL : GLOW_CKB;
 
-  const colorForValue = useCallback((val: number) => {
-    if (val === 2) return BTC_COLOR;
-    return CKB_COLOR;
-  }, []);
+  const colorForValue = useCallback(
+    (val: number) => {
+      if (val === 2) return inks.btc;
+      return inks.ckb;
+    },
+    [inks]
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;

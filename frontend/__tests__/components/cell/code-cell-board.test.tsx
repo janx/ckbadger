@@ -213,7 +213,7 @@ describe('CodeCellBoard inks (V11)', () => {
     ];
     for (const link of links) {
       expect(link).toHaveClass('text-[color:var(--ink)]');
-      expect(link.style.getPropertyValue('--ink')).toBe('#7aa7d6');
+      expect(link.style.getPropertyValue('--ink')).toBe('var(--c-cell-lock)');
       expect(link.style.color).toBe('');
       expect(link.className).not.toMatch(/\[#/);
     }

@@ -1,6 +1,7 @@
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
+import { color } from '@/lib/palette';
 export { resolveApiBase } from '@/lib/runtime-config';
 
 // The active network is derived from the URL path per call (not module-init): the
@@ -5350,12 +5351,12 @@ export const api = {
         },
       })),
       series: [
-        { key: 'transfer', label: 'Transfer', color: '#8ce00a' },
-        { key: 'dao', label: 'DAO', color: '#00d7eb' },
-        { key: 'token', label: 'Token', color: '#a78bfa' },
-        { key: 'object', label: 'Object', color: '#f472b6' },
-        { key: 'identity', label: 'Identity', color: '#2dd4bf' },
-        { key: 'scriptCall', label: 'Script Call', color: '#f97316' },
+        { key: 'transfer', label: 'Transfer', color: color('jade') },
+        { key: 'dao', label: 'DAO', color: color('gold') },
+        { key: 'token', label: 'Token', color: color('token') },
+        { key: 'object', label: 'Object', color: color('object') },
+        { key: 'identity', label: 'Identity', color: color('identity') },
+        { key: 'scriptCall', label: 'Script Call', color: color('amber') },
       ],
       title: 'Activity Type Breakdown',
     };

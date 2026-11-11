@@ -4,6 +4,7 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
+import { fade } from '@/lib/palette';
 import type { Cell } from '@/lib/api';
 import {
   BOARD_INKS,
@@ -51,10 +52,8 @@ type Target =
 type Active = Target | null;
 const targetKey = (t: Target) => (t.kind === 'group' ? `group:${t.group}` : `${t.kind}:${t.id}`);
 
-function rgba(hex: string, alpha: number): string {
-  const h = hex.replace('#', '');
-  return `rgba(${Number.parseInt(h.slice(0, 2), 16)},${Number.parseInt(h.slice(2, 4), 16)},${Number.parseInt(h.slice(4, 6), 16)},${alpha})`;
-}
+/** A part's tone (a theme reference) at `alpha`, as a background. */
+const rgba = fade;
 
 const alignDown = (n: number) => n - (n % ROW);
 const alignUp = (n: number, max: number) => Math.min(max, n % ROW ? n + ROW - (n % ROW) : n);
@@ -97,7 +96,10 @@ function DetailRows({ rows }: { rows: readonly [string, ReactNode, string?][] })
       {rows.map(([label, value, color]) => (
         <div key={label} className="grid grid-cols-[78px_minmax(0,1fr)] gap-2 py-0.5">
           <span className="text-text-dim">{label}</span>
-          <span className="[overflow-wrap:anywhere]" style={{ color: color ?? '#dee2ec' }}>
+          <span
+            className="[overflow-wrap:anywhere]"
+            style={{ color: color ?? 'var(--c-text-bright)' }}
+          >
             {value}
           </span>
         </div>
@@ -170,7 +172,7 @@ const HexRows = memo(function HexRows({
         <span
           key={b}
           data-part-id={part.id}
-          style={{ color: part.occupied ? part.tone : '#343c50' }}
+          style={{ color: part.occupied ? part.tone : 'var(--c-text-ghost)' }}
         >
           {ch}
         </span>
@@ -205,7 +207,7 @@ export function highlightCss(ids: readonly string[] | null): string {
   return (
     `[data-cell-bytes] [data-part-id]{opacity:.25}` +
     `${own}{opacity:1}` +
-    `${quoted.map((id) => `[data-cell-bytes] [data-byte][data-part-id=${id}]`).join(',')}{outline:1px solid #a0a8be}`
+    `${quoted.map((id) => `[data-cell-bytes] [data-byte][data-part-id=${id}]`).join(',')}{outline:1px solid var(--c-text)}`
   );
 }
 
@@ -430,13 +432,15 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               part.block === 'output'
                 ? `outputs[${cell.outputIndex}]`
                 : `outputs_data[${cell.outputIndex}]`,
-              '#a0a8be',
+              'var(--c-text)',
             ],
-            ...(part.type ? [['type', part.type, '#a0a8be'] as [string, ReactNode, string]] : []),
+            ...(part.type
+              ? [['type', part.type, 'var(--c-text)'] as [string, ReactNode, string]]
+              : []),
             [
               'raw',
               rawHex(part.block === 'output' ? outBytes : dataBytes, part),
-              part.occupied ? part.tone : '#4b5266',
+              part.occupied ? part.tone : 'var(--c-ink-quiet)',
             ],
             ...(part.value !== null ? [['value', part.value] as [string, ReactNode]] : []),
             [
@@ -444,7 +448,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               part.occupied
                 ? `yes, counts toward the ${fmt(breakdown.totalBytes)}`
                 : 'no: molecule framing',
-              part.occupied ? DATA_COLOR : '#7c849c',
+              part.occupied ? DATA_COLOR : 'var(--c-text-dim)',
             ],
           ]}
         />
@@ -479,7 +483,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         {range && hash && (
           <DetailRows
             rows={[
-              [`${g} hash`, `blake2b(bytes ${range[0]}..${range[1]})`, '#7c849c'],
+              [`${g} hash`, `blake2b(bytes ${range[0]}..${range[1]})`, 'var(--c-text-dim)'],
               ['', hash, CELL_COLORS[g]],
             ]}
           />
@@ -487,7 +491,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         {g === 'data' && cell.dataHash && (
           <DetailRows
             rows={[
-              ['data hash', 'blake2b(data)', '#7c849c'],
+              ['data hash', 'blake2b(data)', 'var(--c-text-dim)'],
               ['', cell.dataHash, CELL_COLORS.data],
             ]}
           />
@@ -530,7 +534,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             [
               'serialized',
               `${fmt(outBytes.length)} B CellOutput + ${fmt(dataBytes.length)} B data`,
-              '#a0a8be',
+              'var(--c-text)',
             ],
             [
               'occupied',
@@ -540,7 +544,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             [
               'framing',
               `${fmt(outBytes.length - outOccupied)} B of CellOutput headers, not occupied`,
-              '#7c849c',
+              'var(--c-text-dim)',
             ],
           ]}
         />
@@ -682,7 +686,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     <span
                       aria-hidden="true"
                       className="inline-block h-1.5 w-1.5 rounded-full"
-                      style={{ backgroundColor: part.occupied ? part.tone : '#343c50' }}
+                      style={{ backgroundColor: part.occupied ? part.tone : 'var(--c-text-ghost)' }}
                     />
                     {part.block === 'output' ? part.label.split(' · ').at(-1) : part.label}
                     <span className="text-meta text-[color:var(--ink)]" style={QUIET}>

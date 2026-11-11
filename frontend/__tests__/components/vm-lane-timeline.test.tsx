@@ -248,7 +248,7 @@ describe('VmLaneTimeline', () => {
     expect(name.querySelectorAll('tspan')).toHaveLength(0);
     expect(name.getAttribute('x')).toBe('0');
     expect(name.getAttribute('font-size')).toBe('11');
-    expect(name.getAttribute('fill')).toBe('#7c849c');
+    expect(name.getAttribute('fill')).toBe('var(--c-text-dim)');
     const nameY = Number(name.getAttribute('y'));
     // Edition names (12.5 px) and the edition rules start under the name band.
     const y = (text: string) =>

@@ -11,6 +11,7 @@ import {
   scaleRulerTicks,
 } from '@/lib/byte-map';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { fade } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 export type HexField = ByteRange & { color?: string };
 
@@ -132,7 +133,7 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 /** The ink of a field without its own colour (the cell page's data colour). */
-const FIELD_INK = '#6fc3d9';
+const FIELD_INK = 'var(--c-cell-data)';
 
 /**
  * `layout="scale"`: the payload cut where its fields start and end. A run read by several fields
@@ -168,7 +169,7 @@ function HexScaleMap({
         end: piece.end,
         label: fmt(n),
         short: fmt(n),
-        color: '#4b5266',
+        color: 'var(--c-ink-quiet)',
         quiet: true,
         title: `${span} · no field describes ${n === 1 ? 'this byte' : 'these bytes'}`,
       };
@@ -233,10 +234,8 @@ export interface ByteScaleMapProps {
   note?: ReactNode;
 }
 
-function tint(hex: string, alpha: number): string {
-  const h = hex.replace('#', '');
-  return `rgba(${Number.parseInt(h.slice(0, 2), 16)},${Number.parseInt(h.slice(2, 4), 16)},${Number.parseInt(h.slice(4, 6), 16)},${alpha})`;
-}
+/** A part's colour (a theme reference) at `alpha`, as its background. */
+const tint = fade;
 
 /**
  * Bytes drawn to scale (consistency C5 / C6, the boards' "byte by byte" maps): a 22 px row of parts,
@@ -314,10 +313,10 @@ export function ByteScaleMap({
                 ? { flex: `0 0 ${SCALE_DEFAULTS.sliver}px` }
                 : { flex: `${n} 0 0`, minWidth: SCALE_DEFAULTS.floor }),
             backgroundColor: s.quiet
-              ? tint('#dee2ec', on ? 0.1 : 0.04)
+              ? tint('var(--c-text-bright)', on ? 0.1 : 0.04)
               : tint(s.color, on ? 0.28 : 0.12),
             borderTop: `2px solid ${s.color}`,
-            color: s.quiet ? '#7c849c' : s.color,
+            color: s.quiet ? 'var(--c-text-dim)' : s.color,
             // padding only around a label: an empty 3 px part must stay 3 px (border-box)
             paddingLeft: text ? LABEL_PAD_PX : 0,
             paddingRight: text ? LABEL_PAD_PX : 0,
@@ -373,10 +372,16 @@ export function ByteScaleMap({
                 x2={Math.min(Math.max(t.x, 0.5), width - 0.5)}
                 y1={0}
                 y2={4}
-                stroke="#343c50"
+                stroke="var(--c-text-ghost)"
               />
               {t.label && (
-                <text x={t.x} y={15} textAnchor={t.anchor} fill="#4b5266" className="text-meta">
+                <text
+                  x={t.x}
+                  y={15}
+                  textAnchor={t.anchor}
+                  fill="var(--c-ink-quiet)"
+                  className="text-meta"
+                >
                   {t.label}
                 </text>
               )}

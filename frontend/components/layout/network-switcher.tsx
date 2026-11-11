@@ -68,7 +68,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
       >
         <span
           aria-hidden="true"
-          className="bg-aqua h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_6px_rgba(104,204,240,0.8)]"
+          className="bg-aqua h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_6px_rgb(var(--rgb-aqua)/calc(0.8*var(--m-glow)))]"
         />
         <span className="truncate">{active}</span>
         <svg
