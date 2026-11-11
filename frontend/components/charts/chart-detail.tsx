@@ -329,14 +329,14 @@ function DetailBody({
         facts={facts.length ? facts : undefined}
         tier2={method}
       >
+        {/* The command runs on what it draws (rubbing × Song print, phase 5): `full history 1,204
+            days`, `distribution 24 buckets`; a ranked chart counts nothing here. */}
         <DetailSection
           title={distribution ? 'Distribution' : 'Full history'}
-          actions={
-            model.kind !== 'ranked' && (
-              <span className="text-text-dim text-small">
-                {points.length.toLocaleString()} {POINT_NOUN[style]}
-              </span>
-            )
+          args={
+            model.kind !== 'ranked'
+              ? `${points.length.toLocaleString()} ${POINT_NOUN[style]}`
+              : undefined
           }
         >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
