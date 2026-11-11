@@ -116,3 +116,15 @@ export function splitCkbAmount(shannons: bigint): CkbAmountParts {
     ghost: significant === '' ? `.${decimals}` : decimals.slice(significant.length),
   };
 }
+
+/**
+ * The digits `ExactCkb` prints for an amount, as plain text without the unit: every decimal from
+ * `splitCkbAmount` (`0.00001647`, `750.00000000`), the sign only when `signed`, and zero as `0`
+ * with no fraction (consistency plan C4). A sentence that names an amount the page also draws
+ * takes it from here, so the two never disagree (pinned against `ExactCkb` in its test).
+ */
+export function exactCkbText(shannons: bigint, signed: boolean): string {
+  if (shannons === BigInt(0)) return '0';
+  const parts = splitCkbAmount(shannons);
+  return `${signed ? parts.sign : ''}${parts.integer}${parts.fraction}${parts.ghost}`;
+}
