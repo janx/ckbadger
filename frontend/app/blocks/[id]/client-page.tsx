@@ -176,6 +176,7 @@ export default function BlockDetailPage() {
     block.number
   );
   const genesisEpoch = isGenesisEpoch(epoch);
+  const client = minerClient(block);
   const epochStart = block.number - epoch.index;
   const amount = (value: string, field: string) => (
     <ExactCkb
@@ -391,14 +392,10 @@ export default function BlockDetailPage() {
                 </div>
                 <div className="min-w-0">
                   <dt className="text-text-dim mb-1">Miner client</dt>
-                  <dd className="text-text-bright break-all">
-                    {block.minerMessage === null
-                      ? 'Genesis'
-                      : block.minerMessageText === null
-                        ? 'Non-UTF-8 message; see raw bytes below'
-                        : block.minerMessageText}
-                  </dd>
-                  <dd className="text-text-dim">decoded from the cellbase message</dd>
+                  <dd className="text-text-bright break-all">{client.line}</dd>
+                  {client.decoded && (
+                    <dd className="text-text-dim">decoded from the cellbase message</dd>
+                  )}
                 </div>
               </dl>
               <DetailSection title="Position in the chain">
@@ -577,7 +574,7 @@ export default function BlockDetailPage() {
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
                 <dd className="break-all">
-                  {block.minerMessage === null ? 'Genesis' : block.minerMessage}
+                  {block.minerMessage ?? 'None: genesis has no miner message'}
                 </dd>
               </div>
             </dl>
@@ -827,6 +824,31 @@ function ScalePending({ error, value }: { error: Error | null; value: number }) 
       </span>
     </span>
   );
+}
+
+/**
+ * The miner client a block's cellbase message names, as the API decoded it. The API serves no
+ * message for block 0 alone: it reads no miner witness for genesis (CKB builds genesis's cellbase
+ * witness with the bootstrap lock and an empty message, and nobody mined it); a later block with
+ * none is a contract violation. Every later block's message is its bytes, `0x` when empty, and its
+ * text is null when the bytes hold no readable text (padding only, not UTF-8, or control
+ * characters). Only a decoded text is `decoded`.
+ */
+function minerClient(block: Pick<Block, 'number' | 'minerMessage' | 'minerMessageText'>): {
+  line: string;
+  decoded: boolean;
+} {
+  if (block.minerMessage === null) {
+    if (block.number !== 0)
+      throw new Error(
+        `Block ${block.number}: the API served no cellbase message; only genesis has none`
+      );
+    return { line: 'None: genesis has no miner', decoded: false };
+  }
+  if (block.minerMessageText !== null) return { line: block.minerMessageText, decoded: true };
+  if (block.minerMessage === '0x')
+    return { line: 'None: the cellbase message is empty', decoded: false };
+  return { line: 'No readable text; see the raw bytes below', decoded: false };
 }
 
 /** "2 · both committed": the block's own proposals and how many a later block committed. */

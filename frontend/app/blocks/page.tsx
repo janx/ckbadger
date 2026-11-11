@@ -84,7 +84,7 @@ export default function BlocksPage() {
       label: 'Miner',
       minWidth: 160,
       className: 'whitespace-nowrap',
-      render: (block) => miner(block, 'address'),
+      render: (block) => miner(block, 'table'),
     },
     {
       key: 'reward',
@@ -304,14 +304,19 @@ function BlockIdentity({ block }: { block: Block }) {
 const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
 
 /**
- * Who mined the block, linked to its address: the pool `pools.toml` names, else the address. The
- * tables write the address as `ckb1qzda0c...93hhsj`; a phone row writes its tail, `…93hhsj`
- * (`minerName`, the site's one short form of a miner). A full address begins with its lock's code
- * hash — `ckb1qzda0c` for every default-lock miner, the same on every row — and its last six
- * characters are the bech32m checksum of the whole address, so the tail is what tells two miners
- * apart. Genesis is mined by no one.
+ * The head the miner's shortened address keeps: the tables write `ckb1qzda0c...93hhsj`, a phone
+ * row `ckb1...93hhsj` (`ckt1...` on testnet), head and tail like every shortened identifier. The
+ * phone row's head is only the network prefix because what follows it is the lock's code hash —
+ * `qzda0c` for every default-lock miner, the same on every row — while the tail, the bech32m
+ * checksum of the whole address, tells two miners apart.
  */
-function miner(block: Block, unnamed: 'address' | 'tail') {
+const MINER_HEAD = { table: 10, phone: 4 } as const;
+
+/**
+ * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`
+ * names, else the address, head and tail. Genesis is mined by no one.
+ */
+function miner(block: Block, form: keyof typeof MINER_HEAD) {
   if (!block.minerAddress) return <span className="text-text-dim">Genesis</span>;
   return (
     <MinerLink
@@ -320,14 +325,12 @@ function miner(block: Block, unnamed: 'address' | 'tail') {
       // T5: the block number is the row's one bright thing; a named pool reads in body ink.
       className="text-text"
       unnamed={
-        unnamed === 'address' ? (
-          <Address
-            address={block.minerAddress}
-            startChars={10}
-            endChars={6}
-            className="text-small"
-          />
-        ) : undefined
+        <Address
+          address={block.minerAddress}
+          startChars={MINER_HEAD[form]}
+          endChars={6}
+          className="text-small"
+        />
       }
     />
   );
@@ -393,11 +396,12 @@ function reward(block: Block) {
  * paid.
  *
  * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 294 px beside the
- * stone; 12 px Courier Prime, 7.2 px a character, the unit 11 px, 6.6): "miner …93hhsj" (13
- * characters, 93.6 px), the 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15, 108)
- * and " CKB" (26.4), make 240 px. With the address's head, "miner ckb1qzda0c...93hhsj" (180 px),
- * it was 326.4 and the fees dropped to a line of their own at both widths. A larger fee or a long
- * pool name still drops the fees under the miner whole, right-aligned (PhoneRow's rule).
+ * stone; 12 px Courier Prime, 7.2 px a character, the unit 11 px, 6.6): "miner ckb1...93hhsj" (19
+ * characters, 136.8 px), the 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15,
+ * 108) and " CKB" (26.4), make 283.2 px, 10.8 to spare at 360; a fee of 10–99 CKB makes 290.4.
+ * With the tables' head, "miner ckb1qzda0c...93hhsj" (180 px), it was 326.4 and the fees dropped
+ * to a line of their own at both widths. A fee from 100 CKB at 360, from 100,000 CKB at 390, or a
+ * long pool name drops the fees under the miner whole, right-aligned (PhoneRow's rule).
  */
 function BlockPhoneRow({ block }: { block: Block }) {
   return (
@@ -421,7 +425,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
           left: (
             <>
               <span className="text-text-dim">miner </span>
-              {miner(block, 'tail')}
+              {miner(block, 'phone')}
             </>
           ),
           right: <span className="whitespace-nowrap">fees {fees(block, true)}</span>,
@@ -529,7 +533,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     // 138 px holds 19.2), so the column gave 2 of the block stone's 7 px from its 156.
     minWidth: 154,
     className: 'whitespace-nowrap',
-    render: (block) => miner(block, 'address'),
+    render: (block) => miner(block, 'table'),
   },
   {
     key: 'fees',
