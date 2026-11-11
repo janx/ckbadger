@@ -155,6 +155,32 @@ describe('lockCodeHashesByAddress', () => {
     ]);
   });
 
+  it('passes over an input with no cell behind it: a pool input not resolved yet, or the cellbase null out point', () => {
+    // The API's cellbase input (`/transactions/{hash}/detail`): the null out point, every cell
+    // field `null`. It took the transaction page down ("Cannot read properties of null (reading
+    // 'codeHash')") on every live cellbase.
+    const map = lockCodeHashesByAddress([
+      { address: null, lock: null },
+      {},
+      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
+    ]);
+    expect([...map]).toEqual([['ckb1a', '0x01']]);
+  });
+
+  it('refuses a cell with one of address and lock but not the other (no such shape)', () => {
+    expect(() =>
+      lockCodeHashesByAddress([
+        { address: 'ckb1a', lock: null },
+        { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
+      ])
+    ).toThrow('cell with address ckb1a and no lock');
+    expect(() =>
+      lockCodeHashesByAddress([
+        { address: undefined, lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
+      ])
+    ).toThrow('cell with a lock but no address');
+  });
+
   it('refuses one address with two lock code hashes (an address encodes its lock)', () => {
     expect(() =>
       lockCodeHashesByAddress([

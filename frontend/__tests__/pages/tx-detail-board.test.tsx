@@ -603,7 +603,21 @@ describe('Transaction variants (D4)', () => {
       fee: '0',
       feeRate: null,
       cycles: 0,
-      inputs: [],
+      // The one input of every cellbase as the detail endpoint serves it: the null out point,
+      // no cell behind it, every cell field null (a page that read `lock.codeHash` off it crashed).
+      inputs: [
+        {
+          previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+          since: '0x14023e7',
+          capacity: null,
+          commonKnowledgeSize: null,
+          lock: null,
+          type: null,
+          address: null,
+          cellType: null,
+          display: null,
+        } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+      ],
       inputsCapacity: '0',
       inputsCommonKnowledgeSize: '0',
       outputsCapacity: '55961739927',

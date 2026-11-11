@@ -8,17 +8,25 @@ import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn, truncateHash } from '@/lib/utils';
 
-/** Each address's lock code hash, read off the transaction's own cells (inputs and outputs). */
+/**
+ * Each address's lock code hash, read off the transaction's own cells (inputs and outputs). An
+ * input with no cell behind it carries neither: a pool transaction's input not resolved yet (the
+ * fields absent), or a cellbase's one input, the null out point (the API's `null`). One without the
+ * other is not a shape the API has, so it is an error, not a cell to skip.
+ */
 export function lockCodeHashesByAddress(
   cells: readonly {
-    address?: string;
-    lock?: { codeHash: string; hashType: string; args: string };
+    address?: string | null;
+    lock?: { codeHash: string; hashType: string; args: string } | null;
   }[]
 ): ReadonlyMap<string, string> {
   const map = new Map<string, string>();
   for (const c of cells) {
-    // A pending input has no resolved cell yet: no address, no lock to read.
-    if (c.address === undefined || c.lock === undefined) continue;
+    if (c.address == null && c.lock == null) continue;
+    if (c.address == null || c.lock == null)
+      throw new Error(
+        `cell with ${c.address == null ? 'a lock but no address' : `address ${c.address} and no lock`}`
+      );
     const seen = map.get(c.address);
     if (seen !== undefined && seen !== c.lock.codeHash)
       throw new Error(

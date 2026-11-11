@@ -69,8 +69,9 @@ interface TxScriptRef {
 }
 
 interface TxInputRef {
-  lock?: TxScriptRef;
-  type?: TxScriptRef;
+  /** `null` is the API's: a cellbase's null-out-point input has no cell, so no scripts. */
+  lock?: TxScriptRef | null;
+  type?: TxScriptRef | null;
 }
 
 export interface WitnessLensTransactionLike {
@@ -490,7 +491,11 @@ export function buildScriptGroupLens(tx: WitnessLensTransactionLike): ScriptGrou
   if (!tx.inputs || tx.inputs.length === 0) return [];
 
   const groups = new Map<string, ScriptGroupLens>();
-  const addGroup = (script: TxScriptRef | undefined, kind: 'lock' | 'type', inputIndex: number) => {
+  const addGroup = (
+    script: TxScriptRef | null | undefined,
+    kind: 'lock' | 'type',
+    inputIndex: number
+  ) => {
     if (!script) return;
     if (!script.codeHash) throw new Error(`input ${inputIndex} ${kind}: missing codeHash`);
     if (!script.hashType) throw new Error(`input ${inputIndex} ${kind}: missing hashType`);
