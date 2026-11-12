@@ -187,11 +187,7 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
   });
   it('states how many collections are fully on-chain, with a share bar and counted chips', async () => {
     render(<ObjectsPage />);
-    const comp = await screen.findByRole(
-      'region',
-      { name: 'Object composition' },
-      { timeout: 5000 }
-    );
+    const comp = await screen.findByRole('region', { name: 'Object composition' });
     expect(comp).toHaveTextContent(
       '357 of 5,653 collections are fully on-chain · so are 26,880 live objects'
     );
@@ -224,11 +220,7 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
   });
   it('frames on-chain thumbnails, says m-NFT and draws CKB held in violet', async () => {
     render(<ObjectsPage />);
-    const table = await screen.findByRole(
-      'table',
-      { name: 'Object collections' },
-      { timeout: 5000 }
-    );
+    const table = await screen.findByRole('table', { name: 'Object collections' });
     expect(table.querySelector('[data-thumb-frame="btc_ckb"]')).not.toBeNull();
     expect(table.querySelector('[data-thumb-frame="centralized_mixture"]')).toBeNull();
     expect(within(table).getByText(/^m-NFT/)).toBeInTheDocument();
@@ -250,7 +242,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
   });
   it('names each token in full and offers every token standard with an "All" count', async () => {
     render(<TokensPage />);
-    const table = await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
+    const table = await screen.findByRole('table', { name: 'Tokens' });
     expect(within(table).getByText('RGB++ Protocol')).toBeInTheDocument();
     // Table-rows L2-1: the symbol is a tag on the name's line; xUDT is in the row's title only.
     expect(within(table).getByText('RGB++')).toHaveAttribute('data-row-tag', 'default');
@@ -275,7 +267,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
       ],
     });
     render(<TokensPage />);
-    await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
+    await screen.findByRole('table', { name: 'Tokens' });
     const chips = screen.getByRole('group', { name: 'Standard filters' });
     // A standard absent from the summary has no catalog token, so it has no chip.
     await waitFor(() =>
@@ -288,7 +280,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
   });
   it('draws CKB held as an azure bar on the page’s scale, and occupied in whole CKB in the title', async () => {
     render(<TokensPage />);
-    const table = await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
+    const table = await screen.findByRole('table', { name: 'Tokens' });
     // Table-rows L2-1: an 8 px AlignedBar per row on one round page scale (30,670,103 and
     // 7,667,525 whole CKB); Occupied leaves the row for its title.
     const scale = resourceScale([30670103, 7667525]);
@@ -305,7 +297,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
   });
   it('searches as you type and keeps sorting in the board’s "sorted by" line', async () => {
     render(<TokensPage />);
-    await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
+    await screen.findByRole('table', { name: 'Tokens' });
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search the inventory' }), {
       target: { value: 'rgb' },
@@ -325,7 +317,7 @@ describe('Identities view (IV-12, IV-02)', () => {
   });
   it('lists the systems plainly: no standard chips, no repeated name, rose bars', async () => {
     render(<IdentitiesPage />);
-    const table = await screen.findByRole('table', { name: 'Identity systems' }, { timeout: 5000 });
+    const table = await screen.findByRole('table', { name: 'Identity systems' });
     const name = within(table).getByRole('link', { name: '.bit' });
     expect(name).toHaveClass('text-body');
     expect(screen.queryByRole('group', { name: 'Standard filters' })).not.toBeInTheDocument();

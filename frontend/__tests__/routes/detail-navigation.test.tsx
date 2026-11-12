@@ -96,17 +96,10 @@ describe('detail navigation', () => {
       </MemoryRouter>
     );
 
-    await waitFor(
-      () => {
-        expect(api.getScripts).toHaveBeenCalled();
-      },
-      { timeout: 3000 }
-    );
-    const links = await screen.findAllByRole(
-      'link',
-      { name: 'SECP256K1_BLAKE160' },
-      { timeout: 3000 }
-    );
+    await waitFor(() => {
+      expect(api.getScripts).toHaveBeenCalled();
+    });
+    const links = await screen.findAllByRole('link', { name: 'SECP256K1_BLAKE160' });
     await user.click(links[0]);
 
     await waitFor(() => {
@@ -124,9 +117,7 @@ describe('detail navigation', () => {
       </MemoryRouter>
     );
 
-    expect(
-      await screen.findByText('.bit Cell identity detail 0xbitcell', {}, { timeout: 3000 })
-    ).toBeInTheDocument();
+    expect(await screen.findByText('.bit Cell identity detail 0xbitcell')).toBeInTheDocument();
   });
 
   it('routes .cell name links to the item detail page', async () => {
@@ -138,9 +129,7 @@ describe('detail navigation', () => {
       </MemoryRouter>
     );
 
-    expect(
-      await screen.findByText(`.cell name detail ${nameId}`, {}, { timeout: 3000 })
-    ).toBeInTheDocument();
+    expect(await screen.findByText(`.cell name detail ${nameId}`)).toBeInTheDocument();
   });
 
   it('routes an uncle link to the uncle page under its including block (BA-10)', async () => {
@@ -150,6 +139,6 @@ describe('detail navigation', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('uncle detail page', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('uncle detail page')).toBeInTheDocument();
   });
 });

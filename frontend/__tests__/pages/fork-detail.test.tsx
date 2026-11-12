@@ -52,7 +52,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     ).toBeInTheDocument();
     expect(api.getForkAt).toHaveBeenCalledWith(10, '17404795');
     // Consistency plan C1: the tab names the page.
-    expect(document.title).toBe('#10 · 17404795 · fork · CKBadger');
+    await waitFor(() => expect(document.title).toBe('#10 · 17404795 · fork · CKBadger'));
     expect(
       screen.getByText(
         '1 block deep · detected 2025-08-01 06:13:20 UTC+8 · this node switched once'

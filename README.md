@@ -62,6 +62,7 @@ Just try it and feel.
 
 - A running CKB node with RPC accessible (default: `http://127.0.0.1:8114`)
 - ~60GB disk space per fully indexed network (actual usage depends on chain and enabled data)
+- To build: Rust, pnpm and Node.js 22 or newer (`make release` builds the frontend with `pnpm build`; `package.json` pins Node 24.14.0 for volta, and CI uses the same pin)
 
 If you can run a CKB node, you can run CKBadger. If you don't know how to run CKB — no worries, agents can do that for you.
 

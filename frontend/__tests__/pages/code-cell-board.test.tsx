@@ -39,7 +39,6 @@ function view() {
     </QueryClientProvider>
   );
 }
-const wait = { timeout: 5000 };
 
 describe('code cell page against the CellCode board', () => {
   beforeEach(() => {
@@ -49,7 +48,7 @@ describe('code cell page against the CellCode board', () => {
 
   it('presses the code cell’s own seal: its Type ID an unregistered type, class other (seal kinds, C3)', async () => {
     const { container } = view();
-    await screen.findByTestId('code-cell-of', undefined, wait);
+    await screen.findByTestId('code-cell-of');
     expectOnePageSeal(container, {
       kind: 'cell',
       tx: codeCellFixture.txHash,
@@ -62,7 +61,7 @@ describe('code cell page against the CellCode board', () => {
 
   it('says whose code it is in the header and names lock and type (SC-K2)', async () => {
     const { container } = view();
-    const codeCellOf = await screen.findByTestId('code-cell-of', undefined, wait);
+    const codeCellOf = await screen.findByTestId('code-cell-of');
     expect(codeCellOf).toHaveTextContent('· code cell of JoyID, v5');
     // the name plate (seals by kind, C10): on the kind line, with the cell's status, after "Cell"
     const { kindLine, nameBox } = expectNamePlate(container, 'Cell');
@@ -70,7 +69,7 @@ describe('code cell page against the CellCode board', () => {
     expect(kindLine).toHaveTextContent(/^Celllive· code cell of JoyID, v5$/);
     expect(nameBox).not.toContainElement(codeCellOf);
     const facts = screen.getByRole('region', { name: 'Cell facts' });
-    await within(facts).findByRole('link', { name: 'Multisig' }, wait);
+    await within(facts).findByRole('link', { name: 'Multisig' });
     expect(facts).toHaveTextContent('args 0x6598…d696');
     expect(facts).toHaveTextContent('TypeType ID');
     expect(facts).toHaveTextContent('Data100,312 BRISC-V ELF');
@@ -82,7 +81,7 @@ describe('code cell page against the CellCode board', () => {
   it('puts "code" before the microscope: by type hash, by data hash, built with (SC-K3)', async () => {
     view();
     // Phase 5 (A8, A7): the code runs on the script it is; the microscope is the bytes command.
-    const code = await screen.findByRole('heading', { name: 'Code JoyID' }, wait);
+    const code = await screen.findByRole('heading', { name: 'Code JoyID' });
     const microscope = screen.getByRole('heading', { name: /^Bytes / });
     expect(
       code.compareDocumentPosition(microscope) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -112,7 +111,7 @@ describe('code cell page against the CellCode board', () => {
 
   it('reads the data as an ELF to scale, 36 parts, with excerpts instead of pages (SC-K4)', async () => {
     view();
-    const map = await screen.findByRole('group', { name: 'ELF binary map' }, wait);
+    const map = await screen.findByRole('group', { name: 'ELF binary map' });
     expect(within(map).getByTitle('.text · 91,352 B')).toHaveTextContent('.text 91,352');
     expect(within(map).getByTitle('ELF header · 64 B')).toBeInTheDocument();
     expect(within(map).getByTitle('program headers · 336 B')).toBeInTheDocument();
@@ -151,7 +150,7 @@ describe('code cell page against the CellCode board', () => {
 
   it('keeps small map parts visible and writes counts with separators (SC-K6)', async () => {
     view();
-    const map = await screen.findByRole('group', { name: 'Capacity map' }, wait);
+    const map = await screen.findByRole('group', { name: 'Capacity map' });
     for (const part of ['capacity', 'lock', 'type'])
       expect(
         (within(map).getByTitle(new RegExp(`^${part} · `)) as HTMLElement).style.minWidth
@@ -187,7 +186,7 @@ describe('code cell page · visual pass', () => {
 
   it('labels small map parts of a large cell with their byte count only, never wrapping', async () => {
     view();
-    const map = await screen.findByRole('group', { name: 'Capacity map' }, wait);
+    const map = await screen.findByRole('group', { name: 'Capacity map' });
     expect(within(map).getByTitle(/^lock · /)).toHaveTextContent(/^53$/);
     expect(within(map).getByTitle(/^type · /)).toHaveTextContent(/^65$/);
     expect(within(map).getByTitle(/^data · /)).toHaveTextContent('data 100,312');
@@ -195,14 +194,14 @@ describe('code cell page · visual pass', () => {
 
   it('gives 5-digit offsets their own wider column', async () => {
     view();
-    const data = await screen.findByLabelText('CellData byte map', undefined, wait);
+    const data = await screen.findByLabelText('CellData byte map');
     const offset = within(data).getByText('0x00000');
     expect(offset).toHaveClass('w-[74px]');
   });
 
   it('shows the epoch the code cell was created in (SC-C9)', async () => {
     view();
-    const facts = await screen.findByRole('region', { name: 'Cell facts' }, wait);
+    const facts = await screen.findByRole('region', { name: 'Cell facts' });
     expect(facts).toHaveTextContent('epoch 13,150 · 935/1500');
   });
 });

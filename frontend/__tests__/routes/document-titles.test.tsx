@@ -94,8 +94,7 @@ describe('every route names its page in the tab (C1)', () => {
     const path = SAMPLE[pattern] ?? pattern;
     expect(path, `route ${pattern} needs a sample address in SAMPLE`).not.toMatch(/:/);
     const view = mount(path);
-    // Each page is a lazy chunk; under the full suite it can take over a second to load.
-    await waitFor(() => expect(document.title).not.toBe(SLOGAN), { timeout: 5000 });
+    await waitFor(() => expect(document.title).not.toBe(SLOGAN));
     expect(document.title).toMatch(/^\S.* · CKBadger$/);
     view.unmount();
     expect(document.title).toBe(SLOGAN);
@@ -103,13 +102,13 @@ describe('every route names its page in the tab (C1)', () => {
 
   it('home keeps the slogan from index.html', async () => {
     const view = mount('');
-    await waitFor(() => expect(document.querySelector('main')).not.toBeNull(), { timeout: 5000 });
+    await waitFor(() => expect(document.querySelector('main')).not.toBeNull());
     expect(document.title).toBe(SLOGAN);
     view.unmount();
   });
 
   it('a route that names no page is "Not found · CKBadger"', async () => {
     mount('nope-404');
-    await waitFor(() => expect(document.title).toBe('Not found · CKBadger'), { timeout: 5000 });
+    await waitFor(() => expect(document.title).toBe('Not found · CKBadger'));
   });
 });

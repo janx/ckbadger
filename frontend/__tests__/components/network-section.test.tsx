@@ -323,11 +323,7 @@ describe('NetworkSection', () => {
       )
     );
     render(<NetworkSection />);
-    const alert = await within(figure('home-block-time')).findByRole(
-      'alert',
-      {},
-      { timeout: 3000 }
-    );
+    const alert = await within(figure('home-block-time')).findByRole('alert');
     expect(alert).toHaveTextContent(/Failed to load/);
   });
 });

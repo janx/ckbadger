@@ -201,10 +201,10 @@ it('keeps a failed identity source distinct from an absent identity', async () =
 // ── F2 identities (round 2): the IdentityBit board's tier 1 (ID-C5/C6/C7/C10, ID-B1/B2/B4) ──
 it('reads like the .bit board: badge, summary, held-until bar, domain facts, internals in tier 2', async () => {
   const { container } = render(<Page identityId={evidence.itemId} />);
-  const facts = await screen.findByRole('region', { name: 'Metrics' }, { timeout: 4000 });
+  const facts = await screen.findByRole('region', { name: 'Metrics' });
   expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.bit');
   // Consistency plan C1: the tab names the page.
-  expect(document.title).toBe('alice.bit · identity · CKBadger');
+  await waitFor(() => expect(document.title).toBe('alice.bit · identity · CKBadger'));
   expect(
     screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
   ).toHaveTextContent('.bit');
@@ -249,7 +249,7 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
 
 it('puts the metrics row right after the header in reading order (ID-C11, C7)', async () => {
   render(<Page identityId={evidence.itemId} />);
-  const facts = await screen.findByRole('region', { name: 'Metrics' }, { timeout: 4000 });
+  const facts = await screen.findByRole('region', { name: 'Metrics' });
   const term = screen.getByRole('heading', { name: /^Term held until/ });
   expect(facts.compareDocumentPosition(term) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

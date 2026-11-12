@@ -121,7 +121,7 @@ it('reports a gateway timeout as a status, never the proxy URL, and wraps at 390
     )
   );
   render(<Page collectionId="dotbit" />);
-  await screen.findAllByText(/HTTP 504/, {}, { timeout: 4000 });
+  await screen.findAllByText(/HTTP 504/);
   expect(document.body).not.toHaveTextContent('127.0.0.1');
   expect(document.body).not.toHaveTextContent('error sending request');
   // The read-state line breaks anywhere, so no long token can widen the page at 390 px.
