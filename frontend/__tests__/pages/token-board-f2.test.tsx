@@ -176,7 +176,7 @@ describe('Token board (F2 objects)', () => {
       ],
     });
     const { container } = render(<TokenDetailPage typeHash={hash} />);
-    const row = await screen.findByRole('article', undefined, { timeout: 5000 });
+    const row = await screen.findByRole('article');
     expect(row.querySelector('[data-role="detail"]')).toBeNull();
     expect(row.querySelector('[data-role="lock-kind"]')).toHaveTextContent('UTXOSwap Intent Lock');
     expect(row.querySelector('[data-role="headline"] [data-class="tokens"]')).not.toBeNull();
@@ -199,9 +199,9 @@ describe('Token board (F2 objects)', () => {
       },
     });
     const { container } = render(<TokenDetailPage typeHash={hash} />);
-    await screen.findByRole('heading', { name: 'RGB++_Jump' }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: 'RGB++_Jump' });
     // Consistency plan C1: the tab names the page.
-    expect(document.title).toBe('RGB++_Jump · token · CKBadger');
+    await waitFor(() => expect(document.title).toBe('RGB++_Jump · token · CKBadger'));
     const tier2 = container.querySelector('[data-tier="2"]')!;
     expect(tier2).toHaveTextContent(
       'from a curated label shipped with CKBadger, not from the chain'
@@ -214,7 +214,7 @@ describe('Token board (F2 objects)', () => {
   it('says plainly when no label or Unique Cell names the token (IV-26)', async () => {
     vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, metadata: null });
     const { container } = render(<TokenDetailPage typeHash={hash} />);
-    await screen.findByRole('heading', { name: 'TEST' }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: 'TEST' });
     expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
       'Neither a curated label nor a Unique Cell names this token.'
     );
@@ -230,17 +230,13 @@ describe('Token board (F2 objects)', () => {
       nextCursor: p?.cursor ? null : '999:2',
     }));
     render(<TokenDetailPage typeHash={hash} />);
-    const history = await screen.findByRole('region', { name: 'History' }, { timeout: 5000 });
+    const history = await screen.findByRole('region', { name: 'History' });
     expect(history).toHaveTextContent('2 mints · 1 burn · 1,000 transfers');
     // Responsive fix plan 2026-11-01 (A3, report B#18): "H-multiplier ×N" is one unbroken unit.
     const hmul = history.querySelector('[data-role="h-multiplier"]');
     expect(hmul).toHaveTextContent(/^H-multiplier ×\d+\.\d{2}$/);
     expect(hmul).toHaveClass('whitespace-nowrap');
-    fireEvent.click(
-      await within(history).findByText('Every change to the supply (3)', undefined, {
-        timeout: 5000,
-      })
-    );
+    fireEvent.click(await within(history).findByText('Every change to the supply (3)'));
     const table = within(history).getByRole('table', { name: 'Mints and burns' });
     expect(within(table).getAllByText('Mint')).toHaveLength(2);
     fireEvent.click(within(history).getByRole('button', { name: 'Next' }));
@@ -269,11 +265,7 @@ describe('Token board (F2 objects)', () => {
       buckets: [{ lowerBound: '0', upperBound: null, holdersCount: 720, balance: '10000' }],
     });
     render(<TokenDetailPage typeHash={hash} />);
-    const bar = await screen.findByRole(
-      'img',
-      { name: /Largest holder 94.49%/ },
-      { timeout: 5000 }
-    );
+    const bar = await screen.findByRole('img', { name: /Largest holder 94.49%/ });
     expect(bar.querySelector('[data-segment]')).toHaveStyle({ backgroundColor: 'var(--c-token)' });
     expect(bar).toHaveAccessibleName(/Other 710 1.70%/);
     expect(screen.queryByText('Remaining holders')).not.toBeInTheDocument();
@@ -282,7 +274,7 @@ describe('Token board (F2 objects)', () => {
   it('keeps issuer and cap "Not established" and says why (D8, IV-19)', async () => {
     vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, transfers24h: 0 });
     render(<TokenDetailPage typeHash={hash} />);
-    await screen.findByRole('heading', { name: 'TEST' }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: 'TEST' });
     // C7: the rail is the metrics row; each "not established" keeps its sentence in a title.
     const facts = screen.getByRole('region', { name: 'Metrics' });
     expect(within(facts).getByText('maximum supply not established')).toHaveAttribute(
@@ -311,7 +303,7 @@ describe('Token board (F2 objects)', () => {
       buckets: [{ lowerBound: '0', upperBound: null, holdersCount: 720, balance: '10000' }],
     });
     const { container } = render(<TokenDetailPage typeHash={hash} />);
-    await screen.findByRole('heading', { name: 'TEST' }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: 'TEST' });
     expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     expect(
@@ -332,17 +324,15 @@ describe('Token board (F2 objects)', () => {
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
     });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(/xUDT · 8 decimals/, undefined, { timeout: 5000 })).toHaveClass(
-      'text-body'
+    expect(await screen.findByText(/xUDT · 8 decimals/)).toHaveClass('text-body');
+    expect(await screen.findByText(/Another token also calls itself TEST/)).toHaveTextContent(
+      'Tell them apart by type hash; this one is 0x12121212…1212.'
     );
-    expect(
-      await screen.findByText(/Another token also calls itself TEST/, undefined, { timeout: 5000 })
-    ).toHaveTextContent('Tell them apart by type hash; this one is 0x12121212…1212.');
   });
 
   it('explains the type script in tier 2 (IV-20)', async () => {
     const { container } = render(<TokenDetailPage typeHash={hash} />);
-    await screen.findByRole('heading', { name: 'TEST' }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: 'TEST' });
     const tier2 = container.querySelector('[data-tier="2"]')!;
     expect(tier2).toHaveTextContent(
       'the token’s type script; its code decides what a valid transfer is'
@@ -371,9 +361,7 @@ describe('Token board (F2 objects)', () => {
       issuer: { lockHash: other, address, lockKind: 'Default Lock' },
     });
     render(<TokenDetailPage typeHash={hash} />);
-    const note = await screen.findByText(/the lock hash of the owner that can mint/, undefined, {
-      timeout: 5000,
-    });
+    const note = await screen.findByText(/the lock hash of the owner that can mint/);
     expect(note).toHaveTextContent(address);
     expect(note).toHaveClass('[overflow-wrap:anywhere]');
     // Lane L: the issuer's address is a link to its page.
@@ -387,7 +375,7 @@ describe('Token board (F2 objects)', () => {
   it('says when it last moved and what that transaction did', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
-    const line = await screen.findByText(/^It last moved/, undefined, { timeout: 5000 });
+    const line = await screen.findByText(/^It last moved/);
     // Lane P: the day it moved, on the UTC+8 clock; how long ago is the date's hover.
     expect(line.textContent).toMatch(/^It last moved on \d{4}-\d\d-\d\d: .+\.$/);
     expect(line.querySelector('time')).toHaveAttribute('title', expect.stringMatching(/ ago$/));

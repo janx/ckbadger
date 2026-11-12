@@ -223,7 +223,13 @@ describe('Transactions pool view', () => {
       nextCursor: null,
     });
     const statuses = ['pending', 'proposed', 'committed_awaiting_index'] as const;
-    // 59.5 s ago: "59s ago", the longest seconds form, whatever the test's own few ms add
+    // 59.5 s ago: "59s ago", the longest seconds form. The wait is read from the clock when the
+    // row renders, which a loaded machine can put more than half a second after this line (it read
+    // "1m ago" under two suites at once), so the clock stands still for this test; timers stay real.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const timestamp = String(Date.now() - 59_500);
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,

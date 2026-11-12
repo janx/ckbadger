@@ -109,8 +109,8 @@ afterEach(() => {
 
 async function page() {
   const view = render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
-  await screen.findByRole('heading', { level: 1, name: 'Nervape 3x' }, { timeout: 5000 });
-  await screen.findByRole('table', { name: 'Newest objects' }, { timeout: 5000 });
+  await screen.findByRole('heading', { level: 1, name: 'Nervape 3x' });
+  await screen.findByRole('table', { name: 'Newest objects' });
   return view;
 }
 
@@ -183,11 +183,7 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
       traits: { Color: 'Calm Blue' },
     })
   );
-  const chip = await screen.findByRole(
-    'button',
-    { name: 'Clear Color = Calm Blue' },
-    { timeout: 5000 }
-  );
+  const chip = await screen.findByRole('button', { name: 'Clear Color = Calm Blue' });
   expect(container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')).toHaveAttribute(
     'stroke',
     'var(--c-gel-overlay)'
@@ -257,7 +253,7 @@ it('opens Recent activity with five rows and two links that open the full feed i
 it('opens with the cluster kind, its on-chain description, its composition and a summary (OB-C4, C7, C8)', async () => {
   const { container } = await page();
   // Consistency plan C1: the tab names the cluster.
-  expect(document.title).toBe('Nervape 3x · cluster · CKBadger');
+  await waitFor(() => expect(document.title).toBe('Nervape 3x · cluster · CKBadger'));
   const header = screen.getByRole('banner');
   const lede = header.querySelector('[data-role="lede"]')!;
   expect(lede).toHaveTextContent(
@@ -392,9 +388,7 @@ it('draws holder bars in the objects colour (OB-C7)', async () => {
 it('still shows an empty Newest list honestly', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
   render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
-  expect(
-    await screen.findByText('No matching objects.', undefined, { timeout: 5000 })
-  ).toBeInTheDocument();
+  expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
 });
 
 // Visual pass on the live services (2026-10-30).
@@ -414,7 +408,7 @@ it('marks every collection activity row as an object row, as the board does', as
     ],
   });
   await page();
-  await screen.findAllByRole('article', undefined, { timeout: 5000 });
+  await screen.findAllByRole('article');
   const rows = [...document.querySelectorAll('[data-feed-row]')];
   expect(rows.length).toBeGreaterThan(0);
   for (const row of rows)

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import FiberChannelDetailPage from '@/app/fiber/channels/[id]/client-page';
@@ -49,12 +49,12 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
     );
     expect(await screen.findByText('force-closed · settled')).toBeInTheDocument();
     // Consistency plan C1: the tab names the page.
-    expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · Fiber channel · CKBadger$/);
+    await waitFor(() =>
+      expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · Fiber channel · CKBadger$/)
+    );
     // no jade uppercase eyebrow (FF-C6)
     expect(screen.queryByText(/on-chain channel/i)).toBeNull();
-    expect(
-      await screen.findAllByText('Fiber Funding Lock', {}, { timeout: 3000 })
-    ).not.toHaveLength(0);
+    expect(await screen.findAllByText('Fiber Funding Lock')).not.toHaveLength(0);
     expect(screen.getAllByText('Fiber Commitment Lock').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Default Lock').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: /^1 · Open/ })).toBeInTheDocument();

@@ -185,7 +185,7 @@ it('shows an expired .bit Cell as expired, grey and dashed, while its cell remai
   expired.versions[0].decoded.expiredAt = String(Date.parse('2026-04-24T04:57:22Z') / 1000);
   vi.mocked(api.getItemProtocol).mockResolvedValue(expired);
   render(<Page identityId={evidence.itemId} />);
-  await screen.findByRole('heading', { name: 'Term expired on 2026-04-24' }, { timeout: 4000 });
+  await screen.findByRole('heading', { name: 'Term expired on 2026-04-24' });
   const badge = document.querySelector('[data-identity-state]')!;
   expect(badge).toHaveTextContent('Expired');
   expect(badge).toHaveAttribute('data-identity-state', 'expired');

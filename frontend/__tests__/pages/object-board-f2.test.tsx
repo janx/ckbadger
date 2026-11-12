@@ -125,8 +125,8 @@ afterEach(() => {
 
 async function page() {
   const view = render(<SporeDetailPage sporeId={NERVAPE3X_ID} />);
-  await screen.findByRole('heading', { level: 1, name: 'Nervape 3x' }, { timeout: 5000 });
-  await screen.findByLabelText('Traits', undefined, { timeout: 5000 });
+  await screen.findByRole('heading', { level: 1, name: 'Nervape 3x' });
+  await screen.findByLabelText('Traits');
   return view;
 }
 
@@ -156,11 +156,7 @@ it('opens with one hero section — name, status, id and the composition sentenc
   const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
   const story = await within(tier2).findByText(
     // Lane P: the path only; the dates are the metrics, the ages the sentence's hover.
-    /^Minted to a secp256k1 lock, then moved/,
-    undefined,
-    {
-      timeout: 5000,
-    }
+    /^Minted to a secp256k1 lock, then moved/
   );
   expect(story).toHaveTextContent(
     'then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
@@ -176,8 +172,8 @@ it('opens with one hero section — name, status, id and the composition sentenc
 
 it('keeps tier 1 within the prose budget: one lede and captions under the evidence (F4, §0)', async () => {
   const { container } = await page();
-  await screen.findByRole('region', { name: 'CKB held in its cell' }, { timeout: 5000 });
-  await screen.findByRole('region', { name: 'In Nervape 3x' }, { timeout: 5000 });
+  await screen.findByRole('region', { name: 'CKB held in its cell' });
+  await screen.findByRole('region', { name: 'In Nervape 3x' });
   expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
 });
 
@@ -258,11 +254,7 @@ it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async ()
 
 it('shows its cell at minting and now, to scale, with what changed (OB-9)', async () => {
   await page();
-  const cell = await screen.findByRole(
-    'region',
-    { name: 'CKB held in its cell' },
-    { timeout: 5000 }
-  );
+  const cell = await screen.findByRole('region', { name: 'CKB held in its cell' });
   expect(cell).toHaveTextContent('1 CKB per byte · all occupied, none free');
   // R11: no coloured words in tier 1; the bars keep the occupied colour
   expect(within(cell).getByText('all occupied')).not.toHaveClass('text-jade');
@@ -285,7 +277,7 @@ it('shows its cell at minting and now, to scale, with what changed (OB-9)', asyn
 
 it('places it in its collection with the composition count and cluster cell (OB-10)', async () => {
   await page();
-  const coll = await screen.findByRole('region', { name: 'In Nervape 3x' }, { timeout: 5000 });
+  const coll = await screen.findByRole('region', { name: 'In Nervape 3x' });
   // Phase 5 (A11): the collection, run on its name; the link to it is the note.
   const heading = within(coll).getByRole('heading', { name: 'Collection Nervape 3x' });
   expectPrompt(heading, 'Collection', 'Nervape 3x');
@@ -319,9 +311,7 @@ it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C
   ])
     expect(within(rail).getByText(label)).toBeInTheDocument();
   expect(rail).toHaveTextContent('Nervape Shadow Lock');
-  expect(
-    await within(rail).findByText('1 transfer since minting', undefined, { timeout: 5000 })
-  ).toBeInTheDocument();
+  expect(await within(rail).findByText('1 transfer since minting')).toBeInTheDocument();
   // C7: the metric shows the date; the time of day stays in the metric's title.
   expect(rail).toHaveTextContent('2026-10-22');
   expect(within(rail).getByText('Minted').parentElement).toHaveAttribute(

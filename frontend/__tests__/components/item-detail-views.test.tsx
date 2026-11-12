@@ -109,9 +109,7 @@ it('draws an identity collection its weekly transfers from the insights it is se
     ],
   });
   render(<CollectionDetail id="dotbit" kind="identity" />);
-  expect(
-    await screen.findByText(/Week of 2023-11-08: 7 transfers/, {}, { timeout: 3000 })
-  ).toBeInTheDocument();
+  expect(await screen.findByText(/Week of 2023-11-08: 7 transfers/)).toBeInTheDocument();
   expect(api.getCollectionInsights).toHaveBeenCalledWith('dotbit', 'identity');
   expect(screen.queryByText(/not indexed for identity collections/)).not.toBeInTheDocument();
   // Lane E: an identity collection has no developer evidence; no empty tier 2 (was an eyebrow and

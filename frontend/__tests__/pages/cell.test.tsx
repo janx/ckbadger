@@ -254,7 +254,9 @@ describe('CellDetailPage', () => {
     expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
     // Consistency plan C1: the tab names the page.
     // Lane U (U3): the tab names a cell — "Cell 0xabab…abab:0 · CKBadger".
-    expect(document.title).toMatch(/^Cell 0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · CKBadger$/);
+    await waitFor(() =>
+      expect(document.title).toMatch(/^Cell 0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · CKBadger$/)
+    );
     expect(screen.getByText('Unspent for').parentElement).toHaveTextContent(
       /^Unspent for1 mas of #125$/
     );

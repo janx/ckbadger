@@ -323,7 +323,7 @@ describe('protocol byte evidence', () => {
     const { rerender } = render(<ProtocolEvidence title="Copy" dataHex={value} fields={[]} />);
     fireEvent.click(screen.getByRole('button', { name: 'Copy raw bytes' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(value));
-    expect(screen.getByRole('status')).toHaveTextContent('Raw bytes copied.');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Raw bytes copied.'));
     rerender(<ProtocolEvidence title="Copy" dataHex="0xcd" fields={[]} />);
     expect(screen.queryByText('Raw bytes copied.')).not.toBeInTheDocument();
   });

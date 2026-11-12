@@ -33,8 +33,6 @@ const INPUT_LOCK = '0x29e560749fc5c785e3c1cfc3e14c0e608ec87120f0c066facf023ee8bd
 const TYPE_SCRIPT = '0xba0286acbad839ae8a95e182d7698efdf654135d483b92863c55c80d170868ad';
 const OUTPUT_LOCK = '0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0';
 let mockSearchParams = new URLSearchParams();
-/** Other lanes' suites share this machine: give first renders room. */
-const SLOW = { timeout: 5000 };
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -371,13 +369,13 @@ describe('Transaction board, tier 1', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     render(<TransactionDetailPage />);
-    const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' });
     // the kind line says "Transaction" before the action (seals by kind, C10)
     const kindLine = document.querySelector('[data-sealed-kind]') as HTMLElement;
     expect(kindLine).toHaveTextContent(/^Transaction$/);
     expectBefore(kindLine, h1);
     expect(h1.querySelector('[data-class]')).toBeNull();
-    const summary = await screen.findByTestId('tx-summary', {}, SLOW);
+    const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
       'Nervape 3x 0x51c7...96f2 moved from ckb1qzda...cjk9lz to ckb1qzda...shp3hr. The sender paid a 0.00064119 CKB fee.'
     );
@@ -392,8 +390,8 @@ describe('Transaction board, tier 1', () => {
   // copy button; the summary and the comment under both, from the page's left edge.
   it('presses the transaction’s stone beside its name plate, the summary under both, outside the facts and the cells', async () => {
     const { container } = render(<TransactionDetailPage />);
-    const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
-    await screen.findByTestId('tx-cells-frame', {}, SLOW);
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' });
+    await screen.findByTestId('tx-cells-frame');
     const { head: seal } = expectTxSeals(
       container,
       { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
@@ -431,10 +429,10 @@ describe('Transaction board, tier 1', () => {
     expect(head.closest('header')).toContainElement(h1);
     expectBefore(seal, h1);
     expect(head).not.toContainElement(
-      await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW)
+      await screen.findByRole('complementary', { name: 'Transaction facts' })
     );
     expect(head).not.toContainElement(
-      await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' }, SLOW)
+      await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' })
     );
   });
 
@@ -443,7 +441,7 @@ describe('Transaction board, tier 1', () => {
   // and its right half on the created one. The sheets' heads end with the API's exact totals.
   it('presses the same stone across the seam between the two sheets, from lg', async () => {
     const { container } = render(<TransactionDetailPage />);
-    await screen.findByTestId('tx-cells-frame', {}, SLOW);
+    await screen.findByTestId('tx-cells-frame');
     const { seam } = expectTxSeals(
       container,
       { kind: 'tx', hash: TX_HASH, consumed: 1, created: 1 },
@@ -474,7 +472,7 @@ describe('Transaction board, tier 1', () => {
   // the summary, from the page's left edge (it was in the column beside the stone).
   it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
     const { container } = render(<TransactionDetailPage />);
-    const first = await screen.findByText('1 cell became 1.', {}, SLOW);
+    const first = await screen.findByText('1 cell became 1.');
     const comment = first.closest('.comment') as HTMLElement;
     expect(comment).not.toBeNull();
     expect(
@@ -492,7 +490,7 @@ describe('Transaction board, tier 1', () => {
       'Transaction'
     );
     expect(comment.parentElement).toBe(below);
-    const summary = await screen.findByTestId('tx-summary', {}, SLOW);
+    const summary = await screen.findByTestId('tx-summary');
     expect(Array.from(below!.children)).toEqual([summary, comment]);
     expect(head.closest('header')).toContainElement(comment);
     // reading order: the identity (the hash and its copy button), the summary, the comment, then
@@ -509,7 +507,7 @@ describe('Transaction board, tier 1', () => {
 
   it('keeps the status, time, block and fee in a facts rail (TX-18)', async () => {
     render(<TransactionDetailPage />);
-    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW);
+    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' });
     expect(rail).toHaveTextContent('Committed');
     expect(rail).toHaveTextContent('27,369 confirmations');
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
@@ -521,12 +519,8 @@ describe('Transaction board, tier 1', () => {
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
     // Responsive review A#17: on a phone the facts rail came after the six cell cards.
     render(<TransactionDetailPage />);
-    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW);
-    const table = await screen.findByRole(
-      'table',
-      { name: 'Balance changes by participant' },
-      SLOW
-    );
+    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' });
+    const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
     const before = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     const hash = screen.getByRole('button', { name: 'Copy transaction hash' });
@@ -540,15 +534,8 @@ describe('Transaction board, tier 1', () => {
 
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
     render(<TransactionDetailPage />);
-    const table = await screen.findByRole(
-      'table',
-      { name: 'Balance changes by participant' },
-      SLOW
-    );
-    await waitFor(
-      () => expect(table).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed'),
-      SLOW
-    );
+    const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
+    await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed'));
     expect(table.querySelectorAll('[data-composition="btc_ckb"]')).toHaveLength(2);
     expect(table).toHaveTextContent('−502');
     expect(table).not.toHaveTextContent('502.00000000');
@@ -561,8 +548,8 @@ describe('Transaction board, tier 1', () => {
 describe('Transaction board, tier 2', () => {
   it('lights a witness, its groups and their dep, and dims everything unrelated (TX-14)', async () => {
     render(<TransactionDetailPage />);
-    const w0 = await screen.findByTestId('tx-witness-item-0', {}, SLOW);
-    await screen.findAllByText(/supplies code for/, {}, SLOW);
+    const w0 = await screen.findByTestId('tx-witness-item-0');
+    await screen.findAllByText(/supplies code for/);
     fireEvent.mouseEnter(w0);
     expect(w0).toHaveAttribute('data-lit', 'true');
     expect(screen.getByTestId('tx-witness-item-1')).toHaveClass('opacity-25');
@@ -589,7 +576,7 @@ describe('Transaction board, tier 2', () => {
       const el = document.querySelector('#tx-dep-0');
       if (!el) throw new Error('no dep row yet');
       return el as HTMLElement;
-    }, SLOW);
+    });
     const deps = [dep0, ...Array.from(document.querySelectorAll('[id^="tx-dep-"]')).slice(1)];
     expect(deps.length).toBeGreaterThan(1);
     for (const dep of deps) {
@@ -608,7 +595,7 @@ describe('Transaction board, tier 2', () => {
       const el = document.querySelector('#tx-dep-0');
       if (!el) throw new Error('no dep row yet');
       return el as HTMLElement;
-    }, SLOW);
+    });
     expect(dep0).toHaveTextContent('dep group');
     expect(dep0).toHaveTextContent('supplies code for Default Lock');
     expect(dep0).toHaveTextContent('↳ 0xmember:0 · Default Lock code, 52,048 B');
@@ -651,13 +638,9 @@ describe('Transaction board, tier 2', () => {
   it('draws the proposal ruler and the exact capacity equation (TX-17, TX-19)', async () => {
     render(<TransactionDetailPage />);
     expect(
-      await screen.findByRole(
-        'img',
-        {
-          name: 'Proposed in block 99, committed 2 blocks later in 101; the commit window is 2 to 10 blocks',
-        },
-        SLOW
-      )
+      await screen.findByRole('img', {
+        name: 'Proposed in block 99, committed 2 blocks later in 101; the commit window is 2 to 10 blocks',
+      })
     ).toBeInTheDocument();
     expect(await screen.findByTestId('tx-capacity-equation')).toHaveTextContent(
       '555.00000000 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
@@ -669,11 +652,8 @@ describe('Transaction board, tier 2', () => {
 
   it('states the CoBuild actions a witness carries and for whose script (TX-36)', async () => {
     render(<TransactionDetailPage />);
-    const w1 = await screen.findByTestId('tx-witness-item-1', {}, SLOW);
-    await waitFor(
-      () => expect(w1).toHaveTextContent('#1 · CoBuild message7 B · read by Spore'),
-      SLOW
-    );
+    const w1 = await screen.findByTestId('tx-witness-item-1');
+    await waitFor(() => expect(w1).toHaveTextContent('#1 · CoBuild message7 B · read by Spore'));
     expect(screen.getByTestId('tx-witness-item-1')).toHaveTextContent(
       'message: 1 action for Spore: TransferSpore'
     );
@@ -710,7 +690,7 @@ describe('Transaction variants (D4)', () => {
       ],
     });
     render(<TransactionDetailPage />);
-    const inflow = await screen.findByTestId('tx-inflow', {}, SLOW);
+    const inflow = await screen.findByTestId('tx-inflow');
     expect(inflow).toHaveAttribute('data-inflow', 'dao');
     expect(inflow).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
     // What moved (v2): the compensation enters the CKB flow first, from the left, in gold
@@ -719,7 +699,7 @@ describe('Transaction variants (D4)', () => {
       .querySelector('[data-flow="ckb"] [data-flow-side="from"] [data-flow-end]');
     expect(first).toHaveAttribute('data-flow-end', 'compensation');
     expect(first).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
-    await screen.findByTestId('tx-capacity-equation', {}, SLOW);
+    await screen.findByTestId('tx-capacity-equation');
     expect(screen.getByTestId('tx-capacity-equation')).toHaveTextContent(
       '26,050.00000000 CKB in + 175.30634165 CKB compensation = 26,225.30633229 CKB out + 0.00000936 CKB fee'
     );
@@ -794,9 +774,7 @@ describe('Transaction variants (D4)', () => {
       minerMessageText: '0.210.0 (860c9bb 2026-09-21)',
     } as Awaited<ReturnType<typeof api.getBlock>>);
     render(<TransactionDetailPage />);
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Cellbase' }, SLOW)
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Cellbase' })).toBeInTheDocument();
     expect(screen.getByTestId('tx-summary')).toHaveTextContent(
       'The first transaction of block #101. It consumes no cell and pays the reward of block #89, 559.61739927 CKB.'
     );
@@ -834,12 +812,10 @@ describe('Transaction variants (D4)', () => {
     ]);
     expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
-    await waitFor(
-      () =>
-        expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
-          'miner lock Default Lock(0xabab...abab) · message “0.210.0 (860c9bb 2026-09-21)”'
-        ),
-      SLOW
+    await waitFor(() =>
+      expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
+        'miner lock Default Lock(0xabab...abab) · message “0.210.0 (860c9bb 2026-09-21)”'
+      )
     );
     expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('a cellbase runs no script');
     expect(api.getTransactionActivity).not.toHaveBeenCalled();
@@ -852,9 +828,7 @@ describe('Transaction variants (D4)', () => {
       delete (tx as Partial<TransactionDetail>)[key];
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx as TransactionDetail);
     render(<TransactionDetailPage />);
-    expect(await screen.findByTestId('tx-groups-ran', {}, SLOW)).toHaveTextContent(
-      'will run when committed'
-    );
+    expect(await screen.findByTestId('tx-groups-ran')).toHaveTextContent('will run when committed');
     expect(screen.queryByText(/0 ran/)).not.toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
@@ -881,7 +855,7 @@ describe('Transaction variants (D4)', () => {
   // script groups that read them.
   it('sets Witnesses and Cell deps above Script groups in the evidence tier', async () => {
     render(<TransactionDetailPage />);
-    const witnesses = await screen.findByRole('heading', { name: 'Witnesses · 2' }, SLOW);
+    const witnesses = await screen.findByRole('heading', { name: 'Witnesses · 2' });
     const deps = screen.getByRole('heading', { name: 'Cell deps' });
     const groups = screen.getByRole('heading', { name: 'Script groups' });
     const before = (a: Element, b: Element) =>
@@ -898,7 +872,7 @@ describe('Transaction variants (D4)', () => {
       delete (tx as Partial<TransactionDetail>)[key];
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx as TransactionDetail);
     render(<TransactionDetailPage />);
-    await screen.findByTestId('tx-groups-ran', {}, SLOW);
+    await screen.findByTestId('tx-groups-ran');
     expect(screen.getAllByRole('heading', { name: /script groups/i })).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Script groups' })).toBeInTheDocument();
     expect(screen.queryByText(/Capacity entering the pool/)).toBeNull();
@@ -908,8 +882,8 @@ describe('Transaction variants (D4)', () => {
 describe('Transaction board, R2b-a fields', () => {
   it('marks change outputs and reads decoded lock args (TX-22, TX-20)', async () => {
     render(<TransactionDetailPage />);
-    const out = await screen.findByTestId('tx-io-output-0', {}, SLOW);
-    await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'), SLOW);
+    const out = await screen.findByTestId('tx-io-output-0');
+    await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'));
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
     expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
       'pubkey hash 0x111111...1111'
@@ -953,14 +927,12 @@ describe('Transaction board, R2b-a fields', () => {
       ],
     } as TransactionDetail);
     render(<TransactionDetailPage />);
-    await screen.findByTestId('tx-io-output-0', {}, SLOW);
+    await screen.findByTestId('tx-io-output-0');
     // A misfit lock says why its args were not decoded, quietly, in place of the fields.
-    await waitFor(
-      () =>
-        expect(
-          document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)
-        ).toHaveTextContent(`args not decoded: ${joyidReason}`),
-      SLOW
+    await waitFor(() =>
+      expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
+        `args not decoded: ${joyidReason}`
+      )
     );
     expect(
       document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
@@ -999,13 +971,11 @@ describe('Transaction board, R2b-a fields', () => {
       ],
     } as TransactionDetail);
     render(<TransactionDetailPage />);
-    const w1 = await screen.findByTestId('tx-witness-item-1', {}, SLOW);
-    await waitFor(
-      () =>
-        expect(w1).toHaveTextContent(
-          'message: 2 actions for Spore: MintProxy, Spore (script info 0x454545...4545)'
-        ),
-      SLOW
+    const w1 = await screen.findByTestId('tx-witness-item-1');
+    await waitFor(() =>
+      expect(w1).toHaveTextContent(
+        'message: 2 actions for Spore: MintProxy, Spore (script info 0x454545...4545)'
+      )
     );
   });
 
@@ -1040,7 +1010,7 @@ describe('Transaction board, R2b-a fields', () => {
       ],
     });
     render(<TransactionDetailPage />);
-    expect(await screen.findByTestId('tx-summary', {}, SLOW)).toHaveTextContent(
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
       'It ran .bit Time Index State and .bit Time Info. ckb1qzda...cjk9lz paid a 0.00064119 CKB fee.'
     );
   });
@@ -1049,7 +1019,7 @@ describe('Transaction board, R2b-a fields', () => {
 describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
   it('draws the object flow and the CKB flow, from the left to the right, before the ledger', async () => {
     render(<TransactionDetailPage />);
-    const frame = await screen.findByTestId('tx-what-moved', {}, SLOW);
+    const frame = await screen.findByTestId('tx-what-moved');
     const groups = within(frame).getAllByRole('group');
     expect(groups.map((g) => g.getAttribute('data-flow'))).toEqual([
       `object:0x51c75a${'00'.repeat(26)}96f2`,
@@ -1081,7 +1051,7 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
     tx.inputs![0].address = feedSamples.objectTransfer.participants[0].address!;
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
     render(<TransactionDetailPage />);
-    const frame = await screen.findByTestId('tx-what-moved', {}, SLOW);
+    const frame = await screen.findByTestId('tx-what-moved');
     const [object] = within(frame).getAllByRole('group');
     const giver = object.querySelector('[data-flow-side="from"] [data-flow-end="party"]')!;
     fireEvent.mouseEnter(giver);
