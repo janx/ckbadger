@@ -336,15 +336,6 @@ function miner(block: Block, form: keyof typeof MINER_HEAD) {
   );
 }
 
-/** "4 txs · 3 proposals · 1 uncle": the block's contents in words (the glyph's facts). */
-function contents(block: Block): string {
-  return [
-    formatCount(block.transactionSizes.length, 'tx', 'txs'),
-    ...(block.proposalsCount > 0 ? [formatCount(block.proposalsCount, 'proposal')] : []),
-    ...(block.unclesCount > 0 ? [formatCount(block.unclesCount, 'uncle')] : []),
-  ].join(' · ');
-}
-
 function fees(block: Block, unit: boolean) {
   return (
     <ExactCkb
@@ -391,9 +382,18 @@ function reward(block: Block) {
 }
 
 /**
- * A block on a phone (board L1): its seal leading the row, the height with its contents and age,
- * who mined it and the fees, then the quiet figures — hash, size, cycles and when the reward is
- * paid.
+ * A block on a phone (board L1): its seal leading the row, the height with its transactions and
+ * age, who mined it and the fees, then the quiet figures — hash, proposals and uncles, size,
+ * cycles and when the reward is paid. What every reader comes for leads; the consensus detail
+ * (the two-step commit's proposals, the orphan rate's uncles) stands with the developer figures,
+ * after the hash that starts that line on every row, each count one unbroken unit and only when
+ * non-zero.
+ *
+ * The head line never wraps: the 13 px height, "#20,987,284" (11 characters, 85.8 px), and the
+ * 12 px gap leave 196.2 px at 360 and 226.2 at 390 for the right part, 27 and 31 characters at
+ * 12 px; "999 txs · 59m ago" is 17 (122.4 px, 220.2 in all). Only an age that is not an age, "this
+ * device's clock is behind" (29 characters), drops it under the height, whole. With the counts it
+ * read "4 txs · 1 proposal · 13s ago" (28) and dropped at 360 while its neighbours did not.
  *
  * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 294 px beside the
  * stone; 12 px Courier Prime, 7.2 px a character, the unit 11 px, 6.6): "miner ckb1...93hhsj" (19
@@ -417,7 +417,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
               {formatBlockNumber(block.number)}
             </Link>
           ),
-          right: `${contents(block)} · ${formatTimeAgo(block.timestamp)}`,
+          right: `${formatCount(block.transactionSizes.length, 'tx', 'txs')} · ${formatTimeAgo(block.timestamp)}`,
         },
         {
           key: 'miner',
@@ -444,6 +444,16 @@ function BlockPhoneRow({ block }: { block: Block }) {
                   copyable={false}
                   className="text-meta"
                 />,
+                block.proposalsCount > 0 && (
+                  <span key="p" className="whitespace-nowrap">
+                    {formatCount(block.proposalsCount, 'proposal')}
+                  </span>
+                ),
+                block.unclesCount > 0 && (
+                  <span key="u" className="whitespace-nowrap">
+                    {formatCount(block.unclesCount, 'uncle')}
+                  </span>
+                ),
                 block.hardforkActivation && (
                   <Link key="hf" href="/hardforks">
                     HF · {block.hardforkActivation.shortName.toUpperCase()}

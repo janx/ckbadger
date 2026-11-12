@@ -530,24 +530,80 @@ describe('BlocksPage · Blocks v3 board', () => {
       vi.restoreAllMocks();
     });
 
-    it('gives each block three lines at 358 px: height and contents · miner and fees · the figures', async () => {
+    it('gives each block three lines at 358 px: height, txs and age · miner and fees · the figures', async () => {
       atContainerWidth(358);
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       expect(cards).toHaveLength(2);
       expect(screen.queryByRole('table')).toBeNull();
       expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
-        ['identity', '#20,828,894', expect.stringMatching(/^5 txs · 4 proposals · .+ ago$/)],
+        // the head line: what every reader comes for, the height, the transactions and the age
+        ['identity', '#20,828,894', expect.stringMatching(/^5 txs · \d+[smhd] ago$/)],
         ['miner', 'miner ckb1...93hhsj', 'fees 0.05060000 CKB'],
         [
           'figures',
-          // Every desktop column: hash, size with its overhead, cycles, the reward.
-          '0x0000...d2de · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
+          // Every desktop column: hash, the proposals (consensus detail, after the hash that
+          // starts every row's line), size with its overhead, cycles, the reward.
+          '0x0000...d2de · 4 proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
           null,
         ],
       ]);
       // A reward not yet paid says where it will be.
       expect(phoneLines(cards[1])[2].left).toMatch(/· reward pays at #20,828,904$/);
+    });
+
+    // Follow-up: the head line carried the proposal and uncle counts too, so at 360 px (294 px of
+    // text column, the 13 px height #20,987,284 85.8 px and the 12 px gap leaving 196.2, 27
+    // characters at 12 px) "4 txs · 1 proposal · 13s ago" (28) dropped under the height while
+    // "1 tx · 2m ago" stood beside it, and with an uncle it wrapped at 390 too. The head line now
+    // holds the height, the transactions and the age; proposals and uncles join the quiet figures,
+    // each count one unbroken unit, only when non-zero. jsdom cannot measure: the characters are the
+    // measure, 7.8 px each at 13 px, 7.2 at 12, 6.6 at 11.
+    it('keeps the head line to the height, the transactions and the age, one line at 360 px', async () => {
+      atContainerWidth(358);
+      const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+      const busy = {
+        ...page.data[0],
+        number: 20_987_284,
+        hash: `0x${'5e'.repeat(32)}`,
+        transactionSizes: Array<number>(999).fill(355),
+        transactionsCount: 999,
+        proposalsCount: 12,
+        unclesCount: 1,
+        timestamp: ago(59 * 60_000 + 20_000),
+      };
+      const plain = {
+        ...page.data[1],
+        number: 20_987_283,
+        hash: `0x${'5d'.repeat(32)}`,
+        proposalsCount: 0,
+        unclesCount: 0,
+      };
+      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: [busy, plain] });
+      render(<BlocksPage />);
+      const cards = await screen.findAllByTestId('block-row-mobile');
+      const [head, , figures] = phoneLines(cards[0]);
+      expect([head.left, head.right]).toEqual(['#20,987,284', '999 txs · 59m ago']);
+      // the consensus detail stands with the quiet figures, after the hash, each count unbroken
+      expect(figures.left).toMatch(/^0x5e5e\.\.\.5e5e · 12 proposals · 1 uncle · /);
+      const quiet = cards[0].querySelector('[data-line="figures"]') as HTMLElement;
+      for (const count of ['12 proposals', '1 uncle'])
+        expect(within(quiet).getByText(count)).toHaveClass('whitespace-nowrap');
+      // a block with neither writes neither
+      const [plainHead, , plainFigures] = phoneLines(cards[1]);
+      expect(plainHead.right).toMatch(/^1 tx · \d+[smhd] ago$/);
+      expect(plainFigures.left).not.toMatch(/proposal|uncle/);
+      // the worst realistic head: 85.8 + 12 + 17 × 7.2 = 220.2 px, inside 294 (and 324)
+      const headWidth = (left: string, right: string) =>
+        chars(left.length, 13) + 12 + chars(right.length, 12);
+      expect(headWidth(head.left, head.right!)).toBeCloseTo(220.2, 6);
+      expect(headWidth(head.left, head.right!)).toBeLessThanOrEqual(294);
+      // the right part holds 27 characters at 360 and 31 at 390; the old head of this block was 42
+      expect(Math.floor((294 - chars(11, 13) - 12) / chars(1, 12))).toBe(27);
+      expect(Math.floor((324 - chars(11, 13) - 12) / chars(1, 12))).toBe(31);
+      expect(headWidth(head.left, '999 txs · 12 proposals · 1 uncle · 59m ago')).toBeGreaterThan(
+        324
+      );
     });
 
     // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)
