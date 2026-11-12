@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
@@ -71,7 +71,7 @@ describe('Cell page against the Cell board', () => {
 
   it('presses the cell’s own seal: a Spore object, its hexagon window and type glyph (seal kinds, C3)', async () => {
     const { container } = view();
-    await screen.findByRole('heading', { level: 1 }, { timeout: 5000 });
+    await screen.findByRole('heading', { level: 1 });
     // the class is the transaction page's: kindOf() of the API's typeCellType and display
     const seal = expectOnePageSeal(container, {
       kind: 'cell',
@@ -94,7 +94,7 @@ describe('Cell page against the Cell board', () => {
   // edge (it was the first line beside the stone, under the h1).
   it('says what inventory item the cell is, in one line opening the head under the plate (lane U, U6)', async () => {
     const { container } = view();
-    const line = await screen.findByTestId('cell-inventory', undefined, { timeout: 5000 });
+    const line = await screen.findByTestId('cell-inventory');
     expect(await within(line).findByText(/Nervape 3x/)).toBeInTheDocument();
     expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6…2796f2 BTC\+CKB$/);
     expect(within(line).getByRole('link')).toHaveAttribute(
@@ -116,7 +116,7 @@ describe('Cell page against the Cell board', () => {
   // copy; under both, the inventory line, the origin line and the "only name" sentence, in order.
   it('stands the cell’s name plate beside its stone: Cell and its status, the short out point, the full one', async () => {
     const { container } = view();
-    await screen.findByTestId('cell-inventory', undefined, { timeout: 5000 });
+    await screen.findByTestId('cell-inventory');
     const { kindLine, nameBox, title, below } = expectNamePlate(container, 'Cell');
     // the kind word, then the status: the live dot (no text) and "live"
     expect(kindLine.children).toHaveLength(2);
@@ -152,7 +152,7 @@ describe('Cell page against the Cell board', () => {
 
   it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
     view();
-    await screen.findByRole('heading', { name: /^Bytes / }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: /^Bytes / });
     // Lane U (U3): the page presents a CELL, not a transaction output — no "Transaction … /
     // output 1" breadcrumb; the transaction and the index are one line under the full out point.
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
@@ -163,7 +163,7 @@ describe('Cell page against the Cell board', () => {
     const h1 = screen.getByRole('heading', { level: 1 });
     expect(h1).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
     expect(h1).toHaveClass('text-entity');
-    expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger');
+    await waitFor(() => expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger'));
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
     const origin = screen.getByTestId('cell-origin');
     expect(origin).toHaveTextContent(
@@ -205,10 +205,11 @@ describe('Cell page against the Cell board', () => {
 
   it('shows the lock and type by name, never a raw code hash (SC-C4)', async () => {
     view();
-    const facts = await screen.findByRole('region', { name: 'Cell facts' }, { timeout: 5000 });
-    expect(
-      await within(facts).findByRole('link', { name: 'Nervape Shadow Lock' }, { timeout: 5000 })
-    ).toHaveAttribute('href', `/mainnet/script/${cell.lock!.codeHash}?hashType=data1`);
+    const facts = await screen.findByRole('region', { name: 'Cell facts' });
+    expect(await within(facts).findByRole('link', { name: 'Nervape Shadow Lock' })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${cell.lock!.codeHash}?hashType=data1`
+    );
     expect(within(facts).getByRole('link', { name: 'Spore' })).toBeInTheDocument();
     expect(facts.textContent).not.toContain(cell.lock!.codeHash);
     expect(api.lookupScripts).toHaveBeenCalledWith(
@@ -222,7 +223,7 @@ describe('Cell page against the Cell board', () => {
 
   it('is one microscope: grouped pills, one hex box with both blocks, no view switch (SC-C5)', async () => {
     view();
-    await screen.findByRole('link', { name: 'Spore' }, { timeout: 5000 });
+    await screen.findByRole('link', { name: 'Spore' });
     expect(screen.queryByRole('button', { name: 'CellData' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'CellOutput' })).toBeNull();
     const index = screen.getByLabelText('Field index');
@@ -248,7 +249,7 @@ describe('Cell page against the Cell board', () => {
 
   it('lays bytes out 24 a row with offsets and an ASCII column (SC-C6)', async () => {
     view();
-    const box = await screen.findByLabelText('Cell bytes', undefined, { timeout: 5000 });
+    const box = await screen.findByLabelText('Cell bytes');
     expect(within(box).getAllByText('0x0000')).toHaveLength(2);
     expect(within(box).getAllByText('0x0018').length).toBeGreaterThan(0);
     const dataBlock = within(box).getByLabelText('CellData byte map');
@@ -257,8 +258,8 @@ describe('Cell page against the Cell board', () => {
 
   it('links byte, pill, map and the sticky detail (SC-C5, SC-C6)', async () => {
     view();
-    await screen.findByRole('link', { name: 'Nervape Shadow Lock' }, { timeout: 5000 });
-    const box = await screen.findByLabelText('Cell bytes', undefined, { timeout: 5000 });
+    await screen.findByRole('link', { name: 'Nervape Shadow Lock' });
+    const box = await screen.findByLabelText('Cell bytes');
     fireEvent.mouseOver(box.querySelector('[data-byte="output:40"]')!);
     const detail = screen.getByRole('complementary', { name: 'Field detail' });
     expect(detail).toHaveTextContent('lock · code_hash');
@@ -334,7 +335,7 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
 
   it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {
     view();
-    const facts = await screen.findByRole('region', { name: 'Cell facts' }, { timeout: 5000 });
+    const facts = await screen.findByRole('region', { name: 'Cell facts' });
     // the epoch takes its own line under the time, so the seven facts fit one row at 1440
     expect(facts).toHaveTextContent('2026-10-22 22:43:55 UTC+8epoch 15,157 · 112/1800');
     expect(within(facts).getByText(/^epoch 15,157/)).toHaveClass('block');
@@ -347,14 +348,12 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
     void _drop;
     vi.mocked(api.getCell).mockResolvedValue(withoutEpoch as Cell);
     view();
-    expect(
-      await screen.findByText(/has no createdEpoch/, undefined, { timeout: 5000 })
-    ).toHaveAttribute('role', 'alert');
+    expect(await screen.findByText(/has no createdEpoch/)).toHaveAttribute('role', 'alert');
   });
 
   it('gives the data its hash formula and value in the detail (SC-C6)', async () => {
     view();
-    const map = await screen.findByRole('group', { name: 'Capacity map' }, { timeout: 5000 });
+    const map = await screen.findByRole('group', { name: 'Capacity map' });
     fireEvent.mouseEnter(within(map).getByTitle('data · 181 bytes'));
     const detail = screen.getByRole('complementary', { name: 'Field detail' });
     expect(detail).toHaveTextContent('data hashblake2b(data)');
@@ -365,7 +364,7 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
 
   it('pads a short last hex row with bytes of the same width, so ASCII columns align', async () => {
     view();
-    const box = await screen.findByLabelText('Cell bytes', undefined, { timeout: 5000 });
+    const box = await screen.findByLabelText('Cell bytes');
     const pads = box.querySelectorAll('[data-pad]');
     expect(pads.length).toBeGreaterThan(0);
     for (const pad of pads) expect(pad).toHaveClass('px-px');

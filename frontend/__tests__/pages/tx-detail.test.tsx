@@ -501,7 +501,9 @@ describe('TransactionDetailPage', () => {
     expect(args).toHaveTextContent(/^1 in → 1 out$/);
     expect(args).toHaveClass('text-text-dim');
     // Consistency plan C1: the tab names the page.
-    expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/);
+    await waitFor(() =>
+      expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/)
+    );
     expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
     expect(screen.getByText(/\d confirmations?$/)).toBeInTheDocument();
   });
@@ -794,7 +796,7 @@ describe('TransactionDetailPage', () => {
     );
     expect(link).not.toBeNull();
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
-  }, 10000);
+  });
 
   it('uses domain cell labels without inventing an unknown script name', async () => {
     render(<TransactionDetailPage />);
@@ -882,7 +884,7 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionGraph).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Raw data'));
     fireEvent.click(screen.getByText('Cell graph'));
-    expect(await screen.findByTestId('mock-cell-graph', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
     expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
   });
 
@@ -1142,7 +1144,7 @@ describe('TransactionDetailPage', () => {
       },
     ]);
     render(<TransactionDetailPage />);
-    const member = await screen.findByRole('link', { name: '↳ 0xmember:3' }, { timeout: 5000 });
+    const member = await screen.findByRole('link', { name: '↳ 0xmember:3' });
     expect(member).toHaveAttribute('href', '/mainnet/cell/0xmember-3');
     fireEvent.mouseEnter(member.closest('#tx-dep-0')!);
     expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
@@ -1376,7 +1378,7 @@ describe('TransactionDetailPage', () => {
   it('honors the graph deep link without requiring an extra raw-data click', async () => {
     mockSearchParams = new URLSearchParams('tab=graph');
     render(<TransactionDetailPage />);
-    expect(await screen.findByTestId('mock-cell-graph', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
     expect(screen.getByText('Raw data').parentElement).toHaveAttribute('open');
   });
 

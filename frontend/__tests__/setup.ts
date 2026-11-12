@@ -1,6 +1,16 @@
 import '@testing-library/jest-dom';
+import { configure } from '@testing-library/dom';
 import { vi } from 'vitest';
 import { server } from './msw/server';
+
+// How long a findBy* / waitFor waits before it fails: 10 s, not Testing Library's default 1 s.
+// Measured with two full suites running at once (load average 50-60 on 24 cores, 7,212 waits):
+// every wait resolved, p99 1.6 s, p99.9 2.9 s, the slowest 4.6 s, and 260 waits took longer than
+// the old 1 s. 10 s is about twice the slowest; a wait that never resolves costs that and fails
+// with Testing Library's own message and DOM. It stays below the 15 s testTimeout
+// (vitest.config.mts), which covers a whole test: its waits and its rendering. No test waits for
+// something meant not to arrive, so no passing test spends the cap.
+configure({ asyncUtilTimeout: 10_000 });
 
 // jsdom logs a not-implemented error even when components correctly handle a null context.
 if (typeof HTMLCanvasElement !== 'undefined') {

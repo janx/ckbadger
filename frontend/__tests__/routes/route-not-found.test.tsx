@@ -7,7 +7,7 @@
 // a well-formed prefix 404 `not_found` — the page never asks it here.)
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { api } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
 
@@ -46,15 +46,10 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     const getForkAt = vi.spyOn(api, 'getForkAt');
     mount(STALE_FORK);
     expect(
-      await screen.findByRole(
-        'heading',
-        {
-          level: 1,
-          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
-        },
-        // the route's page is a lazy chunk; under the full suite it can take over a second
-        { timeout: 5000 }
-      )
+      await screen.findByRole('heading', {
+        level: 1,
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.getByText('Not found · 404')).toBeInTheDocument();
     expect(screen.queryByText(/the chain keeps/)).toBeNull();
@@ -62,21 +57,16 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     // The address is refused by its shape: no API request is made for it.
     expect(getForkAt).not.toHaveBeenCalled();
     // C1: the tab says so too.
-    expect(document.title).toBe('Not found · CKBadger');
+    await waitFor(() => expect(document.title).toBe('Not found · CKBadger'));
   });
 
   it('an uncle index that is not a number is a 404 too (the same notFound() signal)', async () => {
     mount('/mainnet/blocks/20894834/uncles/first');
     expect(
-      await screen.findByRole(
-        'heading',
-        {
-          level: 1,
-          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
-        },
-        // the route's page is a lazy chunk; under the full suite it can take over a second
-        { timeout: 5000 }
-      )
+      await screen.findByRole('heading', {
+        level: 1,
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.queryByText(/the chain keeps/)).toBeNull();
   });

@@ -77,7 +77,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
   it('opens with breadcrumb, role, the figure and one row of figures; the summary sentence in tier 2 (SC-S1, hierarchy v3)', async () => {
     await renderJoyid();
     // Consistency plan C1: the script family page names the tab.
-    expect(document.title).toBe('JoyID · script · CKBadger');
+    await waitFor(() => expect(document.title).toBe('JoyID · script · CKBadger'));
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
       'Scripts / Locks'
     );

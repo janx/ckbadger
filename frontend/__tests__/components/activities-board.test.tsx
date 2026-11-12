@@ -107,7 +107,7 @@ describe('Activities board (TX-30, TX-32, TX-29)', () => {
   it('says a load failure in sentence case with its reason', async () => {
     vi.mocked(api.getGlobalActivities).mockRejectedValue(new Error('index row missing'));
     render(<ActivitiesStreamExplorer />);
-    const failed = await screen.findByText('Could not read activities', {}, { timeout: 5000 });
+    const failed = await screen.findByText('Could not read activities');
     expect(failed).not.toHaveClass('uppercase');
     expect(screen.getByText('index row missing')).toBeInTheDocument();
   });

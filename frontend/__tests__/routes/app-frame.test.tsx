@@ -57,7 +57,6 @@ vi.mock('@/app/transactions/page', async () => {
 
 const STALE_FORK =
   '/mainnet/forks/20894012/0xc121e093d0cdd348db70be248efd25ee756af7fce2f24b92741a1084945a5bd4';
-const LAZY = { timeout: 5000 };
 
 function mount(path: string) {
   const router = createMemoryRouter(createAppRouter(), { initialEntries: [path] });
@@ -93,13 +92,13 @@ describe('the header is part of the frame (visual finish V6)', () => {
     mount('/mainnet/transactions');
     const [header] = await screen.findAllByRole('banner');
     gates.openTransactions();
-    expect(await screen.findByText('transactions page', {}, LAZY)).toBeInTheDocument();
+    expect(await screen.findByText('transactions page')).toBeInTheDocument();
     expect(screen.getAllByRole('banner')).toEqual([header]);
   });
 
   it('renders a resolved page under exactly one header and one footer', async () => {
     mount('/mainnet/dao');
-    expect(await screen.findByText('dao page', {}, LAZY)).toBeInTheDocument();
+    expect(await screen.findByText('dao page')).toBeInTheDocument();
     expect(screen.getAllByRole('banner')).toHaveLength(1);
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
     // the header comes before the page in reading order
@@ -114,7 +113,7 @@ describe('the header is part of the frame (visual finish V6)', () => {
   // output, inside the page's wrapper, before the footer.
   it('ends every page on one empty prompt, after the page and before the footer', async () => {
     mount('/mainnet/dao');
-    const page = await screen.findByText('dao page', {}, LAZY);
+    const page = await screen.findByText('dao page');
     const ends = screen.getAllByTestId('prompt-end');
     expect(ends).toHaveLength(1);
     const end = ends[0];
@@ -131,7 +130,7 @@ describe('the header is part of the frame (visual finish V6)', () => {
 
   it('closes the frame on one status line, after the footer', async () => {
     mount('/mainnet/dao');
-    expect(await screen.findByText('dao page', {}, LAZY)).toBeInTheDocument();
+    expect(await screen.findByText('dao page')).toBeInTheDocument();
     const lines = screen.getAllByRole('status', { name: 'Status line' });
     expect(lines).toHaveLength(1);
     expect(
@@ -156,14 +155,10 @@ describe('the header is part of the frame (visual finish V6)', () => {
   it('renders a page’s notFound() in the frame: the 404 under one header, one footer', async () => {
     mount(STALE_FORK);
     expect(
-      await screen.findByRole(
-        'heading',
-        {
-          level: 1,
-          name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
-        },
-        LAZY
-      )
+      await screen.findByRole('heading', {
+        level: 1,
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
     ).toBeInTheDocument();
     expect(screen.getAllByRole('banner')).toHaveLength(1);
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
@@ -171,7 +166,7 @@ describe('the header is part of the frame (visual finish V6)', () => {
 
   it('renders a page that throws as the crash page in the frame: one header, one footer', async () => {
     mount('/mainnet/charts');
-    expect(await screen.findByText('Error · not a 404', {}, LAZY)).toBeInTheDocument();
+    expect(await screen.findByText('Error · not a 404')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('charts: the chart model broke');
     expect(screen.getAllByRole('banner')).toHaveLength(1);
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
@@ -196,13 +191,13 @@ describe('the header is part of the frame (visual finish V6)', () => {
 describe('the page arrives (visual finish V7)', () => {
   it('wraps the page in .arrive and replaces the wrapper on navigation; the header stays', async () => {
     const router = mount('/mainnet/dao');
-    const wrapper = (await screen.findByText('dao page', {}, LAZY)).parentElement!;
+    const wrapper = (await screen.findByText('dao page')).parentElement!;
     expect(wrapper).toHaveClass('arrive');
     const header = screen.getByRole('banner');
     expect(header).not.toContainElement(wrapper);
 
     await act(() => router.navigate('/mainnet?tab=blocks'));
-    expect(await screen.findByText('home page', {}, LAZY)).toBeInTheDocument();
+    expect(await screen.findByText('home page')).toBeInTheDocument();
     const next = screen.getByText('home page').parentElement!;
     expect(next).toHaveClass('arrive');
     expect(next).not.toBe(wrapper);

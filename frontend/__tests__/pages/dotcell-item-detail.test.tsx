@@ -55,11 +55,7 @@ it('links a uniquely resolved protocol owner and retains unresolved manager byte
   };
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
   render(<Page identityId="alice" />);
-  const rights = await screen.findByRole(
-    'region',
-    { name: 'Owner and manager' },
-    { timeout: 4000 }
-  );
+  const rights = await screen.findByRole('region', { name: 'Owner and manager' });
   expect(
     within(within(rights).getByLabelText('Owner · holds the name')).getByRole('link')
   ).toHaveAttribute('href', '/mainnet/address/ckb1owner');
@@ -161,7 +157,7 @@ it('names the ring successor and links it by its id (ID-DC6)', async () => {
     ref === next ? { ...dotcellItem(), identityId: next, name: 'ckb.cell' } : dotcellItem()
   );
   render(<Page identityId="alice" />);
-  expect(await screen.findByRole('link', { name: 'ckb.cell' }, { timeout: 4000 })).toHaveAttribute(
+  expect(await screen.findByRole('link', { name: 'ckb.cell' })).toHaveAttribute(
     'href',
     `/mainnet/identities/dotcell/${next}`
   );
@@ -281,7 +277,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
 it('reads like the .cell board: records named, roles, a held-until bar with grace', async () => {
   render(<Page identityId="alice" />);
   expect(
-    await screen.findByRole('heading', { name: 'Term held until 2030-03-18' }, { timeout: 4000 })
+    await screen.findByRole('heading', { name: 'Term held until 2030-03-18' })
   ).toBeInTheDocument();
   expect(screen.getByText(/then 30 days of grace/)).toBeInTheDocument();
   expect(document.querySelector('[data-grace]')).not.toBeNull();
@@ -303,7 +299,7 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
 
 it("names a .cell version's physical lock as a lock, not its owner (visual pass)", async () => {
   render(<Page identityId="alice" />);
-  const versions = await screen.findByLabelText('alice.cell cell versions', {}, { timeout: 4000 });
+  const versions = await screen.findByLabelText('alice.cell cell versions');
   expect(versions).toHaveTextContent('Lock ckb1');
   expect(versions).not.toHaveTextContent('Owner ckb1');
 });

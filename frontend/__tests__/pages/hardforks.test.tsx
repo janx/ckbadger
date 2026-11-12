@@ -107,7 +107,7 @@ describe('HardforksPage', () => {
     getHardforksMock.mockResolvedValue(mockTimeline);
     render(<HardforksPage />);
     expect(
-      await screen.findByRole('img', { name: /Which VM each hash type runs/ }, { timeout: 5000 })
+      await screen.findByRole('img', { name: /Which VM each hash type runs/ })
     ).toBeInTheDocument();
     expect(getBlockMock).not.toHaveBeenCalled();
   });
