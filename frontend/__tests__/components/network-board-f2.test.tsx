@@ -234,7 +234,7 @@ describe('Network board (F2 charts)', () => {
   it('shows the never-verified peers as an unlocated strip under the map (CH-51)', async () => {
     server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
     render(wrap(<NetworkMapView neverVerified={115} />));
-    const strip = await screen.findByRole('img', { name: '115 peers only heard of' });
+    const strip = await screen.findByRole('img', { name: '115\u00a0peers only heard of' });
     expect(strip.querySelectorAll('[data-unlocated]')).toHaveLength(115);
     expect(
       screen.getByText(

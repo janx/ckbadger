@@ -174,7 +174,7 @@ describe('exact capacity and cell anatomy', () => {
       });
     expect(container.querySelector('[data-part="capacity"]')).toHaveAttribute(
       'title',
-      'capacity: 8 bytes'
+      'capacity: 8\u00a0bytes'
     );
   });
   it('keeps exact capacity and the evidence link on cell tiles', () => {
@@ -290,7 +290,7 @@ describe('byte and DNA inspection', () => {
     expect(marks).toHaveLength(4);
     expect(marks[1]).toHaveAttribute('y', '20');
     expect(marks[2]).toHaveAttribute('y', '30');
-    expect(screen.getByRole('img')).toHaveAccessibleName('Object DNA: 2 bytes, 0af1');
+    expect(screen.getByRole('img')).toHaveAccessibleName('Object DNA: 2\u00a0bytes, 0af1');
   });
   // F2 objects (round 2): the single-object gel moved from `ui/allele-gel` (now the collection's
   // allele gel) to `ui/sequencing-gel`; the same linking contract is kept here.

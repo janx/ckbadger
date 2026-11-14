@@ -227,7 +227,7 @@ it('puts a many-gene gel above the table at full width, a few-gene gel beside it
   expect(columns(screen.getByRole('region', { name: 'Objects' })).className).not.toMatch(
     /xl:grid-cols-\[440px/
   );
-  expect(screen.getByRole('img', { name: /allele gel of 8 objects/ })).toBeInTheDocument();
+  expect(screen.getByRole('img', { name: /allele gel of 8\u00a0objects/ })).toBeInTheDocument();
   unmount();
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   await screen.findByRole('table', { name: 'Newest objects' });
@@ -352,10 +352,10 @@ describe('gene cells keep their share whole (lane A follow-up)', () => {
     // so the object and owner columns keep their room.
     const view = table.querySelectorAll('[data-gene-cell]')[0];
     expect(view).toHaveTextContent(/^0 · 1,139$/);
-    expect(view).toHaveAttribute('title', 'View = 0 · 1,139 of 1,298 objects');
+    expect(view).toHaveAttribute('title', 'View = 0 · 1,139 of 1,298\u00a0objects');
     expect(within(table).getByRole('columnheader', { name: 'View' })).toHaveAttribute(
       'title',
-      'prev.view · beside each value, how many of the 1,298 objects carry it'
+      'prev.view · beside each value, how many of the 1,298\u00a0objects carry it'
     );
     // One line per object from md up; below it every column stays, in pairs.
     expect(table.querySelectorAll('[role="row"]')[1]).toHaveClass(
