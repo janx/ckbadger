@@ -1,6 +1,6 @@
 // Storybook-free demo of the F1-c shared graphics with board-shaped data (no route): the
 // shared-graphics test renders it at 1440 and 390 px.
-import { AlignedBar, AlignedBarFootnote } from '@/components/ui/aligned-bar';
+import { AlignedBar } from '@/components/ui/aligned-bar';
 import { IciclePartition } from '@/components/ui/icicle-partition';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { TenureBar } from '@/components/ui/tenure-bar';
@@ -27,7 +27,6 @@ export function SharedGraphicsDemo({ width }: { width: number }) {
             ]}
           />
         ))}
-        <AlignedBarFootnote scale="0–4,000 B" cap="the consensus limit is 597,000 B" />
       </div>
       <IciclePartition
         label="Secondary issuance since genesis, split three ways"

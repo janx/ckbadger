@@ -73,7 +73,6 @@ const OPACITY_ALLOWLIST: Allowlist = {
   'components/layout/nav-menu.tsx': [NO_WORDS],
   // the cell headers, the group columns, the group cards
   'components/transaction/script-group-matrix.tsx': [LINKED, LINKED, LINKED],
-  'components/ui/capacity-utilization.tsx': [LINKED, LINKED],
   'components/ui/composition-set.tsx': [NO_WORDS],
   'components/ui/hex-display.tsx': [HOVER],
   'components/ui/terminal-panel.tsx': [NO_WORDS],
@@ -270,7 +269,7 @@ describe('inks that carry words (R4)', () => {
   ] as const;
 
   it('scans the page source', () => {
-    expect(files.length).toBeGreaterThan(300);
+    expect(files.length).toBeGreaterThan(250);
   });
 
   for (const [kind, allowlist, what] of rules)

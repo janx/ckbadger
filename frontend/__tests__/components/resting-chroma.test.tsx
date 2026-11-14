@@ -16,7 +16,6 @@ import { ActivityRow } from '@/components/activity/activity-row';
 import { ActivityEventGroup, ParticipantLine } from '@/components/activity-event-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
-import { ObjectGalleryPanel } from '@/components/object/object-gallery-panel';
 import { ActivityStats } from '@/components/home/activity-stats';
 import type { Activity, ItemDelta, ParticipantInfo } from '@/lib/api';
 
@@ -218,38 +217,6 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       .filter((a) => a.getAttribute('href')?.includes('/identities/'));
     expect(hashLinks).toHaveLength(2);
     hashLinks.forEach(expectRestingLink);
-  });
-
-  it('an identity card in the object gallery: its label link rests as ink', () => {
-    render(
-      <ObjectGalleryPanel
-        totalCount={1}
-        isLoading={false}
-        page={1}
-        hasPrevious={false}
-        onNext={() => {}}
-        onPrevious={() => {}}
-        collectionItems={{
-          data: [
-            {
-              nftId: `0x${'cd'.repeat(20)}`,
-              name: 'badger.bit',
-              standard: 'dotbit',
-              ownerLockHash: LOCK_HASH,
-              ownerAddress: ADDRESS,
-              isLive: true,
-              createdAtBlock: 10_000,
-            },
-          ],
-          limit: 18,
-          hasMore: false,
-          nextCursor: null,
-        }}
-      />
-    );
-    const label = screen.getByRole('link', { name: 'badger.bit' });
-    expectRestingLink(label);
-    expect(label).toHaveClass('font-semibold');
   });
 
   it('a section CTA outside every row keeps its aqua (text-interactive) — untouched', () => {

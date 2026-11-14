@@ -163,32 +163,6 @@ export function TerminalPanelFooter({ children, className }: TerminalPanelFooter
   );
 }
 
-interface TerminalDividerProps {
-  className?: string;
-  label?: string;
-}
-
-export function TerminalDivider({ className, label }: TerminalDividerProps) {
-  if (label) {
-    return (
-      <div className={cn('flex items-center gap-3 py-2', className)}>
-        <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="eyebrow text-text-dim text-meta font-mono">{label}</span>
-        <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        'via-base-border h-px bg-gradient-to-r from-transparent to-transparent',
-        className
-      )}
-    />
-  );
-}
-
 interface TerminalRowProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   className?: string;

@@ -14,7 +14,6 @@ import {
   ScriptCodeClassSummary,
   ScriptCapacityEvidenceChart,
   ScriptCustodyEvidence,
-  ScriptCodeHistory,
 } from '@/components/scripts/script-code-evidence';
 
 describe('script code evidence', () => {
@@ -139,54 +138,6 @@ describe('script code evidence', () => {
       `/mainnet/cell/${txB}-2`
     );
     expect(screen.getByText(/2 code cells:/)).toBeInTheDocument();
-  });
-
-  it('shows no observed events without inventing a deployment', () => {
-    render(<ScriptCodeHistory markers={[]} />);
-    expect(
-      screen.getByText('No observed code cell events for registered references.')
-    ).toBeInTheDocument();
-  });
-
-  it('positions an event on the indexed calendar day rather than a rolled-back raw timestamp', () => {
-    render(
-      <ScriptCodeHistory
-        markers={[
-          {
-            referenceHash: `0x${'12'.repeat(32)}`,
-            hashType: 'type',
-            versionHash: `0x${'34'.repeat(32)}`,
-            event: 'deployed',
-            blockNumber: 42,
-            txIndex: 1,
-            timestamp: Date.parse('2024-01-01T23:59:59Z'),
-            chainTimeMs: Date.parse('2024-01-02T00:00:01Z'),
-            indexedDay: '2024-01-02',
-            codeCellTxHash: `0x${'56'.repeat(32)}`,
-            codeCellOutputIndex: 0,
-            eventTxHash: `0x${'56'.repeat(32)}`,
-            custody: {
-              class: 'one_key',
-              lockCodeHash: null,
-              lockHashType: null,
-              lockArgs: null,
-              threshold: null,
-              keyCount: null,
-              requireFirstN: null,
-              keyHashes: [],
-              verifiedByTx: null,
-              witnessState: 'unavailable',
-              owners: [],
-            },
-          },
-        ]}
-      />
-    );
-    expect(screen.getByText(/Chart day 2024-01-02/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Event transaction/ })).toHaveAttribute(
-      'href',
-      `/mainnet/tx/0x${'56'.repeat(32)}`
-    );
   });
 
   it('aligns API-produced upgrade markers with the indexed chart day and keeps never-signed distinct', () => {

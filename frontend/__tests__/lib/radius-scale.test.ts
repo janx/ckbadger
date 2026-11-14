@@ -26,14 +26,7 @@ import tailwindConfig from '@/tailwind.config';
  */
 
 /** Sites the gate tolerates, as `path:line` → why the element is a round mark whose size is set elsewhere. */
-const ALLOWLIST: Record<string, string> = {
-  'components/activity-breakdown.tsx:81':
-    'the skeleton of a pie chart, a disc standing in for the disc to come (no importer: the cleanup lane removes the file)',
-  'components/chain-wave/index.tsx:187':
-    'the ping ring over the 8 px dot drawn on the line above it, inset-0 of that 8 px box (no importer)',
-  'components/chain-wave/index.tsx:244':
-    'a mempool bubble, a data circle sized by its transaction in an inline style, like an SVG circle (no importer)',
-};
+const ALLOWLIST: Record<string, string> = {};
 
 /** Where the page's classes are written: the directories tailwind.config.ts reads for content. */
 const SCAN_DIRS = ['app', 'components'];
@@ -228,7 +221,7 @@ describe('square corners (R1)', () => {
   });
 
   it('scans the page source', () => {
-    expect(files.length).toBeGreaterThan(300);
+    expect(files.length).toBeGreaterThan(250);
   });
 
   it('rounds nothing but a small mark, and never by an arbitrary or inline radius', () => {

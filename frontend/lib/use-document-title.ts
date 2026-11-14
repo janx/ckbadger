@@ -13,8 +13,8 @@ export function formatDocumentTitle(parts: readonly string[]): string {
 
 /**
  * Names the page in the browser tab while it is mounted and puts the previous title back on
- * unmount. The four shared headers call it (`DetailLayout`, `AssetDetailShell`, `TopicHero`,
- * `PageHeader`); a page without one of them calls it directly.
+ * unmount. The three shared headers call it (`DetailLayout`, `AssetDetailShell`, `TopicHero`); a
+ * page without one of them calls it directly.
  */
 export function useDocumentTitle(parts: readonly string[]): void {
   const title = formatDocumentTitle(parts);

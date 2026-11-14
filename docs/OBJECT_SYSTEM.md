@@ -18,13 +18,13 @@ Each object is stored as an `ObjectEntry` with standard-specific data in `Object
 
 A spore's `content_type` (MIME) determines how its cell data is presented:
 
-| Content Type                    | Frontend Standard | Behavior                         |
-| ------------------------------- | ----------------- | -------------------------------- |
-| `image/png`, `image/jpeg`, etc. | `plain-image`     | Raw bytes displayed as image     |
-| `image/svg+xml`                 | `plain-svg`       | Raw SVG in cell data             |
-| `text/plain`, `text/html`       | `plain-text`      | Raw text in cell data            |
-| `dob/0`, `dob/1`                | `dob/0`, `dob/1`  | DNA decoded by on-chain decoders |
-| other                           | `generic`         | Hex view only                    |
+| Content Type                    | Behavior                                             |
+| ------------------------------- | ---------------------------------------------------- |
+| `image/png`, `image/jpeg`, etc. | Raw bytes displayed as image                         |
+| `image/svg+xml`                 | Raw SVG in cell data                                 |
+| `text/plain`, `text/html`       | Raw text in cell data; only an embedded SVG is drawn |
+| `dob/0`, `dob/1`                | DNA decoded by on-chain decoders                     |
+| other                           | No picture; the cell's fields in the evidence tier   |
 
 A `dob/*` content type marks the spore as DOB-decodable, but it does **not**
 decide which DOB protocol version runs — see below.
@@ -249,75 +249,36 @@ The taxonomy is bincode-serialized in RocksDB, so new variants may only be **app
 
 **Rebuild note**: deterministic failures are remembered only for this DB's lifetime. A `ckbadger purge` + re-sync from genesis re-attempts and re-classifies every spore, so a dependency that legitimately appears on-chain later self-heals on rebuild. (The `CF_DOB_DECODED` value format changed from a bare `DobDecodedEntry` to `DecodeOutcome`, so shipping this feature required a re-sync.)
 
-## Frontend Per-Standard Behavior
+## Frontend Behavior by Content Type
 
-| Standard      | Trait Filter           | Media Labels                                           | Preview Source                   |
-| ------------- | ---------------------- | ------------------------------------------------------ | -------------------------------- |
-| `plain-image` | N/A (no traits)        | N/A                                                    | Raw cell bytes (base64)          |
-| `plain-svg`   | N/A                    | N/A                                                    | Raw SVG from cell data           |
-| `plain-text`  | N/A                    | N/A                                                    | None                             |
-| `dob/0`       | All traits shown       | "Decoded Output", "SVG Render"                         | Decoded media or render endpoint |
-| `dob/1`       | Filter SVG/image blobs | "Decoder Chain Output" (with step count), "SVG Render" | Decoded media or render endpoint |
-| `generic`     | N/A                    | N/A                                                    | None                             |
+The object page (`frontend/components/asset/spore-detail.tsx`) lists a DOB's traits in its hero
+(`frontend/components/asset/object-hero.tsx`, filtered by `isReadableTrait` in
+`frontend/lib/dob-genes.ts`) and picks its picture in `frontend/components/asset/object-media.tsx`
+with `detectPreview` (`frontend/lib/preview-utils.ts`):
 
-## CellLife: Hash-Seeded Game of Life Visualization
+| Content Type                                                                    | Traits in the hero                                                                                        | Picture                                         |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `dob/0`, `dob/1`                                                                | Every trait but DOB/1's `prev.*` render hints and media values (a URI, SVG source), which stay on the gel | The decoded image media, the highest step first |
+| `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/avif`, `image/bmp` | None                                                                                                      | The cell's bytes, up to 2 MB                    |
+| `image/svg+xml`                                                                 | None                                                                                                      | The SVG in the cell's data, up to 256 KB        |
+| `text/*`, JSON, XML, JavaScript                                                 | None                                                                                                      | An `<svg>` inside the text, up to 256 KB        |
+| other                                                                           | None                                                                                                      | None                                            |
 
-Each object in gallery views has an identicon generated by Conway's Game of Life, seeded deterministically from the object's hex hash. This gives every object a unique, living visual identity.
-
-### How It Works
-
-```
-hex hash → hashToBytes() → seedGrid() → stepGrid() loop → canvas render
-```
-
-1. **Seed**: Hash bytes are bit-walked to populate an NxN grid (default 8x8). Border cells stay dead. Each bit in the hash determines whether an interior cell is alive.
-2. **Color**: Single-chain objects use CKB jade (`#2edba3`). Dual-chain objects (BTC+CKB, determined by `mediaProfile.tier === 'btc_ckb'`) add BTC gold (`#f2c55c`). Color assignment uses a 16-byte offset in the hash for the second color channel.
-3. **Shape**: Hash byte[16] selects one of 8 cell shapes (circle, square, diamond, triangle, hexagon, cross, star, rounded-square).
-4. **Speed**: Hash byte[17] derives the animation interval (300–600ms).
-5. **Evolution**: Standard B3/S23 rules. Survivors keep their color; newborns inherit the majority neighbor color (jade wins ties). Reseeds after extinction or 250 generations.
-
-### Visual Layers
-
-Each alive cell is rendered with a 4-layer bloom on a retina-aware canvas:
-
-| Layer       | Scale | Opacity | Purpose              |
-| ----------- | ----- | ------- | -------------------- |
-| Outer bloom | 1.8x  | 8%      | Soft glow halo       |
-| Inner bloom | 1.3x  | 18%     | Concentrated glow    |
-| Cell body   | 1.0x  | 75%     | Main visible shape   |
-| Core        | 0.45x | 90%     | Bright center accent |
-
-Dead cells fade out at 0.12 opacity per tick (0.7x scale, 30% base opacity).
-
-### Interaction & Accessibility
-
-- **Hover pause**: Animation freezes on mouse enter, resumes on leave.
-- **Reduced motion**: Respects `prefers-reduced-motion` — renders generation 0 only, no animation.
-- **Outer glow**: CSS `glow-breathe` keyframe (4s ease-in-out loop) with per-instance phase offset derived from hash byte[0].
-
-### Gallery Usage
-
-The `ObjectGalleryPanel` chooses between `CellLife` and `CellLifePlaceholder` based on spore media tier:
-
-- `pure_ckb` tier → `CellLife` (jade only)
-- `btc_ckb` tier → `CellLife` with `isDualChain` (jade + gold)
-- All other tiers / non-Spore standards → `CellLifePlaceholder` (static "?" box)
+A media source on Bitcoin (`btcfs`) comes first: the page says the image lives on Bitcoin and
+names the inscription, and fetches nothing. Without a picture it shows a placeholder ("Decode
+pending · awaiting DOB execution." while a DOB waits for its decoder, else "No renderable media
+available.").
 
 ## Key Files
 
-| Component          | File                                                  |
-| ------------------ | ----------------------------------------------------- |
-| Store types        | `crates/ckbadger-store/src/types.rs`                  |
-| Spore parser       | `crates/indexer/src/parser/spore.rs`                  |
-| Media analysis     | `crates/indexer/src/parser/media_source.rs`           |
-| DOB decoder        | `crates/dob-decoder/src/lib.rs`                       |
-| Decode worker      | `crates/indexer/src/sync/dob_decode_worker.rs`        |
-| Decode error types | `crates/indexer/src/sync/dob_decode_error.rs`         |
-| Blob store         | `crates/indexer/src/media_store.rs`                   |
-| API routes         | `crates/api/src/routes/spore.rs`                      |
-| Frontend standard  | `frontend/lib/object-standard.ts`                     |
-| Frontend page      | `frontend/app/objects/[sporeId]/client-page.tsx`      |
-| GoL engine         | `frontend/lib/game-of-life.ts`                        |
-| CellLife component | `frontend/components/object/cell-life.tsx`            |
-| Gallery panel      | `frontend/components/object/object-gallery-panel.tsx` |
-| CellLife tests     | `frontend/__tests__/components/cell-life.test.tsx`    |
+| Component          | File                                             |
+| ------------------ | ------------------------------------------------ |
+| Store types        | `crates/ckbadger-store/src/types.rs`             |
+| Spore parser       | `crates/indexer/src/parser/spore.rs`             |
+| Media analysis     | `crates/indexer/src/parser/media_source.rs`      |
+| DOB decoder        | `crates/dob-decoder/src/lib.rs`                  |
+| Decode worker      | `crates/indexer/src/sync/dob_decode_worker.rs`   |
+| Decode error types | `crates/indexer/src/sync/dob_decode_error.rs`    |
+| Blob store         | `crates/indexer/src/media_store.rs`              |
+| API routes         | `crates/api/src/routes/spore.rs`                 |
+| Frontend page      | `frontend/app/objects/[sporeId]/client-page.tsx` |

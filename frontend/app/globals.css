@@ -182,10 +182,6 @@ body * {
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-
   .tabular-nums {
     font-feature-settings: 'tnum';
     font-variant-numeric: tabular-nums;
@@ -231,20 +227,6 @@ body * {
     transform: scale(1.1);
   }
 
-  .digit-slot {
-    display: inline-block;
-    overflow: hidden;
-    vertical-align: bottom;
-  }
-
-  .digit-value {
-    display: inline-block;
-  }
-
-  .digit-value.changing {
-    animation: digit-tick 0.2s ease-out;
-  }
-
   /*
    * Row scan (Midnight, continued: move 4): a faint jade band crosses a hovered row once, in
    * 0.5 s. Painted as the row's own background image — a gradient three rows wide whose middle
@@ -268,53 +250,6 @@ body * {
   .row-scan:hover {
     animation: row-scan-sweep 0.5s ease-out forwards;
   }
-
-  .byte-hover-breathe {
-    animation: byte-breathe 1.15s ease-in-out infinite;
-  }
-
-  .status-marquee-shine {
-    display: inline-block;
-    background-image: linear-gradient(
-      90deg,
-      var(--c-ink-muted) 0%,
-      var(--c-text-bright) 45%,
-      var(--c-ink-muted) 100%
-    );
-    background-size: 220% 100%;
-    background-position: 220% 0;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-
-  .cycles-calculating-marquee {
-    display: inline-block;
-    background-image: linear-gradient(
-      90deg,
-      var(--c-ink-muted) 0%,
-      var(--c-text-bright) 45%,
-      var(--c-ink-muted) 100%
-    );
-    background-size: 220% 100%;
-    background-position: 220% 0;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-}
-
-@keyframes cycles-marquee-shine {
-  0% {
-    background-position: 220% 0;
-  }
-  100% {
-    background-position: -220% 0;
-  }
 }
 
 @keyframes terminal-border-scan-ltr {
@@ -323,29 +258,6 @@ body * {
   }
   100% {
     transform: translateX(520%);
-  }
-}
-
-@keyframes digit-tick {
-  0% {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes byte-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    filter: brightness(1);
-  }
-  50% {
-    transform: scale(1.08);
-    filter: brightness(1.15);
   }
 }
 
@@ -605,10 +517,6 @@ svg a:hover {
 :root[data-theme='light'] .chart-line-halo {
   filter: none;
 }
-:root[data-theme='light'] .glow-neon,
-:root[data-theme='light'] .glow-soft {
-  text-shadow: none;
-}
 
 /* Reduced motion: no sweep, no blink; the halos are static anyway. */
 @media (prefers-reduced-motion: reduce) {
@@ -621,20 +529,6 @@ svg a:hover {
   }
 }
 
-/* A stat figure's glow, held close (the rubbing's bloom is 6 px, never a wide neon wash): a 1 px
-   core in the figure's colour and two short halos (components/ui/stat-block.tsx sets the three). */
-.glow-neon {
-  text-shadow:
-    0 0 1px var(--glow-color),
-    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
-}
-.glow-soft {
-  text-shadow:
-    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
-}
-
 /* A live mark breathes: the square's ink fades to 45 % and back over 1.5 s (no bloom: the prompt
    square is ink, not phosphor). */
 @keyframes live-pulse {
@@ -645,64 +539,6 @@ svg a:hover {
   50% {
     opacity: 0.45;
   }
-}
-
-/* Shield storage cards from CRT scanline overlay */
-.storage-card-no-crt {
-  position: relative;
-  z-index: 10000;
-}
-
-/* --- Storage tier border-glow breathing --- */
-.storage-card-ckb {
-  animation: storage-breathe-ckb 4s ease-in-out infinite;
-}
-.storage-card-both {
-  animation: storage-breathe-both 4s ease-in-out infinite;
-}
-@keyframes storage-breathe-ckb {
-  0%,
-  100% {
-    border-color: rgb(var(--rgb-jade) / 0.25);
-    box-shadow: 0 0 0 rgb(var(--rgb-jade) / calc(0 * var(--m-glow)));
-  }
-  50% {
-    border-color: rgb(var(--rgb-jade) / 0.5);
-    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.08 * var(--m-glow)));
-  }
-}
-@keyframes storage-breathe-both {
-  0%,
-  100% {
-    border-color: rgb(var(--rgb-tier-btc-edge-lit) / 0.25);
-    box-shadow: 0 0 0 rgb(var(--rgb-tier-btc-edge-lit) / calc(0 * var(--m-glow)));
-  }
-  50% {
-    border-color: rgb(var(--rgb-tier-btc-edge-lit) / 0.5);
-    box-shadow: 0 0 6px rgb(var(--rgb-tier-btc-edge-lit) / calc(0.08 * var(--m-glow)));
-  }
-}
-
-/* Storage tier text effects */
-.storage-text-gem {
-  color: var(--c-gem-jade-1);
-  text-shadow: 0 0 6px rgb(var(--rgb-gem-jade-1) / calc(0.45 * var(--m-glow)));
-}
-/* Both text: gold→emerald split */
-.storage-text-split {
-  background: linear-gradient(
-    135deg,
-    var(--c-gem-gold-0) 0%,
-    var(--c-gem-gold-1) 40%,
-    var(--c-gem-jade-0) 60%,
-    var(--c-gem-jade-1) 100%
-  );
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 -1px 0 rgb(var(--rgb-gold-bright) / calc(0.25 * var(--m-glow))))
-    drop-shadow(0 0 6px rgb(var(--rgb-jade-bright) / calc(0.25 * var(--m-glow))));
 }
 
 /* Ambient glow breathing animation for on-chain preview */
