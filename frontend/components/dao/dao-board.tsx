@@ -20,6 +20,7 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
+import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
 import {
   IciclePartition,
   icicleNodePaint,
@@ -69,7 +70,7 @@ function Amount({
       {signed ? parts.sign : null}
       {parts.integer}
       <span className={plain ? undefined : 'text-text-dim'}>{parts.fraction}</span>
-      <span className={plain ? undefined : 'text-text-dim/50'}>{parts.ghost}</span>
+      <span className={plain ? undefined : 'text-text-ghost'}>{parts.ghost}</span>
     </span>
   );
 }
@@ -143,7 +144,7 @@ function DepositedFigure({ shannons }: { shannons: string }) {
         {parts.integer}
         <span className="text-hero text-gold-dim font-normal">
           {parts.fraction}
-          <span className="opacity-50">{parts.ghost}</span>
+          <span className="text-text-ghost">{parts.ghost}</span>
         </span>
       </span>
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
@@ -152,15 +153,20 @@ function DepositedFigure({ shannons }: { shannons: string }) {
   );
 }
 
-/** A signed CKB decimal in its sign's hue: the fraction in the same hue's dim step. */
-function SignedCkbDecimal({ value, fractionClass }: { value: string; fractionClass: string }) {
+/**
+ * A signed CKB decimal in its sign's hue: the fraction in the sign's quieter ink (`AMOUNT_INK`, a
+ * named key at 4.5:1), the padding zeros ghost.
+ */
+function SignedCkbDecimal({ value }: { value: string }) {
   const parts = splitCkbAmount(parseCkbDecimal(value));
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {parts.sign}
       {parts.integer}
-      <span className={fractionClass}>{parts.fraction}</span>
-      <span className="opacity-40">{parts.ghost}</span>
+      <span data-fraction className={AMOUNT_INK[amountSign(parts.sign)].fraction}>
+        {parts.fraction}
+      </span>
+      <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
 }
@@ -264,17 +270,7 @@ function Hero({
                         : 'text-text'
                   }
                 >
-                  <SignedCkbDecimal
-                    value={change!}
-                    fractionClass={
-                      changeShannons > BigInt(0)
-                        ? 'text-positive-dim'
-                        : changeShannons < BigInt(0)
-                          ? 'text-negative-dim'
-                          : 'text-text-dim'
-                    }
-                  />{' '}
-                  CKB
+                  <SignedCkbDecimal value={change!} /> CKB
                 </span>
               )}{' '}
               <span className="text-text-dim">

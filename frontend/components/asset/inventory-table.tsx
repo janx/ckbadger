@@ -3,7 +3,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { exactUnsignedInteger, formatDecimal, formatScaledInteger } from '@/lib/exact-integer';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
@@ -43,8 +43,13 @@ export function AssetAmount({ amount, decimals }: AssetAmountProps) {
       )}
       {fraction && (
         <>
-          .<span className="opacity-80">{significant}</span>
-          <span className="text-text-ghost">{fraction.slice(significant.length)}</span>
+          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+            {significant ? `.${significant}` : ''}
+          </span>
+          <span className="text-text-ghost">
+            {significant ? '' : '.'}
+            {fraction.slice(significant.length)}
+          </span>
         </>
       )}
       {decimals === null && ' (raw)'}

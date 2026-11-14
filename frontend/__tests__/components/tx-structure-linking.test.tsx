@@ -65,10 +65,15 @@ describe('TxStructure page-owned linking (F2-tx, TX-14)', () => {
   // in the dim ink (the quiet variant), never at 30 % (1.5–1.9:1 on the cell page); each stone
   // keeps its own state's ink at full strength (a consumed cell its dead ink, a live one cinnabar).
   it('sets the cells it does not follow back in the dim ink, every stone at full strength', () => {
+    const spent = tile('in:1', '10000000000');
     render(
       <TxStructure
         txHash="0xtx"
-        inputs={[tile('in:0', '20000000000'), tile('in:1', '10000000000')]}
+        inputs={[
+          tile('in:0', '20000000000'),
+          // a spent cell's stone is in the dead ink (`ink`)
+          { ...spent, seal: { ...spent.seal, state: 'ink' } },
+        ]}
         outputs={[tile('out:0', '29999990000')]}
         fee="10000"
         linking="page"
@@ -82,10 +87,7 @@ describe('TxStructure page-owned linking (F2-tx, TX-14)', () => {
       expect([...el.classList].filter((c) => /(^|:)opacity-/.test(c))).toEqual([]);
     const stones = [...sibling.querySelectorAll('[data-seal-state]')];
     expect(stones.length).toBeGreaterThan(0);
-    expect(sibling.querySelector('[data-seal="cell"]')).toHaveAttribute(
-      'data-seal-state',
-      'consumed'
-    );
+    expect(sibling.querySelector('[data-seal="cell"]')).toHaveAttribute('data-seal-state', 'ink');
   });
 
   it('can leave the continuity legend to the page', () => {

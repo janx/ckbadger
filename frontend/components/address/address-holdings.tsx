@@ -7,7 +7,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
@@ -114,7 +114,9 @@ function TokenAmount({ amount, decimals }: { amount: string; decimals: number | 
       {integer}
       {fraction && (
         <>
-          <span className="opacity-[0.78]">{significant ? '.' + significant : ''}</span>
+          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+            {significant ? '.' + significant : ''}
+          </span>
           <span data-ghost className="text-text-ghost">
             {significant ? '' : '.'}
             {fraction.slice(significant.length)}

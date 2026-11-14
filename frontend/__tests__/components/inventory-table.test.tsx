@@ -92,9 +92,21 @@ describe('Inventory rows', () => {
     const breaks = Array.from(root.querySelectorAll('wbr'));
     expect(breaks.length).toBe(3);
     for (const wbr of breaks) expect(wbr.previousSibling?.textContent?.endsWith(',')).toBe(true);
-    expect(screen.getByText('00000000000000000000')).toHaveClass('text-text-ghost');
+    // the point joins its zeros when no decimal is significant, as ExactCkb's ghost does (R4,
+    // re-pinned on purpose: the point stood alone in the amount's ink)
+    expect(screen.getByText('.00000000000000000000')).toHaveClass('text-text-ghost');
     expect(container.querySelector('.text-text-muted')).toBeNull();
   });
+  // UI review 2026-11-14 (DY-06, ruling R4): a token amount's significant decimals are the neutral
+  // fraction ink (text-dim, 4.5:1), never the amount's ink at 80 %.
+  it('sets the significant decimals in the neutral fraction ink, with no opacity', () => {
+    const { container } = render(<AssetAmount amount="123450000" decimals={8} />);
+    const fraction = container.querySelector('[data-fraction]');
+    expect(fraction).toHaveTextContent(/^\.2345$/);
+    expect(fraction).toHaveClass('text-text-dim');
+    expect(container.innerHTML).not.toMatch(/opacity-/);
+  });
+
   it('labels unknown decimals as raw instead of guessing the unit', () => {
     render(<AssetAmount amount="12345678901234567890" decimals={null} />);
     expect(screen.getByText('12,345,678,901,234,567,890 (raw)')).toBeInTheDocument();
