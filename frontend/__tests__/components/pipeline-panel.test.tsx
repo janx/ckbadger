@@ -247,6 +247,21 @@ const WORD_INK: Readonly<Record<string, PaletteKey>> = {
   'fill-aqua': 'aqua',
 };
 const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'base-elevated'];
+/** The age fade's two ends: the tip, and tip − 7 on (pinned in pipeline-encoding.test.ts). */
+const AGES = [ageOpacity(0), ageOpacity(7)];
+/** A word's ink: its fill class, a named ink or a pipeline token (`fill-[var(--pipeline-…)]`). */
+function wordInk(word: Element, svg: Element): PaletteKey {
+  for (let a: Element | null = word; a && a !== svg; a = a.parentElement) {
+    const cls = [...a.classList].find((c) => c.startsWith('fill-'));
+    if (!cls) continue;
+    const token = /^fill-\[var\(--([a-z0-9-]+)\)\]$/.exec(cls);
+    if (token) return paletteKeyOfVar(token[1]);
+    const key = WORD_INK[cls];
+    if (!key) throw new Error(`pipeline word "${word.textContent}" in unknown ink ${cls}`);
+    return key;
+  }
+  throw new Error(`pipeline word "${word.textContent}" has no fill class`);
+}
 
 /**
  * Every word the canvas writes, its ink (its fill class), and the composite it stands on, over
@@ -258,8 +273,6 @@ const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'bas
 function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
   const styleFill = (el: Element) => (el as SVGElement).style.getPropertyValue('fill');
   const alphaOf = (el: Element) => Number(el.getAttribute('fill-opacity') ?? '1');
-  /** The age fade's two ends: the tip, and tip − 7 on (pinned in pipeline-encoding.test.ts). */
-  const AGES = [ageOpacity(0), ageOpacity(7)];
   const groundOf = (
     word: Element
   ): { kind: string; hexes: (theme: ThemeName, page: PaletteKey) => string[] } => {
@@ -295,24 +308,13 @@ function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
     }
     return { kind: 'the page', hexes: (t, p) => [PALETTE[t][p]] };
   };
-  const inkOf = (word: Element): PaletteKey => {
-    for (let a: Element | null = word; a && a !== svg; a = a.parentElement) {
-      const cls = [...a.classList].find((c) => c.startsWith('fill-'));
-      if (cls) {
-        const key = WORD_INK[cls];
-        if (!key) throw new Error(`pipeline word "${word.textContent}" in unknown ink ${cls}`);
-        return key;
-      }
-    }
-    throw new Error(`pipeline word "${word.textContent}" has no fill class`);
-  };
   const words = [...svg.querySelectorAll('text, tspan')].filter((el) =>
     [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim() !== '')
   );
   expect(words.length).toBeGreaterThan(4);
   const worst = new Map<string, { ratio: number; example: string }>();
   for (const word of words) {
-    const ink = inkOf(word);
+    const ink = wordInk(word, svg);
     const ground = groundOf(word);
     for (const theme of THEMES)
       for (const page of PAGE_GROUNDS) {
@@ -541,6 +543,33 @@ describe('PipelinePanel static render', () => {
     const failures = wordInkFailures(svg, 'row');
     act(() => usePipelineHoverStore.getState().clearHover());
     expect(failures).toEqual([]);
+  });
+
+  // Lane E2 round 3 (the lead's correction): the in-window number keeps the plain gold by night,
+  // the home page's approved look (6.11:1 on the tile, already fine); only by day, where the plain
+  // gold is 4.15:1 on the tile, it takes the gold's bright step, so it reads at 4.5:1 there.
+  it('keeps an in-window number the plain gold by night, and at 4.5:1 on its tile by day', async () => {
+    const svg = await renderPanel();
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    const consensus = buildPipelineSnapshot().consensus;
+    const inside = [...svg.querySelectorAll('[data-card]')].filter((c) =>
+      inWindow(Number(c.getAttribute('data-number')), T, consensus)
+    );
+    expect(inside.length).toBeGreaterThan(0);
+    const short: string[] = [];
+    for (const c of inside) {
+      const number = c.querySelector('[data-block-number]') as Element;
+      const ink = wordInk(number, svg);
+      expect(PALETTE.dark[ink], `night ink of ${number.textContent}`).toBe(PALETTE.dark.gold);
+      const tile = fillHex('light', (c.querySelector('[data-box]') as SVGElement).style.fill);
+      for (const page of PAGE_GROUNDS)
+        for (const a of AGES) {
+          const ratio = contrastRatio(PALETTE.light[ink], mixHex(PALETTE.light[page], tile, a));
+          if (ratio < 4.5) short.push(`${number.textContent} at ${a} on ${page}: ${ratio}`);
+        }
+    }
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(short).toEqual([]);
   });
 
   it('writes the well’s and NEXT’s "unavailable" at 4.5:1 when the pool tip differs', async () => {
