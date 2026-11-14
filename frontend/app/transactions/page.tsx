@@ -584,7 +584,7 @@ export default function TransactionsPage() {
                     <Link
                       key={tx.hash}
                       href={`/tx/${tx.hash}`}
-                      title={`${tx.hash}: ${tx.txSize} bytes, ${tx.feeRate} shannon/KB`}
+                      title={`${tx.hash}: ${formatCount(tx.txSize, 'byte')}, ${tx.feeRate} shannon/KB`}
                       data-pool-status={tx.status}
                       className={cn('block', POOL_SQUARE[tx.status])}
                       style={{

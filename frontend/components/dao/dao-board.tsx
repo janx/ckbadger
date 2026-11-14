@@ -866,11 +866,11 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 key={row.nominalDay}
                 role="listitem"
                 tabIndex={0}
-                aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
+                aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
                 onFocus={() => setSelectedDay(row.nominalDay)}
                 onMouseEnter={() => setSelectedDay(row.nominalDay)}
                 className="focus:outline-interactive group flex h-[200px] flex-col justify-end pt-6 focus:outline"
-                title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
+                title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
               >
                 <div
                   data-window-bar

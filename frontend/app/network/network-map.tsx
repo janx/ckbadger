@@ -536,7 +536,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
           </span>
           <svg
             role="img"
-            aria-label={`${neverVerified} peers only heard of`}
+            aria-label={`${formatCount(neverVerified, 'peer')} only heard of`}
             width={width}
             height={12 + Math.floor((neverVerified - 1) / perRow) * 9}
             className="block"

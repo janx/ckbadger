@@ -254,9 +254,16 @@ describe('copy gates (U-15)', () => {
     '${denominator} blocks',
     '${formatScaledInteger(years, per, 2)} years',
     "${formatChartExact(leader.value, 'blocks')} blocks · ",
-    // a developer's message for a missing witness, and a row's hover title
+    // a developer's message for a missing witness, and the scripts rows' hover titles ("N live of
+    // M cells ever", or "unavailable cells ever" when the API states no count)
     '${witness.index} bytes',
     '${countText(script.cellsCount)} cells ever',
+    '${countText(s.cellsCount)} cells ever',
+    // a name before its noun in an accessible name: a holdings label's objects, a gene's variants
+    '${label} objects held here',
+    '${lane.gene} variants',
+    // a range's far end ("the commit window is 2 to 10 blocks"), never one block
+    '${window.far} blocks',
   ]);
 
   it('writes every count with its noun through the one plural rule (formatCount)', () => {

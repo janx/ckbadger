@@ -598,7 +598,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     ? byId.get(active.id)?.group === g
                     : g === 'data'
             }
-            title={`${g} · ${fmt(groupBytes[g])} bytes`}
+            title={`${g} · ${formatCount(groupBytes[g], 'byte')}`}
             {...handlers({ kind: 'group', group: g })}
             className="text-meta flex items-center justify-center whitespace-nowrap rounded-sm"
             style={{

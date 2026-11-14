@@ -176,7 +176,7 @@ function Gel({
     <>
       <svg
         role="img"
-        aria-label={`${subject}: allele gel of ${total.toLocaleString('en-US')} objects, one lane per gene (${lanes.map((l) => `${l.gene} ${l.variants} ${countNoun(l.variants, 'variant')}`).join(', ')}); each band is one variant, as thick as its share, common at the top.`}
+        aria-label={`${subject}: allele gel of ${formatCount(total, 'object')}, one lane per gene (${lanes.map((l) => `${l.gene} ${l.variants} ${countNoun(l.variants, 'variant')}`).join(', ')}); each band is one variant, as thick as its share, common at the top.`}
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}

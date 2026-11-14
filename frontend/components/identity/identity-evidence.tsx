@@ -355,7 +355,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
   if (!d) throw new Error(`${protocol.itemId}: did:ckb has no versions`);
   const bytes = byteLength(d.documentCborHex, `${protocol.itemId} document`);
   return (
-    <Tier2Section title={`Document as stored · CBOR, ${bytes.toLocaleString('en-US')} bytes`}>
+    <Tier2Section title={`Document as stored · CBOR, ${formatCount(bytes, 'byte')}`}>
       <Rows
         rows={[
           ['DID', d.did],

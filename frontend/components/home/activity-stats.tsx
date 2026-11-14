@@ -29,7 +29,7 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { cn, formatCkbCompact } from '@/lib/utils';
-import { countNoun } from '@/lib/format-count';
+import { countNoun, formatCount } from '@/lib/format-count';
 
 const TYPE_BREAKDOWN = '/charts/activity-type-breakdown';
 
@@ -147,7 +147,7 @@ function Summary({ view }: { view: SummaryView }) {
         />
         <RankedBars
           testId="home-activity-scripts"
-          title={`By script, share of ${n(view.scriptCalls)} calls`}
+          title={`By script, share of ${formatCount(view.scriptCalls, 'call')}`}
           titleHref="/charts/most-utilized-scripts"
           rows={view.scripts}
           wideLabels

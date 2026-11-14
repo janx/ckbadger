@@ -124,7 +124,7 @@ it('makes Objects the gel of the genes that vary beside the 20 newest (OB-C1, C9
     'Objects 90 live · three genes vary'
   );
   expect(
-    within(objects).getByRole('img', { name: /allele gel of 90 objects/ })
+    within(objects).getByRole('img', { name: /allele gel of 90\sobjects/ })
   ).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: 'Collection allele frequencies' })).toBeNull();
   expect(

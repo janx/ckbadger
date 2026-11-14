@@ -354,7 +354,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                 width={model.width}
                 height={picture.height}
                 role="img"
-                aria-label={`The Fiber network on chain: ${model.nodes.length} parties and the ${model.edges.length} pairs that opened channels`}
+                aria-label={`The Fiber network on chain: ${formatCount(model.nodes.length, 'party', 'parties')} and the ${formatCount(model.edges.length, 'pair')} that opened channels`}
                 className="block"
               >
                 <text data-role="chart-name" x="8" y="14" fontSize="11" fill={FIBER_COLORS.note}>

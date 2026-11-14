@@ -297,7 +297,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                     <span
                       key={lane.gene}
                       role="columnheader"
-                      title={`${lane.gene} · beside each value, how many of the ${total.toLocaleString('en-US')} objects carry it`}
+                      title={`${lane.gene} · beside each value, how many of the ${formatCount(total, 'object')} carry it`}
                     >
                       {geneLabel(lane.gene)}
                     </span>
@@ -364,7 +364,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                             className="flex min-w-0 items-center whitespace-nowrap"
                             title={
                               own
-                                ? `${geneLabel(lane.gene)} = ${own.value}${band ? ` · ${band.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects` : ''}`
+                                ? `${geneLabel(lane.gene)} = ${own.value}${band ? ` · ${band.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}` : ''}`
                                 : undefined
                             }
                           >

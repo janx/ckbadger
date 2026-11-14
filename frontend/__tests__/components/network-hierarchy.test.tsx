@@ -341,7 +341,7 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
     // The idle reading is the map's own count; the hint is the row's, once (R14).
     expect(readout).toHaveTextContent(/^4 verified nodes in 2 countriestap or hover$/);
     expect(view.querySelectorAll('[data-hint="tap-or-hover"]')).toHaveLength(1);
-    const strip = screen.getByRole('img', { name: '115 peers only heard of' });
+    const strip = screen.getByRole('img', { name: '115\u00a0peers only heard of' });
     const caption = view.querySelector('[data-role="caption"]') as HTMLElement;
     expect(caption.textContent).toBe(
       'Every node this crawler verified, at its approximate GeoIP place; no links are drawn, because no one can see them from outside.'

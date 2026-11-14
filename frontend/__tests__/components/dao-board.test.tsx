@@ -108,13 +108,13 @@ describe('DaoBoard', () => {
     const cycles = screen.getByRole('list', { name: 'Phase-0 cycle boundaries' });
     expect(within(cycles).getAllByRole('listitem')).toHaveLength(30);
     expect(
-      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposits, 30000000000 shannons/)
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposit, 30000000000 shannons/)
     ).toBeInTheDocument();
     expect(
-      screen.getByTitle(/Nominal day 30, epochs \+174 to \+180: 1\sdeposits, 20000000000 shannons/)
+      screen.getByTitle(/Nominal day 30, epochs \+174 to \+180: 1\sdeposit, 20000000000 shannons/)
     ).toBeInTheDocument();
     fireEvent.focus(
-      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposits, 30000000000 shannons/)
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposit, 30000000000 shannons/)
     );
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposit'
@@ -1085,7 +1085,7 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     fireEvent.focus(
-      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposits, 30000000000 shannons/)
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposit, 30000000000 shannons/)
     );
     expect(within(windows()).getByRole('status', { name: 'Cycle reading' })).toHaveTextContent(
       'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposit'

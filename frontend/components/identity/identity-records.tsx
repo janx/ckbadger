@@ -15,7 +15,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
         <span className="flex items-center gap-2.5">
           <img
             src={value.src}
-            alt={`${label ?? 'Record'}, a ${value.format} image of ${value.bytes.toLocaleString('en-US')} bytes`}
+            alt={`${label ?? 'Record'}, a ${value.format} image of ${formatCount(value.bytes, 'byte')}`}
             className="border-base-border h-12 w-12 shrink-0 rounded border object-cover"
           />
           <span className="text-text">
