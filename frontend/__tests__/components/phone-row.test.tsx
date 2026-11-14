@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
-import { ShareBar, shareBarWidth, shareBarWidthFromPercent } from '@/components/ui/share-bar';
+import {
+  ShareBar,
+  formatShareTick,
+  percentHundredths,
+  shareBarWidth,
+} from '@/components/ui/share-bar';
+import { resourceScale } from '@/components/blocks/block-visual';
 import { phoneLines } from '@/__tests__/utils/phone-row';
 
 describe('PhoneRow (boards L1–L8)', () => {
@@ -80,22 +86,36 @@ describe('PhoneRow (boards L1–L8)', () => {
   });
 });
 
-describe('Share bar (board L5: 10 % = full)', () => {
-  it('draws a share against 10 % from exact integers, and a full bar from 10 % up', () => {
-    expect(shareBarWidth(BigInt(232), BigInt(10000))).toBe('23.2%');
-    expect(shareBarWidth(BigInt(1), BigInt(10))).toBe('100%');
-    expect(shareBarWidth(BigInt(9), BigInt(10))).toBe('100%');
-    expect(shareBarWidth(BigInt(0), BigInt(0))).toBe('0%');
-    expect(() => shareBarWidth(BigInt(11), BigInt(10))).toThrow('is not a share');
-    // An API's exact percentage text, read as hundredths.
-    expect(shareBarWidthFromPercent('2.32')).toBe('23.2%');
-    expect(shareBarWidthFromPercent('1')).toBe('10%');
-    expect(shareBarWidthFromPercent('42.5')).toBe('100%');
-    expect(() => shareBarWidthFromPercent('1.234')).toThrow('is not a percentage');
-    expect(() => shareBarWidthFromPercent('101')).toThrow('is not a share');
-    const { container } = render(<ShareBar width="23.2%" />);
-    expect((container.firstElementChild!.firstElementChild as HTMLElement).style.width).toBe(
-      '23.2%'
-    );
+// Re-pinned with ruling R7 (UI review 2026-11-14): the 10 % = full clamp of board L5 is gone; a
+// bar is drawn on its list's one scale, the table's rounded maximum.
+describe('Share bar (ruling R7: the rounded maximum of the list, no clamp)', () => {
+  it('draws a value on its scale, in proportion, with no clamp', () => {
+    expect(shareBarWidth(232, 1000)).toBe('23.2%');
+    expect(shareBarWidth(5273, 6000)).toBe('87.88%');
+    expect(shareBarWidth(2645, 6000)).toBe('44.08%');
+    expect(shareBarWidth(6000, 6000)).toBe('100%');
+    expect(shareBarWidth(0, 1)).toBe('0%');
+    expect(() => shareBarWidth(11, 10)).toThrow('is not on the scale 10');
+    expect(() => shareBarWidth(1, 0)).toThrow('invalid scale 0');
+    const { container } = render(<ShareBar value={232} scale={1000} track={120} />);
+    const track = container.firstElementChild as HTMLElement;
+    expect(track.style.width).toBe('120px');
+    expect((track.firstElementChild as HTMLElement).style.width).toBe('23.2%');
+  });
+
+  it('reads an API percentage as hundredths and names the rounded maximum for a few maxima', () => {
+    expect(percentHundredths('2.32')).toBe(232);
+    expect(percentHundredths('1')).toBe(100);
+    expect(percentHundredths('42.5')).toBe(4250);
+    expect(() => percentHundredths('1.234')).toThrow('is not a percentage');
+    expect(() => percentHundredths('101')).toThrow('is not a share');
+    // the smallest round percentage at or above the largest share on the page
+    const axis = (largest: string) => formatShareTick(resourceScale([percentHundredths(largest)]));
+    expect(axis('52.73')).toBe('60%');
+    expect(axis('8.23')).toBe('10%');
+    expect(axis('25')).toBe('30%');
+    expect(axis('1.00')).toBe('1%');
+    expect(axis('0.04')).toBe('0.04%');
+    expect(axis('100')).toBe('100%');
   });
 });

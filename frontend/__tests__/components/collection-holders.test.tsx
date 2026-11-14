@@ -316,14 +316,18 @@ describe('Collection holders phone rows (board L5)', () => {
     expect(screen.queryByRole('table', { name: 'Top 10 collection holders' })).toBeNull();
     const second = phoneLines(rows[1]);
     expect(second.map((l) => l.key)).toEqual(['holder', 'share']);
+    // The first row carries the axis mark of the page's scale (6 items at most: 6).
+    expect(phoneLines(rows[0]).map((l) => l.key)).toEqual(['holder', 'axis', 'share']);
+    expect(phoneLines(rows[0])[1].left).toBe('06');
     // The rank is inline at the start of the first line, not a line of its own (B#19).
     expect(rows[1].querySelector('[data-line="holder"] [data-role="rank"]')).toHaveTextContent('2');
     expect(second[0].left).toMatch(/^2.*JoyID$/);
     expect(second[0].right).toBe('2 items');
-    // Against the largest holder on the page (6 items), as the table's bar.
+    // Re-pinned with ruling R7: on the table's scale for its Items bars, the page's rounded
+    // maximum (here 6, the largest itself is round).
     expect(rows[1].querySelector('[data-share-bar]')).toHaveAttribute(
       'data-share-bar',
-      `${(2 / 6) * 100}%`
+      `${Math.round((2 / resourceScale([6, 2])) * 10000) / 100}%`
     );
     // The three-column distribution (265 px) still fits a phone as a table (R1) …
     expect(

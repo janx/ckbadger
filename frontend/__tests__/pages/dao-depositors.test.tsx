@@ -102,13 +102,15 @@ describe('DAO depositors page (DAO-12)', () => {
     const first = within(cards).getAllByRole('listitem')[0];
     expect(first.querySelectorAll('dt')).toHaveLength(0);
     const [row] = within(first).getAllByTestId('holder-row-mobile');
-    // Rank inline, the depositor and the CKB deposited; then the share bar, its number and count.
+    // Rank inline, the depositor and the CKB deposited; the first row's axis mark; then the share
+    // bar with its number, and the deposit count. Re-pinned with ruling R7 (UI review 2026-11-14):
+    // the bar is on the page's rounded maximum (1 % for two 1.00 % depositors), not 10 % = full.
     expect(phoneLines(row)).toEqual([
       { key: 'holder', tone: 'head', left: '1ckb1qzda0cr0…ssd2hqn', right: '999.00000000 CKB' },
-      { key: 'share', tone: 'quiet', left: '', right: '1.00% · 1 deposit' },
+      { key: 'axis', tone: 'quiet', left: '01%', right: null },
+      { key: 'share', tone: 'quiet', left: '1.00%', right: '1 deposit' },
     ]);
-    // 10 % fills the bar: 1.00 % draws a tenth of it.
-    expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '10%');
+    expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });
 
   // Table-rows T5: the depositor is the row's one bright thing, at body, on an 18 px line so the
@@ -121,7 +123,9 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
     const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
     expect(rank.firstElementChild).toHaveClass('text-text-dim');
-    expect(share.firstElementChild).toHaveClass('text-text-dim');
+    // R7: the share is a bar on the page's scale with its number beside it, the number dim.
+    expect(share.querySelector('[data-aligned-bar]')).not.toBeNull();
+    expect(within(share as HTMLElement).getByText('1.00%')).toHaveClass('text-text-dim');
     for (const cell of [rank, deposits, capacity, share])
       expect(cell.querySelector('.text-body')).toBeNull();
   });
@@ -135,12 +139,15 @@ describe('DAO depositors page (DAO-12)', () => {
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
     render(<DaoDepositorsPage />);
     const [row] = await screen.findAllByTestId('holder-row-mobile');
+    // Re-pinned with ruling R7: the first row carries the axis mark over the bar; the bar comes
+    // after the amount and its number last, so every bar ends at one x.
     expect(phoneLines(row)).toEqual([
+      { key: 'axis', tone: 'quiet', left: '', right: '01%' },
       {
         key: 'holder',
         tone: 'head',
         left: '1ckb1qzda0cr0…ssd2hqn',
-        right: '1.00% · 1 deposit999.00000000 CKB',
+        right: '1 deposit999.00000000 CKB1.00%',
       },
     ]);
   });

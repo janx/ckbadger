@@ -21,7 +21,8 @@ import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
-import { shareBarWidth } from '@/components/ui/share-bar';
+import { formatShareTick } from '@/components/ui/share-bar';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -222,21 +223,19 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     const total = exactUnsignedInteger(holders.data!.totalSupply, 'holder-page supply'),
       amount = exactUnsignedInteger(h.balance, 'holder balance');
     if (amount > total) throw new Error('Holder balance exceeds same-response supply');
-    if (total === BigInt(0)) return { text: '—', hundredths: 0, amount, total };
+    if (total === BigInt(0)) return { text: '—', hundredths: 0 };
     const hundredths = Number(formatScaledInteger(amount * BigInt(10000), total, 0));
-    return {
-      text: `${formatScaledInteger(amount * BigInt(100), total, 2)}%`,
-      hundredths,
-      amount,
-      total,
-    };
+    return { text: `${formatScaledInteger(amount * BigInt(100), total, 2)}%`, hundredths };
   };
   // Board L5 on the row rules (table-rows L2-4): rank and address bright, the lock a tag, the
   // amount to 2 dp and the share as an 8 px bar on the page's scale — 552 px of minimums, so the
   // table holds in the token page's 554 px column at 1280; the two-line phone row takes over below
   // it. Every digit of the amount is in the row's title.
+  /** R7: the one scale of the page's share bars, the table's and the phone rows' alike. */
+  const shareScaleOf = (rows: readonly TokenHolder[]) =>
+    resourceScale(rows.map((h) => holderShare(h).hundredths));
   const holderColumns = (rows: readonly TokenHolder[]): ListColumn<TokenHolder>[] => {
-    const shareScale = resourceScale(rows.map((h) => holderShare(h).hundredths));
+    const shareScale = shareScaleOf(rows);
     return [
       {
         key: 'rank',
@@ -303,7 +302,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             label="Share"
             scale={shareScale}
             trackWidth={SHARE_TRACK}
-            format={(n) => `${n / 100}%`}
+            format={formatShareTick}
           />
         ),
         render: (h) => {
@@ -348,6 +347,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             rowTitle={holderTitle}
             mobileRow={(h, wide) => {
               const share = holderShare(h);
+              const rows = holders.data!.data;
+              const scale = shareScaleOf(rows);
               return (
                 <HolderPhoneRow
                   rank={rank(h)}
@@ -366,7 +367,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                   lock={h.lockKind ?? 'Lock kind unavailable'}
                   amount={<AssetAmount amount={h.balance} decimals={decimals} />}
                   share={share.text}
-                  barWidth={shareBarWidth(share.amount, share.total)}
+                  bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
+                  axis={rows[0] === h ? formatShareTick(scale) : undefined}
                   wide={wide}
                 />
               );

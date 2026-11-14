@@ -257,7 +257,8 @@ function ScopedCollectionHolders({
                 density="row"
                 rowTitle={holderTitle}
                 mobileRow={(holder, wide) => {
-                  const max = Math.max(...holders.data!.data.map((h) => h.itemCount));
+                  // R7: the table's scale for its Items bars — the page's rounded maximum.
+                  const scale = resourceScale(listed.map((h) => h.itemCount));
                   return (
                     <HolderPhoneRow
                       rank={rank(holder)}
@@ -273,10 +274,12 @@ function ScopedCollectionHolders({
                           </span>
                         </span>
                       }
-                      // The bar is the holder's count against the largest on the page, as the
-                      // table's Items column draws it.
-                      barWidth={`${max ? (holder.itemCount / max) * 100 : 0}%`}
-                      barColor={assetClass ? CLASS_COLORS[assetClass] : undefined}
+                      bar={{
+                        value: holder.itemCount,
+                        scale,
+                        color: assetClass ? CLASS_COLORS[assetClass] : undefined,
+                      }}
+                      axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
                       wide={wide}
                     />
                   );
