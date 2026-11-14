@@ -382,7 +382,7 @@ describe('CellDetailPage', () => {
   it('distinguishes missing cells from transport failures', async () => {
     getCell.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const rendered = view();
-    expect(await screen.findByText('no cell at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no cell at this out point.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the hash shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/cells/${truncateHash(hash)}/0`

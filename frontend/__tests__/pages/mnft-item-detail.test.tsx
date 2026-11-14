@@ -238,7 +238,7 @@ describe('MnftItemDetailPage', () => {
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: "no object at this address. the local index was asked; it holds none. honey badger don't care.",
+        name: "no object with this id. the local index was asked; it holds none. honey badger don't care.",
       })
     ).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once

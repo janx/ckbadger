@@ -121,9 +121,9 @@ describe('NotFoundPage', () => {
     // the index was asked, so the verse says so; the finding names the alternative
     const h1 = screen.getByRole('heading', {
       level: 1,
-      name: "no transaction at this address. the local index was asked; it holds none. honey badger don't care.",
+      name: "no transaction with this hash. the local index was asked; it holds none. honey badger don't care.",
     });
-    expect(verseLines(h1)[0]).toBe('no transaction at this address.');
+    expect(verseLines(h1)[0]).toBe('no transaction with this hash.');
     expect(screen.queryByText(/the chain was not asked/)).toBeNull();
     expect(screen.getByText('/transactions/0xabc')).toBeInTheDocument();
     // U-18: what was asked, its answer and what /search said, in one line
@@ -170,14 +170,14 @@ describe('NotFoundPage', () => {
       `checked /transactions/${short}/detail → 404 · /search: no block has this hash either`
     );
     expect(document.querySelector('.error-facts')).not.toHaveTextContent(HASH);
-    // only the id breaks anywhere; the words of the line wrap between words
+    // the words of the line wrap between words; the shortened id is one unit (U-16, re-pinned:
+    // it broke anywhere, "0x" / "36528a03...742ce54b")
     const id = within(lines[0]).getByText(short);
-    expect(id).toHaveClass('break-all');
-    expect(lines[0].querySelectorAll('.break-all')).toHaveLength(1);
-    expect(lines[0]).not.toHaveClass('break-all');
+    expect(id).toHaveAttribute('data-nobreak');
+    expect(lines[0].querySelectorAll('.break-all')).toHaveLength(0);
     // nothing answered: the same verse as an entity known as something else
     expect(verseLines(screen.getByRole('heading', { level: 1 }))).toEqual([
-      'no transaction at this address.',
+      'no transaction with this hash.',
       'the local index was asked; it holds none.',
       "honey badger don't care.",
     ]);
@@ -212,7 +212,7 @@ describe('NotFoundPage', () => {
       'checked /transactions/0xffffffff...ffffffff → 404 · the /search check could not complete: search unavailable'
     );
     // the words of the line wrap between words; only the id breaks anywhere
-    expect(within(lines[0]).getByText('0xffffffff...ffffffff')).toHaveClass('break-all');
+    expect(within(lines[0]).getByText('0xffffffff...ffffffff')).toHaveAttribute('data-nobreak');
     expect(lines[0]).not.toHaveClass('break-all');
     expect(lines[0]).toHaveClass('[overflow-wrap:anywhere]');
   });
@@ -313,12 +313,12 @@ describe('NotFoundPage', () => {
         checkedEndpoint: '/fiber/channels/0x01',
       })
     ).toEqual([
-      'no fiber channel at this address.',
+      'no fiber channel with this id.',
       'the local index was asked; it holds none.',
       "honey badger don't care.",
     ]);
     expect(entityVerse({ kind: 'block', identifier: '1', checkedEndpoint: '/blocks/1' })[0]).toBe(
-      'no block at this address.'
+      'no block with this number or hash.'
     );
     expect(
       entityVerse({ kind: 'script-family', identifier: 'x', checkedEndpoint: '/x' })

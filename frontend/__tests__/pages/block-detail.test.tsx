@@ -155,7 +155,7 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_HASH;
     vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
     render(<BlockDetailPage />);
-    expect(await screen.findByText('no block at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no block with this number or hash.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/blocks/${truncateHash(BLOCK_HASH)}`
@@ -177,7 +177,7 @@ describe('BlockDetailPage', () => {
     );
     render(<BlockDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('missing canonical header');
-    expect(screen.queryByText('no block at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no block with this number or hash.')).not.toBeInTheDocument();
   });
 
   it('shows exact decoded DAO fields alongside the raw 32-byte header', async () => {

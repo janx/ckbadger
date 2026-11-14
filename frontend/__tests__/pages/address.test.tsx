@@ -191,7 +191,7 @@ describe('Address v3', () => {
   it('shows typed 404 evidence only when the address endpoint actually returns 404', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);
-    expect(await screen.findByText('no address at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('nothing at this address.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the address shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/addresses/${truncateHash(addressText)}`
@@ -305,7 +305,7 @@ describe('Address v3', () => {
     render(<AddressDetailPage />);
     expect(await screen.findByText('that is not a ckb address.')).toBeInTheDocument();
     expect(document.querySelector('.error-facts')).toHaveTextContent('invalid address');
-    expect(screen.queryByText('no address at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('nothing at this address.')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
   it('says a failed address read in the one shared line', async () => {

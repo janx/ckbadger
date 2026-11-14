@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { NoBreak } from '@/components/ui/no-break';
 import { ErrorPageShell } from '@/components/error-page-shell';
 import { usePathname } from '@/src/navigation';
 import {
@@ -25,15 +26,33 @@ export const ROUTE_VERSE = [
 ] as const;
 
 /**
+ * What the index holds none of, by kind, naming the id the page was asked by (U-15: a transaction
+ * has a hash, not an address; only an address is "at this address").
+ */
+const NONE_WITH: Record<EntityKind, string> = {
+  block: 'no block with this number or hash.',
+  uncle: 'no uncle at this block and index.',
+  transaction: 'no transaction with this hash.',
+  cell: 'no cell at this out point.',
+  address: 'nothing at this address.',
+  script: 'no script with this code hash.',
+  'script-family': 'no script with this name.',
+  token: 'no token with this type hash.',
+  object: 'no object with this id.',
+  collection: 'no collection with this id.',
+  identity: 'no identity with this id.',
+  class: 'no class with this id.',
+  cluster: 'no cluster with this id.',
+  fork: 'no fork at this height and orphan.',
+  'fiber-channel': 'no fiber channel with this id.',
+};
+
+/**
  * An entity the page names but the local index does not hold: the index was asked (the facts say
  * which endpoint answered 404), so the route's second line would not be true here.
  */
 export function entityVerse(entity: NotFoundEntity): readonly string[] {
-  return [
-    `no ${entity.kind.replace('-', ' ')} at this address.`,
-    'the local index was asked; it holds none.',
-    ROUTE_VERSE[2],
-  ];
+  return [NONE_WITH[entity.kind], 'the local index was asked; it holds none.', ROUTE_VERSE[2]];
 }
 
 /** What a page's id must be, by kind: the first line of the verse when it is not one (R11). */
@@ -86,20 +105,15 @@ const RETURNS: Partial<Record<EntityKind, { href: string; label: string }>> = {
 
 /**
  * The endpoint a 404 came from, as one fact line shows it: every long segment (a hash, an
- * address) shortened, and only those may break anywhere (U-18). The rest wraps between words.
+ * address) shortened (U-18), each one unit that never breaks inside (U-16); the line wraps
+ * between words and around them.
  */
 function CheckedEndpoint({ path }: { path: string }) {
   return (
     <span data-endpoint="">
       {path.split(/([/?&=])/).map((part, i) => {
         const short = truncateHash(part);
-        return short === part ? (
-          part
-        ) : (
-          <span key={i} className="break-all">
-            {short}
-          </span>
-        );
+        return short === part ? part : <NoBreak key={i}>{short}</NoBreak>;
       })}
     </span>
   );
@@ -130,7 +144,7 @@ export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPa
     facts = <span className="min-w-0 [overflow-wrap:anywhere]">{notAnId.reason}</span>;
   } else if (entity) {
     facts = (
-      // words wrap between words; only the shortened id breaks anywhere
+      // words wrap between words and around the shortened id, which is one unit
       <span className="min-w-0 [overflow-wrap:anywhere]">
         checked <CheckedEndpoint path={entity.checkedEndpoint} /> → 404
         {lookup.status === 'loading' && (

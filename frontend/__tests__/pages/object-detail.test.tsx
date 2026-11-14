@@ -325,7 +325,7 @@ it('renders not found for both absent namespaces or an unrecognized identifier',
     new ApiRequestError(404, 'not_found', 'Collection not found')
   );
   const { rerender } = render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByText('no object at this address.')).toBeInTheDocument();
+  expect(await screen.findByText('no object with this id.')).toBeInTheDocument();
   // U-18: one fact line: the lookup that decided (the collection is asked only after the
   // object's 404), the id shortened, once
   expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(

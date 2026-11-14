@@ -1393,7 +1393,7 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('no transaction at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no transaction with this hash.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/transactions/${truncateHash(TX_HASH)}/detail`
@@ -1409,7 +1409,7 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not read this transaction: upstream request 404 timed out'
     );
-    expect(screen.queryByText('no transaction at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no transaction with this hash.')).not.toBeInTheDocument();
   });
 
   it('shows detailed message for non-404 transaction errors', async () => {

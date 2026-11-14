@@ -140,7 +140,7 @@ describe('TokenDetailPage', () => {
       new ApiRequestError(404, 'not_found', 'token absent')
     );
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText('no token at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no token with this type hash.')).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/tokens/${truncateHash(hash)}`
@@ -165,7 +165,7 @@ describe('TokenDetailPage', () => {
     );
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('token index mismatch');
-    expect(screen.queryByText('no token at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
   });
 
   it('keeps the token visible and names the distribution endpoint when that secondary read fails', async () => {
@@ -177,7 +177,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       `Could not load holder distribution from /tokens/${hash}/distribution: API error: 404 - distribution unavailable`
     );
-    expect(screen.queryByText('no token at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
   });
   it('consumes unmodified router responses across history, distribution, holders and full transactions', async () => {
     const p = tokenProducer;
