@@ -36,9 +36,12 @@ export interface ChartDefinition {
   evidenceLabel: string;
   queryKey: string;
   fetch: () => Promise<ChartPayload>;
-  /** A dual-unit API series belongs on a separate axis/chart; never stack it with this one. */
-  secondaryUnit?: string;
-  secondaryLabel?: string;
+  /**
+   * A second physical unit the API returns beside the main series: its own chart under the main
+   * one, never stacked or combined with it (CH-06). `label` names it once, as the section's command
+   * line; `note` says in plain words what it counts; `caption` is its quantity, for its caption.
+   */
+  secondary?: { unit: string; label: string; caption: string; note: string };
   primaryField?: 'value' | 'value2';
   /** Four related charts, as on the ChartDetail board (CH-28). */
   related: readonly string[];
@@ -206,8 +209,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Nervos DAO',
     queryKey: 'dao-chart-total-deposit',
     fetch: api.getDaoTotalDepositChart,
-    secondaryUnit: 'depositors',
-    secondaryLabel: 'Current depositors',
+    secondary: {
+      unit: 'depositors',
+      label: 'Current depositors',
+      caption: 'Depositors, per day',
+      note: 'Addresses holding a live Nervos DAO deposit at the end of each day.',
+    },
     related: ['daily-deposit', 'circulation-ratio', 'nominal-apc', 'total-supply'],
   },
   {
@@ -226,8 +233,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Nervos DAO',
     queryKey: 'dao-chart-daily-deposit',
     fetch: api.getDaoDailyDepositChart,
-    secondaryUnit: 'deposits',
-    secondaryLabel: 'Deposit count',
+    secondary: {
+      unit: 'deposits',
+      label: 'Deposit count',
+      caption: 'Deposits, per day',
+      note: 'New Nervos DAO deposits made each day.',
+    },
     related: ['total-deposit', 'circulation-ratio', 'nominal-apc', 'activity-type-breakdown'],
   },
   {
@@ -308,8 +319,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-knowledge-size',
     fetch: api.getKnowledgeSizeChart,
-    secondaryUnit: '%',
-    secondaryLabel: 'Utilization',
+    secondary: {
+      unit: '%',
+      label: 'Utilization',
+      caption: 'Occupied share of circulating CKB',
+      note: 'CKB occupied by live cells as a share of circulating CKB, each day.',
+    },
     related: [
       'common-knowledge-composition',
       'cell-count',
@@ -394,8 +409,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-cell-size-distribution',
     fetch: api.getCellSizeDistributionChart,
-    secondaryUnit: 'CKB',
-    secondaryLabel: 'Common knowledge',
+    secondary: {
+      unit: 'CKB',
+      label: 'Common knowledge',
+      caption: 'CKB occupied, by cell size',
+      note: 'CKB occupied by the live cells in each size bucket.',
+    },
     related: [
       'knowledge-size',
       'cell-count',
@@ -434,8 +453,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Address activity',
     queryKey: 'chart-address-cohort-retention',
     fetch: api.getAddressCohortRetentionChart,
-    secondaryUnit: 'CKB',
-    secondaryLabel: 'Common knowledge',
+    secondary: {
+      unit: 'CKB',
+      label: 'Common knowledge',
+      caption: 'CKB occupied, by first-seen month',
+      note: 'CKB occupied today by the addresses first seen in each month.',
+    },
     related: ['active-addresses', 'hodl-wave', 'knowledge-size', 'common-knowledge-composition'],
   },
   {
@@ -532,8 +555,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-epoch-time-length',
     fetch: api.getEpochTimeLengthChart,
-    secondaryUnit: 'blocks',
-    secondaryLabel: 'Epoch blocks',
+    secondary: {
+      unit: 'blocks',
+      label: 'Epoch blocks',
+      caption: 'Blocks, per epoch',
+      note: 'Blocks in each completed epoch.',
+    },
     related: ['epoch-time-distribution', 'average-block-time', 'difficulty', 'hash-rate'],
   },
   {

@@ -35,6 +35,9 @@ describe('KnowledgeSizePage with the real chart', () => {
     expect(path).not.toMatch(/NaN|Infinity/);
     fireEvent.keyDown(svg, { key: 'ArrowLeft' });
     expect(screen.getByText('-30')).toBeInTheDocument();
-    expect(container).toHaveTextContent('Exact signed change in occupied CKB');
+    // Re-pinned for CH-06: the one dim line says what the flow counts in plain words.
+    expect(container).toHaveTextContent(
+      'Occupied CKB gained since the previous day; below zero, CKB freed.'
+    );
   });
 });

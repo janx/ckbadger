@@ -408,12 +408,15 @@ describe('shared chart detail', () => {
     expect(readings).toHaveTextContent('peak, #14,004');
     // the count is the command's args (phase 5, D10): 'full history 1,201 epochs'
     expect(screen.getByRole('heading', { name: 'Full history 1,201 epochs' })).toBeInTheDocument();
-    expect(screen.getByText('1,201 epochs')).toBeInTheDocument();
+    // Re-pinned for CH-06: the blocks chart's command line carries its span as well.
+    expect(screen.getByRole('heading', { name: 'Epoch blocks 1,201 epochs' })).toBeInTheDocument();
     const main = lastChart('Epoch length');
     expect(main.hideCaption).toBe(true);
     expect(main.referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
-    // The separate blocks chart says what it counts, not the hours subtitle.
-    expect(lastChart('Epoch blocks').subtitle).toBe('Epoch blocks · 1,201 epochs');
+    // The separate blocks chart says what it counts, not the hours subtitle (re-pinned for CH-06:
+    // its caption is its own quantity, the name no longer repeated in it).
+    expect(lastChart('Epoch blocks').subtitle).toBe('Blocks, per epoch · 1,201 epochs');
+    expect(lastChart('Epoch blocks').hideCaption).toBe(true);
   });
 
   it('gives every chart a readout line a tap pins (R6), and says so in its help', async () => {

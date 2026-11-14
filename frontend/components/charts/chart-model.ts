@@ -77,7 +77,7 @@ export interface ChartModel {
   unit: string;
   kind: 'line' | 'bars' | 'stacked' | 'ranked';
   /** Present only when the API actually provides a second physical unit. */
-  secondary?: { points: ChartPoint[]; series: ChartSeries[]; unit: string; title: string };
+  secondary?: SubChart;
   latest: { label: string; raw: string; display: string } | null;
   /** Exact, signed change between the final two returned points. */
   delta: string | null;
@@ -95,7 +95,7 @@ export interface ChartModel {
   /** Card preview of a ranking: the top five plus an exact "Others" for every remaining rank. */
   rankedPreview?: { rows: RankedPreviewRow[]; summaryLabel: string | undefined };
   /** Exact signed day-over-day change in occupied CKB, when the source is knowledge size. */
-  dailyFlow?: { points: ChartPoint[]; series: ChartSeries[]; unit: string; title: string };
+  dailyFlow?: SubChart;
   /** Exact daily histories from both distinct utilization scopes. */
   historicalShares?: SubChart[];
   summaryLabel?: string;
@@ -264,7 +264,7 @@ function singleChart(
     const values: Record<string, string> = {
       primary: chartUnitValue(primary, definition.scale, `${definition.slug} at ${point.date}`),
     };
-    if (hasSecond && !definition.secondaryUnit) {
+    if (hasSecond && !definition.secondary) {
       const companion = point[companionField];
       if (companion === undefined || companion === null)
         throw new Error(`${definition.slug}: missing ${companionField} at ${point.date}`);
@@ -285,7 +285,7 @@ function singleChart(
       color: 'var(--c-jade)',
     },
   ];
-  if (hasSecond && !definition.secondaryUnit)
+  if (hasSecond && !definition.secondary)
     series.push({
       key: 'companion',
       label: primaryField === 'value2' ? payload.yAxisLabel : (payload.y2AxisLabel ?? 'Companion'),
@@ -293,8 +293,8 @@ function singleChart(
       // A companion reading of the same unit (real inflation, daily turnover) is dashed (CH-12).
       dashed: true,
     });
-  const secondary =
-    hasSecond && definition.secondaryUnit
+  const secondary: SubChart | undefined =
+    hasSecond && definition.secondary
       ? {
           points: payload.data.map((point) => ({
             label: point.date,
@@ -306,15 +306,11 @@ function singleChart(
               ),
             },
           })),
-          series: [
-            {
-              key: 'secondary',
-              label: definition.secondaryLabel ?? payload.y2AxisLabel ?? 'Secondary',
-              color: 'var(--c-aqua)',
-            },
-          ],
-          unit: definition.secondaryUnit,
-          title: definition.secondaryLabel ?? payload.y2AxisLabel ?? 'Secondary series',
+          series: [{ key: 'secondary', label: definition.secondary.label, color: 'var(--c-aqua)' }],
+          unit: definition.secondary.unit,
+          title: definition.secondary.label,
+          caption: definition.secondary.caption,
+          note: definition.secondary.note,
         }
       : undefined;
   const last = points.at(-1);
@@ -366,6 +362,8 @@ function singleChart(
       definition.slug === 'knowledge-size'
         ? {
             title: 'Net knowledge flow',
+            caption: 'Change in occupied CKB, per day',
+            note: 'Occupied CKB gained since the previous day; below zero, CKB freed.',
             unit: 'CKB/day',
             series: [{ key: 'flow', label: 'Daily net flow', color: 'var(--c-aqua)' }],
             points: points.slice(1).map((point, index) => ({
@@ -591,6 +589,8 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
     secondary: holderCount
       ? {
           title: 'Holder count',
+          caption: 'Holders, per day',
+          note: 'Addresses holding a positive balance at the end of each day.',
           unit: 'holders',
           series: [{ key: 'holders', label: 'Holders', color: 'var(--c-aqua)' }],
           points: payload.data.map((point) => ({
@@ -740,6 +740,8 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
     kind: 'line',
     secondary: {
       title: 'Consumed cells, cumulative',
+      caption: 'Consumed cells, cumulative',
+      note: 'Cells consumed since genesis, counted at the end of each day.',
       unit: 'cells',
       series: [{ key: 'secondary', label: 'Consumed cells', color: 'var(--c-aqua)' }],
       points: payload.data.map((point) => ({

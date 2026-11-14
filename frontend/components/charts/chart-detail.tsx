@@ -484,15 +484,15 @@ function DetailBody({
             </DetailSection>
           );
         })}
+        {/* A chart under the main one is named once, by its command line; one dim line says
+            what it counts; its own title and caption are for assistive technology (CH-06). */}
         {model.secondary && model.secondary.points.length > 0 && (
-          <DetailSection title={model.secondary.title}>
-            <p className="text-text-dim text-small mb-3">
-              Separate scale: {model.secondary.unit}. These values are never combined with{' '}
-              {model.unit}.
-            </p>
+          <DetailSection title={model.secondary.title} args={chartSpan(secondaryPoints, style)}>
+            <p className="text-text-dim text-small mb-3">{model.secondary.note}</p>
             <Chart
               title={model.secondary.title}
-              subtitle={`${model.secondary.title} · ${chartSpan(secondaryPoints, style)}`}
+              subtitle={`${model.secondary.caption} · ${chartSpan(secondaryPoints, style)}`}
+              hideCaption
               data={secondaryPoints}
               series={model.secondary.series}
               unit={model.secondary.unit}
@@ -508,13 +508,15 @@ function DetailBody({
           </DetailSection>
         )}
         {model.dailyFlow && model.dailyFlow.points.length > 0 && (
-          <DetailSection title={model.dailyFlow.title}>
-            <p className="text-text-dim text-small mb-3">
-              Exact signed change in occupied CKB from the preceding returned day.
-            </p>
+          <DetailSection
+            title={model.dailyFlow.title}
+            args={chartSpan(rangePoints(model.dailyFlow.points, range), 'date')}
+          >
+            <p className="text-text-dim text-small mb-3">{model.dailyFlow.note}</p>
             <Chart
               title={model.dailyFlow.title}
-              subtitle="Daily change in common knowledge"
+              subtitle={`${model.dailyFlow.caption} · ${chartSpan(rangePoints(model.dailyFlow.points, range), 'date')}`}
+              hideCaption
               data={rangePoints(model.dailyFlow.points, range)}
               series={model.dailyFlow.series}
               unit={model.dailyFlow.unit}
