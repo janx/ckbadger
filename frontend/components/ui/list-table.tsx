@@ -51,6 +51,13 @@ export interface ListTableProps<T> {
    * fields that left a one-line row are kept (with the detail page). Never empty.
    */
   rowTitle?: (row: T) => string;
+  /**
+   * Told the form this list chose, and again whenever its measured width changes it, before the
+   * browser paints. For a part of the page that belongs to one form only — a legend of the wide
+   * table's glyphs, a switch of its bar (PA-02, PA-03) — so it is drawn exactly with that form,
+   * from the same measurement, never from a breakpoint of its own.
+   */
+  onForm?: (form: ListTableForm) => void;
 }
 
 export type ListTableDensity = 'default' | 'row';
@@ -138,6 +145,7 @@ export function ListTable<T>({
   className,
   density = 'default',
   rowTitle,
+  onForm,
 }: ListTableProps<T>) {
   const [minimum, narrowMinimum] = minimumWidths(label, columns, narrowColumns);
   const titleOf = (row: T): string | undefined => {
@@ -153,6 +161,7 @@ export function ListTable<T>({
   const form: ListTableForm =
     width === null ? 'table' : listTableForm(label, width, columns, narrowColumns);
   const shown = form === 'narrow-table' ? narrowColumns! : columns;
+  useLayoutEffect(() => onForm?.(form), [form, onForm]);
   return (
     <div
       ref={ref}
