@@ -17,6 +17,7 @@ import { formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { HexCode } from '@/components/ui/hex-code';
 import { Dotted } from '@/components/ui/phone-row';
+import { shortenHash } from '@/lib/shorten';
 
 /** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
 export type BlockNeighbour = Pick<
@@ -431,7 +432,7 @@ export function BlockPosition({
                       uncle {formatBlockNumber(uncle.number)}
                     </text>
                     <text x={uncleX + 10} y={top + 39} fill="var(--c-text-dim)" fontSize="11">
-                      {uncle.hash.slice(0, 6)}…{uncle.hash.slice(-4)}
+                      {shortenHash(uncle.hash, 'tight')}
                     </text>
                     <text
                       data-uncle-time
@@ -470,7 +471,8 @@ export function BlockPosition({
                     Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
                   <text x={parentX + 10} y={top + 41} fill="var(--c-text)" fontSize="11">
-                    {uncle.parentHash.slice(0, 12)}…{uncle.parentHash.slice(-6)}
+                    {/* SVG labels in 178 px tiles: the tight size (U-09) */}
+                    {shortenHash(uncle.parentHash, 'tight')}
                   </text>
                 </Link>
                 <Link
@@ -490,7 +492,7 @@ export function BlockPosition({
                     Uncle {formatBlockNumber(uncle.number)}
                   </text>
                   <text x={uncleX + 10} y={top + 41} fill="var(--c-text-dim)" fontSize="11">
-                    {uncle.hash.slice(0, 12)}…{uncle.hash.slice(-6)}
+                    {shortenHash(uncle.hash, 'tight')}
                   </text>
                 </Link>
               </g>

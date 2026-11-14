@@ -257,7 +257,7 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Fiber · Channel Close')).toBeInTheDocument();
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      'channel 0x0d3870bb...6e26:0 · 750.00000000 CKB'
+      'channel 0x0d3870bb…006e26:0 · 750.00000000 CKB'
     );
     expect(
       [
@@ -282,8 +282,8 @@ describe('ActivityFeed', () => {
       'title',
       `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
     );
-    expect(row).toHaveTextContent('object 0x51c75a...96f2 departed');
-    expect(row).toHaveTextContent('object 0x51c75a...96f2 arrived');
+    expect(row).toHaveTextContent('object 0x51c75a00…0096f2 departed');
+    expect(row).toHaveTextContent('object 0x51c75a00…0096f2 arrived');
     // A party with no item change is still listed.
     expect(row.querySelectorAll('[data-party]')).toHaveLength(3);
   });
@@ -297,10 +297,10 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Token transfer')).toBeInTheDocument();
     // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
-    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede...e09f');
-    expect(within(row).getByRole('link', { name: '0xab0ede...e09f' })).toHaveAttribute(
+    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede00…00e09f');
+    expect(within(row).getByRole('link', { name: '0xab0ede00…00e09f' })).toHaveAttribute(
       'title',
-      `0xab0ede...e09f(0x4b0000${'00'.repeat(14)}838e)`
+      `0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
     );
     expect(
       within(row).getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })
@@ -386,7 +386,7 @@ describe('ActivityFeed', () => {
     // the date closes it (was the age), the age is the date's hover.
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef\\.\\.\\.efefef · ${formatUtc8Date(tx(0).timestamp)}$`)
+      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatUtc8Date(tx(0).timestamp)}$`)
     );
     expect(within(evidence).getByText(formatUtc8Date(tx(0).timestamp))).toHaveAttribute(
       'title',

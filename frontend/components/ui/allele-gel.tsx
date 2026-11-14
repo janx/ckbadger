@@ -25,6 +25,7 @@ import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
+import { clipLabel } from '@/lib/shorten';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
@@ -276,9 +277,7 @@ function Gel({
                             pointerEvents="none"
                             fill={lane.conserved ? GEL_COLORS.well : GEL_COLORS.bandText}
                           >
-                            {b.label.length > labelChars
-                              ? `${b.label.slice(0, labelChars - 1)}…`
-                              : b.label}
+                            {clipLabel(b.label, labelChars)}
                           </text>
                         )}
                       </g>

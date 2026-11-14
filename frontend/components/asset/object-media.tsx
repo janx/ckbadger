@@ -7,6 +7,7 @@ import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { ClassMark } from '@/components/ui/class-mark';
 import { formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
@@ -52,7 +53,13 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
       <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
     );
   const href = bitcoinTxHref(inscription.txid, network);
-  const label = `Bitcoin tx ${inscription.txid.slice(0, 4)}…${inscription.txid.slice(-4)} · inscription i${inscription.index}`;
+  // the media box's reading: the txid at the row size (U-09; it was 4…4)
+  const label = (
+    <>
+      Bitcoin tx <ShortId value={inscription.txid} kind="hash" size="row" /> · inscription i
+      {inscription.index}
+    </>
+  );
   return href ? (
     <a href={href} className="text-copper break-all" target="_blank" rel="noopener noreferrer">
       {label} ↗

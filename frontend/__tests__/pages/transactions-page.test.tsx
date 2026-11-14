@@ -199,16 +199,17 @@ describe('Transactions pool view', () => {
     expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(1230).toBeLessThanOrEqual(1232);
-    // "0x" and 10 digits, the ellipsis, 6 digits: 21 characters of JetBrains Mono at 13 px (7.8)
+    // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
+    // characters of JetBrains Mono at 13 px (7.8; it was 21, 12 + 6 with three dots)
     const shown = within(table).getByTitle(`0x${'ab'.repeat(32)}`);
-    expect(shown).toHaveTextContent(/^0xababababab\.\.\.ababab$/);
+    expect(shown).toHaveTextContent(/^0xabababab…ababab$/);
     const chars = shown.textContent!.length;
-    expect(chars).toBe(21);
-    // the stone, the hash and the 16 px gap fit the 237 px; one more character would not
+    expect(chars).toBe(17);
+    // the stone, the hash and the 16 px gap fit the 237 px with 31.9 px to spare; the column keeps
+    // its 237 so both of the page's lists change form at the same width
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(236.3, 6);
-    expect(used).toBeLessThanOrEqual(237);
-    expect(used + 7.8).toBeGreaterThan(237);
+    expect(used).toBeCloseTo(205.1, 6);
+    expect(237 - used).toBeCloseTo(31.9, 6);
   });
 
   // Old issue C, round 2: at 1,200 px the pool's columns lived on the 32 px the 1,232 px container
@@ -353,9 +354,9 @@ describe('Transactions pool view', () => {
         name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
       });
       expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
-      // the table's hash is 12 + 6, the phone row's 10 + 6
+      // U-09 (re-pinned): the table's hash at the row size, the phone row's at the tight size
       expect(within(shown).getByTitle(`0x${'ab'.repeat(32)}`)).toHaveTextContent(
-        form === 'table' ? /^0xababababab\.\.\.ababab$/ : /^0xabababab\.\.\.ababab$/
+        form === 'table' ? /^0xabababab…ababab$/ : /^0xabab…abab$/
       );
       unmount();
       vi.unstubAllGlobals();
@@ -520,8 +521,8 @@ describe('Transactions pool view', () => {
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
       expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
       expect(hash).not.toHaveClass('text-small');
-      // the table's 21 characters (old issue C: see the width budget above)
-      expect(hash).toHaveTextContent(/^0xababababab\.\.\.ababab$/);
+      // the table's 17 characters, the row size (U-09: see the width budget above)
+      expect(hash).toHaveTextContent(/^0xabababab…ababab$/);
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);
     }
@@ -574,7 +575,7 @@ describe('Transactions pool view', () => {
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0xabababab...ababab', expect.stringMatching(/^Proposed· .+ ago$/)],
+      ['identity', '0xabab…abab', expect.stringMatching(/^Proposed· .+ ago$/)],
       [
         'what',
         'Interpretation unavailablepartial: an input is not yet resolvable',

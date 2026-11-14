@@ -9,7 +9,9 @@ import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { describeIdentityRecords } from '@/lib/identity-records';
 import { readDidDocument } from '@/lib/did-document';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatUtc8Date, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { ShortId } from '@/components/ui/short-id';
+import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
 
@@ -113,7 +115,7 @@ function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
   return {
     label: 'Owner',
     size: 'body',
-    value: <Address address={cell.ownerAddress} className="text-body" />,
+    value: <Address address={cell.ownerAddress} size="row" className="text-body" />,
     note: `${cell.lockName ?? 'lock not named'}${note}`,
   };
 }
@@ -159,7 +161,13 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
     size: 'body',
     value: party.lockHash ? (
       <AppLink href={`/address/${party.address ?? party.lockHash}`}>
-        <Hash hash={party.address ?? party.lockHash} copyable={false} className="text-body" />
+        <Hash
+          hash={party.address ?? party.lockHash}
+          kind={party.address ? 'address' : 'hash'}
+          size="row"
+          copyable={false}
+          className="text-body"
+        />
       </AppLink>
     ) : (
       <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
@@ -174,12 +182,17 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
  * A `.cell` named party in one line: its address when the API resolved the 20-byte prefix to
  * exactly one lock, else the prefix itself — never an address it does not have.
  */
-export function PartyLine({ party, size = 13 }: { party: DotCellPartyRef; size?: 13 | 14 }) {
-  const text = size === 14 ? 'text-body' : 'text-body';
+export function PartyLine({ party, size }: { party: DotCellPartyRef; size: ShortSize }) {
   return party.lockHash ? (
     <>
       <AppLink href={`/address/${party.address ?? party.lockHash}`}>
-        <Hash hash={party.address ?? party.lockHash} copyable={false} className={text} />
+        <Hash
+          hash={party.address ?? party.lockHash}
+          kind={party.address ? 'address' : 'hash'}
+          size={size}
+          copyable={false}
+          className="text-body"
+        />
       </AppLink>
       <Sub>{party.scriptName ?? 'lock not named'}</Sub>
     </>
@@ -219,7 +232,7 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
           {bitCells.map((c) => (
             <span key={c.id}>
               <AppLink href={`/identities/bit-cell/${c.id}`}>
-                {c.name ?? truncateHash(c.id, 10, 4)}
+                {c.name ?? <ShortId value={c.id} kind="hash" size="row" />}
               </AppLink>
               <span className="text-text-dim font-normal">
                 {' '}

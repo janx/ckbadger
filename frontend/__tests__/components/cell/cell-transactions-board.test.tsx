@@ -227,7 +227,7 @@ describe('Its transactions against the Cell board', () => {
     await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     // U-16 (re-pinned): the dep is a reference, written as the transaction page writes it — its
     // kind, then the out point shortened (was the full out point and "(dep_group)")
-    const short = `${depTx.slice(0, 10)}...${depTx.slice(-6)}:1`;
+    const short = `${depTx.slice(0, 10)}…${depTx.slice(-6)}:1`;
     const dep = await screen.findByRole('link', { name: short });
     expect(dep).toHaveAttribute('href', expect.stringMatching(new RegExp(`/cell/${depTx}-1$`)));
     expect(dep.parentElement).toHaveTextContent(`dep group ${short}`);

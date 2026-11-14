@@ -33,6 +33,7 @@ import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -53,10 +54,6 @@ const activityFilters = [
   ['protocol:rgbpp', 'RGB++'],
 ] as const;
 type ActivityFilter = (typeof activityFilters)[number][0];
-/** C13: the page's h1 — the address (or lock hash) cut to its first 12 and last 8 characters. */
-function shortName(value: string): string {
-  return value.length > 21 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
-}
 /**
  * C14: what a filter chip's one-row page says of its count. The API counts only the unfiltered
  * feed, so a filtered page tells 0 or 1 committed activities exactly, and otherwise only that
@@ -253,8 +250,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           <DetailSkeleton />
         ) : (
           <DetailLayout
-            // C13: the page is named by its short address; the full one and its copy are beneath.
-            title={shortName(a.address ?? a.lockScriptHash)}
+            // C13: the page is named by its short address (U-09: an h1 is the head size); the full
+            // one and its copy are beneath.
+            title={
+              a.address ? shortenAddress(a.address, 'head') : shortenHash(a.lockScriptHash, 'head')
+            }
             documentTitle={[
               a.address ? titleAddress(a.address) : titleHash(a.lockScriptHash),
               'address',
@@ -282,6 +282,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       {a.lockScriptInfo?.name ?? (
                         <Hash
                           hash={a.lockScript.codeHash}
+                          size="row"
                           className="text-small"
                           copyable={false}
                         />
@@ -430,13 +431,18 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
                       <Link href={`/fiber/channels/${c.channelId}`}>
-                        <Hash hash={c.channelId} className="text-small" copyable={false} />
+                        <Hash
+                          hash={c.channelId}
+                          size="row"
+                          className="text-small"
+                          copyable={false}
+                        />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
                           <Link href={`/address/${p}`} key={p}>
-                            <Hash hash={p} copyable={false} className="text-small" />
+                            <Hash hash={p} size="row" copyable={false} className="text-small" />
                           </Link>
                         ))}
                       </span>

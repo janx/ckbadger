@@ -19,14 +19,15 @@ describe('Hash', () => {
     expect(screen.getByText(fullHash)).toBeInTheDocument();
   });
 
-  it('uses truncation settings for the displayed hash', () => {
-    render(<Hash hash={fullHash} startChars={8} endChars={6} />);
-    expect(screen.getByText('0x123456...abcdef')).toBeInTheDocument();
+  // U-09 (re-pinned): a size, never a length
+  it('writes the hash at its size', () => {
+    render(<Hash hash={fullHash} size="row" />);
+    expect(screen.getByText('0x12345678…abcdef')).toBeInTheDocument();
     expect(screen.queryByText(fullHash)).not.toBeInTheDocument();
   });
 
   it('copies hash to clipboard on click when copyable', async () => {
-    render(<Hash hash={fullHash} copyable />);
+    render(<Hash hash={fullHash} size="row" copyable />);
 
     const element = screen.getByText(/0x12345678/);
     fireEvent.click(element);
@@ -39,7 +40,7 @@ describe('Hash', () => {
   });
 
   it('uses the full hash as title when copying is disabled', () => {
-    render(<Hash hash={fullHash} copyable={false} />);
+    render(<Hash hash={fullHash} size="row" copyable={false} />);
 
     const element = screen.getByText(/0x12345678/);
     fireEvent.click(element);

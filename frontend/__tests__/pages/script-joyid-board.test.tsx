@@ -107,8 +107,9 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('In use since2023-10-07');
     // Lane L: the first deployment's transaction is named, and links to its page.
     const DEPLOY = '0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5';
-    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0f6…f433f5');
-    const deployer = within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' });
+    // U-09 (re-pinned): a hero tile's note at the tight size (it was 8…6)
+    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0…33f5');
+    const deployer = within(metrics).getByRole('link', { name: '0xbac0…33f5' });
     expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
     expect(deployer).toHaveAttribute('title', DEPLOY);
   });
@@ -124,8 +125,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       expect(el.closest('[data-nobreak], .whitespace-nowrap')).not.toBeNull();
     // the deployment's shortened hash, the first day, the replacement day, the holder's name
     whole(
-      within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' }).firstElementChild ??
-        within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' })
+      within(metrics).getByRole('link', { name: '0xbac0…33f5' }).firstElementChild ??
+        within(metrics).getByRole('link', { name: '0xbac0…33f5' })
     );
     whole(within(metrics).getByText('2023-10-07'));
     whole(within(metrics).getByText('2025-11-21'));
@@ -174,7 +175,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(timeline).toHaveTextContent('multisig 0xd1db…b95c · 3 of 5 signatures');
     expect(
       [...timeline.querySelectorAll<HTMLElement>('[data-holder]')].map((s) => s.title).join(' ')
-    ).toContain('multisig 0x65983f…d696 · signers not on chain yet');
+    ).toContain('multisig 0x65983f1d…eed696 · signers not on chain yet');
     expect(document.body.textContent).not.toMatch(/common knowledge/i);
   });
 
@@ -203,7 +204,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     expect(segments[0].title.match(/0x[0-9a-f]{40}/g)).toHaveLength(6);
     expect(segments[1].title).toContain(
-      'kept 2 of 5\u00a0keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+      'kept 2 of 5\u00a0keys of multisig 0xd1dbde92…0cb95c at the handover on 2025-08-28'
     );
     expect(screen.getByRole('status', { name: 'Code cell holder reading' })).toHaveTextContent(
       '3 holders · 5 versions · 2 handovers'
@@ -230,8 +231,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(rows[4]).toHaveTextContent('#11,132,140');
     expect(title(rows[4])).toContain('consumed by v2');
     expect(title(rows[4])).toContain('first deployed');
-    expect(title(rows[4])).toContain('into multisig 0xd1db…b95c');
-    expect(title(rows[2])).toContain('hands it to 0x07a2…68ca');
+    expect(title(rows[4])).toContain('into multisig 0xd1dbde92…0cb95c');
+    expect(title(rows[2])).toContain('hands it to 0x07a21dc2…9d68ca');
     expect(rows[0]).toHaveTextContent('live · current');
     expect(title(rows[0])).toContain('100,438.00000000');
     expect(screen.getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)).toBeInTheDocument();
@@ -262,7 +263,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     const table = screen.getByRole('table', { name: 'Its cells' });
     const rows = within(table).getAllByRole('row').slice(1);
-    expect(rows[0]).toHaveTextContent('0x44e5e9…517f:1');
+    expect(rows[0]).toHaveTextContent('0x44e5e96c…f8517f:1');
     expect(rows[0]).toHaveTextContent('63 B');
     expect(rows[0]).toHaveTextContent('—');
     expect(rows[1]).toHaveTextContent('COTA');
@@ -734,7 +735,8 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
       ['hash', 'quiet'],
       ['detail', 'quiet'],
     ]);
-    expect(first[0].left).toMatch(/^v1 2023-10-07 · 0x[0-9a-f]{8}…[0-9a-f]{6}:\d$/);
+    // U-09 (re-pinned): the phone row's out point at the tight size
+    expect(first[0].left).toMatch(/^v1 2023-10-07 · 0x[0-9a-f]{4}…[0-9a-f]{4}:\d$/);
     expect(first[0].right).toBe('consumed by v2');
     // The version hash keeps a line of its own, whole: it is what a developer copies.
     expect(first[1].left).toMatch(/^0x[0-9a-f]{64}$/);

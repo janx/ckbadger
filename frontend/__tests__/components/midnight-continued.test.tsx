@@ -112,9 +112,9 @@ describe('the rules in globals.css', () => {
 describe('move 1c on a hash', () => {
   it('a copyable hash carries the hover glow; a plain one does not', () => {
     const hash = `0x${'ab'.repeat(32)}`;
-    const { rerender } = render(<Hash hash={hash} />);
+    const { rerender } = render(<Hash hash={hash} size="row" />);
     expect(screen.getByText(/0xabababab/)).toHaveClass('hover-lit', 'cursor-pointer');
-    rerender(<Hash hash={hash} copyable={false} />);
+    rerender(<Hash hash={hash} size="row" copyable={false} />);
     expect(screen.getByText(/0xabababab/)).not.toHaveClass('hover-lit');
   });
 });

@@ -10,7 +10,6 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
-import { truncateHash } from '@/lib/utils';
 import {
   api,
   ApiRequestError,
@@ -243,7 +242,7 @@ describe('MnftItemDetailPage', () => {
     ).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/assets/objects/items/${truncateHash(id)}`
+      `/assets/objects/items/${id.slice(0, 10)}…${id.slice(-6)}`
     );
     expect(api.getItemProtocol).not.toHaveBeenCalled();
   });

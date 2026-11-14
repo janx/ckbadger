@@ -17,7 +17,8 @@ import { DaoGrows } from '@/components/dao/dao-grows';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { formatCapacity, formatDurationMs, truncateHash } from '@/lib/utils';
+import { formatCapacity, formatDurationMs } from '@/lib/utils';
+import type { ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
@@ -42,7 +43,7 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatCount } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
@@ -1010,22 +1011,23 @@ function concentrationGroups(evidence: DaoEvidence) {
   return { total, groups };
 }
 
-function ownerLink(owner: Owner) {
+/** A depositor's address at the form's size (U-09): row in the table, tight in the phone row. */
+function ownerLink(owner: Owner, size: ShortSize) {
   return (
     <Link href={`/address/${owner.address}`} className="text-text-bright hover:underline">
-      {owner.address.slice(0, 12)}…{owner.address.slice(-7)}
+      <ShortId value={owner.address} kind="address" size={size} />
     </Link>
   );
 }
 
-function lockLink(owner: Owner) {
+function lockLink(owner: Owner, size: ShortSize) {
   return (
     <Link
       href={`/script/${owner.lockCodeHash}?hashType=${owner.lockHashType}&kind=lock`}
       className="text-text-dim hover:text-text-bright font-mono hover:underline"
       title={`${owner.lockCodeHash} (${owner.lockHashType})`}
     >
-      {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`}
+      {owner.lockKind ?? <ShortId value={owner.lockCodeHash} kind="hash" size={size} />}
     </Link>
   );
 }
@@ -1054,7 +1056,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     header: ownerHead('Depositor'),
     minWidth: 190,
     className: OWNER_CELL,
-    render: ownerLink,
+    render: (o) => ownerLink(o, 'row'),
   },
   {
     key: 'lock',
@@ -1062,7 +1064,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     header: ownerHead('Lock'),
     minWidth: 170,
     className: OWNER_CELL,
-    render: lockLink,
+    render: (o) => lockLink(o, 'row'),
   },
   {
     key: 'deposits',
@@ -1131,12 +1133,12 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0">
                 <span className="text-text-dim mr-2">{o.rank}</span>
-                {ownerLink(o)}
+                {ownerLink(o, 'tight')}
               </span>
               <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              {lockLink(o)}
+              {lockLink(o, 'tight')}
               <span className="text-text-bright">
                 <Amount value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
@@ -1259,7 +1261,7 @@ function RawEvidence({
         </Link>{' '}
         (
         <span title={anchor.blockHash}>
-          <NoBreak>{truncateHash(anchor.blockHash)}</NoBreak>
+          <ShortId value={anchor.blockHash} kind="hash" size="row" />
         </span>
         ), S (
         <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (

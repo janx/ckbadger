@@ -7,20 +7,18 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
 import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
-import { formatDurationMs, truncateHash } from '@/lib/utils';
+import { formatDurationMs } from '@/lib/utils';
+import { shortenHash } from '@/lib/shorten';
 import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { formatCount } from '@/lib/format-count';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** Links in a board ink; the global `a:hover` jade still wins over them. */
 const CELL_LINK = inkStyle(BOARD_INKS.cellLink);
 const LINK = inkStyle(BOARD_INKS.link);
-
-function short(hash: string, head = 8, tail = 6): string {
-  return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
-}
 
 export function TransactionEvidence({
   hash,
@@ -85,7 +83,8 @@ export function TransactionEvidence({
   const scriptName = (codeHash: string) => {
     if (codeHash.toLowerCase() === TYPE_ID_CODE_HASH) return 'Type ID';
     const name = lookup.data?.[codeHash]?.name;
-    return name && name.toLowerCase() !== 'unknown' ? name : short(codeHash);
+    // a script group's name in the structure: the row size (U-09)
+    return name && name.toLowerCase() !== 'unknown' ? name : shortenHash(codeHash, 'row');
   };
   if (focus && ![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
     throw new Error(`${label} transaction ${hash} does not contain focused cell ${focus}`);
@@ -128,9 +127,8 @@ export function TransactionEvidence({
                         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
                         className="hover:text-jade"
                       >
-                        <NoBreak>
-                          {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
-                        </NoBreak>
+                        <ShortId value={dep.outPointTxHash} kind="hash" size="row" />
+                        <OutpointIndex index={dep.outPointIndex} />
                       </Link>
                     </span>
                   ))
@@ -229,8 +227,9 @@ function NotSpentYet({
                 className="text-text hover:text-jade"
                 title={`${requirement.hashType} ${requirement.referenceHash}`}
               >
-                {(requirement.kind === 'lock' ? lockName : typeName) ??
-                  short(requirement.referenceHash)}
+                {(requirement.kind === 'lock' ? lockName : typeName) ?? (
+                  <ShortId value={requirement.referenceHash} kind="hash" size="row" />
+                )}
               </Link>
               <span className="text-text-dim">
                 {' '}
@@ -254,9 +253,8 @@ function NotSpentYet({
                     style={LINK}
                     title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
                   >
-                    <NoBreak>
-                      {short(candidate.txHash)}:{candidate.outputIndex}
-                    </NoBreak>
+                    <ShortId value={candidate.txHash} kind="hash" size="row" />
+                    <OutpointIndex index={candidate.outputIndex} />
                   </Link>
                 </span>
               ))}

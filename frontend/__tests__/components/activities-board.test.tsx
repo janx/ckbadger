@@ -152,7 +152,7 @@ describe('Activities board (TX-30, TX-32, TX-29)', () => {
     render(<ActivitiesStreamExplorer />);
     await waitFor(() =>
       expect(document.querySelector('[data-feed-row="0x4bec9eca"]')).toHaveTextContent(
-        'Nervape Headwear 0x0a3a5c...6129 departed'
+        'Nervape Headwear 0x0a3a5c00…006129 departed'
       )
     );
     expect(document.querySelector('[data-composition="btc_ckb"]')).toBeInTheDocument();

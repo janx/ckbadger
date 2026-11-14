@@ -1,5 +1,5 @@
 import type { ExactJson, LockArgsDecoded } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 // The text of the API's decoded lock args (`lockArgsDecoded`, R2b-a 39 + round 3 R-8): one path
 // for every place a lock line shows them. Nothing here decodes bytes; it only names the fields
@@ -17,9 +17,10 @@ const FIELD_WORDS: Record<string, string> = {
   pubkeyHash: 'pubkey hash',
 };
 
-function fieldValue(value: ExactJson): string {
+/** A field's value: a hex value of 8 bytes or more is a hex id, shortened at the line's size. */
+function fieldValue(value: ExactJson, size: ShortSize): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return /^0x[0-9a-f]{16,}$/i.test(text) ? truncateHash(text, 8, 4) : text;
+  return /^0x[0-9a-f]{16,}$/i.test(text) ? shortenHash(text, size) : text;
 }
 
 function fieldWords(key: string): string {
@@ -43,22 +44,23 @@ export function isFieldLayoutLock(decoded: LockArgsDecoded): boolean {
  */
 export function lockArgsLine(
   decoded: LockArgsDecoded | null | undefined,
-  decodeError: string | null | undefined
+  decodeError: string | null | undefined,
+  size: ShortSize
 ): string | null {
   if (decoded && decodeError)
     throw new Error(`lock args both decoded and not decoded (${decodeError})`);
-  if (decoded) return decodedLockArgsText(decoded);
+  if (decoded) return decodedLockArgsText(decoded, size);
   if (decodeError) return `args not decoded: ${decodeError}`;
   return null;
 }
 
-export function decodedLockArgsText(decoded: LockArgsDecoded): string {
+export function decodedLockArgsText(decoded: LockArgsDecoded, size: ShortSize): string {
   const fields = Object.entries(decoded).filter(([key]) => key !== 'lock');
   if (isFieldLayoutLock(decoded))
     return `args ${fields
       .map(([key, value]) =>
-        key === 'prefix' ? fieldValue(value) : `${fieldWords(key)} ${fieldValue(value)}`
+        key === 'prefix' ? fieldValue(value, size) : `${fieldWords(key)} ${fieldValue(value, size)}`
       )
       .join(' + ')}`;
-  return fields.map(([key, value]) => `${fieldWords(key)} ${fieldValue(value)}`).join(' · ');
+  return fields.map(([key, value]) => `${fieldWords(key)} ${fieldValue(value, size)}`).join(' · ');
 }

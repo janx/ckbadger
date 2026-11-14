@@ -155,8 +155,12 @@ describe('DaoBoard', () => {
     for (const width of [1248, 358]) {
       stubChartWidth(width);
       const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+      // U-09 (re-pinned): the table's row size (10…6), the phone card's tight size (8…6)
       const links = screen.getAllByRole('link', {
-        name: `${owner.address.slice(0, 12)}…${owner.address.slice(-7)}`,
+        name:
+          width === 1248
+            ? `${owner.address.slice(0, 10)}…${owner.address.slice(-6)}`
+            : `${owner.address.slice(0, 8)}…${owner.address.slice(-6)}`,
       });
       expect(links).toHaveLength(1);
       expect(links[0]).toHaveAttribute('href', `/mainnet/address/${owner.address}`);
@@ -1217,7 +1221,7 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
       expect(cell).toHaveClass('text-body', 'py-1.5');
     // The Lock column names the lock; its code hash and hash type are the link's title.
     const lock = within(table).getAllByRole('link', { name: /^0x9bd7e06f/ })[0];
-    expect(lock.textContent).toBe('0x9bd7e06f…');
+    expect(lock.textContent).toBe('0x9bd7e06f…a3cce8');
     expect(lock).toHaveAttribute(
       'title',
       '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8 (type)'
@@ -1290,7 +1294,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('Cbytes 0..810,000,000.00000000 CKB issued in total');
     // contracts W5-3 (DAO-16): the identity names the block it holds at, number and hash.
     expect(t2).toHaveTextContent(
-      'At block #5 (0xa5a5a5a5...a5a5a5a5), S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+      'At block #5 (0xa5a5a5a5…a5a5a5), S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
     );
     // Lane L: tier 2 names block #5 five times (the header field's heading, the capacity-use
     // line, AR's reading block, the S proof, the statistics note) and every one is a link to it
@@ -1299,7 +1303,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(fives).toHaveLength(5);
     for (const a of fives) expect(a).toHaveAttribute('href', '/mainnet/blocks/5');
     expect(within(t2 as HTMLElement).getByTitle(ANCHOR_5.blockHash)).toHaveTextContent(
-      '0xa5a5a5a5...a5a5a5a5'
+      '0xa5a5a5a5…a5a5a5'
     );
     expect(t2).toHaveTextContent(
       'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
@@ -1351,7 +1355,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     const t2 = tier2(container);
     expect(t2).toHaveTextContent('The DAO field in every block header · #5');
     expect(t2).toHaveTextContent(
-      'At block #4 (0xb4b4b4b4...b4b4b4b4), S (5.00000000 CKB) equals the compensation still owed'
+      'At block #4 (0xb4b4b4b4…b4b4b4), S (5.00000000 CKB) equals the compensation still owed'
     );
     expect(t2).not.toHaveTextContent('not shown across two blocks');
   });

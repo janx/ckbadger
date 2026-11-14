@@ -5,7 +5,6 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 import { CELL_COLORS } from '@/lib/design-tokens';
@@ -580,7 +579,7 @@ describe('TransactionDetailPage', () => {
     const from = flows[0].querySelector('[data-flow-side="from"]')!;
     const to = flows[0].querySelector('[data-flow-side="to"]')!;
     expect([...from.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
-      expect.stringMatching(/^ckb1qpcf\.\.\.gh76tz.*234\.00000000 CKB$/),
+      expect.stringMatching(/^ckb1qpcf70…gh76tz.*234\.00000000 CKB$/),
     ]);
     expect([...to.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
       expect.stringMatching(/4maw7d.*234\.00000000 CKB$/),
@@ -822,11 +821,11 @@ describe('TransactionDetailPage', () => {
   it('links every input and output tile to its cell page by its out point (L1)', async () => {
     render(<TransactionDetailPage />);
     const input = await screen.findByTestId('tx-io-input-0');
-    const inputLink = within(input).getByRole('link', { name: '0xbbbb...bbbb:0' });
+    const inputLink = within(input).getByRole('link', { name: '0xbbbb…bbbb:0' });
     expect(inputLink).toHaveAttribute('href', `/mainnet/cell/0x${'b'.repeat(64)}-0`);
     expect(inputLink).toHaveAttribute('title', `0x${'b'.repeat(64)}:0`);
     const output = screen.getByTestId('tx-io-output-0');
-    const outputLink = within(output).getByRole('link', { name: '0x57a5...8e0f:0' });
+    const outputLink = within(output).getByRole('link', { name: '0x57a5…8e0f:0' });
     expect(outputLink).toHaveAttribute('href', `/mainnet/cell/${TX_HASH}-0`);
     expect(outputLink).toHaveAttribute('title', `${TX_HASH}:0`);
     // the script matrix names the same cells, and links them too
@@ -852,14 +851,14 @@ describe('TransactionDetailPage', () => {
     fireEvent.mouseEnter(output);
     expect(output).toHaveAttribute('data-highlighted', 'true');
     const replaces = mockReplace.mock.calls.length;
-    fireEvent.click(within(output).getByRole('link', { name: '0x57a5...8e0f:0' }));
+    fireEvent.click(within(output).getByRole('link', { name: '0x57a5…8e0f:0' }));
     fireEvent.click(output);
     expect(mockReplace.mock.calls.length).toBe(replaces);
     // with a witness selected, the tile body still clears the selection; the link still does not
     fireEvent.click(screen.getByTestId('tx-witness-item-0'));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=0');
     const selected = mockReplace.mock.calls.length;
-    fireEvent.click(within(output).getByRole('link', { name: '0x57a5...8e0f:0' }));
+    fireEvent.click(within(output).getByRole('link', { name: '0x57a5…8e0f:0' }));
     expect(mockReplace.mock.calls.length).toBe(selected);
     fireEvent.click(output);
     expect(mockReplace.mock.calls.length).toBe(selected + 1);
@@ -1307,7 +1306,8 @@ describe('TransactionDetailPage', () => {
         noAmountReason: null,
         compositionTier: 'btc_ckb',
       } satisfies TransactionCellDisplay,
-      expected: ['Spore', 'Nervape 3x', '0x55555555...555555', 'BTC+CKB'],
+      // U-09 (re-pinned): a tile's id at the tight size
+      expected: ['Spore', 'Nervape 3x', '0x5555…5555', 'BTC+CKB'],
       href: `/mainnet/objects/0x${'5'.repeat(64)}`,
     },
     {
@@ -1361,7 +1361,7 @@ describe('TransactionDetailPage', () => {
         noAmountReason: null,
         compositionTier: null,
       } satisfies TransactionCellDisplay,
-      expected: ['.bit', 'alice.bit', '0x99999999...999999'],
+      expected: ['.bit', 'alice.bit', '0x9999…9999'],
       href: `/mainnet/identities/dotbit/0x${'9'.repeat(40)}`,
     },
   ])('renders $label from the per-cell API descriptor', async ({ display, expected, href }) => {
@@ -1400,7 +1400,7 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByText('no transaction with this hash.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/transactions/${truncateHash(TX_HASH)}/detail`
+      `/transactions/${TX_HASH.slice(0, 10)}…${TX_HASH.slice(-6)}/detail`
     );
     expect(screen.queryByText(/Could not read this transaction/)).not.toBeInTheDocument();
   });

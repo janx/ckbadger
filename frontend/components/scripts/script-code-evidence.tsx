@@ -9,7 +9,7 @@ import type {
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { formatCkbAmount, truncateHash } from '@/lib/utils';
+import { formatCkbAmount } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount, countNoun } from '@/lib/format-count';
@@ -19,7 +19,8 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -373,7 +374,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         <div className="text-text-dim mt-1 break-all">
           This holder signed to spend the code cell in{' '}
           <AppLink href={`/tx/${signer}`} className="text-emphasis hover:underline">
-            <NoBreak>{truncateHash(signer, 12, 8)}</NoBreak>
+            <ShortId value={signer} kind="hash" size="row" />
           </AppLink>
         </div>
       )}
@@ -552,9 +553,8 @@ export function ScriptCapacityEvidenceChart({
                   href={`/cell/${marker.codeCellTxHash}-${marker.codeCellOutputIndex}`}
                   className="hover:text-text-bright hover:underline"
                 >
-                  <NoBreak>
-                    {truncateHash(marker.codeCellTxHash, 8, 6)}:{marker.codeCellOutputIndex}
-                  </NoBreak>
+                  <ShortId value={marker.codeCellTxHash} kind="hash" size="row" />
+                  <OutpointIndex index={marker.codeCellOutputIndex} />
                 </AppLink>
               </span>
             ))}

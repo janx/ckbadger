@@ -15,11 +15,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function truncateHash(hash: string, start = 10, end = 8): string {
-  if (hash.length <= start + end) return hash;
-  return `${hash.slice(0, start)}...${hash.slice(-end)}`;
-}
-
 /** Raw block timestamp displayed in the indexer's fixed UTC+8 calendar timezone. */
 export function formatUtc8Date(timestamp: string | number): string {
   return utc8Iso(timestampMs(timestamp, 'block timestamp')).slice(0, 10);

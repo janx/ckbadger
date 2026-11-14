@@ -11,12 +11,13 @@ import { cellInventoryItem, type CellInventoryItem } from '@/lib/cell-inventory'
 import { readErrorText } from '@/lib/read-error';
 import { retryTransientOnly } from '@/lib/query-client';
 import { scriptActivityLink } from '@/lib/script-activity-link';
-import { shortHex } from '@/lib/script-lineage';
 import { NEWEST_CELLS_COUNT, type NewestCellsKind } from '@/lib/script-newest-cells';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 export interface NewestCellsState {
@@ -29,28 +30,28 @@ export interface NewestCellsState {
 
 const IDENTITY_WORD = { dotbit: '.bit', 'bit-cell': '.bit Cell', did: 'did:ckb', dotcell: '.cell' };
 
-const shortId = (id: string) => shortHex(id, 8, 6);
-
 /**
  * The words lane U's inventory naming gives the item: its pending statement on the cell page (the
- * class and the short id; no further name is read per row), or the name the cell's data carries.
+ * class and the short id at the row's size; no further name is read per row), or the name the
+ * cell's data carries.
  */
-function itemWords(item: CellInventoryItem): string {
+function itemWords(item: CellInventoryItem, size: ShortSize): string {
+  const id = (value: string) => shortenHash(value, size);
   switch (item.kind) {
     case 'spore':
-      return `Spore object ${shortId(item.id)}`;
+      return `Spore object ${id(item.id)}`;
     case 'spore-cluster':
-      return `Spore cluster ${shortId(item.id)}`;
+      return `Spore cluster ${id(item.id)}`;
     case 'm-nft':
-      return `m-NFT object ${shortId(item.id)}`;
+      return `m-NFT object ${id(item.id)}`;
     case 'm-nft-class':
-      return `m-NFT class ${shortId(item.id)}`;
+      return `m-NFT class ${id(item.id)}`;
     case 'token':
       return `${item.amount} ${item.unit}`;
     case 'token-without-amount':
       return `${item.unit} · no readable amount`;
     case 'identity':
-      return item.name ?? `${IDENTITY_WORD[item.standard]} identity ${shortId(item.id)}`;
+      return item.name ?? `${IDENTITY_WORD[item.standard]} identity ${id(item.id)}`;
     case 'dao':
       return item.stage === 'deposit' ? 'Nervos DAO deposit' : 'Nervos DAO withdrawal request';
   }
@@ -79,19 +80,21 @@ type What =
 
 /**
  * What the cell is: the inventory item it is (lane U's `cellInventoryItem`, read from the cell's
- * own detail), else its type script by registry name (R6), else a plain cell.
+ * own detail), else its type script by registry name (R6), else a plain cell. Its ids at `size`,
+ * the size of the form the row is drawn in (U-09).
  */
-function whatOf(row: Cell, detail: Cell | undefined, error: Error | null): What {
+function whatOf({ cell: row, detail, error }: Row, size: ShortSize): What {
   if (error)
     return { state: 'failed', message: `could not read the cell: ${readErrorText(error)}` };
   if (!detail) return { state: 'reading' };
   let item: CellInventoryItem | null;
   try {
-    item = cellInventoryItem(detail);
+    item = cellInventoryItem(detail, size);
   } catch (failure) {
     return { state: 'failed', message: (failure as Error).message };
   }
-  if (item) return { state: 'item', text: itemWords(item), href: item.href, title: itemId(item) };
+  if (item)
+    return { state: 'item', text: itemWords(item, size), href: item.href, title: itemId(item) };
   if (!row.typeScriptHash) return { state: 'plain' };
   if (!row.typeCodeHash || !row.typeHashType)
     return { state: 'failed', message: 'type reference unavailable' };
@@ -99,7 +102,7 @@ function whatOf(row: Cell, detail: Cell | undefined, error: Error | null): What 
     throw new Error(`Cell ${row.txHash}:${row.outputIndex} row has no typeScriptName (R6)`);
   return {
     state: 'typed',
-    text: row.typeScriptName ?? `type ${shortHex(row.typeCodeHash)}`,
+    text: row.typeScriptName ?? `type ${shortenHash(row.typeCodeHash, size)}`,
     href: `/script/${row.typeCodeHash}?hashType=${row.typeHashType}`,
     title: `type script ${row.typeCodeHash} · ${row.typeHashType}`,
   };
@@ -137,14 +140,14 @@ function whatText(what: What): string {
         : what.text;
 }
 
-function Owner({ cell }: { cell: Cell }) {
+function Owner({ cell, size }: { cell: Cell; size: ShortSize }) {
   return cell.address ? (
     <Link
       href={`/address/${cell.address}`}
       title={cell.address}
       className="text-text hover:text-jade"
     >
-      {cell.address.slice(0, 10)}…{cell.address.slice(-6)}
+      <ShortId value={cell.address} kind="address" size={size} />
     </Link>
   ) : (
     <span role="alert" className="text-negative">
@@ -170,7 +173,15 @@ function createdDate(detail: Cell | undefined): ReactNode {
 }
 
 /** "tx 0x1234…abcd · #20,911,313 · 2026-11-02": where and when the cell was made. */
-function Created({ cell, detail }: { cell: Cell; detail: Cell | undefined }) {
+function Created({
+  cell,
+  detail,
+  size,
+}: {
+  cell: Cell;
+  detail: Cell | undefined;
+  size: ShortSize;
+}) {
   return (
     <span className="text-text-dim whitespace-nowrap">
       <Dotted
@@ -182,7 +193,7 @@ function Created({ cell, detail }: { cell: Cell; detail: Cell | undefined }) {
               title={cell.txHash}
               className="text-text-dim hover:text-jade"
             >
-              <NoBreak>{shortHex(cell.txHash, 6, 4)}</NoBreak>
+              <ShortId value={cell.txHash} kind="hash" size={size} />
             </Link>
           </>,
           <BlockLink key="block" number={cell.createdAtBlock} />,
@@ -200,7 +211,7 @@ function Head({ label }: { label: string }) {
 interface Row {
   cell: Cell;
   detail: Cell | undefined;
-  what: What;
+  error: Error | null;
 }
 
 /**
@@ -227,31 +238,34 @@ export function ScriptNewestCells({
       retry: retryTransientOnly,
     })),
   });
-  const rows: Row[] = newest.rows.map((cell, i) => {
-    const detail = details[i]?.data;
-    return { cell, detail, what: whatOf(cell, detail, details[i]?.error ?? null) };
-  });
+  const rows: Row[] = newest.rows.map((cell, i) => ({
+    cell,
+    detail: details[i]?.data,
+    error: details[i]?.error ?? null,
+  }));
   const activity = scriptActivityLink(family.familyId);
   const verb = newest.kind === 'type' ? 'types' : 'locks';
   const outpoint = (cell: Cell) => `${cell.txHash}:${cell.outputIndex}`;
-  const rowTitle = ({ cell, detail, what }: Row) =>
-    [
+  const rowTitle = (row: Row) => {
+    const { cell, detail } = row;
+    return [
       outpoint(cell),
-      whatText(what),
+      whatText(whatOf(row, 'row')),
       cell.address ? `owner ${cell.address}` : 'owner address unavailable',
       `created in tx ${cell.txHash}`,
       `at ${formatBlockNumber(cell.createdAtBlock)}`,
       ...(detail?.createdTimestamp ? [formatUtc8Date(detail.createdTimestamp)] : []),
     ].join(' · ');
-  const key = ({ cell }: Row) => (
+  };
+  // The out point at the form's size (U-09): `row` in the table, `tight` in the phone row.
+  const key = ({ cell }: Row, size: ShortSize) => (
     <Link
       href={`/cell/${cell.txHash}-${cell.outputIndex}`}
       title={outpoint(cell)}
       className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
     >
-      <NoBreak>
-        {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
-      </NoBreak>
+      <ShortId value={cell.txHash} kind="hash" size={size} />
+      <OutpointIndex index={cell.outputIndex} />
     </Link>
   );
   const columns: ListColumn<Row>[] = [
@@ -259,9 +273,10 @@ export function ScriptNewestCells({
       key: 'cell',
       label: 'Cell',
       header: <Head label="Cell" />,
-      minWidth: 150,
+      // the out point at row size, 20 characters at 13 px (156 px) and the cell padding
+      minWidth: 176,
       width: '15%',
-      render: key,
+      render: (row) => key(row, 'row'),
     },
     {
       key: 'what',
@@ -270,7 +285,7 @@ export function ScriptNewestCells({
       minWidth: 190,
       width: 'auto',
       className: 'truncate',
-      render: ({ what }) => <WhatItIs what={what} />,
+      render: (row) => <WhatItIs what={whatOf(row, 'row')} />,
     },
     {
       key: 'owner',
@@ -278,16 +293,17 @@ export function ScriptNewestCells({
       header: <Head label="Owner" />,
       minWidth: 170,
       width: '17%',
-      render: ({ cell }) => <Owner cell={cell} />,
+      render: ({ cell }) => <Owner cell={cell} size="row" />,
     },
     {
       key: 'created',
       label: 'Created in',
       header: <Head label="Created in" />,
-      minWidth: 300,
+      // "tx 0x12345678…abcdef · #20,911,313 · 2026-11-02": 47 characters at 12 px (338 px) and the padding
+      minWidth: 356,
       width: '30%',
       numeric: true,
-      render: ({ cell, detail }) => <Created cell={cell} detail={detail} />,
+      render: ({ cell, detail }) => <Created cell={cell} detail={detail} size="row" />,
     },
   ];
   return (
@@ -324,12 +340,17 @@ export function ScriptNewestCells({
               lines={[
                 // The owner is short enough to share the out point's line; what the cell is can
                 // be long (a token amount, a .bit name) and takes its own line, wrapping.
-                { key: 'cell', tone: 'head', left: key(row), right: <Owner cell={row.cell} /> },
-                { key: 'what', tone: 'body', left: <WhatItIs what={row.what} /> },
+                {
+                  key: 'cell',
+                  tone: 'head',
+                  left: key(row, 'tight'),
+                  right: <Owner cell={row.cell} size="tight" />,
+                },
+                { key: 'what', tone: 'body', left: <WhatItIs what={whatOf(row, 'tight')} /> },
                 {
                   key: 'created',
                   tone: 'quiet',
-                  left: <Created cell={row.cell} detail={row.detail} />,
+                  left: <Created cell={row.cell} detail={row.detail} size="tight" />,
                 },
               ]}
             />

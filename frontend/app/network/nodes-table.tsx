@@ -17,9 +17,9 @@ import {
   type NetworkPeerSummary,
   type NetworkSessionInitiator,
 } from '@/lib/api';
-import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo } from '@/lib/utils';
 import { countNoun, formatCount } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 
 interface PeerFilters {
   state?: NetworkPeerDisplayState;
@@ -208,7 +208,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 <span className="text-text">{sessionInitiatorLabel(session.initiator)}</span> ·
                 observer{' '}
                 <span className="text-aqua" title={session.observerPeerId}>
-                  <NoBreak>{truncateHash(session.observerPeerId)}</NoBreak>
+                  <ShortId value={session.observerPeerId} kind="hash" size="row" />
                 </span>{' '}
                 · {session.clientVersion || 'unknown client'} · observed {session.observationCount}{' '}
                 completed {countNoun(session.observationCount, 'round')} · latest{' '}
@@ -294,7 +294,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 className="text-text-dim"
               >
                 <span className="text-aqua" title={advertiser.advertiserPeerId}>
-                  <NoBreak>{truncateHash(advertiser.advertiserPeerId)}</NoBreak>
+                  <ShortId value={advertiser.advertiserPeerId} kind="hash" size="row" />
                 </span>{' '}
                 · <span className="break-all">{advertiser.alias}</span> · observed{' '}
                 {formatCount(advertiser.observationCount, 'completed round')} · first round #
@@ -450,7 +450,7 @@ function PeerRow({
                 {expanded ? '▾' : '▸'}
               </span>
               <span className="text-aqua text-small whitespace-nowrap">
-                <NoBreak>{truncateHash(peer.peerId)}</NoBreak>
+                <ShortId value={peer.peerId} kind="hash" size="tight" />
               </span>
               {/* As wide as its words (R16), at most the column, cut to fit. */}
               <span
@@ -473,7 +473,7 @@ function PeerRow({
               {/* The id keeps its width (already cut in the middle); the dial state takes what is
                   left of the line and wraps inside its tag only when it must. */}
               <span className="text-aqua text-small whitespace-nowrap">
-                <NoBreak>{truncateHash(peer.peerId)}</NoBreak>
+                <ShortId value={peer.peerId} kind="hash" size="tight" />
               </span>
               <span className="min-w-0 justify-self-end">
                 <RowTag variant={state.variant} className="whitespace-normal">
@@ -519,9 +519,7 @@ function PeerRow({
             className="text-aqua text-small truncate text-left font-mono hover:underline"
           >
             {expanded ? '▾ ' : '▸ '}
-            <span>
-              <NoBreak>{truncateHash(peer.peerId)}</NoBreak>
-            </span>
+            <ShortId value={peer.peerId} kind="hash" size="row" />
           </button>
           {columns.slice(1).map((c) => (
             <span key={c.label} className={c.cell} title={c.title}>

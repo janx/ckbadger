@@ -100,7 +100,7 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
       'ckb',
       'occupied',
     ]);
-    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda...3x8k26');
+    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda0c…3x8k26');
     expect(within(row).getByText('Default Lock')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');

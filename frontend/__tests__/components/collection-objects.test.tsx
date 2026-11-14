@@ -117,7 +117,8 @@ it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', a
   const [, named, unnamed] = within(table).getAllByRole('row');
   expect(named).toHaveTextContent('SECP256K1/blake160');
   // An unnamed lock shows its code hash, never a guessed kind.
-  expect(unnamed).toHaveTextContent('0x434343...4343');
+  // U-09 (re-pinned): the row size
+  expect(unnamed).toHaveTextContent('lock 0x43434343…434343');
   const minted = within(named).getByRole('link', { name: '2023-11-15' });
   expect(minted).toHaveAttribute('href', '/mainnet/blocks/100');
   expect(minted).toHaveAttribute('title', '#100 · 2023-11-15 06:13:20 UTC+8');
@@ -189,7 +190,7 @@ it('writes each Newest row on one line with the name bright and the rest in its 
   expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
   // Without a number the object is its short id.
   const unnumbered = within(plain).getAllByRole('link')[0];
-  expect(unnumbered).toHaveAccessibleName('0x03030303…0303');
+  expect(unnumbered).toHaveAccessibleName('0x03030303…030303');
   expect(numbered).toHaveClass('py-1', 'min-h-[41px]');
   expect(
     within(table)

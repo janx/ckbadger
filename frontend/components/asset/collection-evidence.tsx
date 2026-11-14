@@ -15,11 +15,8 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { retryTransientOnly } from '@/lib/query-client';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatCount } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
-
-const short = (value: string, head = 10, tail = 6) =>
-  value.length > head + tail + 1 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
 
 /**
  * "The cluster cell, byte by byte" (consistency C5, Main board tier 2): the current cluster cell's
@@ -48,7 +45,7 @@ export function ClusterCellEvidence({
         <dt className="text-text-dim">{cell.isLive ? 'live cell' : 'cell'}</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`} title={cell.txHash}>
-            <NoBreak>{short(cell.txHash, 8, 4)}</NoBreak>
+            <ShortId value={cell.txHash} kind="hash" size="row" />
             <OutpointIndex index={cell.outputIndex} />
           </AppLink>{' '}
           · created in{' '}
@@ -60,7 +57,7 @@ export function ClusterCellEvidence({
         <dt className="text-text-dim">held by</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
-            <NoBreak>{short(cell.ownerAddress, 12, 6)}</NoBreak>
+            <ShortId value={cell.ownerAddress} kind="address" size="row" />
           </AppLink>{' '}
           · {cell.lockName ?? 'Unregistered lock'}
         </dd>
@@ -76,7 +73,7 @@ export function ClusterCellEvidence({
                   scriptKind: 'type',
                 })}
               >
-                {cell.typeName ?? short(type.codeHash)}
+                {cell.typeName ?? <ShortId value={type.codeHash} kind="hash" size="row" />}
               </AppLink>
               {type.args.toLowerCase() === clusterId.toLowerCase()
                 ? ' · the cluster id is this cell’s type args'

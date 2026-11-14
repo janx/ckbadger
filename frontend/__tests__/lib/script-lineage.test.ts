@@ -6,12 +6,12 @@ import {
   deploymentOnDay,
   holderName,
   orderedVersions,
-  shortHex,
   signerOf,
   signingText,
   typeLineage,
   versionNumbers,
 } from '@/lib/script-lineage';
+import { shortenHash } from '@/lib/shorten';
 
 const family = fixture.family as unknown as ScriptFamilyDetail;
 const markers = family.history as ScriptHistoryMarkerApi[];
@@ -55,7 +55,7 @@ describe('script lineage (JoyID, five binaries under one Type ID)', () => {
   it('lists the three multisigs, what each signed and that the last never signed', () => {
     const lineage = typeLineage(markers)!;
     const holders = codeHolders(lineage, markers, versionNumbers(family));
-    expect(holders.map((h) => shortHex(h.lockArgs))).toEqual([
+    expect(holders.map((h) => shortenHash(h.lockArgs, 'tight'))).toEqual([
       '0xd1db…b95c',
       '0x07a2…68ca',
       '0x6598…d696',
@@ -69,7 +69,9 @@ describe('script lineage (JoyID, five binaries under one Type ID)', () => {
     expect(holders[2].neverSigned).toBe(true);
     expect(holders[0].until!.blockNumber).toBe(17117990);
     expect(holders[2].until).toBeNull();
-    expect(holderName(holders[0].custody)).toBe('multisig 0xd1db…b95c');
+    // U-09 (re-pinned): the name's lock args at the size of where it stands
+    expect(holderName(holders[0].custody, 'tight')).toBe('multisig 0xd1db…b95c');
+    expect(holderName(holders[0].custody, 'row')).toBe('multisig 0xd1dbde92…0cb95c');
   });
 
   it('says which deployment was in force on a chart day', () => {

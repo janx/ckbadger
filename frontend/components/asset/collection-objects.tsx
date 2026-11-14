@@ -29,11 +29,13 @@ import {
   geneUrlKey,
   genotypePoints,
   laneRule,
+  inscriptionText,
   traitDisplay,
   traitsOutsidePattern,
   type AlleleLane,
 } from '@/lib/dob-genes';
 import { GEL_INK } from '@/lib/design-tokens';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { ALLELE_GEL } from '@/lib/allele-gel-layout';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
@@ -55,19 +57,21 @@ function genesVary(n: number): string {
   return n === 1 ? `${word} gene varies` : `${word} genes vary`;
 }
 
-/** An object's number in its collection, else its short id (the row's key, as the board). */
-function objectName(number: string | null, sporeId: string): string {
-  if (number === null) return `${sporeId.slice(0, 10)}…${sporeId.slice(-4)}`;
+/**
+ * An object's number in its collection, else its short id at the size of where it stands (U-09):
+ * the row's key, as the board; a label on the gel.
+ */
+function objectName(number: string | null, sporeId: string, size: ShortSize): string {
+  if (number === null) return shortenHash(sporeId, size);
   if (!/^(0|[1-9]\d*)$/.test(number))
     throw new Error(`${sporeId}: invalid object number ${number}`);
   // an object's number in its collection (not a block height)
   return '#' + BigInt(number).toLocaleString('en-US');
 }
 
-/** A gene value as a table cell: a Bitcoin pointer by its tail, anything else for people. */
+/** A gene value as a table cell: a Bitcoin inscription by its id, anything else for people. */
 function geneCellText(value: string): string {
-  if (/^btcfs:\/\//i.test(value.trim())) return `…${value.trim().slice(-6)}`;
-  return traitDisplay(value);
+  return inscriptionText(value) ?? traitDisplay(value);
 }
 
 /** A gene value that is a number: it is never cut (no ellipsis inside a number). */
@@ -183,7 +187,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   const overlays = lanes
     ? items.map((item) => ({
         key: item.sporeId,
-        label: objectName(item.number, item.sporeId),
+        label: objectName(item.number, item.sporeId, 'tight'),
         points: genotypePoints(lanes, item.traits).points,
       }))
     : [];
@@ -309,7 +313,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                   </span>
                 </div>
                 {items.map((item) => {
-                  const name = objectName(item.number, item.sporeId);
+                  const name = objectName(item.number, item.sporeId, 'row');
                   const lit = row === item.sporeId;
                   const itemTier = item.mediaProfile?.tier ?? null;
                   // Table-rows L2-4 / C11: one line per object; what does not fit it (its id, the
@@ -417,13 +421,13 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           <>
                             <Address
                               address={item.ownerAddress ?? item.ownerLockHash}
-                              startChars={8}
-                              endChars={6}
+                              size="row"
                               className="text-small"
                             />{' '}
                             <LockKind
                               lockKind={item.lockKind}
                               lockCodeHash={item.lockCodeHash}
+                              size="row"
                               className={rowTagClass()}
                             />
                           </>

@@ -121,13 +121,7 @@ export function BlockTransactionsTable({
       minWidth: 140,
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash
-            hash={tx.hash}
-            startChars={8}
-            endChars={6}
-            copyable={false}
-            className="text-small"
-          />
+          <Hash hash={tx.hash} size="row" copyable={false} className="text-small" />
         </Link>
       ),
     },
@@ -243,13 +237,7 @@ export function BlockTransactionsTable({
                 <>
                   <span className="text-text-dim mr-2">{tx.index}</span>
                   <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                    <Hash
-                      hash={tx.hash}
-                      startChars={8}
-                      endChars={6}
-                      copyable={false}
-                      className="text-body"
-                    />
+                    <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
                   </Link>
                 </>
               ),

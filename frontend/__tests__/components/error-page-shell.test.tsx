@@ -126,7 +126,7 @@ describe('ErrorPageShell', () => {
     // the caption names the block, as a link, and its hash
     const caption = document.querySelector('[data-seal-caption]') as HTMLElement;
     expect(caption).toHaveTextContent(
-      'behind: the seal of the newest block, #1,000,000 · 0xabc123de...1234abcd'
+      'behind: the seal of the newest block, #1,000,000 · 0xabc123de…34abcd'
     );
     // R4 (UI review 2026-11-14, U-08): a caption is information, in the dim ink, never the ghost
     expect(caption).toHaveClass('text-text-dim', 'text-meta');

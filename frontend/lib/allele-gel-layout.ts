@@ -6,6 +6,8 @@
  * hold them as lanes a reader can tell apart. Pure, so the forms are tested without a browser.
  */
 
+import { clipLabel } from '@/lib/shorten';
+
 export const ALLELE_GEL = {
   /** The narrowest lane that still holds a band (R3). */
   laneFloor: 12,
@@ -43,10 +45,9 @@ export type AlleleGelLayout =
       head: number;
     };
 
-/** A gene name as drawn on the gel. */
+/** A gene name as drawn on the gel: a label cut to the gel's caption budget. */
 export function geneCaption(gene: string): string {
-  const max = ALLELE_GEL.captionChars;
-  return gene.length > max ? `${gene.slice(0, max - 1)}…` : gene;
+  return clipLabel(gene, ALLELE_GEL.captionChars);
 }
 
 export function alleleGelLayout({

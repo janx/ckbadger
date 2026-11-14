@@ -17,8 +17,10 @@ const lanes = alleleLanes(
 );
 
 describe('SequencingGel (Object board, OB-7)', () => {
-  // drawn 1:1 for its measured box; 896 px is the DNA plate at 1280, where the gene columns fit
-  beforeEach(() => stubChartWidth(896));
+  // drawn 1:1 for its measured box. U-09 (re-pinned): this DNA's inscription is written by its
+  // txid at the tight size ("Bitcoin inscription a94617…79e0i0", 33 characters, was the tail
+  // alone, 26), so its gene columns fit 1:1 from 937 px; the plate at 1280 is 896 (below)
+  beforeEach(() => stubChartWidth(937));
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -56,8 +58,8 @@ describe('SequencingGel (Object board, OB-7)', () => {
     );
     const bg = container.querySelector('[data-gene="prev.bg"]')!;
     expect(bg.textContent).toContain('bytes 0–31 · btcfs');
-    expect(bg.textContent).toContain('a9461795…e0');
-    expect(bg.textContent).toContain('Bitcoin inscription …79e0i0');
+    expect(bg.textContent).toContain('a94617…79e0');
+    expect(bg.textContent).toContain('Bitcoin inscription a94617…79e0i0');
     const relief = container.querySelector('[data-gene="relief"]')!;
     expect(relief.textContent).toContain('byte 0 · 1 option');
     expect(relief.querySelector('[stroke-dasharray]')).not.toBeNull();
@@ -215,17 +217,25 @@ describe('SequencingGel at the measured width (V3)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('draws lanes and gene columns side by side, 1:1, where the columns fit', () => {
+  // U-09: at 896 px, the plate at 1280, this DNA's inscription reading (33 characters) no longer
+  // fits the value column beside the lanes, so the readings take rows under the map
+  it('takes the rows at the 896 px plate when the inscription reading does not fit beside it', () => {
     stubChartWidth(896);
+    render(<ControlledGel />);
+    expect(screen.getByRole('list', { name: 'Genes' })).toBeInTheDocument();
+  });
+
+  it('draws lanes and gene columns side by side, 1:1, where the columns fit', () => {
+    stubChartWidth(937);
     const { container } = render(<ControlledGel />);
     const svg = container.querySelector('svg[role="img"]')!;
-    expect(svg).toHaveAttribute('width', '896');
-    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 896 /);
+    expect(svg).toHaveAttribute('width', '937');
+    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 937 /);
     expect(svg.getAttribute('class')).not.toMatch(/min-w-/);
     expect(container.querySelector('.overflow-x-auto')).toBeNull();
     // the gene readings are SVG columns beside the bands, the value not cut
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
-      'Bitcoin inscription …79e0i0'
+      'Bitcoin inscription a94617…79e0i0'
     );
     // each column starts after the longest text of the one before: "bytes 51–52 · nervapeNote"
     // (25 characters of 11.5 px) ends before the raw column, which no longer collides with it
@@ -261,7 +271,7 @@ describe('SequencingGel at the measured width (V3)', () => {
       )
     ).toEqual(['Color', 'Serial', 'Note']);
     const genes = screen.getByRole('list', { name: 'Genes' });
-    // the longest reading (a9461795…e0 → Bitcoin inscription …79e0i0) does not fit a third
+    // the longest reading (a94617…79e0 → Bitcoin inscription a94617…79e0i0) does not fit a third
     // column at 358 px: each reading takes its own line under the name and bytes
     expect(genes).toHaveAttribute('data-rows', 'two-line');
     const rows = within(genes).getAllByRole('listitem');
@@ -279,12 +289,12 @@ describe('SequencingGel at the measured width (V3)', () => {
       'prev.bg',
       'bytes 0–31',
       'btcfs',
-      'a9461795…e0',
+      'a94617…79e0',
       '→',
-      'Bitcoin inscription …79e0i0',
+      'Bitcoin inscription a94617…79e0i0',
     ])
       expect(bg).toHaveTextContent(part);
-    expect(within(bg).getByText('Bitcoin inscription …79e0i0')).toHaveClass(
+    expect(within(bg).getByText('Bitcoin inscription a94617…79e0i0')).toHaveClass(
       '[overflow-wrap:anywhere]'
     );
     expect(rows[3]).toHaveTextContent('Color');

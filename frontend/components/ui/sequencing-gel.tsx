@@ -11,6 +11,8 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { SequencingGene, SequencingLayout } from '@/lib/dob-genes';
 import { GEL_COLORS } from '@/lib/design-tokens';
+import { clipLabel, shortenHash } from '@/lib/shorten';
+import { ShortId } from '@/components/ui/short-id';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedTargetProps } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
@@ -25,19 +27,15 @@ const TX = GX + 16;
 /** One character of 12 px and of 11.5 px JetBrains Mono (0.636 em, measured). */
 const CHAR_12 = 7.64;
 const CHAR_115 = 7.32;
-const VALUE_MAX = 28;
+// A value that is longer is a label cut to this budget; 33 holds an inscription whole ("Bitcoin
+// inscription a94617…79e0i0", its txid at the tight size, U-09): an id is never cut.
+const VALUE_MAX = 33;
 const NAME_MAX = 11;
 /** The stacked map: a ruler column, then lanes of up to 20 px and never under 14. */
 const NARROW = { RULER: 34, MAX_LANE: 20, MIN_LANE: 14, TOP: 26, STEP: 7 } as const;
 
 const r = (v: number) => Math.round(v * 10) / 10;
 
-function shortRaw(raw: string): string {
-  return raw.length <= 12 ? raw : `${raw.slice(0, 8)}…${raw.slice(-2)}`;
-}
-function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
 const bytesOf = (g: SequencingGene) =>
   g.length === 1 ? `byte ${g.offset}` : `bytes ${g.offset}–${g.offset + g.length - 1}`;
 const valueOf = (g: SequencingGene) => g.value ?? 'not decoded yet';
@@ -49,11 +47,11 @@ const quiet = (g: SequencingGene) => g.value === 'empty' || g.value === null;
  */
 function wideColumns(genes: readonly SequencingGene[]) {
   const longest = (texts: string[]) => Math.max(0, ...texts.map((t) => t.length));
-  const bytes = TX + longest(genes.map((g) => clip(g.name, NAME_MAX))) * CHAR_12 + 10;
+  const bytes = TX + longest(genes.map((g) => clipLabel(g.name, NAME_MAX))) * CHAR_12 + 10;
   const raw = bytes + longest(genes.map((g) => `${bytesOf(g)} · ${g.rule}`)) * CHAR_115 + 12;
-  const arrow = raw + longest(genes.map((g) => shortRaw(g.raw))) * CHAR_115 + 8;
+  const arrow = raw + longest(genes.map((g) => shortenHash(g.raw, 'tight'))) * CHAR_115 + 8;
   const value = arrow + 16;
-  const needed = value + longest(genes.map((g) => clip(valueOf(g), VALUE_MAX))) * CHAR_12 + 2;
+  const needed = value + longest(genes.map((g) => clipLabel(valueOf(g), VALUE_MAX))) * CHAR_12 + 2;
   const at = (x: number) => Math.ceil(x);
   return { name: TX, bytes: at(bytes), raw: at(raw), arrow: at(arrow), value: at(value), needed };
 }
@@ -117,7 +115,7 @@ export function SequencingGel({ layout, subject, active, onActive, idle }: Seque
         idle={idle ?? tapOrHover('a gene.', { capital: true })}
       >
         {gene
-          ? `${gene.name} · ${bytesOf(gene)} · ${gene.rule} · ${shortRaw(gene.raw)} → ${valueOf(gene)}`
+          ? `${gene.name} · ${bytesOf(gene)} · ${gene.rule} · ${shortenHash(gene.raw, 'tight')} → ${valueOf(gene)}`
           : null}
       </ReadoutRow>
     </div>
@@ -311,13 +309,13 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             )}
             <rect x={TX - 2} y={r(ly - 13)} width={width - TX + 2} height="17" fill="transparent" />
             <text x={col.name} y={r(ly)} fontSize="12" fill={g.color}>
-              {clip(g.name, NAME_MAX)}
+              {clipLabel(g.name, NAME_MAX)}
             </text>
             <text x={col.bytes} y={r(ly)} fontSize="11.5" fill={GEL_COLORS.label}>
               {bytesOf(g)} · {g.rule}
             </text>
             <text x={col.raw} y={r(ly)} fontSize="11.5" fill={g.color} fillOpacity=".85">
-              {shortRaw(g.raw)}
+              {shortenHash(g.raw, 'tight')}
             </text>
             <text x={col.arrow} y={r(ly)} fontSize="12" fill={GEL_COLORS.rulerText}>
               →
@@ -328,7 +326,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               fontSize="12"
               fill={quiet(g) ? GEL_COLORS.rulerText : GEL_COLORS.well}
             >
-              {clip(valueOf(g), VALUE_MAX)}
+              {clipLabel(valueOf(g), VALUE_MAX)}
             </text>
           </g>
         );
@@ -363,7 +361,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
   // otherwise the reading takes a line of its own, so the value is the last to lose room.
   const readingWidth = Math.max(
     0,
-    ...genes.map((g) => (shortRaw(g.raw).length + 3 + valueOf(g).length) * CHAR_12)
+    ...genes.map((g) => (shortenHash(g.raw, 'tight').length + 3 + valueOf(g).length) * CHAR_12)
   );
   const oneLine = width - 88 - 84 - 2 * 10 >= readingWidth;
   return (
@@ -495,7 +493,9 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           const on = g.name === lit;
           const reading = (
             <span className={cn('min-w-0', !oneLine && 'col-span-2')}>
-              <span className="text-text-dim [overflow-wrap:anywhere]">{shortRaw(g.raw)} →</span>{' '}
+              <span className="text-text-dim [overflow-wrap:anywhere]">
+                <ShortId value={g.raw} kind="hash" size="tight" /> →
+              </span>{' '}
               <span
                 className={cn(
                   '[overflow-wrap:anywhere]',
@@ -514,7 +514,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
             >
               <div
                 data-active={on ? 'true' : undefined}
-                aria-label={`${g.name}, ${bytesOf(g)}, ${g.rule}, ${shortRaw(g.raw)} → ${valueOf(g)}`}
+                aria-label={`${g.name}, ${bytesOf(g)}, ${g.rule}, ${shortenHash(g.raw, 'tight')} → ${valueOf(g)}`}
                 {...bind(g.name)}
                 className={cn(
                   '-mx-2 grid cursor-pointer items-baseline gap-x-2.5 px-2 py-2',

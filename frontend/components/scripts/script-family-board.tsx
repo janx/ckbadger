@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
@@ -24,13 +25,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { BOARD_INKS, DATA_COLOR, HELD_CAPACITY_COLOR, inkStyle } from '@/lib/design-tokens';
-import {
-  deploymentOnDay,
-  holderName,
-  shortHex,
-  signingText,
-  type CodeHolder,
-} from '@/lib/script-lineage';
+import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
@@ -84,14 +79,15 @@ export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   );
 }
 
+/** The holder as the hero's sentence names it, the page's lede (U-09: head). */
 function holderSentence(custody: ScriptCustodyApi): string {
   if (custody.class === 'multisig')
     return custody.witnessState === 'never_signed'
       ? 'a multisig that has never signed'
-      : `${holderName(custody)}`;
+      : `${holderName(custody, 'head')}`;
   if (custody.class === 'one_key') return 'a single key';
   if (custody.class === 'unspendable') return 'a lock that can never be unlocked';
-  return holderName(custody);
+  return holderName(custody, 'head');
 }
 
 /** The board's summary sentence: what the script guards, since when, and who can change it. */
@@ -233,8 +229,8 @@ export function ScriptHeroMetrics({
             href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
             className="hover:text-jade"
           >
-            {/* the holder's kind and its key are one unit (U-16) */}
-            <NoBreak>{holderName(last.custody)}</NoBreak>
+            {/* the holder's kind and its key are one unit (U-16); a hero tile, tight (U-09) */}
+            <NoBreak>{holderName(last.custody, 'tight')}</NoBreak>
           </Link>
         </HeroMetric>
       )}
@@ -249,7 +245,7 @@ export function ScriptHeroMetrics({
                 title={deployment.codeCellTxHash}
                 className="hover:text-jade"
               >
-                <NoBreak>{shortHex(deployment.codeCellTxHash, 6, 6)}</NoBreak>
+                <ShortId value={deployment.codeCellTxHash} kind="hash" size="tight" />
               </Link>
             </>
           }
@@ -542,7 +538,7 @@ export function ScriptHistoryReading({
             <span className="flex items-baseline gap-1.5">
               <span>code</span>{' '}
               <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
-              <span>held by {holderName(deployment.custody)}</span>
+              <span>held by {holderName(deployment.custody, 'tight')}</span>
             </span>
           )}
         </>
@@ -697,7 +693,7 @@ export function ScriptCustodyFigure({
                   →{' '}
                 </span>
               )}
-              {holderName(holder.custody)}
+              {holderName(holder.custody, 'row')}
             </div>
             {signingText(holder) && (
               <div className={holder.neverSigned ? 'text-text-dim mt-1' : 'text-text mt-1'}>
@@ -712,7 +708,10 @@ export function ScriptCustodyFigure({
                   : 'no upgrade signed'}
             </div>
             {keyRows[i].length > 0 ? (
-              <ul aria-label={`Keys of ${holderName(holder.custody)}`} className="mt-3 space-y-1.5">
+              <ul
+                aria-label={`Keys of ${holderName(holder.custody, 'row')}`}
+                className="mt-3 space-y-1.5"
+              >
                 {keyRows[i].map((key) => (
                   <li
                     key={key}
@@ -728,9 +727,12 @@ export function ScriptCustodyFigure({
                         stroke="var(--c-text)"
                       />
                     </svg>
-                    <span className={kept(i, key) ? 'text-text-bright' : 'text-text-dim'}>
-                      {key.slice(0, 14)}…
-                    </span>
+                    <ShortId
+                      value={key}
+                      kind="hash"
+                      size="row"
+                      className={kept(i, key) ? 'text-text-bright' : 'text-text-dim'}
+                    />
                   </li>
                 ))}
               </ul>

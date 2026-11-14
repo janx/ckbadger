@@ -317,11 +317,13 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     const { container } = render(<ForkDetailPage />);
     expect(await screen.findByTestId('fork-narrative')).toHaveTextContent(
-      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (…93hhsj).'
+      // U-09 (re-pinned): an unnamed miner is its address at the place's size, head and tail (it
+      // was the tail alone): the narrative's head size, the table's row size, the tree's tight
+      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (ckb1qzda0cr0…qw93hhsj).'
     );
     const table = screen.getByRole('table', { name: 'Blocks' });
-    expect(within(table).getAllByRole('link', { name: '…93hhsj' })).toHaveLength(3);
-    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('…93hhsj');
+    expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })).toHaveLength(3);
+    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1qzda…93hhsj');
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByRole('link', { name: address })).toHaveAttribute(
       'href',
@@ -379,7 +381,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     render(<ForkDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'its event names first orphan 0x17404795000'
+      'its event names first orphan 0x17404795…000000'
     );
   });
 
@@ -433,7 +435,8 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
         'Branch evidence needs the node store: this API runs without the node reader, so the blocks of both branches, their miners and what became of them are not shown. Below is what this node recorded when it switched.'
       );
       expect(screen.getByTestId('fork-narrative')).toHaveTextContent(
-        'This node switched from #11 0x17404795…a3e72a to #12 0xb057fd60…9a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
+        // U-09 (re-pinned): the story is the page's lede, its hashes at the head size
+        'This node switched from #11 0x1740479523…39a3e72a to #12 0xb057fd605c…e29a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
       );
       expect(container.querySelector('svg[data-fork-tree]')).toBeNull();
       expect(screen.queryByRole('table', { name: 'Blocks' })).toBeNull();

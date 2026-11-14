@@ -47,7 +47,7 @@ import {
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
 import { formatCount, countNoun } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
@@ -354,7 +354,9 @@ export function ObjectGeneticsEvidence({
                 {m.step !== null ? ` · step ${m.step + 1}` : ''}
                 {m.role ? ` · ${m.role}` : ''}
               </span>{' '}
-              <span className="text-text-dim">sha256 {m.hash.slice(0, 12)}…</span>{' '}
+              <span className="text-text-dim">
+                sha256 <ShortId value={m.hash} kind="hash" size="row" />
+              </span>{' '}
               <a
                 href={`${apiBaseFor(resolveActiveNetwork())}${m.url}`}
                 target="_blank"
@@ -573,7 +575,6 @@ const FORMAT_WORDS: Record<string, string> = {
   jsonDob0: 'JSON DOB/0',
   nervapeJsonDob0: 'Nervape JSON DOB/0',
 };
-const shortHash = (hash: string) => `${hash.slice(0, 6)}…${hash.slice(-4)}`;
 const count = (n: number) => n.toLocaleString('en-US');
 
 /**
@@ -775,7 +776,8 @@ function PatternReading({
                     {steps.length > 1 && <span className="text-text">{step.step + 1}. </span>}
                     by {step.decoderReference.type}{' '}
                     <span title={step.decoderReference.hash}>
-                      <NoBreak>{shortHash(step.decoderReference.hash)}</NoBreak>
+                      {/* a tile of the mechanism chain, under 200 px: tight (U-09) */}
+                      <ShortId value={step.decoderReference.hash} kind="hash" size="tight" />
                     </span>
                     {step.decoderBinaryHash ? (
                       step.decoderBinaryHash === step.decoderReference.hash ? (
@@ -795,7 +797,7 @@ function PatternReading({
                             href={`/script/${step.decoderBinaryHash}`}
                             title={step.decoderBinaryHash}
                           >
-                            <NoBreak>{shortHash(step.decoderBinaryHash)}</NoBreak>
+                            <ShortId value={step.decoderBinaryHash} kind="hash" size="tight" />
                           </AppLink>
                         </>
                       )
@@ -927,7 +929,7 @@ function PatternReading({
             <span>
               one object, read this way ·{' '}
               <AppLink href={sample.href} title={sample.id}>
-                {`${sample.id.slice(0, 10)}…${sample.id.slice(-4)}`}
+                <ShortId value={sample.id} kind="hash" size="row" />
               </AppLink>
             </span>
             {dna && <span>{formatCount(dna.length, 'byte')}</span>}

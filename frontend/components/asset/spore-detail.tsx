@@ -134,7 +134,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Owner',
       size: 'body',
       value: object.ownerLockHash ? (
-        <Address address={object.ownerAddress ?? object.ownerLockHash} className="text-body" />
+        <Address
+          address={object.ownerAddress ?? object.ownerLockHash}
+          size="row"
+          className="text-body"
+        />
       ) : (
         'No live owner'
       ),
@@ -171,8 +175,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           <AppLink href={`/blocks/${first.blockNumber}`}>
             {formatBlockNumber(first.blockNumber)}
           </AppLink>{' '}
-          · by{' '}
-          <Address address={first.ownerAddress} startChars={8} endChars={6} className="inline" />
+          · by <Address address={first.ownerAddress} size="row" className="inline" />
         </>
       ) : undefined,
     },
@@ -520,8 +523,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   {cluster.data.ownerAddress || cluster.data.ownerLockHash ? (
                     <Address
                       address={cluster.data.ownerAddress ?? cluster.data.ownerLockHash!}
-                      startChars={10}
-                      endChars={6}
+                      size="row"
                       className="inline"
                     />
                   ) : (

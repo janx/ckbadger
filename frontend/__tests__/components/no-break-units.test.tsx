@@ -39,23 +39,23 @@ describe('NoBreak, the one piece that keeps a unit whole', () => {
 
 describe('a shortened id is one unit', () => {
   it('HexCode and Hash keep a shortened hash whole', () => {
-    render(<HexCode value={HASH} startChars={8} endChars={6} copyable={false} />);
-    const short = screen.getByText('0x123456...abcdef');
+    // U-09 (re-pinned): the sizes of lib/shorten.ts, the one ellipsis
+    render(<HexCode value={HASH} size="row" copyable={false} />);
+    const short = screen.getByText('0x12345678…abcdef');
     expect(nowrapOf(short)).not.toBeNull();
-    render(<Hash hash={HASH} copyable={false} />);
-    expect(nowrapOf(screen.getByText('0x12345678...90abcdef'))).not.toBeNull();
+    render(<Hash hash={HASH} size="head" copyable={false} />);
+    expect(nowrapOf(screen.getByText('0x1234567890…90abcdef'))).not.toBeNull();
   });
 
   it('Address keeps a shortened address whole', () => {
-    render(<Address address={ADDRESS} />);
-    const short = `${ADDRESS.slice(0, 12)}...${ADDRESS.slice(-8)}`;
-    expect(nowrapOf(screen.getByText(short))).not.toBeNull();
+    render(<Address address={ADDRESS} size="head" />);
+    expect(nowrapOf(screen.getByText('ckb1qzda0cr0…4k6kmfrz'))).not.toBeNull();
   });
 
   it('an out point keeps its index with its hash', () => {
     const { container } = render(
       <span>
-        <HexCode value={HASH} startChars={10} endChars={6} copyable={false} />
+        <HexCode value={HASH} size="row" copyable={false} />
         <OutpointIndex index={0} />
       </span>
     );

@@ -9,8 +9,9 @@ import type { CellSeal } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn, truncateHash } from '@/lib/utils';
-import { NoBreak } from '@/components/ui/no-break';
+import { cn } from '@/lib/utils';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 export interface CellTileData {
   id: string;
@@ -103,15 +104,15 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
             {cell.outPoint ? (
               <>
                 <span className="text-text-dim">{cell.label}</span>{' '}
-                {/* an out point with its index is one unit, never broken */}
+                {/* an out point with its index is one unit, never broken; tight: a tile's text
+                    column is under 200 px (U-09) */}
                 <Link
                   href={cell.href}
                   title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
                   className="text-text-dim hover:text-jade whitespace-nowrap"
                 >
-                  <NoBreak>
-                    {truncateHash(cell.outPoint.txHash, 6, 4)}:{cell.outPoint.index}
-                  </NoBreak>
+                  <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
+                  <OutpointIndex index={cell.outPoint.index} />
                 </Link>
               </>
             ) : (

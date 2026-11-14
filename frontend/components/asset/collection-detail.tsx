@@ -353,7 +353,11 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             size: 'body' as const,
             value: protocol.data ? (
               protocol.data.current ? (
-                <Address address={protocol.data.current.cell.ownerAddress} className="text-body" />
+                <Address
+                  address={protocol.data.current.cell.ownerAddress}
+                  size="row"
+                  className="text-body"
+                />
               ) : (
                 'No current cluster cell'
               )

@@ -18,7 +18,6 @@ import {
   addressProducerHoldings,
 } from '@/__tests__/msw/fixtures/address-producer';
 import AddressDetailPage from '@/app/address/[addr]/client-page';
-import { truncateHash } from '@/lib/utils';
 import fiberOpenDetail from '@/__tests__/fixtures/fiber-open-detail.json';
 import {
   api,
@@ -195,7 +194,7 @@ describe('Address v3', () => {
     expect(await screen.findByText('nothing at this address.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the address shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/addresses/${truncateHash(addressText)}`
+      `/addresses/${addressText.slice(0, 10)}…${addressText.slice(-6)}`
     );
   });
 

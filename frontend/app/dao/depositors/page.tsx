@@ -17,6 +17,8 @@ import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import type { ShortSize } from '@/lib/shorten';
 
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
@@ -33,10 +35,19 @@ function Ckb({ shannons }: { shannons: string }) {
 }
 
 /**
- * A depositor by address, or by its lock hash when the lock encodes to no address (L1). In the
- * table it is the row's key (table-rows T5): `className` sets it at body on the row's 18 px line.
+ * A depositor by address, or by its lock hash when the lock encodes to no address (L1), at the
+ * form's size (U-09). In the table it is the row's key (table-rows T5): `className` sets it at body
+ * on the row's 18 px line.
  */
-function Depositor({ row, className }: { row: DaoDepositorRow; className?: string }) {
+function Depositor({
+  row,
+  size,
+  className,
+}: {
+  row: DaoDepositorRow;
+  size: ShortSize;
+  className?: string;
+}) {
   const id = row.address ?? row.lockScriptHash;
   return (
     <Link
@@ -44,7 +55,7 @@ function Depositor({ row, className }: { row: DaoDepositorRow; className?: strin
       className={cn('text-text-bright hover:underline', className)}
       title={id}
     >
-      {id.slice(0, 12)}…{id.slice(-7)}
+      <ShortId value={id} kind={row.address ? 'address' : 'hash'} size={size} />
     </Link>
   );
 }
@@ -68,7 +79,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
     key: 'depositor',
     label: 'Depositor',
     minWidth: 260,
-    render: (d) => <Depositor row={d} className="text-body leading-[18px]" />,
+    render: (d) => <Depositor row={d} size="row" className="text-body leading-[18px]" />,
   },
   {
     key: 'deposits',
@@ -188,7 +199,7 @@ export default function DaoDepositorsPage() {
                 mobileRow={(d, wide) => (
                   <HolderPhoneRow
                     rank={d.rank}
-                    party={<Depositor row={d} />}
+                    party={<Depositor row={d} size="tight" />}
                     amount={
                       <span className="whitespace-nowrap">
                         <Ckb shannons={d.capacity} /> <span className="text-text-dim">CKB</span>

@@ -104,7 +104,8 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     expect(screen.queryByRole('table')).toBeNull();
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0x01010101...010101', expect.stringMatching(/^#1,001 · .+ ago$/)],
+      // U-09 (re-pinned): the phone row's hash at the tight size
+      ['identity', '0x0101…0101', expect.stringMatching(/^#1,001 · .+ ago$/)],
       ['what', 'Minted 3', '500.00000000 CKB'],
       [
         'figures',
@@ -135,7 +136,7 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     render(<AssetTransactions rows={[tx(1, 1930, null)]} />);
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0x01010101...010101', expect.stringMatching(/ago$/)],
+      ['identity', '0x0101…0101', expect.stringMatching(/ago$/)],
       [
         'what',
         '500.00000000 CKB',

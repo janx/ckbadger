@@ -186,7 +186,8 @@ describe('script code evidence', () => {
     expect(screen.getAllByRole('button', { name: /2024-11-01 · deployed/ })).toHaveLength(1);
     // Each chip names its code cell by out point (not the reference hash), opening the cell page.
     const codeCell = seed.codeCellTxHash;
-    const short = `${codeCell.slice(0, 8)}...${codeCell.slice(-6)}`;
+    // U-09 (re-pinned): the marker rows' out points at the row size
+    const short = `${codeCell.slice(0, 10)}…${codeCell.slice(-6)}`;
     expect(screen.getByRole('link', { name: `${short}:0` })).toHaveAttribute(
       'href',
       `/mainnet/cell/${codeCell}-0`

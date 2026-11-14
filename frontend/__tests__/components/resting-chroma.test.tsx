@@ -47,12 +47,12 @@ afterEach(() => {
 
 describe('resting chroma (V5): links in rows rest as ink and light up on hover', () => {
   it('Address rests as ink with the faint aqua underline; the global a:hover is its hover', () => {
-    render(<Address address={ADDRESS} />);
+    render(<Address address={ADDRESS} size="row" />);
     expectRestingLink(screen.getByRole('link'));
   });
 
   it('keeps the resting ink when a caller sets only the size (the blocks table miner)', () => {
-    render(<Address address={ADDRESS} startChars={10} endChars={6} className="text-small" />);
+    render(<Address address={ADDRESS} size="row" className="text-small" />);
     const link = screen.getByRole('link');
     expectRestingLink(link);
     expect(link).toHaveClass('text-small');
@@ -73,9 +73,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
         key: 'miner',
         label: 'Miner',
         minWidth: 200,
-        render: (b) => (
-          <Address address={b.miner} startChars={10} endChars={6} className="text-small" />
-        ),
+        render: (b) => <Address address={b.miner} size="row" className="text-small" />,
       },
     ];
     render(
@@ -90,7 +88,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const table = screen.getByRole('table', { name: 'Blocks' });
     const [, row] = within(table).getAllByRole('row');
     expectNoAquaLink(row);
-    expectRestingLink(within(row).getByRole('link', { name: 'ckb1qzda0c...ratvu9' }));
+    expectRestingLink(within(row).getByRole('link', { name: 'ckb1qzda0c…ratvu9' }));
   });
 
   it('a .cell records table row: its decoded address link rests as ink', () => {
@@ -121,11 +119,11 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       roles: [],
     };
     const { container, rerender } = render(
-      <ParticipantRefView participant={{ ...party, address: ADDRESS }} />
+      <ParticipantRefView participant={{ ...party, address: ADDRESS }} size="row" />
     );
     expectRestingLink(screen.getByRole('link'));
     for (const compact of [false, true]) {
-      rerender(<ParticipantRefView participant={party} compact={compact} />);
+      rerender(<ParticipantRefView participant={party} size="row" compact={compact} />);
       const link = screen.getByRole('link');
       expectNoAquaLink(container);
       expect(link).toHaveClass('text-text-dim', 'hover:text-jade');

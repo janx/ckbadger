@@ -10,8 +10,7 @@ import {
   transactionScriptHashes,
 } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { truncateHash } from '@/lib/utils';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
   if (value === null || value === undefined)
     throw new Error(`Transaction ${hash} missing required field "${field}"`);
@@ -69,8 +68,9 @@ export function cellTiles(
   const owner = (address: string | null | undefined, context: string) => {
     const a = required(address ?? undefined, tx.hash, `${context}.address`);
     return (
+      // a tile's text column is under 200 px (203 at 1024): tight (U-09)
       <Link href={`/address/${a}`} className="text-text hover:text-jade">
-        <NoBreak>{truncateHash(a, 10, 6)}</NoBreak>
+        <ShortId value={a} kind="address" size="tight" />
       </Link>
     );
   };
@@ -123,6 +123,7 @@ export function cellTiles(
               <TransactionCellContent
                 display={cell.display}
                 cellHref={`/cell/${out.txHash}-${out.index}`}
+                size="tight"
               />
             ) : (
               content(cell)
@@ -160,7 +161,11 @@ export function cellTiles(
           state: outputSealState(status),
         },
         content: cell.display ? (
-          <TransactionCellContent display={cell.display} cellHref={`/cell/${tx.hash}-${i}`} />
+          <TransactionCellContent
+            display={cell.display}
+            cellHref={`/cell/${tx.hash}-${i}`}
+            size="tight"
+          />
         ) : cell.codeCell ? (
           <CodeCellContent codeCell={cell.codeCell} />
         ) : (

@@ -26,7 +26,8 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 type StateFilter = 'all' | FiberChannelState;
@@ -61,14 +62,17 @@ const filters: {
 ];
 /** R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), 6 px above and below. */
 const ROW = 'text-body py-1.5';
-const shortId = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 
 /**
- * A party in the table, by the last six characters the graph names it with (board L8; R16: the
- * table reads like the graph above it); its whole address or lock hash is its title and link.
+ * A party in the table, by its address or lock hash at the row size (U-09; it was the last six
+ * characters alone, a form of its own); its whole address or lock hash is its title and link.
  */
 function Party({ party }: { party: FiberChannel['observedParties'][number] }) {
-  const text = `…${(party.address ?? party.lockScriptHash).slice(-6)}`;
+  const text = party.address ? (
+    <ShortId value={party.address} kind="address" size="row" />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size="row" />
+  );
   return party.address ? (
     <Link
       href={`/address/${party.address}`}
@@ -117,7 +121,7 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
           : 'none yet',
         ...summary.channelsByToken.map(
           (token) =>
-            `${token.channels.toLocaleString('en-US')} in ${token.symbol ?? `${token.udtTypeHash.slice(0, 10)}…`}`
+            `${token.channels.toLocaleString('en-US')} in ${token.symbol ?? shortenHash(token.udtTypeHash, 'row')}`
         ),
       ].join(' · '),
     },
@@ -137,10 +141,13 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
   ];
 }
 
-/** A party as the fiber graph labels it (board L8): the last six characters of its address. */
+/** A party in the phone row: its address or lock hash at the tight size (U-09). */
 function PartySuffix({ party }: { party: FiberChannel['observedParties'][number] }) {
-  const id = party.address ?? party.lockScriptHash;
-  const text = `…${id.slice(-6)}`;
+  const text = party.address ? (
+    <ShortId value={party.address} kind="address" size="tight" />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size="tight" />
+  );
   return party.address ? (
     <Link
       href={`/address/${party.address}`}
@@ -196,7 +203,7 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
       style={inkStyle(BOARD_INKS.link)}
       title={channel.channelId}
     >
-      <NoBreak>{shortId(channel.channelId)}</NoBreak>
+      <ShortId value={channel.channelId} kind="hash" size="tight" />
     </Link>
   );
   const pair = (
@@ -389,7 +396,7 @@ export default function FiberChannelsPage() {
                             className="text-text-bright hover:underline"
                             title={channel.channelId}
                           >
-                            <NoBreak>{shortId(channel.channelId)}</NoBreak>
+                            <ShortId value={channel.channelId} kind="hash" size="row" />
                           </Link>
                           {stateFilter === 'all' && (
                             <span className="text-text-dim text-meta block">

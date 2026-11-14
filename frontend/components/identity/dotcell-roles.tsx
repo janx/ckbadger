@@ -3,15 +3,21 @@ import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ownerRun, ownerRuns } from '@/lib/identity-term';
-import { truncateHash } from '@/lib/utils';
+import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 import { countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 type DotcellProtocol = Extract<ItemProtocol, { kind: 'dotcell' }>;
 
+/**
+ * A named party in a line or an owner's step: its address (else its lock hash) at the row size
+ * (U-09, PB-19: the role cards, the owners and the metrics of a name write it at one length), or
+ * the 20-byte prefix whole when no lock was resolved.
+ */
 function partyShort(party: DotCellPartyRef): string {
-  return party.lockHash ? truncateHash(party.address ?? party.lockHash, 13, 8) : party.hashPrefix;
+  if (!party.lockHash) return party.hashPrefix;
+  return party.address ? shortenAddress(party.address, 'row') : shortenHash(party.lockHash, 'row');
 }
 
 /**
@@ -91,7 +97,7 @@ export function DotcellRoles({
           >
             <span className="text-text-dim text-small">{c.label}</span>
             <span>
-              <PartyLine party={c.party} size={14} />
+              <PartyLine party={c.party} size="row" />
             </span>
             <span className="text-text-dim text-small">
               since <Utc8Date timestamp={c.since} /> · {c.note}

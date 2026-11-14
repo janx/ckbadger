@@ -6,12 +6,11 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { AssetReadState } from '@/components/asset/detail-shell';
-import { truncateRecordHex } from '@/components/asset/identity-document';
 import type { IdentityStandard } from '@/components/identity/identity-header';
 import { formatUtc8DateTime, cn } from '@/lib/utils';
 import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 type Of<K extends ItemProtocol['kind']> = Extract<ItemProtocol, { kind: K }>;
@@ -242,7 +241,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       <p className="text-text-dim text-meta">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
-          <Hash hash={v.cell.txHash} copyable={false} className="text-meta" />
+          <Hash hash={v.cell.txHash} size="row" copyable={false} className="text-meta" />
         </AppLink>
       </p>
     </Tier2Section>
@@ -401,7 +400,8 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
                 <span className="[overflow-wrap:anywhere]">{r.key || '(empty key)'}</span>
                 <span className="text-text-dim">ttl {r.ttl}</span>
                 <span className="text-text min-w-0 [overflow-wrap:anywhere]">
-                  <NoBreak>{truncateRecordHex(r.valueHex)}</NoBreak>
+                  {/* a record's value is a hex id here, the row size (U-09; it was 18…8) */}
+                  <ShortId value={r.valueHex} kind="hash" size="row" />
                 </span>
               </div>
             ))}
@@ -421,7 +421,13 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               `Lock · ${v.cell.lockName ?? 'not named'}`,
               <>
                 <AppLink href={`/address/${v.cell.ownerAddress}`}>
-                  <Hash hash={v.cell.ownerAddress} copyable={false} className="text-small" />
+                  <Hash
+                    hash={v.cell.ownerAddress}
+                    kind="address"
+                    size="row"
+                    copyable={false}
+                    className="text-small"
+                  />
                 </AppLink>{' '}
                 <Dim>
                   · names are held under this lock; ownership is the owner field in the data
@@ -441,7 +447,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               ) : (
                 <>
                   <AppLink href={`/identities/dotcell/${d.nextId}`}>
-                    <Hash hash={d.nextId} copyable={false} className="text-small" />
+                    <Hash hash={d.nextId} size="row" copyable={false} className="text-small" />
                   </AppLink>
                   <AssetReadState label="its name" error={next.error} loading={next.isLoading} />
                 </>

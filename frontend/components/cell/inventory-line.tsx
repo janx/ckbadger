@@ -12,11 +12,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { AppLink } from '@/components/ui/app-link';
 import { ExactCkb } from '@/components/activity-event-row';
-import { NoBreak } from '@/components/ui/no-break';
-
-function shortId(id: string): string {
-  return id.length <= 19 ? id : `${id.slice(0, 10)}…${id.slice(-6)}`;
-}
+import { ShortId } from '@/components/ui/short-id';
 
 /**
  * The line itself: the class mark, the statement, the item's page as the line's one bright link,
@@ -98,7 +94,7 @@ function TokenAmount({ amount, unit }: { amount: string; unit: string }) {
   );
 }
 
-/** "Nervape Mask 0x7e3bc1bc…216539" with the cluster's name; "a Spore object 0x…" before it. */
+/** "Nervape Mask 0x7e3bc1bc12…06216539" with the cluster's name; "a Spore object 0x…" before it. */
 function SporeLine({ item }: { item: Extract<CellInventoryItem, { kind: 'spore' }> }) {
   const object = useQuery({
     queryKey: ['spore', item.id],
@@ -123,10 +119,7 @@ function SporeLine({ item }: { item: Extract<CellInventoryItem, { kind: 'spore' 
       href={item.href}
       name={
         <>
-          {name ?? 'Spore object'}{' '}
-          <span className="whitespace-nowrap">
-            <NoBreak>{shortId(item.id)}</NoBreak>
-          </span>
+          {name ?? 'Spore object'} <ShortId value={item.id} kind="hash" size="head" />
         </>
       }
       tier={object.data?.mediaProfile?.tier}
@@ -150,7 +143,7 @@ function SporeClusterLine({
       mark="objects"
       lead="This cell defines the cluster"
       href={item.href}
-      name={cluster.data?.name ?? shortId(item.id)}
+      name={cluster.data?.name ?? <ShortId value={item.id} kind="hash" size="head" />}
       error={cluster.error}
       what="the cluster"
     />
@@ -175,10 +168,7 @@ function MnftLine({ item }: { item: Extract<CellInventoryItem, { kind: 'm-nft' }
           `${d.class.name} #${d.tokenIndex}`
         ) : (
           <>
-            m-NFT object{' '}
-            <span className="whitespace-nowrap">
-              <NoBreak>{shortId(item.id)}</NoBreak>
-            </span>
+            m-NFT object <ShortId value={item.id} kind="hash" size="head" />
           </>
         )
       }
@@ -199,7 +189,7 @@ function MnftClassLine({ item }: { item: Extract<CellInventoryItem, { kind: 'm-n
       mark="objects"
       lead="This cell defines the m-NFT class"
       href={item.href}
-      name={collection.data?.name ?? shortId(item.id)}
+      name={collection.data?.name ?? <ShortId value={item.id} kind="hash" size="head" />}
       error={collection.error}
       what="the class"
     />
@@ -234,9 +224,7 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
         name ?? (
           <>
             {IDENTITY_WORD[item.standard]} identity{' '}
-            <span className="whitespace-nowrap">
-              <NoBreak>{shortId(item.id)}</NoBreak>
-            </span>
+            <ShortId value={item.id} kind="hash" size="head" />
           </>
         )
       }
@@ -257,7 +245,7 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
 export function CellInventoryLine({ cell }: { cell: Cell }) {
   let item: CellInventoryItem | null;
   try {
-    item = cellInventoryItem(cell);
+    item = cellInventoryItem(cell, 'head');
   } catch (error) {
     return (
       <p role="alert" data-testid="cell-inventory-error" className="text-rouge text-small">

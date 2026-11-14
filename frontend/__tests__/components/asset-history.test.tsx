@@ -289,7 +289,8 @@ describe('Asset history', () => {
       expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
         ['change', 'Burn −1.00000000', '2024-01-02'],
         ['after', 'supply after 12.00000000', null],
-        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbbbb...bbbb JoyID'],
+        // U-09 (re-pinned): the phone row's lock hash at the tight size
+        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbb…bbbb JoyID'],
       ]);
     } finally {
       vi.restoreAllMocks();

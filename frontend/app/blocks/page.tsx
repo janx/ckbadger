@@ -29,6 +29,7 @@ import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
 import { useState } from 'react';
 
 export default function BlocksPage() {
@@ -54,9 +55,11 @@ export default function BlocksPage() {
       key: 'block',
       label: 'Block',
       // The block's stone and its gap (26 + 8, ROW_SEAL.block.footprint), "#20,879,198" (11
-      // characters at 13 px, 85.8 px), a 12 px space (7.2 px) and "0xd161...8fef" (13 at 11 px,
-      // 85.8 px): 212.8 px and the 16 px gap, 228.8 (was 200 without a seal, 222 with the old
-      // hash seal's 27).
+      // characters at 13 px, 85.8 px), a 12 px space (7.2 px) and "0xd161…8fef" (11 at 11 px,
+      // 72.6 px, the tight size: the hash is the key cell's second token, beside the block
+      // number, and the row size's 17 characters, 112.2 px, would need 256 here and a table of
+      // 1,257 px, wider than 1,232 at 1280): 199.6 px and the 16 px gap, 215.6 (was 228.8 with
+      // "0xd161...8fef" at 13 characters, 200 without a seal, 222 with the old hash seal's 27).
       minWidth: 195 + ROW_SEAL.block.footprint,
       render: (block) => <BlockIdentity block={block} />,
     },
@@ -88,7 +91,7 @@ export default function BlocksPage() {
       label: 'Miner',
       minWidth: 160,
       className: 'whitespace-nowrap',
-      render: (block) => miner(block, 'table'),
+      render: (block) => miner(block, 'row'),
     },
     {
       key: 'reward',
@@ -293,8 +296,7 @@ function BlockIdentity({ block }: { block: Block }) {
           </Link>{' '}
           <Hash
             hash={block.hash}
-            startChars={6}
-            endChars={4}
+            size="tight"
             copyable={false}
             className="text-text-dim text-meta"
           />
@@ -313,34 +315,20 @@ function BlockIdentity({ block }: { block: Block }) {
 const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
 
 /**
- * The head the miner's shortened address keeps: the tables write `ckb1qzda0c...93hhsj`, a phone
- * row `ckb1...93hhsj` (`ckt1...` on testnet), head and tail like every shortened identifier. The
- * phone row's head is only the network prefix because what follows it is the lock's code hash —
- * `qzda0c` for every default-lock miner, the same on every row — while the tail, the bech32m
- * checksum of the whole address, tells two miners apart.
- */
-const MINER_HEAD = { table: 10, phone: 4 } as const;
-
-/**
  * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`
- * names, else the address, head and tail. Genesis is mined by no one.
+ * names, else the address at the form's size (U-09): `ckb1qzda0c…93hhsj` in the tables (row),
+ * `ckb1qzda…93hhsj` in the phone row (tight). Genesis is mined by no one.
  */
-function miner(block: Block, form: keyof typeof MINER_HEAD) {
+function miner(block: Block, size: ShortSize) {
   if (!block.minerAddress) return <span className="text-text-dim">Genesis</span>;
   return (
     <MinerLink
       address={block.minerAddress}
       pool={block.minerPool}
       // T5: the block number is the row's one bright thing; a named pool reads in body ink.
+      size={size}
       className="text-text"
-      unnamed={
-        <Address
-          address={block.minerAddress}
-          startChars={MINER_HEAD[form]}
-          endChars={6}
-          className="text-small"
-        />
-      }
+      unnamed={<Address address={block.minerAddress} size={size} className="text-small" />}
     />
   );
 }
@@ -434,7 +422,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
           left: (
             <>
               <span className="text-text-dim">miner </span>
-              {miner(block, 'phone')}
+              {miner(block, 'tight')}
             </>
           ),
           right: <span className="whitespace-nowrap">fees {fees(block, true)}</span>,
@@ -448,8 +436,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
                 <Hash
                   key="h"
                   hash={block.hash}
-                  startChars={6}
-                  endChars={4}
+                  size="tight"
                   copyable={false}
                   className="text-meta"
                 />,
@@ -492,8 +479,9 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'height',
     label: 'Height',
-    // The block's stone and its gap (26 + 8) beside the two lines ("#20,879,198" at 13 px and the
-    // hash at 11 px, 85.8 px each) and the 16 px gap: 135.8 px, with 2.2 px to spare (the number
+    // The block's stone and its gap (26 + 8) beside the two lines ("#20,879,198" at 13 px, 85.8
+    // px, and the hash at 11 px at the tight size, 72.6 px) and the 16 px gap: 135.8 px, with 2.2
+    // px to spare (the number
     // may break between characters, and with the old hash seal at 0.2 px to spare the cell's
     // sub-pixel width broke it); it was 112 without a seal, 131 with the old hash seal's 27.
     minWidth: 104 + ROW_SEAL.block.footprint,
@@ -506,8 +494,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
           </Link>
           <Hash
             hash={block.hash}
-            startChars={6}
-            endChars={4}
+            size="tight"
             copyable={false}
             className="text-text-dim text-meta block whitespace-nowrap"
           />
@@ -547,12 +534,13 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'miner',
     label: 'Miner',
-    // An unnamed miner, "ckb1qzda0c...93hhsj" (19 characters at 12 px, 136.8 px), and the 16 px
-    // gap: 152.8 px, 1.2 to spare. A pool's name may be as long here as at 156 (19 characters:
-    // 138 px holds 19.2), so the column gave 2 of the block stone's 7 px from its 156.
+    // An unnamed miner, "ckb1qzda0c…93hhsj" (17 characters at 12 px, 122.4 px; it was 19 with
+    // three dots), and the 16 px gap: 138.4 px, 15.6 to spare. A pool's name may be as long here
+    // as at 156 (19 characters: 138 px holds 19.2), so the column gave 2 of the block stone's 7 px
+    // from its 156.
     minWidth: 154,
     className: 'whitespace-nowrap',
-    render: (block) => miner(block, 'table'),
+    render: (block) => miner(block, 'row'),
   },
   {
     key: 'fees',

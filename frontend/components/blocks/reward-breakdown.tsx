@@ -135,7 +135,7 @@ export function RewardBreakdown({
         {block.minerAddress && (
           <>
             <span className="text-text-dim text-small font-normal"> to </span>
-            <Address address={block.minerAddress} className="text-body font-normal" />
+            <Address address={block.minerAddress} size="row" className="text-body font-normal" />
           </>
         )}
       </div>
@@ -196,7 +196,12 @@ export function RewardPaidBy({ block }: { block: RewardBlock }) {
         <>
           {' · '}
           <Link href={`/tx/${block.miningRewardTxHash}`}>
-            <Hash hash={block.miningRewardTxHash} copyable={false} className="text-small" />
+            <Hash
+              hash={block.miningRewardTxHash}
+              size="row"
+              copyable={false}
+              className="text-small"
+            />
           </Link>
         </>
       )}

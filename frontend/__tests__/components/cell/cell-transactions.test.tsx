@@ -233,7 +233,7 @@ describe('CellTransactions', () => {
       { outPointTxHash: DEP, outPointIndex: 0, depType: 'dep_group', scriptHashes: [LOCK_HASH] },
     ]);
     view(liveFixture as unknown as Cell);
-    const short = `${DEP.slice(0, 10)}...${DEP.slice(-6)}:0`;
+    const short = `${DEP.slice(0, 10)}…${DEP.slice(-6)}:0`;
     const link = (await screen.findAllByRole('link', { name: short }))[0];
     expect(link).toHaveAttribute('href', `/mainnet/cell/${DEP}-0`);
     expect(link.firstElementChild).toHaveAttribute('data-nobreak');

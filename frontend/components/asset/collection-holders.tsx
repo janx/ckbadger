@@ -21,6 +21,7 @@ import { formatTick } from '@/lib/chart-ticks';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { countNoun } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
 
 export interface CollectionHoldersProps {
   load: (params: {
@@ -138,14 +139,15 @@ function ScopedCollectionHolders({
     !!distribution && !!holders.data && BigInt(holders.data.data.length) > totalHolders;
   const rank = (holder: CollectionHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1;
-  const party = (holder: CollectionHolder) => (
+  // the holder at the form's size (U-09): row in the table, tight in the phone row
+  const party = (holder: CollectionHolder, size: ShortSize) => (
     <DotCellParty
       party={{
         hashPrefix: holder.ownerHashPrefix ?? null,
         lockHash: holder.lockScriptHash,
         address: holder.address,
       }}
-      truncate
+      size={size}
       // Table-rows L2-4: the holder is the row's bright key, on one 18 px line.
       className="[&>span]:text-small [&_a]:text-text-bright max-w-full flex-nowrap whitespace-nowrap [&>span]:py-0 [&>span]:leading-[18px] [&_a]:leading-[18px]"
     />
@@ -172,7 +174,7 @@ function ScopedCollectionHolders({
       key: 'owner',
       label: 'Holder',
       minWidth: 196,
-      render: party,
+      render: (holder) => party(holder, 'row'),
     },
     {
       key: 'lock',
@@ -183,6 +185,7 @@ function ScopedCollectionHolders({
           <LockKind
             lockKind={holder.lockKind}
             lockCodeHash={holder.lockCodeHash}
+            size="row"
             className={rowTagClass('default', 'min-w-0 truncate')}
           />
         </span>
@@ -251,9 +254,13 @@ function ScopedCollectionHolders({
                   return (
                     <HolderPhoneRow
                       rank={rank(holder)}
-                      party={party(holder)}
+                      party={party(holder, 'tight')}
                       lock={
-                        <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
+                        <LockKind
+                          lockKind={holder.lockKind}
+                          lockCodeHash={holder.lockCodeHash}
+                          size="tight"
+                        />
                       }
                       amount={
                         <span className="whitespace-nowrap">

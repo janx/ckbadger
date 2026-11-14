@@ -27,7 +27,8 @@ describe('ClusterCellEvidence', () => {
     );
     const facts = within(section).getByLabelText('The cluster cell');
     expect(facts).toHaveTextContent(
-      'live cell0xa5c534…3261:0 · created in #99 · 2023-11-15held byckb1qpq5zs2p…utsyjq · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args'
+      // U-09 (re-pinned): the evidence's rows at the row size
+      'live cell0xa5c53484…1f3261:0 · created in #99 · 2023-11-15held byckb1qpq5zs…utsyjq · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args'
     );
     expect(within(facts).getAllByRole('link')[0]).toHaveAttribute(
       'href',

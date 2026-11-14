@@ -15,11 +15,11 @@ const groups: MatrixGroup[] = [
     id: 'lock:run:0xl1',
     kind: 'lock',
     name: 'Default Lock',
-    sub: 'args 0x55c5…a0b9',
+    sub: () => 'args 0x55c5…a0b9',
     ran: true,
     cellIds: ['in:0', 'in:1'],
     witness: { index: 0, detail: { kind: 'WitnessArgs', size: 85 } },
-    code: 'dep group 0x71a7…:0',
+    code: () => 'dep group 0x71a7…:0',
     cycles: '1694860',
     focusTestId: 'focus-l1',
   },
@@ -27,11 +27,11 @@ const groups: MatrixGroup[] = [
     id: 'lock:attached:0xo1',
     kind: 'lock',
     name: '0x43b292…895d',
-    sub: 'owner ckb1qppm9y…204m4g',
+    sub: () => 'owner ckb1qppm9y…204m4g',
     ran: false,
     cellIds: ['out:0'],
     witness: null,
-    code: '—',
+    code: () => '—',
     cycles: null,
     focusTestId: 'focus-o1',
   },
@@ -178,11 +178,11 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
       kind: 'lock',
       name: 'Default Lock',
       href: '/scripts/default-lock',
-      sub: 'pubkey hash 0x55c5…a0b9',
+      sub: () => 'pubkey hash 0x55c5…a0b9',
       ran: true,
       cellIds: ['in:0', 'in:1', 'in:2'],
       witness: { index: 0, detail: { kind: 'WitnessArgs', size: 85 } },
-      code: 'dep group 0x71a7…:0',
+      code: () => 'dep group 0x71a7…:0',
       cycles: '1658503',
       focusTestId: 'focus-l1',
     },
@@ -190,22 +190,22 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
       id: 'type:run:0xt1',
       kind: 'type',
       name: '.bit Time Index State',
-      sub: 'args 0x00',
+      sub: () => 'args 0x00',
       ran: true,
       cellIds: ['in:0', 'out:0'],
       witness: { index: 1, detail: null },
-      code: 'code 0x96b1…:0',
+      code: () => 'code 0x96b1…:0',
       cycles: '32977',
     },
     {
       id: 'lock:attached:0xo1',
       kind: 'lock',
       name: 'Default Lock',
-      sub: 'pubkey hash 0x77aa…0102',
+      sub: () => 'pubkey hash 0x77aa…0102',
       ran: false,
       cellIds: ['out:0', 'out:1', 'out:2'],
       witness: null,
-      code: 'code 0xd00a…:0 · not run here',
+      code: () => 'code 0xd00a…:0 · not run here',
       cycles: null,
     },
   ];
@@ -222,6 +222,34 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
       />
     );
   };
+
+  // U-09: a group's args line and its code dep take the size of the form they are drawn in
+  it('asks for the row size in the matrix and the tight size in the list', () => {
+    const sized = sixGroups.map((g) => ({
+      ...g,
+      sub: (size: string) => `args at ${size}`,
+      code: (size: string) => `code at ${size}`,
+    }));
+    for (const [width, size] of [
+      [1128, 'row'],
+      [358, 'tight'],
+    ] as const) {
+      stubChartWidth(width);
+      const { unmount } = render(
+        <ScriptGroupMatrix
+          txHash="0xtx"
+          inputs={six.inputs}
+          outputs={six.outputs}
+          groups={sized}
+          lit={null}
+          onHover={() => {}}
+        />
+      );
+      expect(screen.getAllByText(`args at ${size}`)).toHaveLength(3);
+      expect(screen.getAllByText(`code at ${size}`).length).toBeGreaterThan(0);
+      unmount();
+    }
+  });
 
   it('draws the matrix only when every cell column fits (1,128 px for six cells)', () => {
     draw(1128);
@@ -299,7 +327,7 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
   });
 
   it('marks a group with no code dep "—" in the matrix and leaves it out of the list', () => {
-    const noDep = { ...sixGroups[2], code: null };
+    const noDep = { ...sixGroups[2], code: () => null };
     stubChartWidth(1128);
     const { unmount } = render(
       <ScriptGroupMatrix

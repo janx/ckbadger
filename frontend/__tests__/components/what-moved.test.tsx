@@ -120,14 +120,15 @@ describe('WhatMoved, the ribbon form', () => {
     expect(plate).toHaveTextContent('Nervape Suit');
     expect(plate.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     expect(
-      within(plate as HTMLElement).getByRole('link', { name: '0x4a2237a7...2abf1d' })
+      within(plate as HTMLElement).getByRole('link', { name: '0x4a2237a7…2abf1d' })
     ).toHaveAttribute('href', `/mainnet/objects/${NERVAPE}`);
     // the plate carries no total for a whole object
     expect(plate.querySelector('[data-flow-total]')).toBeNull();
     const from = object.querySelector('[data-flow-side="from"]')!;
     const to = object.querySelector('[data-flow-side="to"]')!;
-    expect(from).toHaveTextContent('ckb1qrgq...sp7v9m');
-    expect(to).toHaveTextContent('ckb1qrgq...ay02wn');
+    // U-09 (re-pinned): the ribbon's parties at the row size
+    expect(from).toHaveTextContent('ckb1qrgqep…sp7v9m');
+    expect(to).toHaveTextContent('ckb1qrgqep…ay02wn');
     expect(to).toHaveTextContent('JoyID');
     // a whole object is the ribbon's full weight on both sides
     expect(from.querySelector('[data-flow-end="party"]')).toHaveAttribute('data-weight', '22');
@@ -147,11 +148,11 @@ describe('WhatMoved, the ribbon form', () => {
       ]);
     // U-15 (re-pinned): a lock the registry does not name is 'lock <code hash>'
     expect(ends(from)).toEqual([
-      ['party', '14', 'ckb1qrgq...ay02wnJoyID638.00008888 CKB'],
-      ['party', '10', 'ckb1qrgq...sp7v9mlock 0x9bd7e0...cce8432.00000000 CKB'],
+      ['party', '14', 'ckb1qrgqep…ay02wnJoyID638.00008888 CKB'],
+      ['party', '10', 'ckb1qrgqep…sp7v9mlock 0x9bd7e06f…a3cce8432.00000000 CKB'],
     ]);
     expect(ends(to)).toEqual([
-      ['party', '22', 'ckb1qrgq...ct4hxvJoyID1,070.00000000 CKB'],
+      ['party', '22', 'ckb1qrgqep…ct4hxvJoyID1,070.00000000 CKB'],
       ['miner', '2', 'the miner fee0.00008888 CKB'],
     ]);
     // the plate's total is what left the givers, so the fee is inside it
@@ -278,8 +279,9 @@ describe('WhatMoved, the list form', () => {
     expect(object.querySelector('svg[aria-hidden="true"] path[d="M6 0v15"]')).not.toBeNull();
     const eyebrows = Array.from(object.querySelectorAll('.eyebrow')).map((e) => e.textContent);
     expect(eyebrows).toEqual(['from', 'to']);
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qrgq...sp7v9m');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qrgq...ay02wn');
+    // U-09 (re-pinned): the list's parties at the tight size
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qrgq…sp7v9m');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qrgq…ay02wn');
     expect(ckb.querySelectorAll('[data-flow-side="to"] [data-flow-end]')).toHaveLength(2);
     expect(ckb.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
       'the miner fee0.00008888 CKB'

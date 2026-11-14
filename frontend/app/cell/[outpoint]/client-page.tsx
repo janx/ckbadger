@@ -16,7 +16,8 @@ import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
-import { formatDurationMs, truncateHash } from '@/lib/utils';
+import { formatDurationMs } from '@/lib/utils';
+import { shortenOutpoint } from '@/lib/shorten';
 import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -24,7 +25,7 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** What `outpointParts` accepts, as the not-an-id page states it. */
@@ -99,10 +100,6 @@ function useScriptNames(cell: Cell | undefined) {
   return { lock: name(cell?.lock?.codeHash), type: name(cell?.type?.codeHash), lookup };
 }
 
-function short(hash: string, head = 8, tail = 6): string {
-  return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
-}
-
 function Fact({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -137,7 +134,8 @@ function ScriptFact({
     script.codeHash === TYPE_ID_CODE_HASH
       ? undefined
       : `/script/${script.codeHash}?hashType=${script.hashType}`;
-  const text = name ?? short(script.codeHash);
+  // a fact tile's ids at the row size (U-09)
+  const text = name ?? <ShortId value={script.codeHash} kind="hash" size="row" />;
   return (
     <Fact
       label={label}
@@ -146,7 +144,7 @@ function ScriptFact({
           <>
             {script.args !== '0x' && (
               <span title={script.args}>
-                args <NoBreak>{short(script.args, 4, 4)}</NoBreak>
+                args <ShortId value={script.args} kind="hash" size="row" />
               </span>
             )}
             {owner && (
@@ -155,7 +153,7 @@ function ScriptFact({
                 title={owner}
                 className="hover:text-jade block [overflow-wrap:anywhere]"
               >
-                <NoBreak>{truncateHash(owner, 10, 6)}</NoBreak>
+                <ShortId value={owner} kind="address" size="row" />
               </Link>
             )}
           </>
@@ -344,15 +342,16 @@ function CodeCellOf({ cell }: { cell: Cell }) {
 
 /**
  * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to the
- * transaction page and the block to its page.
+ * "output 0 of transaction 0x0361eb40ab…12b6518a · live since #14,965,803", the hash linking to
+ * the transaction page and the block to its page; the line under the plate is the page's lede
+ * (U-09: head).
  */
 function CellOrigin({ cell }: { cell: Cell }) {
   return (
     <p data-testid="cell-origin">
       output {cell.outputIndex} of transaction{' '}
       <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        <NoBreak>{short(cell.txHash)}</NoBreak>
+        <ShortId value={cell.txHash} kind="hash" size="head" />
       </Link>{' '}
       ·{' '}
       {cell.status === 'dead' ? (
@@ -399,8 +398,10 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, its one break
         // opportunity after the "…": under the stone below md it has the full width, and at 26 px
         // the short out point (19 characters, 20 or 21 for an index up to 999) is 286.5 to 316.7
-        // px, inside the 328 px line at 360, so it stands on one line.
-        title={`${short(cell.txHash)}:${cell.outputIndex}`}
+        // px, inside the 328 px line at 360, so it stands on one line. It takes the row size (U-09),
+        // not the head size an h1 takes: at head the out point is 23 to 25 characters, 359 to 390
+        // px at 26 px, over the line at 390 (358) and at 360 (328).
+        title={shortenOutpoint(cell.txHash, cell.outputIndex, 'row')}
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.

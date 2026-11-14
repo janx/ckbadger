@@ -478,7 +478,8 @@ describe('Tokens Inventory Page', () => {
 
     render(<TokensPage />);
 
-    const fallbackLabel = `${typeHash.slice(0, 10)}...${typeHash.slice(-8)}`;
+    // U-09 (re-pinned): the table's name cell at the row size
+    const fallbackLabel = `${typeHash.slice(0, 10)}…${typeHash.slice(-6)}`;
     await waitFor(() => {
       expect(screen.getAllByText(fallbackLabel).length).toBeGreaterThanOrEqual(1);
     });

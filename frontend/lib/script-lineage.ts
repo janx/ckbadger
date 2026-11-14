@@ -4,20 +4,13 @@ import type {
   ScriptHistoryMarkerApi,
   ScriptVersionDetail,
 } from '@/lib/api';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
  * Reading of a script family's code lineage from the API's own records (versions and history
  * markers). Nothing here classifies a lock or guesses an event: it orders, numbers and pairs
  * what `/scripts/{name}` returned, and throws when two of its records disagree.
  */
-
-/** `0xd1db…b95c`: the board's short form for lock args, code hashes and outpoints. */
-export function shortHex(value: string, head = 4, tail = 4): string {
-  if (!/^0x[0-9a-fA-F]+$/.test(value)) throw new Error(`Not a hex value: ${value}`);
-  return value.length <= 2 + head + tail + 1
-    ? value
-    : `${value.slice(0, 2 + head)}…${value.slice(-tail)}`;
-}
 
 /** Versions in deployment order (v1 = first deployed), the order the Code versions table uses. */
 export function orderedVersions(
@@ -156,20 +149,23 @@ export function deploymentOnDay(
   return current;
 }
 
-/** How the board names a code cell holder: `multisig 0xd1db…b95c`. */
-export function holderName(custody: ScriptCustodyApi): string {
+/**
+ * How the board names a code cell holder: `multisig 0xd1db…b95c`, its lock args at the size of
+ * the place the name stands in (U-09).
+ */
+export function holderName(custody: ScriptCustodyApi, size: ShortSize): string {
   switch (custody.class) {
     case 'multisig':
-      return `multisig ${shortHex(custody.lockArgs ?? '0x')}`;
+      return `multisig ${shortenHash(custody.lockArgs ?? '0x', size)}`;
     case 'one_key':
-      return `one key ${shortHex(custody.lockArgs ?? '0x')}`;
+      return `one key ${shortenHash(custody.lockArgs ?? '0x', size)}`;
     case 'unspendable':
       return 'an unspendable lock';
     case 'fixed':
       return 'no one (pinned by data hash)';
     default:
       return custody.lockCodeHash
-        ? `lock ${shortHex(custody.lockCodeHash)}`
+        ? `lock ${shortenHash(custody.lockCodeHash, size)}`
         : 'an unrecorded holder';
   }
 }

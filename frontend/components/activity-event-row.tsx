@@ -10,7 +10,8 @@ import {
   getIdentityItemDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
+import { formatCkbAmount, cn } from '@/lib/utils';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
 export type { ActivityBody } from '@/lib/activity-classify';
@@ -32,7 +33,8 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { AssetClass } from '@/lib/design-tokens';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 /** A row that is not a pool row sits in a block; an absent number is a contract violation. */
 function committedActivityBlock(activity: { blockNumber: number | null; txHash: string }): number {
@@ -70,9 +72,12 @@ export const LOCK_SCRIPT_CALL_LABEL = 'Script Call (lock)';
  * A call's script as a reader names it: the registry name, else its code hash (what kind of
  * script it is), never the script hash, which reads as `code(args)` (F2-tx, TX-31).
  */
-export function formatScriptRef(sc: { codeHash: string; scriptName?: string }): string {
+export function formatScriptRef(
+  sc: { codeHash: string; scriptName?: string },
+  size: ShortSize
+): string {
   if (sc.scriptName?.trim()) return sc.scriptName!.trim();
-  return truncateHash(sc.codeHash, 8, 4);
+  return shortenHash(sc.codeHash, size);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,14 +148,14 @@ function CallExpr({
 export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quiet?: boolean }) {
   return (
     <CallExpr
-      name={formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })}
+      name={formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row')}
       href={getScriptDetailHref({
         name: sc.scriptName,
         codeHash: sc.typeCodeHash,
         hashType: sc.typeHashType,
         scriptKind: 'type',
       })}
-      args={sc.typeArgs === '0x' ? null : truncateHash(sc.typeArgs, 6, 4)}
+      args={sc.typeArgs === '0x' ? null : shortenHash(sc.typeArgs, 'row')}
       quiet={quiet}
     />
   );
@@ -163,17 +168,17 @@ export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quie
 export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quiet?: boolean }) {
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason; it is
   // said once, quietly, after the call (decoded fields are not drawn on activity rows).
-  const notDecoded = lockArgsLine(lc.decoded, lc.decodeError);
+  const notDecoded = lockArgsLine(lc.decoded, lc.decodeError, 'row');
   const call = (
     <CallExpr
-      name={formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName })}
+      name={formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName }, 'row')}
       href={getScriptDetailHref({
         name: lc.scriptName,
         codeHash: lc.lockCodeHash,
         hashType: lc.lockHashType,
         scriptKind: 'lock',
       })}
-      args={lc.lockArgs === '0x' ? null : truncateHash(lc.lockArgs, 6, 4)}
+      args={lc.lockArgs === '0x' ? null : shortenHash(lc.lockArgs, 'row')}
       quiet={quiet}
     />
   );
@@ -205,7 +210,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
       const formatted = formatTokenBalanceWithRawMarker(absDelta, item.decimals ?? null);
       const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
       const symbol = item.symbol?.trim();
-      const label = symbol || truncateHash(item.typeScriptHash, 8, 6);
+      const label = symbol || <ShortId value={item.typeScriptHash} kind="hash" size="row" />;
       return {
         badge: (
           <span className="text-token text-small font-mono">
@@ -242,7 +247,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
             className="text-lavender-dim hover:text-lavender text-small font-mono transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            <NoBreak>{truncateHash(item.objectId, 8, 6)}</NoBreak>
+            <ShortId value={item.objectId} kind="hash" size="row" />
           </Link>
         ),
       };
@@ -262,7 +267,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
             className="text-text-bright decoration-aqua/35 text-small font-mono underline underline-offset-[3px] transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            <NoBreak>{truncateHash(item.identityId, 8, 6)}</NoBreak>
+            <ShortId value={item.identityId} kind="hash" size="row" />
           </Link>
         ),
       };
@@ -493,7 +498,10 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
       </span>
     ),
     value: btcTxid ? (
-      <span className="text-text-dim text-small font-mono">btc:{truncateHash(btcTxid, 8, 6)}</span>
+      <span className="text-text-dim text-small font-mono">
+        btc:
+        <ShortId value={btcTxid} kind="hash" size="row" />
+      </span>
     ) : isFiber && capacity !== null ? (
       <span className="text-text-dim text-small font-mono">
         {formatCkbAmount(capacity).full} CKB
@@ -619,7 +627,7 @@ export function ActivityEventGroup({
         <div className="flex items-center justify-between gap-2">
           <div className="text-small flex items-center gap-1.5 font-mono">
             <Link href={txLink} className="text-text hover:text-jade transition-colors">
-              <NoBreak>{truncateHash(activity.txHash, 8, 6)}</NoBreak>
+              <ShortId value={activity.txHash} kind="hash" size="tight" />
             </Link>
             <span className="text-text-dim">{'\u00B7'}</span>
             {position}
@@ -655,7 +663,7 @@ export function ActivityEventGroup({
             {i === 0 ? (
               <div className="text-small flex items-center gap-1.5 font-mono">
                 <Link href={txLink} className="text-text hover:text-jade transition-colors">
-                  <NoBreak>{truncateHash(activity.txHash, 8, 6)}</NoBreak>
+                  <ShortId value={activity.txHash} kind="hash" size="row" />
                 </Link>
                 <span className="text-text-dim">{'\u00B7'}</span>
                 {position}
@@ -698,7 +706,9 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
       const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
       const formatted = formatTokenBalanceWithRawMarker(absDelta, item.decimals ?? null);
-      const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
+      const label = item.symbol?.trim() || (
+        <ShortId value={item.typeScriptHash} kind="hash" size="row" />
+      );
       const color =
         delta > BigInt(0) ? 'text-positive' : delta < BigInt(0) ? 'text-negative' : 'text-text-dim';
       return (
@@ -721,7 +731,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
-          {item.delta} <NoBreak>{truncateHash(item.objectId, 8, 6)}</NoBreak>
+          {item.delta} <ShortId value={item.objectId} kind="hash" size="row" />
         </Link>
       );
     }
@@ -734,7 +744,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
-          {item.delta} <NoBreak>{truncateHash(item.identityId, 8, 6)}</NoBreak>
+          {item.delta} <ShortId value={item.identityId} kind="hash" size="row" />
         </Link>
       );
     }
@@ -747,7 +757,7 @@ export function ParticipantLine({ participant }: { participant: ParticipantInfo 
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <ParticipantRefView participant={participant} compact />
+      <ParticipantRefView participant={participant} size="row" compact />
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
         {showCkb && <CkbDelta delta={participant.ckbDelta} />}
         {participant.itemDeltas.map((item, i) => (
@@ -963,14 +973,17 @@ export function ExactCkb({
  * unit beside an exact CKB amount; the default keeps it in the amount's ink.
  * `showComposition={false}` (consistency C3) leaves an object's composition badge to its caller,
  * which says a tier shared by a whole participant line once; the default draws it per object.
+ * `size` is the size of the row the fact stands in, for an id it writes (U-09).
  */
 export function ItemDeltaFact({
   item,
+  size,
   tone = 'plain',
   symbol = 'same',
   showComposition = true,
 }: {
   item: ItemDelta;
+  size: ShortSize;
   tone?: 'plain' | 'sign';
   symbol?: 'same' | 'dim';
   showComposition?: boolean;
@@ -980,7 +993,9 @@ export function ItemDeltaFact({
       const delta = BigInt(item.delta);
       const sign = delta > BigInt(0) ? '+' : delta < BigInt(0) ? MINUS : '';
       const abs = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
-      const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
+      const label = item.symbol?.trim() || (
+        <ShortId value={item.typeScriptHash} kind="hash" size={size} />
+      );
       return (
         <span className="inline-flex items-baseline gap-1.5">
           <ClassMark kind="tokens" size={12} className="self-center" />
@@ -1017,7 +1032,7 @@ export function ItemDeltaFact({
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              <NoBreak>{truncateHash(item.objectId, 8, 4)}</NoBreak>
+              <ShortId value={item.objectId} kind="hash" size={size} />
             </Link>
           </span>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
@@ -1038,7 +1053,7 @@ export function ItemDeltaFact({
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              <NoBreak>{truncateHash(item.identityId, 8, 4)}</NoBreak>
+              <ShortId value={item.identityId} kind="hash" size={size} />
             </Link>
           </span>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
@@ -1061,7 +1076,10 @@ export type ProtocolNoteFact =
  * What a protocol action's metadata says, as quiet parts of one line: DAO amounts and the deposit
  * block, a Fiber channel and its capacity, an RGB++ BTC txid. Empty when the action carries none.
  */
-export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNoteFact[] {
+export function protocolActionNoteFacts(
+  pa: ActivityProtocolAction,
+  size: ShortSize
+): ProtocolNoteFact[] {
   const meta = protocolActionMeta(pa);
   const facts: ProtocolNoteFact[] = [];
   if (meta.channelOutpoint) {
@@ -1072,7 +1090,9 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
       kind: 'other',
       node:
         index === undefined ? (
-          `channel ${truncateHash(hash, 10, 4)}`
+          <>
+            channel <ShortId value={hash} kind="hash" size={size} />
+          </>
         ) : (
           <>
             channel{' '}
@@ -1081,9 +1101,8 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              <NoBreak>
-                {truncateHash(hash, 10, 4)}:{index}
-              </NoBreak>
+              <ShortId value={hash} kind="hash" size={size} />
+              <OutpointIndex index={index} />
             </Link>
           </>
         ),
@@ -1147,14 +1166,17 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
       kind: 'other',
       node: (
         <span className="text-copper" title={meta.btcTxid}>
-          Bitcoin tx <NoBreak>{truncateHash(meta.btcTxid, 8, 6)}</NoBreak>
-          {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
+          Bitcoin tx <ShortId value={meta.btcTxid} kind="hash" size={size} />
+          {meta.btcOutputIndex !== null && <OutpointIndex index={meta.btcOutputIndex.toString()} />}
         </span>
       ),
     });
   return facts;
 }
 
-export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
-  return protocolActionNoteFacts(pa).map((f) => f.node);
+export function protocolActionNoteParts(
+  pa: ActivityProtocolAction,
+  size: ShortSize
+): React.ReactNode[] {
+  return protocolActionNoteFacts(pa, size).map((f) => f.node);
 }

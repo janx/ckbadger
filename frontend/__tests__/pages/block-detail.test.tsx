@@ -4,7 +4,6 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 
 const BLOCK_ID = '8775638';
 const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
@@ -158,7 +157,7 @@ describe('BlockDetailPage', () => {
     expect(await screen.findByText('no block with this number or hash.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/blocks/${truncateHash(BLOCK_HASH)}`
+      `/blocks/${BLOCK_HASH.slice(0, 10)}…${BLOCK_HASH.slice(-6)}`
     );
   });
 

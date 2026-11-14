@@ -36,11 +36,18 @@ const DOTS_ALLOWLIST: Allowlist = {
   'lib/witness-analysis.ts': [AGENT_BUNDLE, AGENT_BUNDLE, AGENT_BUNDLE, AGENT_BUNDLE],
 };
 
+const NUMBER_TAIL =
+  'a block number’s last digits as a label inside a drawing whose ruler or column states the leading ones: a number, not an id or a text label';
+
 /** Cuts joined to an ellipsis the gate tolerates. */
 const SLICED_ALLOWLIST: Allowlist = {
+  // the proposal ruler's tick labels ("…312")
+  'components/transaction/proposal-ruler.tsx': [NUMBER_TAIL],
   // hashShort's head and tail
   'lib/ai/markdown-renderer.ts': [AGENT_BUNDLE, AGENT_BUNDLE],
   // the missing and the empty witness groups' code hashes
+  // the pipeline's block cards and rows ("…9312")
+  'lib/pipeline/layout.ts': [NUMBER_TAIL],
   'lib/witness-analysis.ts': [AGENT_BUNDLE, AGENT_BUNDLE],
 };
 

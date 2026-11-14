@@ -4,6 +4,7 @@ import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { AssetClass } from '@/lib/design-tokens';
+import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import type { TxHover, TxLinkSets } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
@@ -34,13 +35,20 @@ export interface MatrixGroup {
   name: string;
   href?: string;
   mark?: AssetClass | null;
-  sub: ReactNode;
+  /**
+   * The line under the name (the lock's args), at the size of the form it is drawn in (U-09):
+   * `row` in the matrix's script column, `tight` in the narrow list.
+   */
+  sub: (size: ShortSize) => ReactNode;
   ran: boolean;
   cellIds: readonly string[];
   /** Null when the group reads no witness. */
   witness: MatrixWitness | null;
-  /** The cell dep its code comes from; null when there is none to point at (an attached lock). */
-  code: ReactNode;
+  /**
+   * The cell dep its code comes from, at the form's size; null when there is none to point at (an
+   * attached lock).
+   */
+  code: (size: ShortSize) => ReactNode;
   /** Exact decimal cycles of a group that ran; null when not measured (or not run). */
   cycles: string | null;
   /** Shown instead of the cycles line (a pending transaction: "will run when committed"). */
@@ -228,7 +236,7 @@ export function ScriptGroupMatrix({
                     <span className="truncate">{g.name}</span>
                   )}
                 </span>
-                <span className="text-text-dim truncate">{g.sub}</span>
+                <span className="text-text-dim truncate">{g.sub('row')}</span>
                 <span className="text-text-dim">
                   {cyclesLine(g, 'runs here · cycles not available')}
                 </span>
@@ -299,7 +307,7 @@ export function ScriptGroupMatrix({
                 </button>
               </span>
               <span role="cell" className="min-w-0 pl-4">
-                {g.code ?? <span className="text-text-dim">—</span>}
+                {g.code('row') ?? <span className="text-text-dim">—</span>}
               </span>
             </div>
           );
@@ -433,9 +441,9 @@ function GroupList({
               data-line="evidence"
               className="text-text-dim text-meta flex flex-wrap gap-x-3 gap-y-0.5"
             >
-              <span className="min-w-0 [overflow-wrap:anywhere]">{g.sub}</span>
-              {g.code !== null && (
-                <span className="min-w-0 [overflow-wrap:anywhere]">{g.code}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{g.sub('tight')}</span>
+              {g.code('tight') !== null && (
+                <span className="min-w-0 [overflow-wrap:anywhere]">{g.code('tight')}</span>
               )}
             </div>
           </li>

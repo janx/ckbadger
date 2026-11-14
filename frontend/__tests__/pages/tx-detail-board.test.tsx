@@ -377,7 +377,8 @@ describe('Transaction board, tier 1', () => {
     expect(h1.querySelector('[data-class]')).toBeNull();
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
-      'Nervape 3x 0x51c7...96f2 moved from ckb1qzda...cjk9lz to ckb1qzda...shp3hr. The sender paid a 0.00064119 CKB fee.'
+      // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size
+      'Nervape 3x 0x51c75a0000…000096f2 moved from ckb1qzda0cr0…sqcjk9lz to ckb1qzda0cr0…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
@@ -521,7 +522,7 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
     expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent('paid by ckb1qzda...cjk9lz');
+    expect(rail).toHaveTextContent('paid by ckb1qzda0c…cjk9lz');
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
@@ -543,7 +544,7 @@ describe('Transaction board, tier 1', () => {
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
     render(<TransactionDetailPage />);
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
-    await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed'));
+    await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a00…0096f2 departed'));
     expect(table.querySelectorAll('[data-composition="btc_ckb"]')).toHaveLength(2);
     expect(table).toHaveTextContent('−502');
     expect(table).not.toHaveTextContent('502.00000000');
@@ -623,9 +624,9 @@ describe('Transaction board, tier 2', () => {
     const attached = document.querySelector(
       `[data-group-row="lock:attached:${OUTPUT_LOCK}"]`
     ) as HTMLElement;
-    expect(attached).toHaveTextContent('code 0xd00a0222...2c47f7:0 · not run here');
+    expect(attached).toHaveTextContent('code 0xd00a0222…2c47f7:0 · not run here');
     // In the code column the out point opens the code cell; the kind jumps to the dep row.
-    expect(within(attached).getByRole('link', { name: '0xd00a0222...2c47f7:0' })).toHaveAttribute(
+    expect(within(attached).getByRole('link', { name: '0xd00a0222…2c47f7:0' })).toHaveAttribute(
       'href',
       expect.stringMatching(new RegExp(`/cell/0xd00a0222${'00'.repeat(26)}2c47f7-0$`))
     );
@@ -636,7 +637,7 @@ describe('Transaction board, tier 2', () => {
     const spore = document.querySelector(
       `[data-group-row="type:run:${TYPE_SCRIPT}"]`
     ) as HTMLElement;
-    expect(within(spore).getByRole('link', { name: '0x96b198fb...b69824:0' })).toHaveAttribute(
+    expect(within(spore).getByRole('link', { name: '0x96b198fb…b69824:0' })).toHaveAttribute(
       'href',
       expect.stringMatching(new RegExp(`/cell/0x96b198fb${'00'.repeat(26)}b69824-0$`))
     );
@@ -658,16 +659,16 @@ describe('Transaction board, tier 2', () => {
       });
     const count = (el: HTMLElement, word: string) => el.textContent!.split(word).length - 1;
     const code = await dep(1);
-    expect(code).toHaveTextContent(/^0x96b198fb\.\.\.b69824:0code for Spore · 76,752 B$/);
+    expect(code).toHaveTextContent(/^0x96b198fb…b69824:0code for Spore · 76,752 B$/);
     expect(count(code, 'Spore')).toBe(1);
     const group = await dep(0);
-    expect(group).toHaveTextContent(/^0x71a7ba8f\.\.\.72e46c:0dep group for Default Lock↳/);
+    expect(group).toHaveTextContent(/^0x71a7ba8f…72e46c:0dep group for Default Lock↳/);
     // the group's statement, then its member's own line
     expect(count(group, 'Default Lock')).toBe(2);
     expect(count(group, ' for ')).toBe(1);
     const attached = await dep(2);
     expect(attached).toHaveTextContent(
-      /^0xd00a0222\.\.\.2c47f7:0code of Default Lock, not run here · 122,552 B$/
+      /^0xd00a0222…2c47f7:0code of Default Lock, not run here · 122,552 B$/
     );
     expect(count(attached, 'not run here')).toBe(1);
   });
@@ -851,7 +852,8 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
-        'miner lock Default Lock(0xabab...abab) · message “0.210.0 (860c9bb 2026-09-21)”'
+        // U-09 (re-pinned): a witness note in its row, the row size
+        'miner lock Default Lock(0xabababab…ababab) · message “0.210.0 (860c9bb 2026-09-21)”'
       )
     );
     expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('a cellbase runs no script');
@@ -923,7 +925,7 @@ describe('Transaction board, R2b-a fields', () => {
     await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'));
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
     expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
-      'pubkey hash 0x111111...1111'
+      'pubkey hash 0x11111111…111111'
     );
   });
 
@@ -973,10 +975,10 @@ describe('Transaction board, R2b-a fields', () => {
     );
     expect(
       document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
-    ).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
+    ).toHaveTextContent('args 0x07 + hash 0x31da0000…005d74');
     const owner = screen.getByTestId('tx-fact-output-lock-0');
     expect(owner).toHaveTextContent('New owner of the object in output 0');
-    expect(owner).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
+    expect(owner).toHaveTextContent('args 0x07 + hash 0x31da0000…005d74');
     expect(owner).not.toHaveTextContent(/CKBFS|held through/);
   });
 
@@ -1011,7 +1013,7 @@ describe('Transaction board, R2b-a fields', () => {
     const w1 = await screen.findByTestId('tx-witness-item-1');
     await waitFor(() =>
       expect(w1).toHaveTextContent(
-        'message: 2 actions for Spore: MintProxy, Spore (script info 0x454545...4545)'
+        'message: 2 actions for Spore: MintProxy, Spore (script info 0x45454545…454545)'
       )
     );
   });
@@ -1048,7 +1050,7 @@ describe('Transaction board, R2b-a fields', () => {
     });
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
-      'It ran .bit Time Index State and .bit Time Info. ckb1qzda...cjk9lz paid a 0.00064119 CKB fee.'
+      'It ran .bit Time Index State and .bit Time Info. ckb1qzda0cr0…sqcjk9lz paid a 0.00064119 CKB fee.'
     );
   });
 });
@@ -1063,8 +1065,9 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
       'ckb',
     ]);
     const [object, ckb] = groups;
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda...cjk9lz');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda...shp3hr');
+    // U-09 (re-pinned): the ribbon's parties at the row size
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda0c…cjk9lz');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda0c…shp3hr');
     expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
     expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee

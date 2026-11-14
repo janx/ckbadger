@@ -89,13 +89,6 @@ function poolSealId(tx: PoolRow): SealId {
 }
 
 /**
- * The hash in the pool table's Transaction column: "0x" and 10 digits, the ellipsis, 6 digits (21
- * characters at 13 px, 163.8 px), as before the transaction's row stone (old issue C). The phone
- * row's identity line, which shares its line with the status and the wait, keeps 10 + 6.
- */
-const POOL_HASH_CHARS = { start: 12, end: 6 } as const;
-
-/**
  * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
  * status and wait, then what it does and its value, then fee, rate, cells, size and cycles quiet.
  */
@@ -157,13 +150,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} className="hover:underline">
-              <Hash
-                hash={tx.hash}
-                startChars={10}
-                endChars={6}
-                copyable={false}
-                className="text-body"
-              />
+              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
           right: (
@@ -286,12 +273,10 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 21 characters at
-      // 13 px (163.8 px) and the 16 px gap: 236.3 of its 237 px. The 30 px it gained over 207 are
-      // the widest container's own (1,232 px from 1280; the columns took 1,200 of it); the table
-      // is 1,230 px, the committed table's width, and both of the page's lists change form at
-      // the same width (old issue C: the stone had taken the 30 from the hash, 12 + 6 → 10 + 4).
-      // Every column is declared for its own widest content: the 32 px no longer hide one.
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
+      // characters at 13 px (132.6 px; it was 21 with three dots, 163.8 px), and the 16 px gap:
+      // 205.1 of its 237 px. The table is 1,230 px, the committed table's width, and both of the
+      // page's lists change form at the same width, so the column keeps its 237.
       minWidth: 237,
       render: (tx) => (
         <div className="flex items-start">
@@ -301,8 +286,7 @@ export default function TransactionsPage() {
             <Link href={`/tx/${tx.hash}`}>
               <Hash
                 hash={tx.hash}
-                startChars={POOL_HASH_CHARS.start}
-                endChars={POOL_HASH_CHARS.end}
+                size="row"
                 copyable={false}
                 className="text-body text-text-bright leading-[18px]"
               />

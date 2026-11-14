@@ -192,10 +192,14 @@ describe('FiberChannelsPage', () => {
     ).toEqual(['Channel', 'Parties', 'Capacity', 'Opened', 'Open for']);
     expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
     expect(within(table).getByText('3m 20s')).toBeInTheDocument();
-    // a party reads by its last six characters, as the graph names it (board L8, R16); the whole
-    // lock hash (or address) stays its title and link
-    expect(within(table).getByText('…aaaaaa')).toHaveAttribute('title', `0x${'aa'.repeat(32)}`);
-    expect(within(table).queryByText('0xaaaaaaaa…aaaaaa')).toBeNull();
+    // U-09 (re-pinned): a party reads head and tail at the row size (it was its last six
+    // characters alone, as the graph named it); the whole lock hash (or address) stays its title
+    // and link
+    expect(within(table).getByText('0xaaaaaaaa…aaaaaa').closest('[title]')).toHaveAttribute(
+      'title',
+      `0x${'aa'.repeat(32)}`
+    );
+    expect(within(table).queryByText('…aaaaaa')).toBeNull();
     // R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), a 20.8 px line
     // with 6 px above and below
     for (const cell of within(table).getAllByRole('cell'))
@@ -268,8 +272,14 @@ describe('Fiber channel phone row (board L8)', () => {
     const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
     expect(screen.queryByRole('table', { name: 'Open channels' })).toBeNull();
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
-      ['channel', 'head', '0x01010101…010101', 'open'],
-      ['pair', 'body', '…pr3prn ⇄ …bbbbbb Default Lock · unnamed lock', '3,000.00000000 CKB'],
+      // U-09 (re-pinned): the phone row's ids at the tight size
+      ['channel', 'head', '0x0101…0101', 'open'],
+      [
+        'pair',
+        'body',
+        'ckb1qzqq…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
+        '3,000.00000000 CKB',
+      ],
       [
         'time',
         'quiet',
@@ -295,7 +305,7 @@ describe('Fiber channel phone row (board L8)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       [
         'channel',
-        '0x01010101…010101 · …pr3prn ⇄ …bbbbbb Default Lock · unnamed lock',
+        '0x0101…0101 · ckb1qzqq…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
         '3,000.00000000 CKB',
       ],
       ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],

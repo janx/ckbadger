@@ -2,27 +2,20 @@
 
 import Link from '@/components/ui/link';
 import { NoBreak } from '@/components/ui/no-break';
+import type { IdShortening } from '@/components/ui/hex-code';
+import { shortenAddress } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
-interface AddressProps {
+type AddressProps = IdShortening & {
   address: string;
-  truncate?: boolean;
-  startChars?: number;
-  endChars?: number;
   className?: string;
-}
+};
 
-export function Address({
-  address,
-  truncate = true,
-  startChars = 12,
-  endChars = 8,
-  className,
-}: AddressProps) {
-  const shortened = truncate && address.length > startChars + endChars;
-  const displayAddress = shortened
-    ? `${address.slice(0, startChars)}...${address.slice(-endChars)}`
-    : address;
+export function Address({ address, className, ...shortening }: AddressProps) {
+  const truncate = shortening.truncate !== false;
+  const displayAddress =
+    shortening.truncate === false ? address : shortenAddress(address, shortening.size);
+  const shortened = displayAddress !== address;
 
   return (
     <Link

@@ -32,7 +32,8 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
-import { formatCkbAmount, formatUtc8Date, truncateHash } from '@/lib/utils';
+import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
+import { shortenHash } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
@@ -194,7 +195,7 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
   );
   const description = hasName(s)
     ? s.description
-    : `${getScriptRefBadgeLabel(s.hashType)} · ${truncateHash(s.codeHash, 10, 8)}`;
+    : `${getScriptRefBadgeLabel(s.hashType)} · ${shortenHash(s.codeHash, 'tight')}`;
   return (
     <PhoneRow
       testId="script-row-mobile"
@@ -253,9 +254,9 @@ function roleText(script: KnownScript): string {
   return script.scriptKind ? script.scriptKind.replace('+', ' + ') : 'unregistered';
 }
 
-/** An unlabeled family's identity: its reference, short. */
+/** An unlabeled family's identity in the table: its reference at the row size (U-09). */
 function refText(script: KnownScript): string {
-  return `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
+  return `${getScriptRefBadgeLabel(script.hashType)} · ${shortenHash(script.codeHash, 'row')}`;
 }
 
 /**

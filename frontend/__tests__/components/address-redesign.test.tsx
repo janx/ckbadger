@@ -265,7 +265,8 @@ describe('Address v3 components', () => {
           'href',
           `/mainnet/cell/${cell.txHash}-${cell.outputIndex}`
         );
-        expect(outPoint).toHaveTextContent(`0xdce40476...3993e1:${cell.outputIndex}`);
+        // U-09 (re-pinned): the table's out point at the row size
+        expect(outPoint).toHaveTextContent(`0xdce40476…3993e1:${cell.outputIndex}`);
         expectBefore(seal, outPoint);
         expect(row.querySelector('[data-owner-seal]')).toBeNull();
       });
@@ -287,7 +288,8 @@ describe('Address v3 components', () => {
           expect(seal).not.toHaveClass('-my-[6px]');
           // the head line is the out point alone, the seal in its own column
           const lines = phoneLines(row);
-          expect(lines[0].left).toBe(`0xdce40476...3993e1:${cell.outputIndex}`);
+          // U-09 (re-pinned): the phone row's out point at the tight size
+          expect(lines[0].left).toBe(`0xdce4…93e1:${cell.outputIndex}`);
           expectBefore(seal, within(row).getAllByRole('link')[0]);
           expect(row.querySelector('[data-owner-seal]')).toBeNull();
         });

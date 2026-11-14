@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
-import { truncateHash } from '@/lib/utils';
 import {
   api,
   ApiRequestError,
@@ -143,7 +142,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByText('no token with this type hash.')).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/tokens/${truncateHash(hash)}`
+      `/tokens/${hash.slice(0, 10)}…${hash.slice(-6)}`
     );
   });
 
@@ -331,7 +330,8 @@ describe('TokenDetailPage', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/Another token also calls itself/);
-    const self = within(note).getByText(`${hash.slice(0, 10)}…${hash.slice(-4)}`);
+    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8
+    const self = within(note).getByText(`${hash.slice(0, 12)}…${hash.slice(-8)}`);
     expect(self.closest('[data-nobreak]')).not.toBeNull();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     // every dot of the metrics row belongs to the item after it: none is loose text

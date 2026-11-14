@@ -232,7 +232,8 @@ describe('Token holders (board L5)', () => {
       {
         key: 'holder',
         tone: 'head',
-        left: '1ckb1qrgqep...tllakf JoyID',
+        // U-09 (re-pinned): the phone row's address at the tight size
+        left: '1ckb1qrgq…tllakf JoyID',
         right: '562,997.00000000',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
@@ -276,7 +277,7 @@ describe('Token holders where the table does not fit (L5)', () => {
     // Re-pinned with ruling R7: 10.00 % is drawn on the page's rounded maximum (10 %), the axis
     // mark over the bar, the number beside it — no longer full because 10 % was the clamp.
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x11111111...111111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x1111…1111 JoyID', right: '100' },
       { key: 'axis', tone: 'quiet', left: '010%', right: null },
       { key: 'share', tone: 'quiet', left: '10.00%', right: null },
     ]);
