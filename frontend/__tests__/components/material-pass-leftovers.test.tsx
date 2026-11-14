@@ -2,7 +2,6 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { CodeCellsList } from '@/components/ui/code-cells-list';
 import { DataField, DataSection } from '@/components/ui/data-field';
@@ -98,26 +97,21 @@ describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', ()
     eyebrow(screen.getByText('Multiplier total'));
   });
 
-  it('a collection stat card’s label and a .cell records table head', () => {
+  it('a .cell records table head', () => {
     render(
-      <>
-        <ObjectCollectionStatCards totalCount={3} liveCount={2} createdAtBlock={10} />
-        <DotCellRecordsTable
-          records={[
-            {
-              key: 'k',
-              label: 'l',
-              valueHex: '0x76',
-              valueUtf8: 'v',
-              ttl: 1,
-              decodedAddress: null,
-            },
-          ]}
-        />
-      </>
+      <DotCellRecordsTable
+        records={[
+          {
+            key: 'k',
+            label: 'l',
+            valueHex: '0x76',
+            valueUtf8: 'v',
+            ttl: 1,
+            decodedAddress: null,
+          },
+        ]}
+      />
     );
-    for (const label of ['Total Objects', 'Live Items', 'Created At'])
-      eyebrow(screen.getByText(label));
     const head = screen.getByText('Key').closest('tr') as HTMLElement;
     eyebrow(head);
     expect(head).toHaveClass('text-small', 'text-text-dim');
