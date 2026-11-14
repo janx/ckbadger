@@ -316,6 +316,41 @@ describe('useRealtimeData network scoping', () => {
     expect(stats.estimatedEpochTime).toBe('3h 36m');
   });
 
+  it('writes on a new block only the caches a live page reads', () => {
+    renderHarness();
+    const queryClient = scopedQueryClient as QueryClient;
+    // The readers: ['network-stats'] is hooks/useNetworkStats', the home and charts pages' and the
+    // chart detail's; ['pipeline'] is hooks/usePipelineSnapshot's. A cache nothing reads is not
+    // written (the removed chain wave's ['chain-wave-tip-block'] was the last).
+    const written = vi.spyOn(queryClient, 'setQueryData');
+    const invalidated = vi.spyOn(queryClient, 'invalidateQueries');
+    try {
+      act(() => {
+        instances[0].onmessage?.({
+          data: JSON.stringify({
+            type: 'new_block',
+            data: {
+              number: 12345,
+              hash: '0xabc123',
+              timestamp: '2024-01-01T00:00:00Z',
+              transactionsCount: 5,
+              epochNumber: 100,
+              epochIndex: 450,
+              epochLength: 1800,
+            },
+          }),
+        });
+      });
+      expect(written.mock.calls.map(([key]) => key)).toEqual([['network-stats']]);
+      expect(invalidated.mock.calls.map(([filters]) => filters)).toEqual([
+        { queryKey: ['pipeline'] },
+      ]);
+    } finally {
+      written.mockRestore();
+      invalidated.mockRestore();
+    }
+  });
+
   it('resets stale realtime store data on network switch', async () => {
     const user = userEvent.setup();
     renderHarness();
