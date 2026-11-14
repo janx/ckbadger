@@ -163,7 +163,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // the grid of deposited and the share multiple's half-scale line: solid hairlines
     const share = container.querySelector('svg[data-panel="share"]')!;
     for (const panel of [main, share]) {
-      const grid = [...panel.querySelectorAll('line.stroke-base-border-subtle')];
+      // in the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
+      const grid = [...panel.querySelectorAll('line.stroke-row-rule')];
       expect(grid.length).toBeGreaterThan(0);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
     }

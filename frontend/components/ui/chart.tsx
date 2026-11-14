@@ -14,6 +14,7 @@ import {
 } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
+import { CHART_GRID_COLOR } from '@/lib/chart-colors';
 import { unitAfter, withUnit } from '@/components/charts/chart-format';
 
 export interface ChartPoint {
@@ -625,7 +626,7 @@ export function Chart({
                         x2={right}
                         y1={yTick(v)}
                         y2={yTick(v)}
-                        stroke="var(--c-base-border-subtle)"
+                        stroke={CHART_GRID_COLOR}
                       />
                       {insideYTicks !== 'over' && insideTickLabel(v)}
                     </g>
@@ -637,7 +638,7 @@ export function Chart({
                       x2={right}
                       y1={yTick(v)}
                       y2={yTick(v)}
-                      stroke="var(--c-base-border-subtle)"
+                      stroke={CHART_GRID_COLOR}
                     />
                     <text
                       x={left - 8}

@@ -6,8 +6,11 @@ export const CHART_SECONDARY_COLOR = HUE_RAMP[1];
 export const CHART_TERTIARY_COLOR = HUE_RAMP[2];
 export const CHART_PALETTE = HUE_RAMP;
 
-/** The row-rule ink: every chart's grid is 1 px solid border-subtle (visual finish V13 b). */
-export const CHART_GRID_COLOR = color('base-border-subtle');
+/**
+ * The row-rule ink: every chart's grid is 1 px solid (visual finish V13 b), a rule on the ruled
+ * paper by day (R5, ruling 4c); the hair by night.
+ */
+export const CHART_GRID_COLOR = color('row-rule');
 export const CHART_AXIS_COLOR = color('text-ghost');
 export const CHART_TOOLTIP_BG = color('base-surface');
 export const CHART_TOOLTIP_BORDER = CHART_TOOLTIP_BG;

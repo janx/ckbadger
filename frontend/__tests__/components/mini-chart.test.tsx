@@ -184,7 +184,8 @@ describe('mini charts', () => {
   // the signed axis are its grid (the scale's ends, labelled), solid like the line and bar charts'
   // grids, all in the row-rule ink #1a1f30; the zero line is the solid base, the line chart's
   // reference (a target) keeps its dash.
-  it('draws every mini chart grid solid in var(--c-base-border-subtle); only the reference is dashed', () => {
+  // R5, ruling 4c (re-pinned on purpose): the grid is the row-rule key, the hair by night.
+  it('draws every mini chart grid solid in var(--c-row-rule); only the reference is dashed', () => {
     const changes = [0.3e6, -0.25e6, 0.4e6].map((value, i) => ({
       label: `10/${18 + i}`,
       value,
@@ -204,7 +205,7 @@ describe('mini charts', () => {
     const grids = [...container.querySelectorAll('[data-role="grid"]')];
     expect(grids).toHaveLength(3);
     for (const grid of grids) {
-      expect(grid).toHaveAttribute('stroke', 'var(--c-base-border-subtle)');
+      expect(grid).toHaveAttribute('stroke', 'var(--c-row-rule)');
       expect(grid).not.toHaveAttribute('stroke-dasharray');
     }
     const signed = screen.getByRole('img', { name: 'Signed' });

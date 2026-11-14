@@ -153,7 +153,7 @@ rules and a ruled line by 1.25:1; by night they are the hair and the elevated ti
 The ground decides its rule: inside `.tier2-ground` the two keys resolve to **`row-rule-deep`**
 and **`bar-track-deep`** (the class re-points `--c-` / `--rgb-row-rule` and `-bar-track`), which
 clear the darker tier-2 ground and a ruled line on it by 1.25:1 by day; no class changes. The
-frames, chips and the page header's edges keep the hair. A **tile** is the surface under its own
+frames, chips and the page header's edges keep the hair; a chart's gridlines and base line are rules (`CHART_GRID_COLOR`, `FORK_COLORS.grid` / `.axis`: the row-rule key). A **tile** is the surface under its own
 1 px border (`slate-other`, the tile outline): its fill alone is about 1.03:1 on the tier-2 ground
 by day.
 

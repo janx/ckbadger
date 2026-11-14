@@ -289,7 +289,7 @@ function DepositedPlot({
       {shown.map((v) => (
         <g key={v}>
           {/* Visual finish V13: the grid is solid; a dash means a reference. */}
-          <line x1={left} x2={width} y1={y(v)} y2={y(v)} className="stroke-base-border-subtle" />
+          <line x1={left} x2={width} y1={y(v)} y2={y(v)} className="stroke-row-rule" />
           <text
             data-role="y-tick"
             x={left - 8}
@@ -422,13 +422,7 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
               {...plotHandlers(pin, last)}
             >
               {/* The half-scale guide is grid, not a reference: solid (visual finish V13). */}
-              <line
-                x1={0}
-                x2={width}
-                y1={y(top / 2)}
-                y2={y(top / 2)}
-                className="stroke-base-border-subtle"
-              />
+              <line x1={0} x2={width} y1={y(top / 2)} y2={y(top / 2)} className="stroke-row-rule" />
               <path d={path} fill="none" className="stroke-text" strokeWidth={1.25} />
               <text
                 data-role="chart-name"

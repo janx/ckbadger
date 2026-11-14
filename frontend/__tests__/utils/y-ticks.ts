@@ -3,10 +3,11 @@ import { expect } from 'vitest';
 // U-19 / DY-05 (UI review 2026-11-14): a plot's round values are written in a gutter left of the
 // plot, in the dim ink — never inside it, where the data crosses them and a fill buries them.
 
+// a grid line is a rule, in the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
 const isGrid = (line: Element) =>
   line.getAttribute('y1') === line.getAttribute('y2') &&
-  (line.getAttribute('stroke') === 'var(--c-base-border-subtle)' ||
-    line.classList.contains('stroke-base-border-subtle'));
+  (line.getAttribute('stroke') === 'var(--c-row-rule)' ||
+    line.classList.contains('stroke-row-rule'));
 
 /** The plot's left edge: where its horizontal grid lines start. */
 export function plotLeftOf(svg: Element): number {

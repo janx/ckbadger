@@ -52,11 +52,12 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     );
     // a round scale: 100, 200, 300 (its top in the name's band, unwritten)
     expect(screen.getByText('200')).toBeInTheDocument();
-    // visual finish V13(b): the scale's lines are grid — solid, in the row-rule ink #1a1f30
+    // visual finish V13(b): the scale's lines are grid — solid, in the row-rule ink (R5, ruling 4c;
+    // re-pinned on purpose: it was the hair)
     const grid = [...container.querySelectorAll('svg line[data-role="grid"]')];
     expect(grid).toHaveLength(3);
     for (const line of grid) {
-      expect(line).toHaveAttribute('stroke', 'var(--c-base-border-subtle)');
+      expect(line).toHaveAttribute('stroke', 'var(--c-row-rule)');
       expect(line).not.toHaveAttribute('stroke-dasharray');
     }
     expect(container.querySelectorAll('svg line[stroke-dasharray]')).toHaveLength(0);

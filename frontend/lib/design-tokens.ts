@@ -199,9 +199,12 @@ export const FORK_COLORS = {
   tileFill: color('tile'),
   tileStroke: color('slate-other'),
   tileStrokeLit: color('text-bright'),
-  /** The row-rule ink: every chart's grid is 1 px solid border-subtle (visual finish V13 b). */
-  grid: color('base-border-subtle'),
-  axis: color('base-border-subtle'),
+  /**
+   * The row-rule ink: every chart's grid is 1 px solid (visual finish V13 b), a rule on the ruled
+   * paper (R5, ruling 4c: the hair by night, darker by day); the base line too.
+   */
+  grid: color('row-rule'),
+  axis: color('row-rule'),
   tick: color('text-dim'),
   ink: color('text-bright'),
   dim: color('text'),
