@@ -1362,7 +1362,9 @@ function classedSeries(
 
 /**
  * The card's bands: the HODL wave's four coarser age groups, as on the board (CH-07); activity by
- * type its six kinds, largest first, each in the page's class colour (CH-02).
+ * type its six kinds in the page's class order (script calls, CKB transfers, tokens, objects,
+ * identities, Nervos DAO), each in its class colour (CH-02). The order is fixed, not by size, so a
+ * kind's place and colour never move from one day to the next.
  */
 const CARD_GROUPS: Readonly<
   Record<string, readonly { key: string; label: string; members: readonly string[] }[]>
