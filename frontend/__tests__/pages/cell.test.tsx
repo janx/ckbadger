@@ -145,10 +145,10 @@ describe('CellDetailPage', () => {
   // U-09, the lead's ruling of the B3 follow-up (RESPONSIVE_LAYOUT principle 4): the h1 is the
   // out point at the head size where its measured line holds it, the row size otherwise; the row
   // size until measured. Below md the h1 is 26 px with −0.02 em tracking, 15.08 px a character:
-  // the head out point "0xabababab…abababab:0" (23 characters) is 346.84 px, inside the 358 px line
+  // the head out point "0xababababab…abababab:0" (23 characters) is 346.84 px, inside the 358 px line
   // at 390 and over the 328 at 360. The page picked the row size at every width before.
   it.each([
-    [358, '0xabababab…abababab:0'],
+    [358, '0xababababab…abababab:0'],
     [328, '0xabababab…ababab:0'],
   ] as const)('names the cell on a %i px h1 line by %s', async (line, name) => {
     stubChartWidth(line);

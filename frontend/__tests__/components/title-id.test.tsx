@@ -49,7 +49,7 @@ describe('TitleId: the h1 id by its measured line (U-09)', () => {
     expect(shown(container)).toHaveAttribute('data-title-id', 'row');
   });
 
-  // the head out point, 0xabababab…abababab:0, is 23 characters: 23 × 15.08 = 346.84 px at 26 px
+  // the head out point, 0xababababab…abababab:0, is 23 characters: 23 × 15.08 = 346.84 px at 26 px
   it.each([
     [346, 'row'],
     [347, 'head'],

@@ -26,6 +26,7 @@ import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
 import { ShortId } from '@/components/ui/short-id';
+import { TitleId } from '@/components/ui/title-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** What `outpointParts` accepts, as the not-an-id page states it. */
@@ -395,13 +396,15 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // Consistency round C13 + lane U (U3): the page presents a cell, named by its short out
         // point; the kind line before it says "Cell" (seals by kind, C10), the full out point and
         // its copy are the id line, and the transaction it is an output of is said under the plate
-        // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, its one break
-        // opportunity after the "…": under the stone below md it has the full width, and at 26 px
-        // the short out point (19 characters, 20 or 21 for an index up to 999) is 286.5 to 316.7
-        // px, inside the 328 px line at 360, so it stands on one line. It takes the row size (U-09),
-        // not the head size an h1 takes: at head the out point is 23 to 25 characters, 359 to 390
-        // px at 26 px, over the line at 390 (358) and at 360 (328).
-        title={shortenOutpoint(cell.txHash, cell.outputIndex, 'row')}
+        // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, one unit,
+        // at the head size where its measured line holds it and at the row size otherwise (U-09,
+        // RESPONSIVE_LAYOUT principle 4; TitleId). Below md it has the full width under the stone at
+        // 26 px, 15.08 px a character with the h1's tracking: the head out point (23 to 25
+        // characters for an index up to 999) is 346.8 to 377.0 px, so an index under 10 takes the
+        // head form in the 358 px line at 390 and every out point takes the row form (19 to 21
+        // characters, 286.5 to 316.7 px) in the 328 px line at 360; from md, beside the stone, the
+        // head form (400.2 to 435 px at 30 px) fits the plate.
+        title={<TitleId form={(size) => shortenOutpoint(cell.txHash, cell.outputIndex, size)} />}
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
