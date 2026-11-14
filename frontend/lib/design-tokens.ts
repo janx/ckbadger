@@ -156,12 +156,19 @@ export const BLOCK_POSITION_COLORS = { currentTile: color('tile-current') } as c
 /**
  * Nervos DAO secondary-issuance partition (board V63): the whole issuance a quiet slate, miners
  * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
+ * The keys, for a drawer that picks the ink of words on these fills (`inkOnFill`).
  */
+export const DAO_ISSUANCE_KEYS = {
+  total: 'ink-quiet',
+  miners: 'text',
+  compensation: CLASS_KEYS.dao,
+  burnt: CLASS_KEYS.other,
+} as const satisfies Record<string, PaletteKey>;
 export const DAO_ISSUANCE_COLORS = {
-  total: color('ink-quiet'),
-  miners: color('text'),
-  compensation: CLASS_COLORS.dao,
-  burnt: CLASS_COLORS.other,
+  total: color(DAO_ISSUANCE_KEYS.total),
+  miners: color(DAO_ISSUANCE_KEYS.miners),
+  compensation: color(DAO_ISSUANCE_KEYS.compensation),
+  burnt: color(DAO_ISSUANCE_KEYS.burnt),
 } as const;
 
 // ---- F2 group `fiber` (Fiber network, Fiber channel, Forks, Fork detail) ----

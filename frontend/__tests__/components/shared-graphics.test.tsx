@@ -148,8 +148,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
   const tree = node({
     align: 'inside',
     note: '1.344 billion CKB a year',
-    color: 'var(--c-ink-quiet)',
-    ink: 'bright',
+    fill: 'ink-quiet',
     children: [
       { key: 'm', label: 'to miners', value: BigInt(10), tone: 'ckb' as const, note: '10.00%' },
       {
@@ -166,7 +165,6 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
         value: BigInt(70),
         tone: 'other' as const,
         align: 'inside' as const,
-        ink: 'bright' as const,
       },
     ],
   });
@@ -186,6 +184,9 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     expect(label('total')).toHaveTextContent(
       'Secondary issuance since genesis 100 · 1.344 billion CKB a year'
     );
+    // the words inside a box take the ink its fill calls for (inkOnFill; re-pinned on purpose:
+    // the ink was a per-node 'bright' / 'dark'): the quiet slate at 90 % by night calls for the
+    // bright ink
     expect(label('total')).toHaveClass('fill-text-bright');
     expect(label('c').getAttribute('text-anchor')).toBe('end');
     expect(label('c').getAttribute('x')).toBe('350');
@@ -211,8 +212,7 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     label: 'Secondary issuance since genesis',
     value: BigInt(100),
     tone: 'ckb' as const,
-    color: 'var(--c-ink-quiet)',
-    ink: 'bright' as const,
+    fill: 'ink-quiet' as const,
     boxLabel: { name: 'secondary issuance since genesis', share: '100', unit: 'CKB' },
     children: [
       {
@@ -220,8 +220,7 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'to miners',
         value: BigInt(10),
         tone: 'ckb' as const,
-        color: 'var(--c-text)',
-        ink: 'dark' as const,
+        fill: 'text' as const,
         boxLabel: { name: 'miners', share: '10.00%' },
       },
       {
@@ -229,7 +228,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'compensation',
         value: BigInt(20),
         tone: 'dao' as const,
-        ink: 'dark' as const,
         boxLabel: { name: 'depositors', share: '20.00%' },
         children: [
           {
@@ -237,7 +235,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
             label: 'paid out',
             value: BigInt(10),
             tone: 'dao' as const,
-            ink: 'dark' as const,
             boxLabel: { name: 'paid out', share: '50.0%' },
           },
           {
@@ -245,7 +242,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
             label: 'still owed',
             value: BigInt(10),
             tone: 'dao' as const,
-            ink: 'bright' as const,
             boxLabel: { name: 'still owed', share: '50.0%' },
           },
         ],
@@ -255,7 +251,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'burnt',
         value: BigInt(70),
         tone: 'other' as const,
-        ink: 'bright' as const,
         boxLabel: { name: 'burnt', share: '70.00%', note: 'no cell can ever claim it' },
       },
     ],
@@ -295,13 +290,15 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     expect(label('m')!.textContent).toBe('10.00%');
     expect(label('c')!.textContent).toBe('depositors 20.00%');
     expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
-    expect(label('b')!.querySelector('[data-part="note"]')).toHaveClass('fill-text-dim');
+    // the note is in the box's one ink, no dim ink on a fill (re-pinned on purpose)
+    expect(label('b')!.querySelector('[data-part="note"]')!.getAttribute('class')).toBeNull();
     // the 32 px row reads at 11 px: "paid out 50.0%" fits 118 px, "still owed 50.0%" does not
     expect(label('p')!.textContent).toBe('paid out 50.0%');
     expect(label('p')).toHaveAttribute('font-size', '11');
     expect(label('o')!.textContent).toBe('50.0%');
-    // ink: the page colour on light boxes, the bright ink on dark ones
-    expect(label('m')).toHaveClass('fill-base-bg');
+    // ink: the ink each fill calls for (inkOnFill, re-pinned on purpose: the dark ink was the page
+    // ground picked by hand): by night the well on the light text fill, the bright ink on the slate
+    expect(label('m')).toHaveClass('fill-base-void');
     expect(label('b')).toHaveClass('fill-text-bright');
     // no words under the boxes (R12)
     expect(container.querySelectorAll('[data-note]')).toHaveLength(0);

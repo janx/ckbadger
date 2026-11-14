@@ -27,7 +27,12 @@ import {
   type IcicleNode,
 } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { CLASS_COLORS, CLASS_KEYS, DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
+import {
+  CLASS_COLORS,
+  CLASS_KEYS,
+  DAO_ISSUANCE_COLORS,
+  DAO_ISSUANCE_KEYS,
+} from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
@@ -401,9 +406,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         label: 'Secondary issuance since genesis',
         value: total,
         tone: 'ckb',
-        color: DAO_ISSUANCE_COLORS.total,
+        fill: DAO_ISSUANCE_KEYS.total,
         opacity: 0.55,
-        ink: 'bright',
         // The board's root label: the whole as a whole number of CKB (cut, not rounded); the
         // exact parts are the line under the icicle.
         boxLabel: {
@@ -417,9 +421,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             label: 'to miners',
             value: mining,
             tone: 'ckb',
-            color: DAO_ISSUANCE_COLORS.miners,
+            fill: DAO_ISSUANCE_KEYS.miners,
             opacity: 1,
-            ink: 'dark',
             boxLabel: { name: 'miners', share: share(mining) },
           },
           {
@@ -428,7 +431,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             value: compensation,
             tone: 'dao',
             opacity: 1,
-            ink: 'dark',
             boxLabel: { name: 'depositors', share: share(compensation) },
             children: [
               {
@@ -437,7 +439,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
                 value: claimed,
                 tone: 'dao',
                 opacity: 1,
-                ink: 'dark',
                 boxLabel: { name: 'paid out', share: ofCompensation(claimed) },
               },
               {
@@ -446,7 +447,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
                 value: unclaimed,
                 tone: 'dao',
                 opacity: 0.4,
-                ink: 'bright',
                 boxLabel: { name: 'still owed', share: ofCompensation(unclaimed) },
               },
             ],
@@ -456,9 +456,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             label: 'burnt',
             value: burnt,
             tone: 'other',
-            color: DAO_ISSUANCE_COLORS.burnt,
+            fill: DAO_ISSUANCE_KEYS.burnt,
             opacity: 1,
-            ink: 'bright',
             boxLabel: { name: 'burnt', share: share(burnt), note: 'no cell can ever claim it' },
           },
         ],
