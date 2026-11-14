@@ -162,9 +162,10 @@ calc(0.45 * var(--m-glow)))`), out by day.
 
 - Do not use standard Tailwind color classes (text-white, bg-gray-\*, etc.) -- use semantic tokens.
 - Do not write a hex or an `rgba(...)` of a palette colour anywhere but `lib/palette.ts`.
-- Prefer semantic colors for charts from `frontend/lib/chart-colors.ts`.
+- Prefer semantic colors for charts from `frontend/lib/design-tokens.ts`, as the shared `Chart`
+  (`frontend/components/ui/chart.tsx`) takes them.
 - For new chart legends, keep the same semantic mapping:
-  - primary series -> jade (`CHART_PRIMARY_COLOR`)
+  - primary series -> jade (the jade ramp's first shade)
   - the following series -> the jade ramp (`jadeRamp(n)`)
 
 ## Review checklist

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
-import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { CodeCellsList } from '@/components/ui/code-cells-list';
 import { DataField, DataSection } from '@/components/ui/data-field';
 import { HMultiplier } from '@/components/ui/h-multiplier';
@@ -88,23 +87,14 @@ describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', ()
     expect(screen.getByText('Mini label')).toHaveClass('text-small', 'text-text-dim');
   });
 
-  it('the capacity-utilization and H-multiplier bar titles', () => {
+  it('the H-multiplier bar title', () => {
     render(
-      <>
-        <CapacityUtilization
-          subject="test"
-          totalCapacity="100000000000"
-          commonKnowledgeSize="50000000000"
-          totalLabel="Utilization total"
-        />
-        <HMultiplier
-          totalCapacity="100000000000"
-          commonKnowledgeSize="50000000000"
-          totalLabel="Multiplier total"
-        />
-      </>
+      <HMultiplier
+        totalCapacity="100000000000"
+        commonKnowledgeSize="50000000000"
+        totalLabel="Multiplier total"
+      />
     );
-    eyebrow(screen.getByText('Utilization total'));
     eyebrow(screen.getByText('Multiplier total'));
   });
 
