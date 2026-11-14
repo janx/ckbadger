@@ -145,7 +145,9 @@ describe('Charts index encodings (F2 charts)', () => {
     expect(model.series).toHaveLength(8);
   });
 
-  it('summarises activity by type in the four groups of the board (CH-07)', () => {
+  // Re-pinned for CH-02 (UI review 2026-11-14): the card's bands are the six kinds in their class
+  // colours, largest first; the merged "Assets" band had no class colour to take.
+  it('summarises activity by type in its six kinds, largest first (CH-07, CH-02)', () => {
     const model = chartModel(def('activity-type-breakdown'), {
       title: 'Activity Type Breakdown',
       series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'].map((key) => ({
@@ -169,9 +171,11 @@ describe('Charts index encodings (F2 charts)', () => {
     });
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
       'Script calls 80.00 %',
-      'Transfers 10.00 %',
-      'Assets 8.00 %',
-      'DAO 2.00 %',
+      'CKB transfers 10.00 %',
+      'Tokens 3.00 %',
+      'Objects 4.00 %',
+      'Identities 1.00 %',
+      'Nervos DAO 2.00 %',
     ]);
     expect(model.headline).toEqual({ pre: 'script calls', display: '80.00', unit: '%' });
   });

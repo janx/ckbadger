@@ -13,7 +13,13 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { niceStep } from '@/lib/chart-ticks';
-import { CLASS_COLORS, DATA_COLOR, jadeRamp, type AssetClass } from '@/lib/design-tokens';
+import {
+  ACTIVITY_KIND_COLORS,
+  CLASS_COLORS,
+  DATA_COLOR,
+  jadeRamp,
+  type AssetClass,
+} from '@/lib/design-tokens';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
@@ -598,10 +604,18 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   const groups = CARD_GROUPS[definition.slug];
   if (groups) {
     const cardRamp = jadeRamp(groups.length);
+    // A classed chart's card bands are its types, one each, in the page's colours (CH-02).
+    const cardColor = (group: (typeof groups)[number], index: number): string => {
+      if (!classes) return cardRamp[index];
+      const [member, ...more] = group.members;
+      if (more.length || !classes[member])
+        throw new Error(`${definition.slug}: card band ${group.key} is not one classed type`);
+      return classes[member].color;
+    };
     const cardSeries = groups.map((group, index) => ({
       key: group.key,
       label: group.label,
-      color: cardRamp[index],
+      color: cardColor(group, index),
     }));
     const cardPoints = points.map((point) => ({
       label: point.label,
@@ -1129,6 +1143,15 @@ const CLASSED_SERIES: Readonly<
     compensation: { label: 'DAO compensation', color: CLASS_COLORS.dao },
     mining: { label: 'Miners', color: DATA_COLOR },
   },
+  // The activity kinds in the colours and words the rest of the site gives them (CH-02).
+  'activity-type-breakdown': {
+    transfer: { label: 'CKB transfers', color: ACTIVITY_KIND_COLORS.transfer },
+    dao: { label: 'Nervos DAO', color: ACTIVITY_KIND_COLORS.dao },
+    token: { label: 'Tokens', color: ACTIVITY_KIND_COLORS.token },
+    object: { label: 'Objects', color: ACTIVITY_KIND_COLORS.object },
+    identity: { label: 'Identities', color: ACTIVITY_KIND_COLORS.identity },
+    scriptCall: { label: 'Script calls', color: ACTIVITY_KIND_COLORS.scriptCall },
+  },
 };
 
 /** The returned series of a classed chart, every key known, in board order (CH-06). */
@@ -1161,7 +1184,10 @@ function classedSeries(
   });
 }
 
-/** The card's coarser bands of the HODL wave and activity by type, as on the board (CH-07). */
+/**
+ * The card's bands: the HODL wave's four coarser age groups, as on the board (CH-07); activity by
+ * type its six kinds, largest first, each in the page's class colour (CH-02).
+ */
 const CARD_GROUPS: Readonly<
   Record<string, readonly { key: string; label: string; members: readonly string[] }[]>
 > = {
@@ -1171,12 +1197,13 @@ const CARD_GROUPS: Readonly<
     { key: 'w1m3', label: '1 w – 3 m', members: ['1m3m', '1w1m'] },
     { key: 'under1w', label: 'under 1 w', members: ['1d1w', '24h'] },
   ],
-  'activity-type-breakdown': [
-    { key: 'scriptCall', label: 'Script calls', members: ['scriptCall'] },
-    { key: 'transfer', label: 'Transfers', members: ['transfer'] },
-    { key: 'assets', label: 'Assets', members: ['token', 'object', 'identity'] },
-    { key: 'dao', label: 'DAO', members: ['dao'] },
-  ],
+  'activity-type-breakdown': ['scriptCall', 'transfer', 'token', 'object', 'identity', 'dao'].map(
+    (key) => ({
+      key,
+      label: CLASSED_SERIES['activity-type-breakdown'][key].label,
+      members: [key],
+    })
+  ),
 };
 
 /** The exact sum of non-negative decimals, trailing zeros trimmed. */

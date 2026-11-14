@@ -323,10 +323,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   'chart-activity-type-breakdown': ({ seriesLabels }) => ({
     overview:
       'Splits each indexed chain day’s activity count by the event category recorded by the activity index.',
-    legendItems: bySeriesLabels(
-      seriesLabels,
-      (label) => `Daily indexed ${label.toLowerCase()} activity count.`
-    ),
+    legendItems: bySeriesLabels(seriesLabels, () => 'Indexed activities of this kind, per day.'),
   }),
   'chart-active-addresses': () => ({
     overview:

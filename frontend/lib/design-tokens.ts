@@ -44,6 +44,21 @@ export const FLOW_COLORS = {
   fee: color('flow-fee'),
   compensation: CLASS_COLORS.dao,
 } as const;
+/** A script call's moss ink: the activity feed's script-call badge (`text-amber`). */
+export const SCRIPT_CALL_COLOR = color('amber');
+/**
+ * The activity kinds as the site colours them (UI review 2026-11-14, CH-02), keyed by the daily
+ * activity series: CKB transfers the data ink (the Activities chips' swatch), the DAO gold, each
+ * asset class its class colour, a script call the feed's moss ink. Full strength, both themes.
+ */
+export const ACTIVITY_KIND_COLORS = {
+  transfer: DATA_COLOR,
+  dao: CLASS_COLORS.dao,
+  token: CLASS_COLORS.tokens,
+  object: CLASS_COLORS.objects,
+  identity: CLASS_COLORS.identities,
+  scriptCall: SCRIPT_CALL_COLOR,
+} as const;
 /** Ended states (an expired identity term): neutral grey, never gold or the class colour. */
 export const EXPIRED_COLOR = color('text-dim');
 export const HUE_RAMP = [
