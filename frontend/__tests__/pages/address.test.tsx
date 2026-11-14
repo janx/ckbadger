@@ -353,6 +353,22 @@ describe('Address v3', () => {
         .getAllByRole('link')
         .map((l) => l.textContent)
     ).toEqual(['5\u00a0DAO cells', '9\u00a0tokens', '14\u00a0objects', '1\u00a0identity']);
+    // PA-25 (the lead's follow-up): the nav opened with a loose "·" that was left alone at a line's
+    // start when the nav wrapped under the heading. The heading and the links are one separated
+    // list: each link carries its own dot, none is loose text.
+    const list = nav.closest('[data-dotted]');
+    expect(list).not.toBeNull();
+    expect(list).toContainElement(screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' }));
+    expect(nav.querySelectorAll('[data-dotted-separator]')).toHaveLength(4);
+    const loose = [...nav.querySelectorAll('*'), nav].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !(el as Element).hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose).toHaveLength(0);
     // Phase 5 (A21): the holdings run on the live cells; the count nav stands beside the heading,
     // outside its name, and the section is named by the heading.
     const heading = screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' });
