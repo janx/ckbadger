@@ -1,7 +1,7 @@
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
-import { entityVerse, NotFoundPage, ROUTE_VERSE } from '@/components/not-found-page';
+import { entityVerse, NotFoundPage, notAnIdVerse, ROUTE_VERSE } from '@/components/not-found-page';
 import { useNotFoundEvidence } from '@/lib/not-found-evidence';
 
 vi.mock('@/lib/not-found-evidence', () => ({
@@ -236,6 +236,51 @@ describe('NotFoundPage', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveTextContent(/^checked \/forks\/7\/a9bc1b75 → 404$/);
     expect(lines[0].querySelector('.break-all')).toBeNull();
+  });
+
+  // U-06, R11: a malformed id gets the same page, with its own first line and the reason.
+  it('an id that is not one: its kind’s first line, the index not asked, the reason as one quiet line', async () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/address/ckb1notanaddress']}>
+        <NotFoundPage notAnId={{ kind: 'address', reason: 'Invalid CKB address: parse failed' }} />
+      </MemoryRouter>
+    );
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(verseLines(h1)).toEqual([
+      'that is not a ckb address.',
+      'the index was not asked; nothing on it is lost.',
+      "honey badger don't care.",
+    ]);
+    expect(h1).toHaveClass('comment', 'comment-lg');
+    expect(screen.getByText('Not an id · 400')).toHaveClass('eyebrow');
+    expect(screen.queryByText('Not found · 404')).toBeNull();
+    const lines = factLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveTextContent(/^Invalid CKB address: parse failed$/);
+    expect(useNotFoundEvidence).toHaveBeenLastCalledWith(undefined);
+    expect(screen.getByRole('link', { name: '← activities' })).toHaveAttribute(
+      'href',
+      '/mainnet/activities'
+    );
+    await waitFor(() => expect(document.title).toBe('Not found · CKBadger'));
+  });
+
+  it('every kind of id has its own first line', () => {
+    expect(notAnIdVerse('block')[0]).toBe('that is not a block number or hash.');
+    expect(notAnIdVerse('transaction')[0]).toBe('that is not a transaction hash.');
+    expect(notAnIdVerse('cell')[0]).toBe('that is not a cell out point.');
+    expect(notAnIdVerse('object')[0]).toBe('that is not an object id.');
+    expect(notAnIdVerse('collection')[0]).toBe('that is not a collection id.');
+    expect(notAnIdVerse('fiber-channel')[0]).toBe('that is not a channel id.');
+    expect(notAnIdVerse('token')[0]).toBe('that is not a token type hash.');
+    expect(notAnIdVerse('script')[0]).toBe('that is not a script code hash.');
+    expect(notAnIdVerse('identity')[0]).toBe('that is not an identity id.');
+    expect(notAnIdVerse('fork')[0]).toBe('that is not a fork height and orphan.');
+    expect(notAnIdVerse('uncle')[0]).toBe('that is not a block and uncle index.');
+    expect(notAnIdVerse('uncle').slice(1)).toEqual([
+      'the index was not asked; nothing on it is lost.',
+      "honey badger don't care.",
+    ]);
   });
 
   it('an entity’s verse: its kind in words, the index asked, and the meme last — never the route’s second line', () => {

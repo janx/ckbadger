@@ -5,7 +5,9 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetHistory } from '@/components/asset/asset-history';
@@ -88,17 +90,20 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       />
     );
   }
-  if (!t && token.isLoading) return <DetailSkeletonPage />;
-  if (!t)
+  if (!t && isBadRequestApiError(token.error))
+    return <NotFoundPage notAnId={{ kind: 'token', reason: token.error.apiMessage }} />;
+  if (!t) {
+    if (!token.error) return <DetailSkeletonPage />;
     return (
       <AssetDetailShell
         title="Token"
         kind="tokens"
         breadcrumb={[{ label: 'Inventory', href: '/inventory/tokens' }]}
       >
-        <AssetReadState error={token.error} loading={token.isLoading} label="token" />
+        <ReadFailure what="token" error={token.error} />
       </AssetDetailShell>
     );
+  }
   const held =
     t.totalCapacity === null ? null : exactUnsignedInteger(t.totalCapacity, 'token held capacity');
   const occupied =

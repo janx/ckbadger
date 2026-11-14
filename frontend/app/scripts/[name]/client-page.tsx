@@ -19,6 +19,8 @@ import { ScriptFamilyPage } from '@/components/scripts/script-family-page';
 import type { NewestCellsState } from '@/components/scripts/script-newest-cells';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { ReadFailure } from '@/components/read-failure';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -1032,26 +1034,31 @@ export default function ScriptDetailPage({
       </div>
     );
   }
-  const rawRequestFailures = [
-    codeHashLookupError ? { source: 'reference lookup', error: codeHashLookupError } : null,
-    codeHashCodeCellsError ? { source: 'code-cell query', error: codeHashCodeCellsError } : null,
-  ].filter((failure): failure is { source: string; error: Error } => failure !== null);
+  const rawRequestFailures = [codeHashLookupError, codeHashCodeCellsError].filter(
+    (error): error is Error => error !== null
+  );
   const failedRequest = isCodeHashMode
-    ? (rawRequestFailures.find((failure) => !isNotFoundApiError(failure.error)) ??
+    ? (rawRequestFailures.find((error) => !isNotFoundApiError(error)) ??
       (codeHashLookup ? rawRequestFailures[0] : null) ??
       null)
     : namedScriptDetailError && !isNotFoundApiError(namedScriptDetailError)
-      ? { source: 'script family detail', error: namedScriptDetailError }
+      ? namedScriptDetailError
       : null;
+  if (isBadRequestApiError(failedRequest)) {
+    return (
+      <NotFoundPage
+        notAnId={{
+          kind: isCodeHashMode ? 'script' : 'script-family',
+          reason: failedRequest.apiMessage,
+        }}
+      />
+    );
+  }
   if (failedRequest) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
-          <DetailLayout title="Script data unavailable" identity={normalizedCodeHash ?? name}>
-            <p role="alert" className="text-negative text-small break-words py-8">
-              Failed to load {failedRequest.source}: {failedRequest.error.message}
-            </p>
-          </DetailLayout>
+          <ReadFailure what="script" error={failedRequest} />
         </main>
       </div>
     );
@@ -1100,7 +1107,7 @@ export default function ScriptDetailPage({
   if (
     isCodeHashMode &&
     (!deployments || deployments.length === 0) &&
-    rawRequestFailures.some((failure) => isNotFoundApiError(failure.error))
+    rawRequestFailures.some((error) => isNotFoundApiError(error))
   ) {
     const failedEndpoint = isNotFoundApiError(codeHashCodeCellsError)
       ? `/scripts/code-cells?${new URLSearchParams({ code_hash: normalizedCodeHash!, hash_type: codeHashDeploymentQueryHashType! })}`

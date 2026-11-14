@@ -9,7 +9,9 @@ import { formatCapacity } from '@/lib/utils';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // the error class itself: the page's failed-read line reads a gateway status off it
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: {
     getScriptFamilyDetail: vi.fn(),
     getScriptUsage: vi.fn(),
@@ -580,31 +582,33 @@ describe('ScriptDetailPage', () => {
     expect(current.previousElementSibling).toHaveTextContent('current code');
   });
 
-  it.each([
-    { status: 500, expectedTitle: 'Script data unavailable' },
-    {
+  // U-06: a failed read is the one shared line ("Could not read this script: …"), in place of a
+  // "Script data unavailable" h1 and "Failed to load script family detail: …".
+  it('distinguishes named script HTTP 500 from not found', async () => {
+    vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
+      status: 500,
+      message: 'family endpoint 500',
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^Could not read this script: family endpoint 500$/
+    );
+    expect(screen.queryByText(/no script family at this address/)).toBeNull();
+  });
+
+  it('distinguishes named script HTTP 404 from not found', async () => {
+    vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
       status: 404,
-      expectedTitle:
-        "no script family at this address. the local index was asked; it holds none. honey badger don't care.",
-    },
-  ])(
-    'distinguishes named script HTTP $status from not found',
-    async ({ status, expectedTitle }) => {
-      vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
-        status,
-        message: `family endpoint ${status}`,
-      });
-      render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-      expect(await screen.findByRole('heading', { name: expectedTitle })).toBeInTheDocument();
-      if (status !== 404) {
-        expect(screen.getByRole('alert')).toHaveTextContent('family endpoint 500');
-      } else {
-        expect((await screen.findAllByText('/scripts/SECP256K1_BLAKE160')).length).toBeGreaterThan(
-          0
-        );
-      }
-    }
-  );
+      message: 'family endpoint 404',
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    expect(
+      await screen.findByRole('heading', {
+        name: "no script family at this address. the local index was asked; it holds none. honey badger don't care.",
+      })
+    ).toBeInTheDocument();
+    expect((await screen.findAllByText('/scripts/SECP256K1_BLAKE160')).length).toBeGreaterThan(0);
+  });
 
   it.each(['lookup', 'code cells'])(
     'shows a raw reference %s request failure instead of not found',
@@ -616,11 +620,10 @@ describe('ScriptDetailPage', () => {
         vi.mocked(api.getCodeCells).mockRejectedValue(new Error('code cells invariant failed'));
       }
       render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
-      expect(
-        await screen.findByRole('heading', { name: 'Script data unavailable' })
-      ).toBeInTheDocument();
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        failedRequest === 'lookup' ? 'lookup transport failed' : 'code cells invariant failed'
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        `Could not read this script: ${
+          failedRequest === 'lookup' ? 'lookup transport failed' : 'code cells invariant failed'
+        }`
       );
       expect(screen.queryByText('No script matched this name or reference.')).toBeNull();
     }
@@ -629,10 +632,9 @@ describe('ScriptDetailPage', () => {
   it('keeps a resolved raw reference visible as an error when its code-cell query returns 404', async () => {
     vi.mocked(api.getCodeCells).mockRejectedValue({ status: 404, message: 'reference missing' });
     render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
-    expect(
-      await screen.findByRole('heading', { name: 'Script data unavailable' })
-    ).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('reference missing');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this script: reference missing'
+    );
     expect(screen.queryByText('no script at this address.')).not.toBeInTheDocument();
   });
 

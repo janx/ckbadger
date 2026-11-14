@@ -2,18 +2,22 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { notFound, useParams } from '@/src/navigation';
+import { useParams } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { Hash } from '@/components/ui/hash';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { api, isNotFoundApiError, type BlockUncle } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { decodeDaoHeader } from '@/lib/dao-header';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatEpochPosition } from '@/lib/epoch';
 
 const INDEX = /^(0|[1-9]\d*)$/;
+/** What `INDEX` accepts, as the not-an-id page says it. */
+const UNCLE_INDEX_RULE = 'an uncle is named by its index in the block: a whole number from 0.';
 
 export default function UncleDetailPage() {
   const params = useParams();
@@ -26,7 +30,7 @@ export default function UncleDetailPage() {
     queryFn: () => api.getBlockUncle(id, index),
     enabled: valid,
   });
-  if (!valid) notFound();
+  if (!valid) return <NotFoundPage notAnId={{ kind: 'uncle', reason: UNCLE_INDEX_RULE }} />;
   if (!query.data && isNotFoundApiError(query.error)) {
     return (
       <NotFoundPage
@@ -38,14 +42,16 @@ export default function UncleDetailPage() {
       />
     );
   }
+  if (!query.data && isBadRequestApiError(query.error))
+    return <NotFoundPage notAnId={{ kind: 'uncle', reason: query.error.apiMessage }} />;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
         {query.isLoading && <p role="status">Loading uncle…</p>}
-        {query.error && (
+        {query.error && !query.data && <ReadFailure what="uncle" error={query.error} />}
+        {query.error && query.data && (
           <p role="alert">
-            Unable to {query.data ? 'refresh' : 'read'} uncle: {query.error.message}
-            {query.data ? '. Showing previously loaded data.' : ''}
+            Unable to refresh uncle: {query.error.message}. Showing previously loaded data.
           </p>
         )}
         {query.data && <UncleEvidence uncle={query.data} id={id} index={index} />}

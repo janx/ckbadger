@@ -5,6 +5,7 @@ import { http, HttpResponse, type PathParams } from 'msw';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { server } from '@/__tests__/msw/server';
 import { createAppQueryClient } from '@/lib/query-client';
+import { POOL_POLL_INTERVAL_MS } from '@/lib/pool-polling';
 import AddressDetailPage from '@/app/address/[addr]/client-page';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import UncleDetailPage from '@/app/blocks/[id]/uncles/[index]/client-page';
@@ -114,9 +115,16 @@ describe('a malformed id answered 400 by the API', () => {
       (p) => p.addr === 'ckb1notanaddress',
       'Invalid CKB address: parse failed'
     );
-    renderWithAppClient(<AddressDetailPage />);
-    await expectNotAnId('that is not a ckb address.', 'Invalid CKB address: parse failed');
-    expect(seen.count).toBe(1);
+    // the address read polls every 5 s for the pool; an id that is not one is not polled
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderWithAppClient(<AddressDetailPage />);
+      await expectNotAnId('that is not a ckb address.', 'Invalid CKB address: parse failed');
+      await vi.advanceTimersByTimeAsync(POOL_POLL_INTERVAL_MS * 3);
+      expect(seen.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('/blocks/abc: not a block number or hash', async () => {
@@ -318,7 +326,7 @@ describe('a malformed id the page refuses before asking', () => {
     renderWithAppClient(<SporeDetailPage sporeId="0x00" />);
     await expectNotAnId(
       'that is not an object id.',
-      'an object id is 0x and 64 hex digits (a Spore or a cluster), or 48 (an m-NFT class).'
+      'an object id is 64 hex digits (a Spore or a cluster) or 48 (an m-NFT class).'
     );
   });
 

@@ -7,11 +7,13 @@ import type {
   DotbitBitCellRef,
 } from '@/lib/api';
 import { isNotFoundApiError } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { normalizeAssetId } from '@/lib/asset-utils';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetDetailShell } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { retryTransientOnly } from '@/lib/query-client';
 export interface IdentityItemDetailConfig {
   standard: 'dotbit' | 'did_ckb' | 'bit_cell';
@@ -73,17 +75,20 @@ function ScopedIdentity({ config, identityId }: Props) {
       />
     );
   }
-  if (!item && detail.isLoading) return <DetailSkeletonPage />;
-  if (!item)
+  if (!item && isBadRequestApiError(detail.error))
+    return <NotFoundPage notAnId={{ kind: 'identity', reason: detail.error.apiMessage }} />;
+  if (!item) {
+    if (!detail.error) return <DetailSkeletonPage />;
     return (
       <AssetDetailShell
         title={config.labels.defaultTitle}
         kind="identities"
         breadcrumb={[{ label: config.labels.backLabel, href: config.labels.backHref }]}
       >
-        <AssetReadState label="identity" error={detail.error} loading={detail.isLoading} />
+        <ReadFailure what="identity" error={detail.error} />
       </AssetDetailShell>
     );
+  }
   return (
     <CanonicalIdentityDetail
       kind={

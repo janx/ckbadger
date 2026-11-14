@@ -5,6 +5,7 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
+import { truncateHash } from '@/lib/utils';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 import { CELL_COLORS } from '@/lib/design-tokens';
@@ -774,7 +775,10 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
+    // U-06: the one failed-read line, not a "Failed to load transaction" h1
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this transaction: HTTP 503 · the API is not available'
+    );
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(document.querySelector('.comment')).toBeNull();
     // C2: nothing was read, so no stone.
@@ -1389,9 +1393,12 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText(`/transactions/${TX_HASH}/detail`)).toBeInTheDocument();
-    expect(screen.getByText('no transaction at this address.')).toBeInTheDocument();
-    expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+    expect(await screen.findByText('no transaction at this address.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/transactions/${truncateHash(TX_HASH)}/detail`
+    );
+    expect(screen.queryByText(/Could not read this transaction/)).not.toBeInTheDocument();
   });
 
   it('does not infer HTTP 404 from a transport error message containing 404', async () => {
@@ -1399,7 +1406,9 @@ describe('TransactionDetailPage', () => {
       new Error('upstream request 404 timed out')
     );
     render(<TransactionDetailPage />);
-    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this transaction: upstream request 404 timed out'
+    );
     expect(screen.queryByText('no transaction at this address.')).not.toBeInTheDocument();
   });
 
@@ -1412,11 +1421,9 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42/
-      )
-    ).toBeInTheDocument();
+    // U-06: the one failed-read line carries the API's own words
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^Could not read this transaction: API error: 500 - transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42$/
+    );
   });
 });

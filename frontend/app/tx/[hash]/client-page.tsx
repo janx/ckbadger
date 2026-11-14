@@ -34,6 +34,7 @@ import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+import { ReadFailure } from '@/components/read-failure';
 import {
   api,
   isNotFoundApiError,
@@ -48,6 +49,7 @@ import {
   type ParticipantInfo,
   type TransactionFeePayer,
 } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { exactCkbText } from '@/lib/ckb-decimal';
 import { txComment } from '@/lib/tx-comment';
@@ -729,15 +731,11 @@ export default function TransactionDetailPage() {
       />
     );
   }
+  if (!tx && isBadRequestApiError(error))
+    return <NotFoundPage notAnId={{ kind: 'transaction', reason: error.apiMessage }} />;
   if (!tx) {
-    const message = error instanceof Error ? error.message : 'Transaction response is empty';
-    return shell(
-      <DetailLayout title="Failed to load transaction">
-        <p role="alert" className="text-text-dim text-small break-words">
-          {message}
-        </p>
-      </DetailLayout>
-    );
+    if (!error) throw new Error(`Transaction ${hash}: request completed without a transaction`);
+    return shell(<ReadFailure what="transaction" error={error} />);
   }
   // The transaction's stone (the seals by kind), pressed on the head and, from lg, across the cells:
   // its hash, the cells it consumed — the API's count, as its row in a list, but none for a

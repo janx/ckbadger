@@ -152,12 +152,14 @@ describe('the header is part of the frame (visual finish V6)', () => {
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
   });
 
-  it('renders a page’s notFound() in the frame: the 404 under one header, one footer', async () => {
+  // U-06: the stale fork address is refused by its shape and answered by the page as not an id
+  // (it called notFound() before); the voice page still renders in the frame.
+  it('renders a page’s own not-an-id answer in the frame: under one header, one footer', async () => {
     mount(STALE_FORK);
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        name: "that is not a fork height and orphan. the index was not asked; nothing on it is lost. honey badger don't care.",
       })
     ).toBeInTheDocument();
     expect(screen.getAllByRole('banner')).toHaveLength(1);

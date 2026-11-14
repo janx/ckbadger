@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { notFound, useParams } from '@/src/navigation';
+import { useParams } from '@/src/navigation';
 import {
   api,
   isNotFoundApiError,
@@ -14,7 +14,9 @@ import {
   type ReorgDetail,
   type ReorgEvent,
 } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
@@ -64,6 +66,10 @@ const blockAt = (number: number) => (
   </Link>
 );
 
+/** What `parseForkRoute` accepts, as the not-an-id page says it. */
+const FORK_ROUTE_RULE =
+  'a fork is named by its height and the first 8 hex digits of the first orphan’s hash.';
+
 export default function ForkDetailPage() {
   const params = useParams();
   const route = parseForkRoute(String(params.height ?? ''), String(params.orphan ?? ''));
@@ -72,10 +78,7 @@ export default function ForkDetailPage() {
     queryFn: () => api.getForkAt(route!.height, route!.orphan),
     enabled: route !== null,
   });
-  if (!route) {
-    notFound();
-    return null;
-  }
+  if (!route) return <NotFoundPage notAnId={{ kind: 'fork', reason: FORK_ROUTE_RULE }} />;
   const address = `/forks/${route.height}/${route.orphan}`;
   if (!query.data && isNotFoundApiError(query.error)) {
     return (
@@ -88,17 +91,15 @@ export default function ForkDetailPage() {
       />
     );
   }
+  if (!query.data && isBadRequestApiError(query.error))
+    return <NotFoundPage notAnId={{ kind: 'fork', reason: query.error.apiMessage }} />;
   const mismatch = query.data ? answerMismatch(address, route, query.data) : null;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
         <DocumentTitle parts={[formatBlockNumber(route.height), route.orphan, 'fork']} />
         {query.isLoading && <p role="status">Loading fork evidence…</p>}
-        {query.error && (
-          <p role="alert" className="text-rouge text-body">
-            Fork evidence unavailable: {(query.error as Error).message}
-          </p>
-        )}
+        {query.error && <ReadFailure what="fork" error={query.error} />}
         {mismatch && (
           <p role="alert" className="text-rouge text-body break-all">
             {mismatch}

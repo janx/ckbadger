@@ -7,7 +7,9 @@ import {
   type ObjectCollection,
   type IdentityCollection,
 } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import {
   AssetDetailShell,
   AssetMetrics,
@@ -251,6 +253,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       />
     );
   }
+  if (!data && isBadRequestApiError(detail.error))
+    return <NotFoundPage notAnId={{ kind: 'collection', reason: detail.error.apiMessage }} />;
   if (!data)
     return (
       <AssetDetailShell
@@ -264,7 +268,11 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           },
         ]}
       >
-        <AssetReadState label="collection" error={detail.error} loading={detail.isLoading} />
+        {detail.error ? (
+          <ReadFailure what="collection" error={detail.error} />
+        ) : (
+          <AssetReadState label="collection" error={null} loading={detail.isLoading} />
+        )}
       </AssetDetailShell>
     );
   // ── Consistency round C7 (Main.dc.html): the rail's facts as the metrics row. For a cluster or

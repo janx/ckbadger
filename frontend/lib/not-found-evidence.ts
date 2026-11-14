@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, type SearchResponse } from '@/lib/api';
 import { resolveActiveNetwork } from '@/lib/active-network';
+import { readErrorText } from '@/lib/read-error';
 
 export type EntityKind =
   | 'block'
@@ -32,7 +33,10 @@ export interface NotFoundEvidence {
   /** A separate, scoped classifier lookup; null where no exact lookup is suitable. */
   query: string | null;
   searchEndpoint: string | null;
-  /** null where no exact /search lookup was run (U-18: the diagnostics line says only its check). */
+  /**
+   * What /search said, as the tail of the not-found page's one diagnostics line (after
+   * "checked … → 404"); null where no exact lookup was run.
+   */
   finding: string | null;
   alternative?: {
     label: string;
@@ -76,7 +80,7 @@ export async function resolveNotFoundEvidence(
       checkedEndpoint,
       query: null,
       searchEndpoint: null,
-      finding: `The ${checkedEndpoint} entity request returned HTTP 404. No exact identifier search was run.`,
+      finding: null,
     };
   }
   const response = await search(plan.query);
@@ -100,7 +104,7 @@ export async function resolveNotFoundEvidence(
     if (hit) {
       return {
         ...base,
-        finding: `The /search cell lookup returned “${hit.label}” for ${outpoint}, while ${checkedEndpoint} returned HTTP 404. These results disagree; the 404 does not prove the cell never existed.`,
+        finding: `/search lists it as “${hit.label}”, so this 404 does not prove the cell never existed`,
       };
     }
   } else {
@@ -118,7 +122,7 @@ export async function resolveNotFoundEvidence(
     if (hit) {
       return {
         ...base,
-        finding: `The ${checkedEndpoint} entity request returned HTTP 404; /search identified this exact hash as a ${plan.kind}.`,
+        finding: `/search: this hash is a ${plan.kind}`,
         alternative: {
           label: hit.label,
           href: hit.url,
@@ -128,9 +132,14 @@ export async function resolveNotFoundEvidence(
       };
     }
   }
+  // The search asks the other namespace (a transaction's hash as a block's, a block's as a
+  // transaction's), so a miss says that kind, with "either": the 404 already said this one.
   return {
     ...base,
-    finding: `The ${checkedEndpoint} entity request returned HTTP 404; /search returned no typed match for ${plan.query}.`,
+    finding:
+      plan.kind === 'cell'
+        ? '/search: no cell at this out point either'
+        : `/search: no ${plan.kind} has this hash either`,
   };
 }
 
@@ -161,7 +170,9 @@ export function useNotFoundEvidence(entity?: NotFoundEntity): NotFoundEvidenceSt
         if (current) setState({ key, value: { status: 'checked', evidence } });
       })
       .catch((error: unknown) => {
-        if (current) setState({ key, value: { status: 'error', error: String(error) } });
+        // the failure's own words, never its class name ("Error: …")
+        const said = error instanceof Error ? readErrorText(error) : String(error);
+        if (current) setState({ key, value: { status: 'error', error: said } });
       });
     return () => {
       current = false;

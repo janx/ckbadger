@@ -25,6 +25,8 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
 import { formatCompactInteger } from '@/lib/exact-integer';
@@ -156,11 +158,13 @@ export default function BlockDetailPage() {
       />
     );
   }
+  if (!block && isBadRequestApiError(error))
+    return <NotFoundPage notAnId={{ kind: 'block', reason: error.apiMessage }} />;
   if (error && !block)
     return (
       <div>
         <main className="container mx-auto py-8">
-          <p role="alert">Unable to read block: {error.message}</p>
+          <ReadFailure what="block" error={error} />
         </main>
       </div>
     );

@@ -170,7 +170,7 @@ it('reports failed reads without substituting a fake collection', async () => {
   vi.mocked(api.getObjectCollection).mockRejectedValue(new Error('Not found'));
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Could not load collection: Not found'
+    'Could not read this collection: Not found'
   );
   expect(screen.queryByRole('region', { name: 'Objects' })).not.toBeInTheDocument();
 });

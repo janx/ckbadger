@@ -10,6 +10,7 @@ import {
 } from '@/__tests__/utils/test-utils';
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
+import { truncateHash } from '@/lib/utils';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import {
   sporeDetailProducer,
@@ -324,8 +325,14 @@ it('renders not found for both absent namespaces or an unrecognized identifier',
     new ApiRequestError(404, 'not_found', 'Collection not found')
   );
   const { rerender } = render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByText(`/assets/objects/${id}`)).toBeInTheDocument();
-  expect(screen.getByText(/Both \/spore\/objects\/.* returned HTTP 404/)).toBeInTheDocument();
+  expect(await screen.findByText('no object at this address.')).toBeInTheDocument();
+  // U-18: one fact line: the lookup that decided (the collection is asked only after the
+  // object's 404), the id shortened, once
+  expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+    `/assets/objects/${truncateHash(id)}`
+  );
+  // U-06: an identifier no object route owns is not an id: the same voice page, its own line
   rerender(<SporeDetailPage sporeId="not-an-id" />);
-  expect(screen.getByRole('heading', { name: 'Invalid object identifier' })).toBeInTheDocument();
+  expect(screen.getByText('that is not an object id.')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Invalid object identifier' })).toBeNull();
 });

@@ -68,7 +68,7 @@ it('reports read errors without generating a placeholder collection', async () =
   vi.mocked(api.getObjectCollection).mockRejectedValue(new Error('Not found'));
   render(<Page classId={mockClassId} />);
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Could not load collection: Not found'
+    'Could not read this collection: Not found'
   );
 });
 it('renders exact class counts and configured permissions, not legacy bit meanings', async () => {

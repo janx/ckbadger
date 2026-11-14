@@ -27,6 +27,8 @@ import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool
 import { ExactCkb } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
@@ -149,7 +151,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const address = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
-    refetchInterval: POOL_POLL_INTERVAL_MS,
+    // R11: an id that is not one never becomes one; its 400 is not polled
+    refetchInterval: (query) =>
+      isBadRequestApiError(query.state.error) ? false : POOL_POLL_INTERVAL_MS,
   });
   const lockHash = address.data?.lockScriptHash;
   const holdings = useQuery({
@@ -236,13 +240,16 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       />
     );
   }
+  if (!a && isBadRequestApiError(address.error)) {
+    return <NotFoundPage notAnId={{ kind: 'address', reason: address.error.apiMessage }} />;
+  }
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
-        {!a && address.isLoading ? (
-          <DetailSkeleton />
+        {!a && address.error ? (
+          <ReadFailure what="address" error={address.error} />
         ) : !a ? (
-          <AddressLoadState label="address" error={address.error} loading={false} />
+          <DetailSkeleton />
         ) : (
           <DetailLayout
             // C13: the page is named by its short address; the full one and its copy are beneath.
