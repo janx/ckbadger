@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
 import { clockNow, subscribeClock } from '@/lib/clock';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
@@ -73,11 +73,41 @@ export function Utc8Age({ timestamp, className }: { timestamp: string; className
 }
 
 /**
- * A time's age in the one form (`formatTimeAgo`), read from the page's one clock (lib/clock.ts, the
- * review's item H): the text is the snapshot, so the reader renders again only when its own age
- * changes, each second under a minute, each minute under an hour, and so on.
+ * Any text a time on the page's one clock decides (lib/clock.ts, the review's item H): `text`
+ * writes it from the clock's time, and that text is the snapshot, so the reader renders again only
+ * when what it writes changes — an age under a minute each second, under an hour each minute, a
+ * count of days once a day. The one path from the clock to the page: every age on screen reads it
+ * (`useAge`, `ClockText`, `useClockTime`), however it is worded (lane E4).
+ */
+export function useClockText(text: (now: number) => string): string {
+  const read = () => text(clockNow());
+  return useSyncExternalStore(subscribeClock, read, read);
+}
+
+/**
+ * A time's age in the one form (`formatTimeAgo`), read from the page's one clock: for an age in an
+ * attribute (a hover) or a component's own line.
  */
 export function useAge(timestamp: string | number): string {
-  const read = useCallback(() => formatTimeAgo(timestamp, clockNow()), [timestamp]);
-  return useSyncExternalStore(subscribeClock, read, read);
+  return useClockText((now) => formatTimeAgo(timestamp, now));
+}
+
+/**
+ * A clock-written text in a sentence, a fact or a cell (`updated 5m ago`, `in pool for 5m`), as
+ * bare text: no element of its own, so the line it stands in is laid out as before; only it
+ * renders again as the clock moves, never the page around it (lane E4).
+ */
+export function ClockText({ text }: { text: (now: number) => string }) {
+  return <>{useClockText(text)}</>;
+}
+
+/**
+ * The clock's time, for a reader that writes several things from one time (an identity's state,
+ * its days to or since its expiry and its term bar's now mark; a feed's day dividers): `text`
+ * writes from a time everything the reader shows of it, and the reader renders again only when
+ * that changes. Every value it writes from the returned time must be in `text`.
+ */
+export function useClockTime(text: (now: number) => string): number {
+  useClockText(text);
+  return clockNow();
 }

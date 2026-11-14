@@ -147,7 +147,9 @@ describe('ActivityFeed', () => {
     );
     expect(evidence).not.toHaveTextContent('0x01ababab');
     // PA-22 (re-pinned): the home feed is live, its row says its age (it was the date)
-    expect(evidence).toHaveTextContent(new RegExp(`^#20,819,142 · ${formatTimeAgo(a.timestamp)}$`));
+    expect(evidence).toHaveTextContent(
+      new RegExp(`^#20,819,142 · ${formatTimeAgo(a.timestamp, Date.now())}$`)
+    );
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
@@ -396,12 +398,13 @@ describe('ActivityFeed', () => {
     // date, consistency C3).
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp)}$`)
+      new RegExp(
+        `^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp, Date.now())}$`
+      )
     );
-    expect(within(evidence).getByText(formatTimeAgo(served[0].timestamp))).toHaveAttribute(
-      'title',
-      formatUtc8DateTime(served[0].timestamp)
-    );
+    expect(
+      within(evidence).getByText(formatTimeAgo(served[0].timestamp, Date.now()))
+    ).toHaveAttribute('title', formatUtc8DateTime(served[0].timestamp));
     // The row's hover is the activity row's: the hash and the age (was no title).
     expect(first).toHaveAttribute(
       'title',

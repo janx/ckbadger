@@ -15,7 +15,7 @@ import { decodeDaoHeader } from '@/lib/dao-header';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatEpochPosition } from '@/lib/epoch';
-import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
 import { PlateHash } from '@/components/ui/page-seal';
 
 const INDEX = /^(0|[1-9]\d*)$/;
@@ -143,7 +143,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
             <>
               <Utc8DateTime timestamp={uncle.timestamp} />
               <span className="text-text-dim text-meta block">
-                {formatTimeAgo(uncle.timestamp)}
+                <ClockText text={(now) => formatTimeAgo(uncle.timestamp, now)} />
               </span>
               {delay && <span className="text-text-dim text-meta block">{delay} its sibling</span>}
             </>

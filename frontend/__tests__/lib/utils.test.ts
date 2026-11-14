@@ -93,29 +93,32 @@ describe('formatCkbAmount', () => {
 });
 
 describe('formatTimeAgo', () => {
+  // Lane E4 (re-pinned): the age takes its time, read from the page's one clock on screen; here a
+  // still time, so the fixture and the age read one time (they read the wall clock twice).
+  const AT = Date.parse('2026-11-14T12:00:00Z');
   it('formats seconds ago', () => {
-    const date = new Date(Date.now() - 30 * 1000);
-    expect(formatTimeAgo(date)).toBe('30s ago');
+    const date = new Date(AT - 30 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('30s ago');
   });
 
   it('formats minutes ago', () => {
-    const date = new Date(Date.now() - 5 * 60 * 1000);
-    expect(formatTimeAgo(date)).toBe('5m ago');
+    const date = new Date(AT - 5 * 60 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('5m ago');
   });
 
   it('formats hours ago', () => {
-    const date = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    expect(formatTimeAgo(date)).toBe('3h ago');
+    const date = new Date(AT - 3 * 60 * 60 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('3h ago');
   });
 
   it('formats days ago', () => {
-    const date = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    expect(formatTimeAgo(date)).toBe('2d ago');
+    const date = new Date(AT - 2 * 24 * 60 * 60 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('2d ago');
   });
 
   it('handles string timestamps', () => {
-    const timestamp = new Date(Date.now() - 60 * 1000).toISOString();
-    expect(formatTimeAgo(timestamp)).toBe('1m ago');
+    const timestamp = new Date(AT - 60 * 1000).toISOString();
+    expect(formatTimeAgo(timestamp, AT)).toBe('1m ago');
   });
 
   // Review 45fd finding 3 (ruling D4): the same rule as the facts rail's two-unit age.
@@ -130,19 +133,21 @@ describe('formatTimeAgo', () => {
     });
 
     it('reads up to 15 s ahead as 0s ago, never a negative age', () => {
-      expect(formatTimeAgo(new Date(NOW + 3000))).toBe('0s ago');
-      expect(formatTimeAgo(String(NOW + 15_000))).toBe('0s ago');
+      expect(formatTimeAgo(new Date(NOW + 3000), NOW)).toBe('0s ago');
+      expect(formatTimeAgo(String(NOW + 15_000), NOW)).toBe('0s ago');
     });
 
     it('says the device clock is behind when the time is further ahead', () => {
-      expect(formatTimeAgo(NOW + 16_000)).toBe("this device's clock is behind");
-      expect(formatTimeAgo(new Date(NOW + 10 * 60 * 1000).toISOString())).toBe(
+      expect(formatTimeAgo(NOW + 16_000, NOW)).toBe("this device's clock is behind");
+      expect(formatTimeAgo(new Date(NOW + 10 * 60 * 1000).toISOString(), NOW)).toBe(
         "this device's clock is behind"
       );
     });
 
     it('refuses a timestamp it cannot read', () => {
-      expect(() => formatTimeAgo('yesterday-ish')).toThrow('Invalid timestamp "yesterday-ish"');
+      expect(() => formatTimeAgo('yesterday-ish', NOW)).toThrow(
+        'Invalid timestamp "yesterday-ish"'
+      );
     });
   });
 });

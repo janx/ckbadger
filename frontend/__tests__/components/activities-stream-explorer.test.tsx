@@ -391,7 +391,7 @@ describe('ActivitiesStreamExplorer', () => {
     // PA-22 (re-pinned): a live feed's row says its age, the full date-time its hover (it was the
     // date, consistency C3, which left a row of seconds ago reading only today's date)
     const evidence = row.querySelector('[data-role="evidence"]') as HTMLElement;
-    expect(within(evidence).getByText(formatTimeAgo(timestamp))).toHaveAttribute(
+    expect(within(evidence).getByText(formatTimeAgo(timestamp, Date.now()))).toHaveAttribute(
       'title',
       formatUtc8DateTime(timestamp)
     );

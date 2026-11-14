@@ -282,7 +282,7 @@ describe('Transactions pool view', () => {
     expect(word).toBe('Confirming'.length);
     const now = Date.now();
     const waits = [59.5, 59 * 60 + 30, 23 * 3600 + 1800, 99 * 86400 + 43200].map((s) =>
-      formatTimeAgo(new Date(now - s * 1000))
+      formatTimeAgo(new Date(now - s * 1000), now)
     );
     expect(waits).toEqual(['59s ago', '59m ago', '23h ago', '99d ago']);
     const wait = Math.max(...waits.map((w) => `· ${w}`.length));

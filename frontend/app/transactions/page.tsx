@@ -23,7 +23,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -34,7 +34,7 @@ import {
   totalActivities,
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
-import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 
 type TransactionKind =
   | 'all'
@@ -87,6 +87,15 @@ function poolConsumed(tx: PoolRow): number {
 /** A pool transaction's stone: its hash and its cells; not in a block yet, so pressed unpressed. */
 function poolSealId(tx: PoolRow): SealId {
   return { kind: 'tx', hash: tx.hash, consumed: poolConsumed(tx), created: tx.outputsCount };
+}
+
+/**
+ * When the newest pool transaction was seen, on the UTC+8 clock (lane P); how long ago is its
+ * hover, read from the page's one clock, so it moves with no data change (lane E4).
+ */
+function NewestSeen({ at }: { at: string }) {
+  const age = useAge(at);
+  return <Utc8DateTime timestamp={at} title={age} />;
 }
 
 /**
@@ -595,11 +604,7 @@ export default function TransactionsPage() {
                     // Lane P: on the UTC+8 clock; how long ago is its hover.
                     <>
                       {' '}
-                      · newest seen{' '}
-                      <Utc8DateTime
-                        timestamp={poolHead.data.summary.newestSeenAt}
-                        title={formatTimeAgo(poolHead.data.summary.newestSeenAt)}
-                      />
+                      · newest seen <NewestSeen at={poolHead.data.summary.newestSeenAt} />
                     </>
                   )}
                 </span>

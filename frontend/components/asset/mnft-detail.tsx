@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -29,8 +28,7 @@ import {
   LiveBadge,
   cellLifeSentence,
   ckbText,
-  itemLifeSentence,
-  itemLifeAges,
+  ItemLife,
   lockFootnote,
   lockPhrase,
 } from '@/components/asset/object-hero';
@@ -118,7 +116,6 @@ export interface MnftDetailProps {
 }
 
 export function MnftDetail({ objectId }: MnftDetailProps) {
-  const [now] = useState(() => Date.now());
   const detail = useQuery({
     queryKey: ['mnft-item-detail', objectId],
     queryFn: () => api.getMnftItemDetail(objectId),
@@ -203,9 +200,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           )}
           {history && history.data.length > 0 ? (
             <p className="text-text text-body leading-relaxed">
-              <span title={itemLifeAges(history.data, now, 'Issued')}>
-                {itemLifeSentence(history.data, now, 'Issued', item.issuer.name ?? 'its issuer')}
-              </span>
+              <ItemLife
+                versions={history.data}
+                verb="Issued"
+                by={item.issuer.name ?? 'its issuer'}
+              />
             </p>
           ) : (
             <p className="text-text text-body">

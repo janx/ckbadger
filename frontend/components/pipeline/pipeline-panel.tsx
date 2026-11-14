@@ -490,7 +490,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       setHover({ block, tx: hit.id, window: info.kind === 'committed' ? info.block.number : null });
       nextArc = info.kind === 'cellbase' ? info.block.number : null;
       nextCursor = 'pointer';
-      show(txTip(info, snapshot, Date.now()));
+      show(txTip(info, snapshot));
     } else if (hit?.kind === 'ghost') {
       // A predicted tx: linked to its pool square by hash when the listed pool has it.
       const g = ghostOfTx.get(hit.id);

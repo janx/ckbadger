@@ -119,7 +119,12 @@ describe('PeersTable', () => {
     expect(shown).toBeGreaterThan(2);
     expect(evidence).toHaveTextContent(/observed 20s ago/);
     expect(evidence).toHaveTextContent(/last same-network Identify 20s ago/);
-    // the row's three ages and every age of its evidence: one clock, one timer
+    // thirteen ages on the table, the three rows' 3 + 2 + 1 and the evidence's 7: one clock, one
+    // timer
+    const readers = (document.body.textContent ?? '').match(
+      /\d+[smhdy] ago|this device's clock is behind/g
+    );
+    expect(readers).toHaveLength(13);
     expect(vi.getTimerCount()).toBe(1);
     tick(1000);
     expect(within(row).getAllByText('21s ago')).toHaveLength(3);
