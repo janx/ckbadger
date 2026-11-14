@@ -146,12 +146,14 @@ describe('Token holders (board L5)', () => {
         lockScriptHash: `0x${'11'.repeat(32)}`,
         address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
         balance: '56299700000000',
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
         lockKind: 'JoyID',
       },
       {
         lockScriptHash: `0x${'22'.repeat(32)}`,
         address: null,
         balance: '1000000000000000',
+        lockCodeHash: null,
         lockKind: null,
       },
     ],
@@ -246,6 +248,93 @@ describe('Token holders (board L5)', () => {
   });
 });
 
+// U-15 / lane A4b (UI review 2026-11-14): a holder whose lock the scripts registry does not name
+// read "Lock kind unavailable", an internal state; the answer now carries the lock's code hash and
+// the row names the lock by it, "lock 0x434343...4343", linked to that code hash's script page, as
+// the collection holders do. A registered lock reads as before; a lock not indexed shows no kind.
+describe('Token holders name an unregistered lock by its code hash (U-15)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const unregistered = `0x${'43'.repeat(32)}`;
+  const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
+  const page = {
+    data: [
+      {
+        lockScriptHash: `0x${'11'.repeat(32)}`,
+        address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+        balance: '300',
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'JoyID',
+      },
+      {
+        lockScriptHash: `0x${'22'.repeat(32)}`,
+        address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
+        balance: '200',
+        lockCodeHash: unregistered,
+        lockKind: null,
+      },
+      {
+        lockScriptHash: `0x${'33'.repeat(32)}`,
+        address: null,
+        balance: '100',
+        lockCodeHash: null,
+        lockKind: null,
+      },
+    ],
+    total: 3,
+    limit: 10,
+    hasMore: false,
+    nextCursor: null,
+    totalSupply: '600',
+    anchor: null,
+  };
+  const mount = () => {
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(page);
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+  };
+
+  it('writes the table’s lock chip "lock <code hash>", the hash a link to its script page', async () => {
+    atContainerWidth(1248);
+    mount();
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const [, named, unnamed, notIndexed] = within(table).getAllByRole('row');
+    expect(within(named).getByText('JoyID')).toHaveClass('truncate');
+    expect(named).toHaveAttribute('title', expect.stringContaining(' · JoyID · '));
+    expect(unnamed.querySelector('[data-lock-kind]')).toHaveTextContent(
+      /^lock 0x434343\.\.\.4343$/
+    );
+    expect(within(unnamed).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+      'href',
+      scriptPage
+    );
+    expect(unnamed).toHaveAttribute('title', expect.stringContaining(` · ${unregistered} · `));
+    expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+    expect(notIndexed).toHaveAttribute('title', expect.stringContaining(' · lock not indexed · '));
+    for (const row of [named, unnamed, notIndexed]) {
+      expect(row).not.toHaveTextContent(/lock kind unavailable/i);
+      expect(row.getAttribute('title')).not.toMatch(/lock kind unavailable/i);
+    }
+  });
+
+  it('writes the phone row’s lock "lock <code hash>" beside the holder', async () => {
+    atContainerWidth(358);
+    mount();
+    const [named, unnamed, notIndexed] = await screen.findAllByTestId('holder-row-mobile');
+    expect(phoneLines(named)[0].left).toMatch(/ JoyID$/);
+    expect(phoneLines(unnamed)[0].left).toMatch(/ lock 0x434343\.\.\.4343$/);
+    expect(within(unnamed).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+      'href',
+      scriptPage
+    );
+    expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+    for (const row of [named, unnamed, notIndexed])
+      expect(row).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+});
+
 describe('Token holders where the table does not fit (L5)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -259,6 +348,7 @@ describe('Token holders where the table does not fit (L5)', () => {
           lockScriptHash: `0x${'11'.repeat(32)}`,
           address: null,
           balance: '100',
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
           lockKind: 'JoyID',
         },
       ],
