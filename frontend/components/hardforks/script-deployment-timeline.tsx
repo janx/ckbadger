@@ -30,6 +30,11 @@ interface Props {
 /** Columns a mark can take on the strip; marks in the same column stack downward. */
 const COLUMNS = 200;
 const ROW_PX = 8;
+/**
+ * PB-02: a version dot is read from a hit area at least this tall over its row of dots (the dot
+ * nearest the pointer answers), not from its own 6–7 px circle; on the lanes and on this strip.
+ */
+export const DOT_HIT_PX = 24;
 
 function headerMs(timestampMs: number): number {
   if (
@@ -104,6 +109,16 @@ export function ScriptDeploymentTimeline({
     return { mark, left: (column + 0.5) / COLUMNS, row };
   });
   const rows = Math.max(...placed.map((entry) => entry.row)) + 1;
+  const stripHeight = Math.max(DOT_HIT_PX, rows * ROW_PX + 6);
+  /** The mark nearest a pointer over the strip's hit area (`el`): its column's x, its row's y. */
+  const nearest = (clientX: number, clientY: number, el: Element) => {
+    const box = el.getBoundingClientRect();
+    const px = clientX - box.left;
+    const py = clientY - box.top;
+    const at = ({ left: x, row }: (typeof placed)[number]) =>
+      Math.hypot(x * box.width - px, row * ROW_PX + 3.5 - py);
+    return placed.reduce((best, entry) => (at(entry) < at(best) ? entry : best)).mark.versionHash;
+  };
   const left = inset?.left ?? 0;
   const right = inset?.right ?? 0;
   const caption = label ?? `known script versions · ${marks.length.toLocaleString()}`;
@@ -117,7 +132,7 @@ export function ScriptDeploymentTimeline({
           {caption}
         </span>
       )}
-      <div className="relative" style={{ height: rows * ROW_PX + 6 }}>
+      <div className="relative" style={{ height: stripHeight }}>
         {!labelAbove && (
           <span
             className="text-text-dim text-meta absolute left-0 top-0 leading-tight"
@@ -132,6 +147,23 @@ export function ScriptDeploymentTimeline({
           className="absolute inset-y-0"
           style={{ left, right }}
         >
+          {/* PB-02: the pointer reads the nearest dot from this band; the buttons keep the
+              keyboard (focus, Enter, Space) and the assistive names. */}
+          <div
+            aria-hidden="true"
+            data-dot-hit="strip"
+            className="absolute inset-x-0 top-0 z-10 cursor-pointer"
+            style={{ height: stripHeight }}
+            onPointerMove={(event) =>
+              readout.hover(nearest(event.clientX, event.clientY, event.currentTarget))
+            }
+            onPointerLeave={() => {
+              if (readout.pinned !== null) readout.hover(null);
+            }}
+            onClick={(event) =>
+              readout.toggle(nearest(event.clientX, event.clientY, event.currentTarget))
+            }
+          />
           {placed.map(({ mark, left: x, row }) => {
             const active = mark.versionHash === selected?.versionHash;
             return (
