@@ -108,7 +108,7 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(phoneLines(row)).toEqual([
       { key: 'holder', tone: 'head', left: '1ckb1qzda0cr0…ssd2hqn', right: '999.00000000 CKB' },
       { key: 'axis', tone: 'quiet', left: '01%', right: null },
-      { key: 'share', tone: 'quiet', left: '1.00%', right: '1 deposit' },
+      { key: 'share', tone: 'quiet', left: '1.00%', right: '1\u00a0deposit' },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });
@@ -147,7 +147,7 @@ describe('DAO depositors page (DAO-12)', () => {
         key: 'holder',
         tone: 'head',
         left: '1ckb1qzda0cr0…ssd2hqn',
-        right: '1 deposit999.00000000 CKB1.00%',
+        right: '1\u00a0deposit999.00000000 CKB1.00%',
       },
     ]);
   });

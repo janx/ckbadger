@@ -147,7 +147,7 @@ it('handles empty gallery and holder sets without using collection totals as pag
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
   vi.mocked(api.getSporeClusterHolders).mockResolvedValue(emptyPage());
   render(<ClusterPage clusterId={id} />);
-  expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
+  expect(await screen.findByText('No objects.')).toBeInTheDocument();
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
   expect(document.querySelector('[data-role="figure"]')).toHaveTextContent('objects live8');
 });

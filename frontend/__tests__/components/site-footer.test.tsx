@@ -123,7 +123,9 @@ describe('SiteFooter', () => {
       expect(sep).toHaveAttribute('aria-hidden', 'true');
       expect(sep.textContent).toBe('· ');
     }
-    expect(about).toHaveClass('overflow-hidden');
+    // re-pinned (ruling b): the box clips the row's left only, never a token on its right
+    expect(about).toHaveClass('min-w-0', '[clip-path:inset(-1em_-100vw_-1em_0)]');
+    expect(about).not.toHaveClass('overflow-hidden');
     expect(tokens[0].parentElement).toHaveClass('-ml-[2ch]', 'flex', 'flex-wrap', 'gap-x-[1ch]');
   });
 

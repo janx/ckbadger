@@ -101,8 +101,8 @@ describe('FiberChannelsPage', () => {
         .map((dd) => dd.textContent)
     ).toEqual([
       '3 · since 2023-11-15 · 1 in USDI',
-      '2 · in 1 pair',
-      '1 m 40 s · 2 of 2 closed within an hour',
+      '2 · in 1\u00a0pair',
+      '1m 40s · 2 of 2 closed within an hour',
     ]);
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();
     // R11: the figure is tier 1's only jade text
@@ -191,7 +191,7 @@ describe('FiberChannelsPage', () => {
         .map((h) => h.textContent)
     ).toEqual(['Channel', 'Parties', 'Capacity', 'Opened', 'Open for']);
     expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
-    expect(within(table).getByText('3 m 20 s')).toBeInTheDocument();
+    expect(within(table).getByText('3m 20s')).toBeInTheDocument();
     // a party reads by its last six characters, as the graph names it (board L8, R16); the whole
     // lock hash (or address) stays its title and link
     expect(within(table).getByText('…aaaaaa')).toHaveAttribute('title', `0x${'aa'.repeat(32)}`);
@@ -273,7 +273,7 @@ describe('Fiber channel phone row (board L8)', () => {
       [
         'time',
         'quiet',
-        expect.stringMatching(/^opened 2023-11-15 \d\d:\d\d · open for 3 m 20 s$/),
+        expect.stringMatching(/^opened 2023-11-15 \d\d:\d\d · open for 3m 20s$/),
         null,
       ],
     ]);
@@ -298,7 +298,7 @@ describe('Fiber channel phone row (board L8)', () => {
         '0x01010101…010101 · …pr3prn ⇄ …bbbbbb Default Lock · unnamed lock',
         '3,000.00000000 CKB',
       ],
-      ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3 m 20 s$/), 'open'],
+      ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],
     ]);
   });
 });

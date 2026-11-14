@@ -43,6 +43,7 @@ import { cn, formatUtc8Date } from '@/lib/utils';
 import { identityTitleParts, type IdentityItemKind } from '@/lib/identity-title';
 import { formatStandard } from '@/components/activity-event-row';
 import { retryTransientOnly } from '@/lib/query-client';
+import { formatCount, countNoun } from '@/lib/format-count';
 
 type IdentityKind = IdentityItemKind;
 export interface CanonicalIdentityDetailProps {
@@ -112,9 +113,9 @@ function identityState(
 /** "3 years paid · 1 at registration, 2 renewals" — the term bar's caption. */
 function termNote(term: Extract<IdentityTerm, { kind: 'term' }>, kind: IdentityKind) {
   const n = term.renewals.length;
-  const renewals = n ? `${n} renewal${n === 1 ? '' : 's'}` : 'not renewed';
+  const renewals = n ? `${n} ${countNoun(n, 'renewal')}` : 'not renewed';
   if (term.graceEnd !== undefined)
-    return `${renewals} · then ${termDays(term.graceEnd, term.expiresAt)} days of grace, to ${formatUtc8Date(term.graceEnd)}`;
+    return `${renewals} · then ${formatCount(termDays(term.graceEnd, term.expiresAt), 'day')} of grace, to ${formatUtc8Date(term.graceEnd)}`;
   return `${kind === 'bit-cell' ? 'held from minting' : 'paid at registration'} · ${renewals}`;
 }
 

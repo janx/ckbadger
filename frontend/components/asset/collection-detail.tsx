@@ -46,12 +46,14 @@ import {
   type CompositionCounts,
 } from '@/components/ui/composition-set';
 import { RowTag } from '@/components/ui/row-tag';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { collectionFeedHeadline } from '@/lib/feed-headlines';
 import { readErrorText } from '@/lib/read-error';
 import { IdentityPositioning, type IdentityStandard } from '@/components/identity/identity-header';
 import { retryTransientOnly } from '@/lib/query-client';
+import { Dotted } from '@/components/ui/phone-row';
+import { NoBreak } from '@/components/ui/no-break';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -85,33 +87,42 @@ function CollectionLede({
   const onchain = counts ? counts.btc_ckb + counts.pure_ckb : 0;
   return (
     <p className="text-text-dim text-body max-w-[640px]">
-      {/* Responsive B#21: the kind is one unit, so its separator never dangles at a line end. */}
-      <span data-role="collection-kind" className="whitespace-nowrap">
-        {kind === 'spore' ? 'Spore cluster' : 'm-NFT class'}
-        {kind === 'spore' && dobVersion !== null && (
-          <>
-            {' · '}
-            <RowTag>DOB/{dobVersion}</RowTag>
-          </>
-        )}
-      </span>
-      {counts &&
-        live > 0 &&
-        (only ? (
-          <>
-            {' · every object is '}
-            <CompositionBadge tier={only} size="sm" />
-            {only === 'btc_ckb'
-              ? ': its record in a CKB cell, its picture in a Bitcoin inscription.'
-              : only === 'pure_ckb'
-                ? ': its record and its content in CKB cells.'
-                : '.'}
-          </>
-        ) : onchain > 0 ? (
-          ' · some of its objects are fully on-chain, the rest are not.'
-        ) : (
-          ' · none of its objects is fully on-chain.'
-        ))}
+      {/* PB-23: the kind and the sentence are one separated list, so the dot goes with the
+          sentence to a new line; the kind is one unit (responsive B#21). */}
+      <Dotted
+        parts={[
+          <span key="kind" data-role="collection-kind" className="whitespace-nowrap">
+            {kind === 'spore' ? 'Spore cluster' : 'm-NFT class'}
+            {kind === 'spore' && dobVersion !== null && (
+              <>
+                {' · '}
+                <RowTag>DOB/{dobVersion}</RowTag>
+              </>
+            )}
+          </span>,
+          counts &&
+            live > 0 &&
+            (only ? (
+              <>
+                every object is{' '}
+                {/* the badge and the stop after it are one unit: a lone "." never opens a line */}
+                <NoBreak>
+                  <CompositionBadge tier={only} size="sm" />
+                  {only === 'btc_ckb' || only === 'pure_ckb' ? ':' : '.'}
+                </NoBreak>
+                {only === 'btc_ckb'
+                  ? ' its record in a CKB cell, its picture in a Bitcoin inscription.'
+                  : only === 'pure_ckb'
+                    ? ' its record and its content in CKB cells.'
+                    : ''}
+              </>
+            ) : onchain > 0 ? (
+              'some of its objects are fully on-chain, the rest are not.'
+            ) : (
+              'none of its objects is fully on-chain.'
+            )),
+        ]}
+      />
     </p>
   );
 }
@@ -410,16 +421,18 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
       )}
       {kind !== 'identity' && mints !== undefined && transfers !== undefined && (
-        <p className="text-text-dim text-small">
-          Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
-          {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
-          {held !== null && occupied !== null && occupied > BigInt(0) && (
-            <>
-              {' · '}
-              <HMultiplierReading held={held} occupied={occupied} />
-            </>
-          )}
-        </p>
+        <div className="text-text-dim text-small">
+          {/* PA-25: one separated list, each count with its noun */}
+          <Dotted
+            parts={[
+              `Minted in ${formatCount(mints, 'transaction')}`,
+              `${formatCount(transfers, 'transfer')} since`,
+              held !== null && occupied !== null && occupied > BigInt(0) && (
+                <HMultiplierReading held={held} occupied={occupied} />
+              ),
+            ]}
+          />
+        </div>
       )}
     </div>
   );
@@ -675,8 +688,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
               <p className="text-text-dim text-meta">
-                {pds.data.totalLiveIdentities} live identities · {pds.data.withoutPds} without a
-                PDS. An identity can name more than one endpoint.
+                {formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')} ·{' '}
+                {pds.data.withoutPds} without a PDS. An identity can name more than one endpoint.
               </p>
               <dl className="space-y-3">
                 {pds.data.groups.map((g) => (
@@ -684,7 +697,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     <dt className="min-w-0 break-all">{g.endpoint}</dt>
                     {/* F2 identities (round 2): one identity, many identities. */}
                     <dd>
-                      {g.count.toLocaleString('en-US')} {g.count === 1 ? 'identity' : 'identities'}
+                      {g.count.toLocaleString('en-US')}{' '}
+                      {countNoun(g.count, 'identity', 'identities')}
                     </dd>
                   </div>
                 ))}

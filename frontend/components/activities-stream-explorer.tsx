@@ -24,6 +24,7 @@ import {
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { countNoun } from '@/lib/format-count';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const POLL_INTERVAL_MS = 10_000;
@@ -525,7 +526,7 @@ export function ActivitiesStreamExplorer({
             <button
               type="button"
               onClick={handleMergePending}
-              aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
+              aria-label={`${pendingNewItems.length} new ${countNoun(pendingNewItems.length, 'activity', 'activities')}`}
               className="border-jade/10 w-full rounded-none border-y bg-[color:var(--bar)] px-4 py-1.5 text-left transition-colors hover:bg-[color:var(--bar-hover)] sm:py-2"
               style={cssVars({
                 '--bar': STREAM_COLORS.pending,
@@ -533,8 +534,8 @@ export function ActivitiesStreamExplorer({
               })}
             >
               <span className="text-text text-small">
-                {pendingNewItems.length} new activit{pendingNewItems.length === 1 ? 'y' : 'ies'} ·
-                Show at top
+                {pendingNewItems.length} new{' '}
+                {countNoun(pendingNewItems.length, 'activity', 'activities')} · Show at top
               </span>
             </button>
           )}

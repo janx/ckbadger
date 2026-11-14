@@ -13,7 +13,7 @@ import { useId, useState, type ReactNode } from 'react';
 import type { AlleleLane } from '@/lib/dob-genes';
 import { GEL_COLORS, GEL_INK } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import {
   ALLELE_GEL,
   alleleGelLayout,
@@ -176,7 +176,7 @@ function Gel({
     <>
       <svg
         role="img"
-        aria-label={`${subject}: allele gel of ${total.toLocaleString('en-US')} objects, one lane per gene (${lanes.map((l) => `${l.gene} ${l.variants} variant${l.variants === 1 ? '' : 's'}`).join(', ')}); each band is one variant, as thick as its share, common at the top.`}
+        aria-label={`${subject}: allele gel of ${formatCount(total, 'object')}, one lane per gene (${lanes.map((l) => `${l.gene} ${l.variants} ${countNoun(l.variants, 'variant')}`).join(', ')}); each band is one variant, as thick as its share, common at the top.`}
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
@@ -378,14 +378,14 @@ function Gel({
           idle={idle ?? tapOrHover('a band.', { capital: true })}
         >
           {readLane && readBand
-            ? `${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects`
+            ? `${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}`
             : null}
         </ReadoutRow>
       </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
       <p className="text-text-dim text-meta mt-1">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
-        {total.toLocaleString('en-US')} objects, common at the top, rare below
+        {formatCount(total, 'object')}, common at the top, rare below
       </p>
     </>
   );
@@ -535,8 +535,7 @@ function GeneList({
       )}
       <p className="text-text-dim text-meta mt-1">
         genes ranked by how many variants they have · most common = how many of all{' '}
-        {total.toLocaleString('en-US')} objects carry the commonest variant · open a gene for every
-        variant
+        {formatCount(total, 'object')} carry the commonest variant · open a gene for every variant
       </p>
     </div>
   );

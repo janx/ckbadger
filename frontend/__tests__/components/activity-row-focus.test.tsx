@@ -144,7 +144,7 @@ describe('focusLockHash: the participant the page is about', () => {
     const { container } = render(<ActivityRow activity={big} focusLockHash={focus.lockHash!} />);
     expect(lines(container)[0]).toHaveTextContent('hprdnn');
     expect(lines(container)).toHaveLength(6);
-    fireEvent.click(within(container).getByRole('button', { name: '+2 participants' }));
+    fireEvent.click(within(container).getByRole('button', { name: '+2\u00a0participants' }));
     expect(lines(container)).toHaveLength(8);
     expect(lines(container)[0]).toHaveTextContent('hprdnn');
   });

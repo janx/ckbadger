@@ -78,7 +78,7 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
   it('says plainly when no records are set', () => {
     render(<IdentityRecords subject="valar.bit" records={[]} />);
     expect(screen.getByRole('region', { name: 'What valar.bit points to' })).toHaveTextContent(
-      'No records are set.'
+      'No records.'
     );
     expect(screen.getByRole('heading', { name: 'Records valar.bit · 0' })).toBeInTheDocument();
   });
@@ -128,7 +128,7 @@ describe('IdentityRecords image records (J13)', () => {
       />
     );
     const section = screen.getByRole('region', { name: 'What apt.cell points to' });
-    const img = within(section).getByRole('img', { name: 'Avatar, a WebP image of 36 bytes' });
+    const img = within(section).getByRole('img', { name: 'Avatar, a WebP image of 36\u00a0bytes' });
     expect(img).toHaveAttribute('src', expect.stringMatching(/^data:image\/webp;base64,/));
     expect(section).toHaveTextContent('WebP · 36 bytes');
     // Bytes that are no image keep the byte count.

@@ -14,6 +14,7 @@ import { inWindow, tail4, windowRange } from '@/lib/pipeline/layout';
 import { fmtInt } from '@/components/pipeline/svg-text';
 import { formatCapacity } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
 export interface TipContent {
@@ -55,7 +56,7 @@ export function commitNote(p: number, tooEarly: boolean, s: PipelineSnapshot): s
   const left = p + s.consensus.proposalWindowFarthest - s.tip.number;
   if (left <= 0) return 'no · its window has closed';
   if (left === 1) return 'yes · last chance in the next block';
-  return `yes · ${left} blocks left`;
+  return `yes · ${formatCount(left, 'block')} left`;
 }
 
 const feeRate = (rate: string) => `${fmtInt(BigInt(rate))} sh/kB`;
@@ -96,7 +97,7 @@ export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipConten
     rows.push(['committed in', num(info.block.number)]);
     rows.push([
       'proposal in',
-      `${num(p.block)} (${info.block.number - p.block} blocks earlier)${p.uncleIndex !== null ? ' · via uncle' : ''}`,
+      `${num(p.block)} (${formatCount(info.block.number - p.block, 'block')} earlier)${p.uncleIndex !== null ? ' · via uncle' : ''}`,
     ]);
   }
   const tag = info.kind === 'pending' ? 'pending' : info.kind;
@@ -167,7 +168,7 @@ export function chipTip(b: PipelineBlock, p: PipelineProposal, s: PipelineSnapsh
   if (p.state === 'committed' && p.committedBlock !== null) {
     rows.push([
       'tx committed in',
-      `${num(p.committedBlock)} (${p.committedBlock - b.number} blocks later)`,
+      `${num(p.committedBlock)} (${formatCount(p.committedBlock - b.number, 'block')} later)`,
     ]);
   }
   if (p.state !== 'committed' && p.txHash && s.pool) {
@@ -177,9 +178,9 @@ export function chipTip(b: PipelineBlock, p: PipelineProposal, s: PipelineSnapsh
   }
   const why: Record<PipelineProposal['state'], string> = {
     early: 'Proposed in this block, so the next block cannot commit it yet.',
-    waiting: `Any of the next blocks can commit it, until ${far} blocks after this one.`,
+    waiting: `Any of the next blocks can commit it, until ${formatCount(far, 'block')} after this one.`,
     committed: '',
-    expired: `Not committed within ${far} blocks; the pool re-queues or drops the tx.`,
+    expired: `Not committed within ${formatCount(far, 'block')}; the pool re-queues or drops the tx.`,
   };
   return {
     key: `chip:${b.hash}:${p.shortId}:${p.uncleIndex ?? ''}`,
@@ -211,7 +212,7 @@ export function windowTip(H: number, s: PipelineSnapshot): TipContent {
     title: 'Proposal window',
     tag: null,
     rows,
-    foot: `A tx can be committed ${c} to ${f} blocks after it is proposed: the latest block is too recent, and proposals older than ${f} blocks have expired.`,
+    foot: `A tx can be committed ${c} to ${formatCount(f, 'block')} after it is proposed: the latest block is too recent, and proposals older than ${formatCount(f, 'block')} have expired.`,
   };
 }
 

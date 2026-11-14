@@ -564,7 +564,7 @@ describe('29 chart variants', () => {
     });
     expect(model.facts).toContainEqual({
       label: 'Window',
-      value: '2026-07-23 → 2026-07-29 · 10 blocks',
+      value: '2026-07-23 → 2026-07-29 · 10\u00a0blocks',
     });
   });
 });

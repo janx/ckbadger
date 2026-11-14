@@ -9,7 +9,6 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
-  DotJoined,
   ExactCkb,
   activityClassMark,
   activityHeadline,
@@ -81,14 +80,16 @@ function paysNote(tx: Transaction): ReactNode {
   );
 }
 
-/** The quiet note beside a row's kind: its protocol facts, its type scripts, or its parties. */
-function whatNote(activity: GlobalActivity): ReactNode {
+/**
+ * The quiet note beside a row's kind, as parts of the row's one separated list (PA-25): its
+ * protocol facts, its type scripts, or its parties.
+ */
+function whatNote(activity: GlobalActivity): ReactNode[] {
   if (activity.protocolActions.length > 0) {
     try {
-      const parts = activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa));
-      return parts.length ? <DotJoined parts={parts} /> : null;
+      return activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa));
     } catch (error) {
-      return <ActivityReadError txHash={activity.txHash} error={error} />;
+      return [<ActivityReadError key="error" txHash={activity.txHash} error={error} />];
     }
   }
   const names = [
@@ -98,15 +99,15 @@ function whatNote(activity: GlobalActivity): ReactNode {
       )
     ),
   ];
-  if (names.length > 0) return names.join(' · ');
-  return formatCount(activity.participants.length, 'participant');
+  if (names.length > 0) return names;
+  return [formatCount(activity.participants.length, 'participant')];
 }
 
 /** A count of resources on the quiet line: "3 → 3 cells · 903 B · 1,744,520 cycles". */
 function quietFigures(tx: Transaction): ReactNode[] {
   return [
     <span key="cells" className="whitespace-nowrap">
-      {consumedCells(tx)} → {tx.outputsCount} cells
+      {consumedCells(tx)} → {formatCount(tx.outputsCount, 'cell')}
     </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize!.toLocaleString('en-US')} B
@@ -128,23 +129,32 @@ function quietFigures(tx: Transaction): ReactNode[] {
  */
 function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   const mark = tx.activity ? activityClassMark(tx.activity) : null;
-  const note = tx.isCellbase ? null : whatNote(tx.activity!);
-  const what = tx.isCellbase ? (
-    <>
-      <span className="text-text-bright">Cellbase</span> {paysNote(tx)} · reward{' '}
-      <ExactCkb
-        shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
-        signed={false}
-        tone="plain"
-      />
-    </>
-  ) : (
-    <>
-      {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
-      <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
-      {note !== null && <span className="text-text-dim"> · {note}</span>}
-    </>
-  );
+  // What it did, as parts of the line's one separated list (PA-25: no "·" ends or opens a line).
+  const what: ReactNode[] = tx.isCellbase
+    ? [
+        <>
+          <span className="text-text-bright">Cellbase</span> {paysNote(tx)}
+        </>,
+        <>
+          reward{' '}
+          <ExactCkb
+            shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
+            signed={false}
+            tone="plain"
+          />
+        </>,
+      ]
+    : [
+        <>
+          {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
+          <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
+        </>,
+        ...whatNote(tx.activity!).map((part, i) => (
+          <span key={i} className="text-text-dim">
+            {part}
+          </span>
+        )),
+      ];
   const fee = (
     <span className="whitespace-nowrap">
       fee{' '}
@@ -205,14 +215,14 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           ? {
               key: 'what',
               tone: 'body',
-              left: <Dotted parts={tx.isCellbase ? [what] : [what, value, fee]} />,
+              left: <Dotted parts={tx.isCellbase ? what : [...what, value, fee]} />,
               right: (
                 <span className="text-text-dim text-meta">
                   <Dotted parts={quiet} />
                 </span>
               ),
             }
-          : { key: 'what', tone: 'body', left: what },
+          : { key: 'what', tone: 'body', left: <Dotted parts={what} /> },
         !wide && {
           key: 'figures',
           tone: 'quiet',
@@ -317,7 +327,7 @@ export function TransactionListTable({
               {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
             </span>
             <span className="text-text-dim text-small min-w-0 truncate">
-              {tx.isCellbase ? paysNote(tx) : whatNote(tx.activity!)}
+              {tx.isCellbase ? paysNote(tx) : <Dotted oneLine parts={whatNote(tx.activity!)} />}
             </span>
           </span>
         );

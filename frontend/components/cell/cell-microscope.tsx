@@ -31,6 +31,7 @@ import {
   type HexRowBytes,
 } from '@/lib/cell-byte-layout';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
+import { formatCount } from '@/lib/format-count';
 
 export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 
@@ -381,7 +382,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         )}
       >
         <span>
-          ⋯ {fmt(to - from)} bytes [{fmt(from)}..{fmt(to)}): {listed}
+          ⋯ {formatCount(to - from, 'byte')} [{fmt(from)}..{fmt(to)}): {listed}
         </span>
         <button
           type="button"
@@ -597,7 +598,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     ? byId.get(active.id)?.group === g
                     : g === 'data'
             }
-            title={`${g} · ${fmt(groupBytes[g])} bytes`}
+            title={`${g} · ${formatCount(groupBytes[g], 'byte')}`}
             {...handlers({ kind: 'group', group: g })}
             className="text-meta flex items-center justify-center whitespace-nowrap rounded-sm"
             style={{

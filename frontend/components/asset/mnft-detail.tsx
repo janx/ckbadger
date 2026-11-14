@@ -34,6 +34,8 @@ import {
   lockFootnote,
   lockPhrase,
 } from '@/components/asset/object-hero';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -261,7 +263,9 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 {characteristic.every((b) => b === '00') ? (
                   <>
                     none, all zero ·{' '}
-                    <span className="whitespace-nowrap">{characteristic.length} bytes</span>
+                    <span className="whitespace-nowrap">
+                      {formatCount(characteristic.length, 'byte')}
+                    </span>
                   </>
                 ) : (
                   item.characteristicHex
@@ -285,7 +289,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     <Hash hash={current.ownerAddress} className="text-body" copyable={false} />
                   </AppLink>
                 ) : (
-                  'No live cell'
+                  'No live owner'
                 )
               ) : (
                 evidenceState
@@ -293,7 +297,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               note: current ? (
                 <>
                   {current.lockName ?? 'Unregistered lock'} · since{' '}
-                  {formatUtc8Date(current.timestamp)}
+                  <Utc8Date timestamp={current.timestamp} />
                 </>
               ) : undefined,
             },
@@ -325,7 +329,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     <span className="text-text-dim">never</span>
                   ) : (
                     <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
-                      {formatUtc8Date(last.timestamp)}
+                      <Utc8Date timestamp={last.timestamp} />
                     </AppLink>
                   )
                 ) : (
@@ -340,7 +344,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                       <AppLink href={`/blocks/${last.blockNumber}`}>
                         {formatBlockNumber(last.blockNumber)}
                       </AppLink>{' '}
-                      · {moves} transfer{moves === 1 ? '' : 's'} since issue
+                      · {moves} {countNoun(moves, 'transfer')} since issue
                     </>
                   )
                 ) : undefined,

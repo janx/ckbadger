@@ -343,13 +343,13 @@ describe('shared chart detail', () => {
     });
     render(<ChartDetail slug="epoch-time-distribution" />);
     // phase 5 (D10): the bucket count, which stood at the row's right end, is the command's args
-    const heading = await screen.findByRole('heading', { name: 'Distribution 3 buckets' });
+    const heading = await screen.findByRole('heading', { name: 'Distribution 3\u00a0buckets' });
     expect(heading.lastElementChild).toHaveTextContent(/^3 buckets$/);
     expect(heading.lastElementChild).toHaveClass('text-text-dim');
     expect(screen.queryByRole('heading', { name: /^Full history/ })).toBeNull();
     const props = lastChart('Epoch durations');
     expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
-    expect(props.subtitle).toBe('Completed epochs by hours taken · 3 buckets');
+    expect(props.subtitle).toBe('Completed epochs by hours taken · 3\u00a0buckets');
     expect(props.slotBars).toBe(true);
   });
 
@@ -368,7 +368,7 @@ describe('shared chart detail', () => {
       data: labels.map((date, i) => ({ date, value: String(1000 - i) })),
     });
     render(<ChartDetail slug="cell-size-distribution" />);
-    await screen.findByRole('heading', { name: 'Distribution 6 buckets' });
+    await screen.findByRole('heading', { name: 'Distribution 6\u00a0buckets' });
     const props = lastChart('Cell size');
     expect(props.categoricalX).toBe(true);
     // Every bucket named, in the axis' words with the unit once (re-pinned for CH-12: the API's
@@ -416,15 +416,19 @@ describe('shared chart detail', () => {
     const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
     expect(readings).toHaveTextContent('peak, #14,004');
     // the count is the command's args (phase 5, D10): 'full history 1,201 epochs'
-    expect(screen.getByRole('heading', { name: 'Full history 1,201 epochs' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Full history 1,201\u00a0epochs' })
+    ).toBeInTheDocument();
     // Re-pinned for CH-06: the blocks chart's command line carries its span as well.
-    expect(screen.getByRole('heading', { name: 'Epoch blocks 1,201 epochs' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Epoch blocks 1,201\u00a0epochs' })
+    ).toBeInTheDocument();
     const main = lastChart('Epoch length');
     expect(main.hideCaption).toBe(true);
     expect(main.referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
     // The separate blocks chart says what it counts, not the hours subtitle (re-pinned for CH-06:
     // its caption is its own quantity, the name no longer repeated in it).
-    expect(lastChart('Epoch blocks').subtitle).toBe('Blocks, per epoch · 1,201 epochs');
+    expect(lastChart('Epoch blocks').subtitle).toBe('Blocks, per epoch · 1,201\u00a0epochs');
     expect(lastChart('Epoch blocks').hideCaption).toBe(true);
   });
 

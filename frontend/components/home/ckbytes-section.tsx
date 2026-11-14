@@ -68,7 +68,7 @@ export function CkbytesSection() {
   });
   const d = useMemo(
     () =>
-      derive({ data: allocation.data, error: allocation.error }, allocationOf, 'No allocation yet'),
+      derive({ data: allocation.data, error: allocation.error }, allocationOf, 'No allocation.'),
     [allocation.data, allocation.error]
   );
   // No note while the allocation loads or fails: the heading never names a block it has not read.
@@ -521,10 +521,7 @@ function ChangeFigure({
     staleTime: 300_000,
     refetchInterval: 300_000,
   });
-  const d = useMemo(
-    () => derive({ data, error }, changeView, 'No daily history yet'),
-    [data, error]
-  );
+  const d = useMemo(() => derive({ data, error }, changeView, 'No daily history.'), [data, error]);
   const v = viewOf(d);
   return (
     <ChartFigure
@@ -585,7 +582,7 @@ function DaoBlock() {
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
-  const d = useMemo(() => derive({ data, error }, daoView, 'No DAO data yet'), [data, error]);
+  const d = useMemo(() => derive({ data, error }, daoView, 'No DAO data.'), [data, error]);
   return (
     <div data-testid="home-dao" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-col gap-0.5">

@@ -12,6 +12,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { AppLink } from '@/components/ui/app-link';
 import { ExactCkb } from '@/components/activity-event-row';
+import { NoBreak } from '@/components/ui/no-break';
 
 function shortId(id: string): string {
   return id.length <= 19 ? id : `${id.slice(0, 10)}…${id.slice(-6)}`;
@@ -122,7 +123,10 @@ function SporeLine({ item }: { item: Extract<CellInventoryItem, { kind: 'spore' 
       href={item.href}
       name={
         <>
-          {name ?? 'Spore object'} <span className="whitespace-nowrap">{shortId(item.id)}</span>
+          {name ?? 'Spore object'}{' '}
+          <span className="whitespace-nowrap">
+            <NoBreak>{shortId(item.id)}</NoBreak>
+          </span>
         </>
       }
       tier={object.data?.mediaProfile?.tier}
@@ -171,7 +175,10 @@ function MnftLine({ item }: { item: Extract<CellInventoryItem, { kind: 'm-nft' }
           `${d.class.name} #${d.tokenIndex}`
         ) : (
           <>
-            m-NFT object <span className="whitespace-nowrap">{shortId(item.id)}</span>
+            m-NFT object{' '}
+            <span className="whitespace-nowrap">
+              <NoBreak>{shortId(item.id)}</NoBreak>
+            </span>
           </>
         )
       }
@@ -227,7 +234,9 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
         name ?? (
           <>
             {IDENTITY_WORD[item.standard]} identity{' '}
-            <span className="whitespace-nowrap">{shortId(item.id)}</span>
+            <span className="whitespace-nowrap">
+              <NoBreak>{shortId(item.id)}</NoBreak>
+            </span>
           </>
         )
       }

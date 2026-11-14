@@ -401,7 +401,11 @@ function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
       <HeroFigure
         label="CKB under these scripts"
         shannons={total}
-        companion={`locked by ${formatCount(counts.locks, 'lock script')} · ${formatCount(counts.all, 'script')} in all · ${formatCount(counts.types, 'type')}`}
+        companion={[
+          `locked by ${formatCount(counts.locks, 'lock script')}`,
+          `${formatCount(counts.all, 'script')} in all`,
+          formatCount(counts.types, 'type'),
+        ]}
       />
       <p className="text-text-dim text-meta mb-1.5 mt-[18px]">who can change the code</p>
       <ScriptCodeClassBar classes={summary.classSummary} />
@@ -714,7 +718,7 @@ export default function ScriptsPage() {
                 )}
               </div>
               {isLoading ? (
-                <div className="text-text-dim text-small py-8">Loading scripts...</div>
+                <div className="text-text-dim text-small py-8">Loading scripts…</div>
               ) : isError ? (
                 <div role="alert" className="text-negative text-small py-8">
                   <strong>Failed to load scripts</strong>:{' '}
@@ -726,7 +730,7 @@ export default function ScriptsPage() {
                   columns={columns}
                   rows={rows}
                   rowKey={(s) => s.codeHash}
-                  empty="No scripts found"
+                  empty="No scripts."
                   density="row"
                   rowTitle={scriptRowTitle}
                   // T5: body ink for the row, the name alone bright.

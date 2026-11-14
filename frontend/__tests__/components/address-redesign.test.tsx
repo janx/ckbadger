@@ -154,7 +154,7 @@ describe('Address v3 components', () => {
         'Lock',
       ]);
       expect(items.map((i) => i.querySelector('dd')!.textContent)).toEqual([
-        '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
+        '29\u00a0holdings · 5\u00a0DAO cells · 9\u00a0tokens · 14\u00a0objects · 1\u00a0identity',
         '40 · 5 DAO cells + 15 token cells + 14 objects + 1 identity + 3 other-script cells + 2 plain CKB',
         '1,021',
         'JoyID · type · 22-byte args',
@@ -428,7 +428,7 @@ describe('Address activity is the shared activity row (C3)', () => {
     );
     const row = article(container);
     const a = addressActivitiesFixture[0];
-    expect(within(row).getByRole('link', { name: /Received 9 objects/ })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: /Received 9\sobjects/ })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
     );

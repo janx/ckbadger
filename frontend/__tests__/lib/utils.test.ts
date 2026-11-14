@@ -167,11 +167,11 @@ describe('formatTimeAgo', () => {
 
 describe('formatDurationMs', () => {
   it('formats chain ages without raw millisecond dumps', () => {
-    expect(formatDurationMs(500)).toBe('500 ms');
-    expect(formatDurationMs(30000)).toBe('30 s');
-    expect(formatDurationMs(60000)).toBe('1 m');
-    expect(formatDurationMs(3661000)).toBe('1 h 1 m');
-    expect(formatDurationMs(90000000)).toBe('1 d 1 h');
+    expect(formatDurationMs(500)).toBe('500ms');
+    expect(formatDurationMs(30000)).toBe('30s');
+    expect(formatDurationMs(60000)).toBe('1m');
+    expect(formatDurationMs(3661000)).toBe('1h 1m');
+    expect(formatDurationMs(90000000)).toBe('1d 1h');
   });
 });
 

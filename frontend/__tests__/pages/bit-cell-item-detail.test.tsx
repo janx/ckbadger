@@ -163,7 +163,7 @@ it('reports missing identity and unavailable raw evidence without inventing a do
   expect(
     await screen.findByRole('heading', {
       level: 1,
-      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+      name: "no identity with this id. the local index was asked; it holds none. honey badger don't care.",
     })
   ).toBeInTheDocument();
   // U-18: the facts name the checked endpoint with the id shortened, once

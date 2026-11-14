@@ -77,7 +77,7 @@ describe('identity facts rail (ID-C6)', () => {
     // Lane P: how far off is the metric's hover; the note keeps the last renewal.
     expect(fact('Expires')).toHaveTextContent('renewed 2025-02-18');
     expect(fact('Expires')).not.toHaveTextContent('in 116 days');
-    expect(fact('Expires')).toHaveAttribute('title', 'expires in 116 days');
+    expect(fact('Expires')).toHaveAttribute('title', 'expires in 116\u00a0days');
     expect(fact('Registered')).toHaveTextContent('2024-02-20');
     expect(fact('Registered')).toHaveAttribute('title', 'registered 2024-02-20 08:56:57 UTC+8');
     expect(fact('Registered')).toHaveTextContent('#12,260,151');
@@ -111,7 +111,7 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Expired')).toHaveTextContent('2026-04-24');
     // Lane P: the date is the value; how long ago is the metric's hover.
     expect(fact('Expired')).toHaveTextContent(/^Expired2026-04-24 · never renewed$/);
-    expect(fact('Expired')).toHaveAttribute('title', 'expired 184 days ago');
+    expect(fact('Expired')).toHaveAttribute('title', 'expired 184\u00a0days ago');
     expect(fact('Minted')).toBeInTheDocument();
     expect(fact('.bit account')).toHaveTextContent('888899.bit · not live');
   });
@@ -168,10 +168,9 @@ describe('identity summary (ID-C5)', () => {
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
       'Registered on 2024-02-20 and renewed twice, it is held until 2027-02-19. Its owner has never changed. No records are set.'
     );
-    expect(within(screen.getByTestId('identity-summary')).getByText('2027-02-19')).toHaveAttribute(
-      'title',
-      '116 days from now'
-    );
+    expect(
+      within(screen.getByTestId('identity-summary')).getByText('2027-02-19').closest('[title]')
+    ).toHaveAttribute('title', '116\u00a0days from now');
   });
 
   it('tells a did:ckb it has no expiry and names its server', () => {
@@ -265,10 +264,9 @@ describe('.bit Cell summary when the term has ended', () => {
       "The name's term ended on 2026-04-24."
     );
     // Lane P: how long ago is the date's hover.
-    expect(within(screen.getByTestId('identity-summary')).getByText('2026-04-24')).toHaveAttribute(
-      'title',
-      '184 days ago'
-    );
+    expect(
+      within(screen.getByTestId('identity-summary')).getByText('2026-04-24').closest('[title]')
+    ).toHaveAttribute('title', '184\u00a0days ago');
   });
 });
 

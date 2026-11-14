@@ -5,6 +5,7 @@ import {
   type IdentityRecordInput,
   type IdentityRecordValue,
 } from '@/lib/identity-records';
+import { formatCount, countNoun } from '@/lib/format-count';
 
 function RecordValue({ value, label }: { value: IdentityRecordValue; label?: string }) {
   switch (value.kind) {
@@ -14,11 +15,11 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
         <span className="flex items-center gap-2.5">
           <img
             src={value.src}
-            alt={`${label ?? 'Record'}, a ${value.format} image of ${value.bytes.toLocaleString('en-US')} bytes`}
+            alt={`${label ?? 'Record'}, a ${value.format} image of ${formatCount(value.bytes, 'byte')}`}
             className="border-base-border h-12 w-12 shrink-0 rounded border object-cover"
           />
           <span className="text-text">
-            {value.format} · {value.bytes.toLocaleString('en-US')} bytes
+            {value.format} · {formatCount(value.bytes, 'byte')}
           </span>
         </span>
       );
@@ -38,9 +39,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
         </span>
       );
     case 'bytes':
-      return (
-        <span className="text-text">{value.bytes.toLocaleString('en-US')} bytes, not text</span>
-      );
+      return <span className="text-text">{formatCount(value.bytes, 'byte')}, not text</span>;
     case 'empty':
       return <span className="text-text-dim">set, empty</span>;
   }
@@ -88,7 +87,7 @@ export function IdentityRecords({
         args={`${subject} · ${records.length.toLocaleString('en-US')}`}
       />
       {records.length === 0 ? (
-        <p className="text-text">No records are set.</p>
+        <p className="text-text">No records.</p>
       ) : (
         <>
           {view.addresses.length > 0 && (
@@ -155,7 +154,7 @@ export function IdentityRecords({
             </dl>
           )}
           <p className="text-text-dim text-small">
-            {records.length.toLocaleString('en-US')} record{records.length === 1 ? '' : 's'} · each
+            {records.length.toLocaleString('en-US')} {countNoun(records.length, 'record')} · each
             cached for {view.ttls.map((t) => `${t.toLocaleString('en-US')} s`).join(' or ')}
           </p>
         </>

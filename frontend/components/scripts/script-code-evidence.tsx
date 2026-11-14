@@ -12,13 +12,14 @@ import type {
 import { formatCkbAmount, truncateHash } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
 import { formatPercent } from '@/lib/ckb-decimal';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
+import { NoBreak } from '@/components/ui/no-break';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -325,6 +326,13 @@ function CodeCellLink({ outpoint }: { outpoint: string }) {
   );
 }
 
+/** A verified multisig's key count: the API states it for every one it verified. */
+function verifiedKeyCount(custody: ScriptCustodyApi): number {
+  if (custody.keyCount === null)
+    throw new Error(`verified multisig ${custody.lockArgs} carries no key count`);
+  return custody.keyCount;
+}
+
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
   return (
@@ -332,8 +340,8 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
       {custody.class === 'multisig' && custody.witnessState === 'verified' && (
         <div className="text-text-dim mt-1">
-          {custody.threshold} of {custody.keyCount} keys · witness configuration matches the code
-          cell lock arguments
+          {custody.threshold} of {formatCount(verifiedKeyCount(custody), 'key')} · witness
+          configuration matches the code cell lock arguments
         </div>
       )}
       {custody.witnessState === 'unavailable' && custody.class === 'multisig' && (
@@ -365,7 +373,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         <div className="text-text-dim mt-1 break-all">
           This holder signed to spend the code cell in{' '}
           <AppLink href={`/tx/${signer}`} className="text-emphasis hover:underline">
-            {truncateHash(signer, 12, 8)}
+            <NoBreak>{truncateHash(signer, 12, 8)}</NoBreak>
           </AppLink>
         </div>
       )}
@@ -377,8 +385,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
               className="break-all"
             >
               {scriptClassLabel(owner.class)} · {owner.lockHashType} {owner.lockCodeHash} · args{' '}
-              {owner.lockArgs} · {owner.codeCells.length} code cell
-              {owner.codeCells.length === 1 ? '' : 's'}:{' '}
+              {owner.lockArgs} · {formatCount(owner.codeCells.length, 'code cell')}:{' '}
               {owner.codeCells.map((outpoint, i) => (
                 <Fragment key={outpoint}>
                   {i > 0 && ', '}
@@ -470,7 +477,7 @@ export function ScriptCapacityEvidenceChart({
   }
   const chartMarkers = [...chartMarkerGroups].map(([index, dayMarkers]) => ({
     index,
-    label: `code · ${dayMarkers.length} event${dayMarkers.length === 1 ? '' : 's'}`,
+    label: `code · ${dayMarkers.length} ${countNoun(dayMarkers.length, 'event')}`,
     plotLabel: '◆',
     href: `/blocks/${dayMarkers[0].blockNumber}`,
   }));
@@ -545,7 +552,9 @@ export function ScriptCapacityEvidenceChart({
                   href={`/cell/${marker.codeCellTxHash}-${marker.codeCellOutputIndex}`}
                   className="hover:text-text-bright hover:underline"
                 >
-                  {truncateHash(marker.codeCellTxHash, 8, 6)}:{marker.codeCellOutputIndex}
+                  <NoBreak>
+                    {truncateHash(marker.codeCellTxHash, 8, 6)}:{marker.codeCellOutputIndex}
+                  </NoBreak>
                 </AppLink>
               </span>
             ))}

@@ -16,6 +16,7 @@ import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { cn } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
+import { formatCount, countNoun } from '@/lib/format-count';
 
 export interface ProtocolEvidenceField {
   name: string;
@@ -49,13 +50,13 @@ const FOLDED_BYTES = 32;
 const ROW = 16;
 
 const fmt = (n: number) => n.toLocaleString('en-US');
-const plural = (n: number, one: string, many: string) => `${fmt(n)} ${n === 1 ? one : many}`;
+const plural = (n: number, one: string, many: string) => formatCount(n, one, many);
 const sentence = (s: string) => `${s[0].toUpperCase()}${s.slice(1)}.`;
 
 /** A run no field describes: said plainly, with what its bytes show when they show more than a count. */
 function gapWords(own: readonly string[]): string {
   const shape = fieldShape(own);
-  const plain = `No decoded field covers ${own.length === 1 ? 'this byte' : 'these bytes'}`;
+  const plain = `No decoded field covers ${countNoun(own.length, 'this byte', 'these bytes')}`;
   return /^[\d,]+ bytes?$/.test(shape) ? `${plain}.` : `${plain}: ${shape}.`;
 }
 
@@ -146,7 +147,7 @@ function ProtocolEvidenceView({
         start: gap.start,
         end: gap.end,
         words: header
-          ? `No field describes these bytes: a molecule table header, the size of all ${fmt(header.total)} bytes, then where its ${fmt(header.offsets.length)} fields start: ${header.offsets.map(fmt).join(', ')}.`
+          ? `No field describes these bytes: a molecule table header, the size of all ${formatCount(header.total, 'byte')}, then where its ${formatCount(header.offsets.length, 'field')} start: ${header.offsets.map(fmt).join(', ')}.`
           : gapWords(own),
         ink: 'var(--c-text-dim)',
         dim: 0,
@@ -351,7 +352,7 @@ function FieldDetail({
           <p className="text-text-dim text-meta mt-1.5">… {fmt(n - shown)} more bytes</p>
           <details className="mt-1.5 min-w-0">
             <summary className="text-text-dim text-meta cursor-pointer">
-              All {fmt(n)} bytes of {reading.name}
+              All {formatCount(n, 'byte')} of {reading.name}
             </summary>
             <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
               0x{bytes.slice(reading.start, reading.end).join('')}

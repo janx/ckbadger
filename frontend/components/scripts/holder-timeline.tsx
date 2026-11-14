@@ -92,7 +92,7 @@ function holderTitle(holder: CodeHolder, previous: CodeHolder | null): string {
         ? 'its keys and threshold appear on chain the first time it signs'
         : '',
     previous && keys.length && before.length
-      ? `kept ${keys.filter((key) => before.includes(key)).length} of ${before.length} keys of ${holderName(previous.custody)} at the handover on ${day(holder.from.timestamp)}`
+      ? `kept ${keys.filter((key) => before.includes(key)).length} of ${formatCount(before.length, 'key')} of ${holderName(previous.custody)} at the handover on ${day(holder.from.timestamp)}`
       : '',
   ]
     .filter(Boolean)

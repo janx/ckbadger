@@ -3,6 +3,7 @@ import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
 import { DetailTier2 } from '@/components/ui/detail-layout';
+import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import type { AssetClass } from '@/lib/design-tokens';
 import { readErrorText } from '@/lib/read-error';
 import { cn } from '@/lib/utils';
@@ -225,8 +226,8 @@ export function AssetDetailShell({
 export interface AssetMetric {
   label: string;
   value: ReactNode;
-  /** The inline dim note after the value: "· 748 hold one". */
-  note?: ReactNode;
+  /** The inline dim note after the value: "· 748 hold one"; its parts, when it has several. */
+  note?: ReactNode | readonly ReactNode[];
   /** `body` for a value that is a name or an address (the board's 13 px); default `section`. */
   size?: 'section' | 'body';
   /** What the row leaves out of sight (a full date, an exact amount), on hover. */
@@ -250,13 +251,22 @@ export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
                 m.size === 'body' ? 'text-body' : 'text-section'
               )}
             >
-              {m.value}
-              {m.note && (
-                <span data-role="metric-note" className="text-text-dim text-small">
-                  {' · '}
-                  <span>{m.note}</span>
-                </span>
-              )}
+              {/* PA-25: the value and its note's parts are one separated list, so a note's dot
+                  goes with it to a new line ("· 3.82% occupied" opened one, "USDC ·" ended one).
+                  The list speaks in the note's size; the value keeps its own inside its item. */}
+              <Dotted
+                className="text-small"
+                parts={[
+                  <span key="value" className={m.size === 'body' ? 'text-body' : 'text-section'}>
+                    {m.value}
+                  </span>,
+                  m.note !== undefined &&
+                    dottedGroup(Array.isArray(m.note) ? m.note : [m.note], {
+                      role: 'metric-note',
+                      className: 'text-text-dim text-small',
+                    }),
+                ]}
+              />
             </dd>
           </div>
         ))}

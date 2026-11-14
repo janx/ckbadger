@@ -34,6 +34,7 @@ import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
+import { formatCount } from '@/lib/format-count';
 export type { ItemFeedHeadline, ItemFeedSubject } from '@/lib/feed-headlines';
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
@@ -258,7 +259,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
         );
         const figures = [
           <span key="cells" className="whitespace-nowrap">
-            {r.inputsCount} → {r.outputsCount} cells
+            {r.inputsCount} → {formatCount(r.outputsCount, 'cell')}
           </span>,
           <span key="fee" className="whitespace-nowrap">
             fee <ExactCkb shannons={BigInt(r.fee)} signed={false} tone="plain" />
@@ -422,7 +423,7 @@ function RecentAssetFeed({
             >
               {recent.transactions === null
                 ? 'All transactions →'
-                : `${recent.transactions.toLocaleString('en-US')} transactions →`}
+                : `${formatCount(recent.transactions, 'transaction')} →`}
             </button>
           </>
         }

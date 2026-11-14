@@ -3,6 +3,8 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import { HexCode } from '@/components/ui/hex-code';
+import { NoBreak } from '@/components/ui/no-break';
 import { useParams } from '@/src/navigation';
 import {
   api,
@@ -24,7 +26,7 @@ import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink, SentenceNodes, type SentencePart } from '@/components/ui/block-link';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import {
   blockClock,
   forkRefHref,
@@ -34,9 +36,10 @@ import {
 } from '@/lib/fork-format';
 import { MinerLink, minerName } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
-import { formatUtc8Date, formatUtc8DateTime, formatUtc8Time } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { DocumentTitle } from '@/lib/use-document-title';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 type MinerBlock = {
   number: number;
@@ -60,6 +63,14 @@ function Miner({ block }: { block: MinerBlock }) {
   return <MinerLink address={minerAddressOf(block)} pool={block.minerPool} />;
 }
 const hashShort = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
+
+/**
+ * A full hash in tier 2 (U-16): one token, whole on its line where the line holds it, else one
+ * line in its own box that scrolls sideways (HexCode's full form); never wrapped in the middle.
+ */
+const FullHash = ({ hash }: { hash: string }) => (
+  <HexCode value={hash} truncate={false} copyable={false} variant="inherit" />
+);
 const blockAt = (number: number) => (
   <Link href={`/blocks/${number}`} className="hover:text-jade">
     {formatBlockNumber(number)}
@@ -176,8 +187,8 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
           Fork at {formatBlockNumber(event.forkPointNumber)}
         </h1>
         <span className="text-text-dim text-body">
-          {formatCount(event.depth, 'block')} deep · detected {formatUtc8DateTime(event.detectedAt)}{' '}
-          · this node switched once
+          {formatCount(event.depth, 'block')} deep · detected{' '}
+          <Utc8DateTime timestamp={event.detectedAt} /> · this node switched once
         </span>
       </div>
     </>
@@ -189,10 +200,16 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
  * stored event alone and there is no branch evidence. Say so, and tell what the event records.
  */
 function StoredFork({ event }: { event: ReorgEvent }) {
-  const story =
-    `This node switched from ${formatBlockNumber(event.oldTipNumber)} ${hashShort(event.oldTipHash)} to ${formatBlockNumber(event.newTipNumber)} ${hashShort(event.newTipHash)}` +
-    ` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.` +
-    (event.revertedByEvent ? ' A later switch on this node reversed it.' : '');
+  // U-16: each shortened hash is one unit
+  const story = (
+    <>
+      This node switched from {formatBlockNumber(event.oldTipNumber)}{' '}
+      <NoBreak>{hashShort(event.oldTipHash)}</NoBreak> to {formatBlockNumber(event.newTipNumber)}{' '}
+      <NoBreak>{hashShort(event.newTipHash)}</NoBreak>
+      {` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.`}
+      {event.revertedByEvent ? ' A later switch on this node reversed it.' : ''}
+    </>
+  );
   return (
     <div className="min-w-0">
       <ForkHeading event={event} />
@@ -245,7 +262,7 @@ function narrative(data: ReorgDetail): SentencePart[][] {
   const lost = orphanedBlocks.length - back.length;
   if (lost > 0)
     push(
-      `This node had followed ${lost === 1 ? 'the block' : 'the blocks'} that lost and switched to the other branch.`
+      `This node had followed ${countNoun(lost, 'the block', 'the blocks')} that lost and switched to the other branch.`
     );
   if (event.revertedByEvent) push('A later switch on this node reversed it.');
   const byInclusion = new Map<number, OrphanedBlock[]>();
@@ -266,7 +283,7 @@ function narrative(data: ReorgDetail): SentencePart[][] {
           : `${blocks.length} dropped blocks`;
     push(
       { block: number },
-      ` included ${which} as ${blocks.length === 1 ? 'an uncle' : 'uncles'}.`
+      ` included ${which} as ${countNoun(blocks.length, 'an uncle', 'uncles')}.`
     );
   }
   for (const block of orphanedBlocks) {
@@ -294,9 +311,9 @@ function narrative(data: ReorgDetail): SentencePart[][] {
       ).length;
       const waiting = txs.filter((tx) => tx.fate === 'not_committed_as_of_tip').length;
       push(
-        `${committed} of its ${formatCount(txs.length, 'transaction')} ${committed === 1 ? 'was' : 'were'} committed later.` +
+        `${committed} of its ${formatCount(txs.length, 'transaction')} ${countNoun(committed, 'was', 'were')} committed later.` +
           (waiting
-            ? ` ${waiting} ${waiting === 1 ? 'is' : 'are'} not committed as of the tip.`
+            ? ` ${waiting} ${countNoun(waiting, 'is', 'are')} not committed as of the tip.`
             : '')
       );
     }
@@ -391,36 +408,38 @@ function StoredEvent({
     <DetailSection title="This node’s fork event, as stored">
       <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
         <span className="text-text-dim">fork point</span>
-        <span className="break-all">
-          {blockAt(event.forkPointNumber)} {event.forkPointHash}
+        <span className="min-w-0">
+          {blockAt(event.forkPointNumber)} <FullHash hash={event.forkPointHash} />
         </span>
         <span className="text-text-dim">first dropped</span>
-        <span className="break-all">
-          {formatBlockNumber(event.forkPointNumber + 1)}′ {firstOrphanOf(event)}
+        <span className="min-w-0">
+          {formatBlockNumber(event.forkPointNumber + 1)}′ <FullHash hash={firstOrphanOf(event)} />
         </span>
         <span className="text-text-dim">detected</span>
-        <span>{formatUtc8DateTime(event.detectedAt)}</span>
+        <span>
+          <Utc8DateTime timestamp={event.detectedAt} />
+        </span>
         <span className="text-text-dim">depth</span>
         <span>{formatCount(event.depth, 'block')}</span>
         <span className="text-text-dim">old tip</span>
-        <span className="break-all">
-          {formatBlockNumber(event.oldTipNumber)} {event.oldTipHash}
+        <span className="min-w-0">
+          {formatBlockNumber(event.oldTipNumber)} <FullHash hash={event.oldTipHash} />
         </span>
         <span className="text-text-dim">new tip</span>
-        <span className="break-all">
+        <span className="min-w-0">
           {onMain?.(event.newTipHash) ? (
             <BlockLink number={event.newTipNumber} />
           ) : (
             formatBlockNumber(event.newTipNumber)
           )}{' '}
-          {event.newTipHash}
+          <FullHash hash={event.newTipHash} />
         </span>
         {event.supersededByTipHash && (
           <>
             <span className="text-text-dim">superseded</span>
-            <span className="break-all">
+            <span className="min-w-0">
               before replay; the canonical {formatBlockNumber(event.newTipNumber)} was{' '}
-              {event.supersededByTipHash}
+              <FullHash hash={event.supersededByTipHash} />
             </span>
           </>
         )}
@@ -501,7 +520,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             <span className="text-text-dim">before {formatUtc8Time(event.detectedAt)}</span>
             <span className="text-text col-span-2 sm:col-span-1">
               this node’s tip is {formatBlockNumber(event.oldTipNumber)}{' '}
-              <span className="text-text-dim">{hashShort(event.oldTipHash)}</span>{' '}
+              <NoBreak className="text-text-dim">{hashShort(event.oldTipHash)}</NoBreak>{' '}
               {where(event.oldTipHash)}
             </span>
             <span className="text-text-bright">{TIP_MARKS[2]}</span>
@@ -513,9 +532,10 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               ) : (
                 formatBlockNumber(event.newTipNumber)
               )}{' '}
-              <span className="text-text-dim">{hashShort(event.newTipHash)}</span> and drops{' '}
-              {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}
-              <span className="text-text-dim"> · depth {event.depth}</span>
+              <NoBreak className="text-text-dim">{hashShort(event.newTipHash)}</NoBreak> and drops{' '}
+              {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}{' '}
+              {/* the dot goes with its item to a new line (PA-25) */}
+              <NoBreak className="text-text-dim">· depth {event.depth}</NoBreak>
             </span>
             {event.revertedByEvent && (
               <span data-testid="fork-step-3" className="contents">
@@ -524,9 +544,9 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 <span className="text-text col-span-2 sm:col-span-1">
                   <EventRef target={event.revertedByEvent} text="a later switch" /> moves this node
                   to {formatBlockNumber(event.revertedByEvent.newTip.number)}{' '}
-                  <span className="text-text-dim">
+                  <NoBreak className="text-text-dim">
                     {hashShort(event.revertedByEvent.newTip.hash)}
-                  </span>{' '}
+                  </NoBreak>{' '}
                   {where(event.revertedByEvent.newTip.hash)}
                 </span>
               </span>
@@ -557,7 +577,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     style={inkStyle(BOARD_INKS.link)}
                     title={row.hash}
                   >
-                    {hashShort(row.hash)}
+                    <NoBreak>{hashShort(row.hash)}</NoBreak>
                   </span>
                 ),
               },
@@ -601,7 +621,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                           style={inkStyle(BOARD_INKS.link)}
                           title={row.hash}
                         >
-                          {hashShort(row.hash)}
+                          <NoBreak>{hashShort(row.hash)}</NoBreak>
                         </span>
                       </>
                     ),
@@ -767,7 +787,14 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                   {uncles.map((block, i) => (
                     <span key={block.hash} className="contents">
                       <span className="text-text-dim">uncle {i}</span>
-                      <span className="break-all">{`${block.hash} · ${formatBlockNumber(block.number)}`}</span>
+                      <span className="min-w-0">
+                        <Dotted
+                          parts={[
+                            <FullHash key="h" hash={block.hash} />,
+                            formatBlockNumber(block.number),
+                          ]}
+                        />
+                      </span>
                     </span>
                   ))}
                   <span className="text-text-dim">included by</span>
@@ -780,7 +807,8 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                         {minerAddressOf(includer)}
                       </Link>
                     ) : (
-                      <span className="text-text-dim">miner witness unavailable</span>
+                      // U-15: the miner's witness is not in the store; said as a fact, not a state
+                      <span className="text-text-dim">not recorded</span>
                     )}
                   </span>
                 </div>

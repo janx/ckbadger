@@ -387,7 +387,7 @@ describe('TransactionListTable row stones', () => {
         { form: 'row', height: ROW_SEAL.tx.height, state: 'pressed', ...SEAL_INKS }
       );
       expect(seal.innerHTML).not.toBe(parsed(counted.svg));
-      expect(row).toHaveTextContent(width === null ? '0 → 1' : '0 → 1 cells');
+      expect(row).toHaveTextContent(width === null ? '0 → 1' : '0 → 1 cell');
       unmount();
     }
   });
@@ -463,7 +463,7 @@ describe('TransactionListTable row stones', () => {
     const started = performance.now();
     render(<TransactionListTable transactions={many} />);
     const elapsed = performance.now() - started;
-    console.info(`50 transaction rows with their stones: ${elapsed.toFixed(1)} ms`);
+    console.info(`50\u00a0transaction rows with their stones: ${elapsed.toFixed(1)} ms`);
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(50);
     rows.forEach((tr, i) =>
@@ -510,7 +510,7 @@ describe('TransactionListTable phone row (board L2)', () => {
         tone: 'quiet',
         // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB").
         left: '0 CKB · fee 0.00030000 CKB',
-        right: '3 → 3 cells · 903 B · 1,704,957 cycles',
+        right: '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
       },
     ]);
     expect(call.querySelector('[data-line="what"] .truncate')).toBeNull();
@@ -518,7 +518,7 @@ describe('TransactionListTable phone row (board L2)', () => {
     expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xc89d2d25...9a2cd7', expect.stringMatching(/^#20,829,775 · /)],
       ['what', 'Cellbase pays #20,829,764 · reward 559.61739927 CKB', null],
-      ['figures', '0 → 1 cells · 360 B · fee 0 CKB', '0 cycles'],
+      ['figures', '0 → 1\u00a0cell · 360 B · fee 0 CKB', '0 cycles'],
     ]);
     expect(base.closest('[role="listitem"]')).toHaveClass('quiet');
   });
@@ -532,7 +532,7 @@ describe('TransactionListTable phone row (board L2)', () => {
       [
         'what',
         'Script call · .bit Time Index State · .bit Time Info · 0 CKB · fee 0.00030000 CKB',
-        '3 → 3 cells · 903 B · 1,704,957 cycles',
+        '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
       ],
     ]);
   });

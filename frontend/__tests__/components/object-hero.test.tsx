@@ -19,10 +19,10 @@ const v = (over: Partial<ItemCellVersion>): ItemCellVersion => ({
 });
 
 it('spells durations and lock phrases for prose', () => {
-  expect(spelledDuration(30_000)).toBe('30 seconds');
-  expect(spelledDuration(60_000)).toBe('1 minute');
-  expect(spelledDuration(2 * 86_400_000)).toBe('2 days');
-  expect(spelledDuration(800 * 86_400_000)).toBe('2 years');
+  expect(spelledDuration(30_000)).toBe('30\u00a0seconds');
+  expect(spelledDuration(60_000)).toBe('1\u00a0minute');
+  expect(spelledDuration(2 * 86_400_000)).toBe('2\u00a0days');
+  expect(spelledDuration(800 * 86_400_000)).toBe('2\u00a0years');
   expect(() => spelledDuration(-1)).toThrow('invalid duration');
   expect(lockPhrase('Nervape Shadow Lock')).toBe('a Nervape Shadow Lock');
   expect(lockPhrase('secp256k1')).toBe('a secp256k1 lock');
@@ -40,7 +40,7 @@ it('tells an item’s life from its cell versions', () => {
     'Minted to a Nervape Shadow Lock, where it sits now.'
   );
   expect(itemLifeSentence([minted, moved], now)).toBe(
-    'Minted to a secp256k1 lock, then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
+    'Minted to a secp256k1 lock, then moved 30\u00a0seconds later to a Nervape Shadow Lock, where it sits now.'
   );
   expect(
     itemLifeSentence([minted, { ...moved, isLive: false, consumedAtBlock: 12 }], now, 'Issued', 'X')
@@ -57,9 +57,9 @@ it('keeps how long ago an item was minted and last moved for the sentence’s ho
   const now = 10 * 86_400_000;
   const minted = v({ timestamp: '0', lockName: 'secp256k1', isLive: false });
   const third = v({ timestamp: String(8 * 86_400_000), lockName: 'JoyID', isLive: true });
-  expect(itemLifeAges([minted], now)).toBe('minted 10 days ago');
+  expect(itemLifeAges([minted], now)).toBe('minted 10\u00a0days ago');
   expect(itemLifeAges([minted, third], now, 'Issued')).toBe(
-    'issued 10 days ago · last moved 2 days ago'
+    'issued 10\u00a0days ago · last moved 2\u00a0days ago'
   );
 });
 
@@ -75,7 +75,7 @@ it('explains what changed in the cell between minting and now', () => {
     anatomy: { capacityBytes: 8, lockBytes: 66, typeBytes: 65, dataBytes: 181 },
   });
   expect(cellLifeSentence([a, b], 'object')).toBe(
-    'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
+    'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13\u00a0bytes, so the cell grew by 13 CKB when it moved.'
   );
   expect(
     cellLifeSentence([v({ capacity: '13400000000', occupiedCapacity: '13300000000' })], 'token')

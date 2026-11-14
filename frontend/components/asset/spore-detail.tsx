@@ -44,6 +44,7 @@ import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
+import { formatCount, countNoun } from '@/lib/format-count';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -149,9 +150,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             value: (
               <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
             ),
-            note: collection.data
-              ? `${collection.data.liveCount.toLocaleString('en-US')} objects`
-              : undefined,
+            note: collection.data ? formatCount(collection.data.liveCount, 'object') : undefined,
           },
         ]
       : []),
@@ -199,7 +198,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               <AppLink href={`/blocks/${last.blockNumber}`}>
                 {formatBlockNumber(last.blockNumber)}
               </AppLink>{' '}
-              · <span>{`${moves} transfer${moves === 1 ? '' : 's'} since minting`}</span>
+              · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
             </>
           )
         ) : undefined,
@@ -219,7 +218,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Content',
       size: 'body',
       value: <span className="break-all">{object.contentType}</span>,
-      note: `${object.contentSize.toLocaleString('en-US')} bytes`,
+      note: formatCount(object.contentSize, 'byte'),
     },
   ];
   const coll = collection.data;
@@ -236,7 +235,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             {coll && collectionName && (
               <span>
                 {' '}
-                {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${coll.holdersCount.toLocaleString('en-US')} addresses`}.`}
+                {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`}
               </span>
             )}
           </p>

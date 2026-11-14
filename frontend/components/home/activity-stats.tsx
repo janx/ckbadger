@@ -29,6 +29,7 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { cn, formatCkbCompact } from '@/lib/utils';
+import { countNoun, formatCount } from '@/lib/format-count';
 
 const TYPE_BREAKDOWN = '/charts/activity-type-breakdown';
 
@@ -39,7 +40,7 @@ export function ActivityStats() {
     queryFn: () => api.getActivitySummary24h(),
     refetchInterval: 30000,
   });
-  const d = useMemo(() => derive({ data, error }, summaryView, 'No activity yet'), [data, error]);
+  const d = useMemo(() => derive({ data, error }, summaryView, 'No activity.'), [data, error]);
 
   return (
     <div data-testid="home-activity-stats" className="flex min-w-0 flex-col gap-[22px]">
@@ -95,7 +96,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   if (scripts.others) {
     rows.push({
       key: 'others',
-      label: `${scripts.others.scripts} other${scripts.others.scripts === 1 ? '' : 's'}`,
+      label: `${scripts.others.scripts} ${countNoun(scripts.others.scripts, 'other')}`,
       share: scripts.others.share,
     });
   }
@@ -146,7 +147,7 @@ function Summary({ view }: { view: SummaryView }) {
         />
         <RankedBars
           testId="home-activity-scripts"
-          title={`By script, share of ${n(view.scriptCalls)} calls`}
+          title={`By script, share of ${formatCount(view.scriptCalls, 'call')}`}
           titleHref="/charts/most-utilized-scripts"
           rows={view.scripts}
           wideLabels
@@ -220,7 +221,7 @@ function DailyActivityFigure() {
       derive(
         { data, error },
         ({ days, transactions }) => dailyActivityView(days, transactions),
-        'No daily activity yet'
+        'No daily activity.'
       ),
     [data, error]
   );

@@ -55,7 +55,7 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
       })),
     });
     render(<ChartDetail slug="nominal-apc" />);
-    expect(await screen.findByRole('heading', { name: 'Model 20 years' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Model 20\u00a0years' })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('model samples');
   });
 

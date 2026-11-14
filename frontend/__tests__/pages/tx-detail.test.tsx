@@ -447,7 +447,11 @@ describe('TransactionDetailPage', () => {
       Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
         (l) => l.textContent
       )
-    ).toEqual(['1 cell became 1.', '0.00064119 ckb to the miner.', 'common knowledge unchanged.']);
+    ).toEqual([
+      '1\u00a0cell became 1.',
+      '0.00064119 ckb to the miner.',
+      'common knowledge unchanged.',
+    ]);
   });
 
   it('requests missing executed-group cycles without discarding the measured transaction total', async () => {
@@ -545,7 +549,7 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByText('Paused: indexer is on a deep fork')).toBeInTheDocument();
     expect(screen.queryByText('Calculation failed')).not.toBeInTheDocument();
-    expect(screen.queryByText('Calculating...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Calculating…')).not.toBeInTheDocument();
   });
   it('marks genesis transactions as outside canonical replay and keeps zero cycles', async () => {
     const tx = createCommittedTransactionDetail();
@@ -595,10 +599,10 @@ describe('TransactionDetailPage', () => {
         (l) => l.textContent
       )
     ).toEqual([
-      '1 cell became 2.',
+      '1\u00a0cell became 2.',
       '0 ckb to the miner.',
       // 61 occupied bytes in, 117 + 117 out
-      'common knowledge grew by 173 bytes.',
+      'common knowledge grew by 173\u00a0bytes.',
     ]);
   });
 
@@ -665,7 +669,7 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     expect((await screen.findAllByText('Pending')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Cell deps' })).toBeInTheDocument();
     expect(screen.getByText('Cell graph')).toBeInTheDocument();
 
@@ -693,7 +697,7 @@ describe('TransactionDetailPage', () => {
     // confirmation count are not known yet and are shown as pending.
     expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Confirming').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.queryByText(/confirmations?$/i)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
     // C2: in a block the store has not indexed yet, its stone is dashed; no cells, no seam seal.
@@ -1393,7 +1397,7 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('no transaction at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no transaction with this hash.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/transactions/${truncateHash(TX_HASH)}/detail`
@@ -1409,7 +1413,7 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not read this transaction: upstream request 404 timed out'
     );
-    expect(screen.queryByText('no transaction at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no transaction with this hash.')).not.toBeInTheDocument();
   });
 
   it('shows detailed message for non-404 transaction errors', async () => {

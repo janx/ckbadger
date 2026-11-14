@@ -101,7 +101,7 @@ describe('HolderTimeline (table-rows L1-3)', () => {
     );
     expect(second.title).toContain('signed v4 and v5 · 2025-08-28 → 2025-11-21');
     expect(second.title).toContain(
-      'kept 2 of 5 keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+      'kept 2 of 5\u00a0keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
     );
     expect(current.title).toBe(
       'multisig 0x65983f…d696 · signers not on chain yet · has never signed · since 2025-11-21 · lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696 · its keys and threshold appear on chain the first time it signs'

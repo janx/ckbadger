@@ -135,7 +135,8 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
       const content = sheet.querySelector('[data-sheet-content]')!;
       expect(content.firstElementChild).toBe(head);
       const h3 = within(sheet).getByRole('heading', { level: 3 });
-      expect(h3).toHaveAccessibleName(`${count} ${side}`);
+      // U-16 (re-pinned): the count and its noun are one unit in the heading's name
+      expect(h3).toHaveAccessibleName(`${count.replace(' ', '\u00a0')} ${side}`);
       expect(head).toContainElement(h3);
       // line 1, the eyebrow label (first on screen, after the count in the name); line 2, the count
       const [figure, label] = Array.from(h3.children) as HTMLElement[];
@@ -164,8 +165,8 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     const { container, unmount } = structure();
     expect(container.querySelector('[data-sheet-total]')).toBeNull();
     // the heads keep their two lines and their names
-    expect(screen.getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '2 cells created' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '1\u00a0cell consumed' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '2\u00a0cells created' })).toBeInTheDocument();
     unmount();
     // a supplied total is the API's, drawn as given even where the tiles would sum otherwise
     const other = structure({ consumedCapacity: '1', createdCapacity: '0' });

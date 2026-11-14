@@ -8,7 +8,7 @@ describe('block evidence visuals', () => {
       <BlockContents transactionSizes={[100, 100, 400]} proposalsCount={3} unclesCount={1} />
     );
     expect(screen.getByRole('img')).toHaveAccessibleName(
-      'Cellbase, 2 user transactions, 3 proposals, 1 uncles'
+      'Cellbase, 2\u00a0user transactions, 3\u00a0proposals, 1\u00a0uncle'
     );
     const squares = container.querySelectorAll('rect');
     expect(Number(squares[1].getAttribute('width')) ** 2).toBe(

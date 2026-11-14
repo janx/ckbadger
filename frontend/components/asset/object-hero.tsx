@@ -9,6 +9,7 @@ import { isReadableTrait, traitDisplay, type DnaTrait } from '@/lib/dob-genes';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
+import { formatCount, countNoun } from '@/lib/format-count';
 
 /** One status pill for an item page: jade while live, grey once gone (OB-15). */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
@@ -115,8 +116,9 @@ export function ObjectTraits({
         })}
       </dl>
       <p className="text-text-dim text-meta">
-        Each trait is read from the object’s DNA, below ·{' '}
-        <TapOrHoverHint what="one to find its gene" />
+        Each trait is read from the object’s DNA, below
+        {/* PB-23: the dot goes with the hint; when the page's one hint is elsewhere, no dot */}
+        <TapOrHoverHint what="one to find its gene" dotted />
       </p>
     </div>
   );
@@ -136,7 +138,7 @@ export function spelledDuration(ms: number): string {
   for (const [size, unit] of units)
     if (ms >= size) {
       const n = Math.floor(ms / size);
-      return `${n} ${unit}${n === 1 ? '' : 's'}`;
+      return formatCount(n, unit);
     }
   return 'under a second';
 }
@@ -173,7 +175,7 @@ export function itemLifeSentence(
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
-    return `${born}${moves ? `, moved ${moves} time${moves === 1 ? '' : 's'}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
+    return `${born}${moves ? `, moved ${moves} ${countNoun(moves, 'time')}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
   }
   if (moves === 0) return `${born}, where it sits now.`;
   const later = spelledDuration(timeOf(last) - timeOf(first));
@@ -232,7 +234,9 @@ export function cellLifeSentence(
   const changes = (['lock', 'type', 'data'] as const).flatMap((part) => {
     const key = `${part}Bytes` as const;
     const d = last.anatomy[key] - first.anatomy[key];
-    return d === 0 ? [] : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${Math.abs(d)} bytes`];
+    return d === 0
+      ? []
+      : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${formatCount(Math.abs(d), 'byte')}`];
   });
   const dCap = cap - was,
     dOcc = occupied - BigInt(first.occupiedCapacity);

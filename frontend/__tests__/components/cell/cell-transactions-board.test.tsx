@@ -225,9 +225,12 @@ describe('Its transactions against the Cell board', () => {
     ]);
     view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
     await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
-    const dep = await screen.findByRole('link', { name: `${depTx}:1` });
+    // U-16 (re-pinned): the dep is a reference, written as the transaction page writes it — its
+    // kind, then the out point shortened (was the full out point and "(dep_group)")
+    const short = `${depTx.slice(0, 10)}...${depTx.slice(-6)}:1`;
+    const dep = await screen.findByRole('link', { name: short });
     expect(dep).toHaveAttribute('href', expect.stringMatching(new RegExp(`/cell/${depTx}-1$`)));
-    expect(dep.parentElement).toHaveTextContent(`${depTx}:1 (dep_group)`);
+    expect(dep.parentElement).toHaveTextContent(`dep group ${short}`);
   });
 
   it('carries the live cell past its transaction into a dashed "Not spent yet" box (SC-C7)', async () => {
@@ -238,7 +241,7 @@ describe('Its transactions against the Cell board', () => {
     ).not.toBeNull();
     const box = screen.getByTestId('not-spent-yet');
     expect(box).toHaveTextContent('Not spent yet');
-    expect(box).toHaveTextContent('3 d 10 h · as of #20,834,844');
+    expect(box).toHaveTextContent('3d 10h · as of #20,834,844');
     // Lane L: the block it is measured at is a link.
     expect(within(box).getByRole('link', { name: '#20,834,844' })).toHaveAttribute(
       'href',

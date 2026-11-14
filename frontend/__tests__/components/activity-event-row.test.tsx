@@ -6,7 +6,7 @@ import {
   ItemDeltaFact,
   LockCallExpr,
   ParticipantLine,
-  ProtocolActionNote,
+  protocolActionNoteParts,
   TypeCallExpr,
   activityHeadline,
   buildGlobalTxEvents,
@@ -17,6 +17,7 @@ import {
 import { MINUS } from '@/lib/chart-ticks';
 import { exactCkbText } from '@/lib/ckb-decimal';
 import type { Activity, GlobalActivity } from '@/lib/api';
+import { Dotted } from '@/components/ui/phone-row';
 
 // Spread the overrides rather than `??`-ing each field: a pool row's
 // `blockNumber` is explicitly null, and `null ?? default` would quietly hand it
@@ -925,7 +926,13 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
   });
 });
 
-describe('ProtocolActionNote — the action metadata in one quiet line', () => {
+// The action metadata as the rows read it: its parts in the one separated list (E1 kept a dead
+// ProtocolActionNote wrapper for these tests; it is gone, and they read the live composition).
+function ProtocolActionNote({ pa }: { pa: Parameters<typeof protocolActionNoteParts>[0] }) {
+  return <Dotted parts={protocolActionNoteParts(pa)} />;
+}
+
+describe('protocol action metadata — in one quiet line', () => {
   it('reads a DAO withdraw request: amount and the deposit block', () => {
     render(
       <ProtocolActionNote

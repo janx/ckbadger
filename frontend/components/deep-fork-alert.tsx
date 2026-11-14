@@ -3,6 +3,7 @@
 import Link from '@/components/ui/link';
 import { DeepForkStatus } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 import { color, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 
@@ -47,7 +48,11 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
           <div className="text-body flex flex-wrap items-center gap-6">
             <div className="flex flex-col">
               <span className="eyebrow text-meta">Fork Depth</span>
-              <span className="font-mono font-bold">{status.depth} blocks</span>
+              <span className="font-mono font-bold">
+                {status.depth === null
+                  ? detectedHeight(status.depth, 'depth')
+                  : formatCount(status.depth, 'block')}
+              </span>
             </div>
             <div className="flex flex-col">
               <span className="eyebrow text-meta">DB Tip</span>

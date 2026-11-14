@@ -20,6 +20,7 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
+import { countNoun } from '@/lib/format-count';
 
 export interface CollectionHoldersProps {
   load: (params: {
@@ -156,7 +157,7 @@ function ScopedCollectionHolders({
         holder.lockScriptHash ??
         `${holder.ownerHashPrefix ?? holderKey(holder)} (unresolved)`,
       holder.lockCodeHash === null ? 'lock not indexed' : (holder.lockKind ?? holder.lockCodeHash),
-      `${holder.itemCount.toLocaleString('en-US')} ${holder.itemCount === 1 ? 'item' : 'items'}`,
+      `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];
   const columns: ListColumn<CollectionHolder>[] = [
@@ -258,7 +259,7 @@ function ScopedCollectionHolders({
                         <span className="whitespace-nowrap">
                           <AssetCount value={holder.itemCount} />{' '}
                           <span className="text-text-dim text-small">
-                            {holder.itemCount === 1 ? 'item' : 'items'}
+                            {countNoun(holder.itemCount, 'item', 'items')}
                           </span>
                         </span>
                       }
@@ -329,7 +330,7 @@ function ScopedCollectionHolders({
                           <span className="text-text-dim">
                             {' · '}
                             <AssetCount value={bucket.items} />{' '}
-                            {bucket.items === 1 ? 'item' : 'items'}
+                            {countNoun(bucket.items, 'item', 'items')}
                           </span>
                         </>
                       ),
@@ -337,7 +338,7 @@ function ScopedCollectionHolders({
                         <span className="inline-flex items-center gap-1.5">
                           {bucketColumns[1].render(bucket)}
                           <span className="text-text-dim">
-                            {bucket.holders === 1 ? 'holder' : 'holders'}
+                            {countNoun(bucket.holders, 'holder', 'holders')}
                           </span>
                         </span>
                       ),

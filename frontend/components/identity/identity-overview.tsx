@@ -10,6 +10,8 @@ import { describeIdentityRecords } from '@/lib/identity-records';
 import { readDidDocument } from '@/lib/did-document';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
 
 export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind: 'm-nft' }>;
 
@@ -24,8 +26,7 @@ function B({ children, title }: { children: ReactNode; title?: string }) {
   );
 }
 const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
-const plural = (n: number, one: string, many: string) =>
-  `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+const plural = (n: number, one: string, many: string) => formatCount(n, one, many);
 function listJoin(items: string[]) {
   return items.length <= 1
     ? items.join('')
@@ -75,16 +76,25 @@ function expiryFact(term: IdentityTerm, now: number, grace?: number): AssetMetri
   // Lane P: the date is the value; how long ago (or how far off) is the metric's hover.
   return {
     label: expired ? 'Expired' : 'Expires',
-    value: formatUtc8Date(term.expiresAt),
+    value: <NoBreak>{formatUtc8Date(term.expiresAt)}</NoBreak>,
     title: expired
       ? `expired ${plural(days, 'day', 'days')} ago`
       : `expires in ${plural(days, 'day', 'days')}`,
-    note: (
-      <>
-        {last ? `renewed ${formatUtc8Date(last.at)}` : 'never renewed'}
-        {grace !== undefined ? ` · grace to ${formatUtc8Date(grace)}` : ''}
-      </>
-    ),
+    // PB-05, PA-25: each date one unit, each note a part of the metric's one separated list
+    note: [
+      last ? (
+        <>
+          renewed <NoBreak>{formatUtc8Date(last.at)}</NoBreak>
+        </>
+      ) : (
+        'never renewed'
+      ),
+      grace !== undefined && (
+        <>
+          grace to <NoBreak>{formatUtc8Date(grace)}</NoBreak>
+        </>
+      ),
+    ],
   };
 }
 
@@ -93,7 +103,7 @@ function blockFact(label: string, timestamp: string | number, block: number): As
   return {
     label,
     title: `${label.toLowerCase()} ${formatUtc8DateTime(timestamp)}`,
-    value: formatUtc8Date(timestamp),
+    value: <NoBreak>{formatUtc8Date(timestamp)}</NoBreak>,
     note: <AppLink href={`/blocks/${block}`}>{formatBlockNumber(block)}</AppLink>,
   };
 }
@@ -213,7 +223,7 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
               </AppLink>
               <span className="text-text-dim font-normal">
                 {' '}
-                · expires {formatUtc8Date(c.expiredAt * 1000)}
+                · expires <NoBreak>{formatUtc8Date(c.expiredAt * 1000)}</NoBreak>
               </span>
             </span>
           ))}
@@ -361,11 +371,17 @@ export function IdentitySummary({
     return now >= term.expiresAt ? (
       <>
         {lead}
-        {whose} term ended on <B title={`${days} ago`}>{formatUtc8Date(term.expiresAt)}</B>
+        {whose} term ended on{' '}
+        <B title={`${days} ago`}>
+          <NoBreak>{formatUtc8Date(term.expiresAt)}</NoBreak>
+        </B>
       </>
     ) : (
       <>
-        {lead}held until <B title={`${days} from now`}>{formatUtc8Date(term.expiresAt)}</B>
+        {lead}held until{' '}
+        <B title={`${days} from now`}>
+          <NoBreak>{formatUtc8Date(term.expiresAt)}</NoBreak>
+        </B>
       </>
     );
   };
@@ -380,7 +396,10 @@ export function IdentitySummary({
       );
       body = (
         <>
-          Registered on <B>{formatUtc8Date(Number(d.registeredAt) * 1000)}</B>
+          Registered on{' '}
+          <B>
+            <NoBreak>{formatUtc8Date(Number(d.registeredAt) * 1000)}</NoBreak>
+          </B>
           {renewals ? ` and renewed ${times(renewals)}` : ''}
           {!isLive ? (
             '; it is no longer a live account. '
@@ -414,7 +433,11 @@ export function IdentitySummary({
         : 'a wallet whose lock is not named';
       body = (
         <>
-          Minted on <B>{formatUtc8Date(mint.timestamp)}</B> into <B>{wallet}</B>
+          Minted on{' '}
+          <B>
+            <NoBreak>{formatUtc8Date(mint.timestamp)}</NoBreak>
+          </B>{' '}
+          into <B>{wallet}</B>
           {!isLive
             ? '; the cell is no longer live. '
             : owners.changes === 0
@@ -459,12 +482,19 @@ export function IdentitySummary({
       ];
       body = (
         <>
-          A Web5 identity, created on <B>{formatUtc8Date(versions[0].cell.timestamp)}</B>.
+          A Web5 identity, created on{' '}
+          <B>
+            <NoBreak>{formatUtc8Date(versions[0].cell.timestamp)}</NoBreak>
+          </B>
+          .
           {versions.length > 1 && (
             <>
               {' '}
               Its document was updated {times(versions.length - 1)}, most recently on{' '}
-              <B>{formatUtc8Date(last.cell.timestamp)}</B>.
+              <B>
+                <NoBreak>{formatUtc8Date(last.cell.timestamp)}</NoBreak>
+              </B>
+              .
             </>
           )}
           {names.length > 0 && <> It names {listJoin(names)}.</>}
@@ -482,15 +512,18 @@ export function IdentitySummary({
       ).addresses.map((a) => a.coin);
       body = (
         <>
-          Registered on <B>{formatUtc8Date(versions[0].cell.timestamp)}</B>
+          Registered on{' '}
+          <B>
+            <NoBreak>{formatUtc8Date(versions[0].cell.timestamp)}</NoBreak>
+          </B>
           {term.kind === 'term' ? <> and {termClause('')}. </> : '. '}
           {owners.changes === 0 ? (
             'Its owner has never changed. '
           ) : (
             <>
               It changed hands {times(owners.changes)}; since{' '}
-              {formatUtc8Date(owners.since.cell.timestamp)} <B>{lockPhrase(d.owner.scriptName)}</B>{' '}
-              owns it
+              <NoBreak>{formatUtc8Date(owners.since.cell.timestamp)}</NoBreak>{' '}
+              <B>{lockPhrase(d.owner.scriptName)}</B> owns it
               {d.manager.hashPrefix !== d.owner.hashPrefix
                 ? ` while ${lockPhrase(d.manager.scriptName)} manages its records`
                 : ''}

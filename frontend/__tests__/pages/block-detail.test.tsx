@@ -155,7 +155,7 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_HASH;
     vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
     render(<BlockDetailPage />);
-    expect(await screen.findByText('no block at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no block with this number or hash.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/blocks/${truncateHash(BLOCK_HASH)}`
@@ -177,7 +177,7 @@ describe('BlockDetailPage', () => {
     );
     render(<BlockDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('missing canonical header');
-    expect(screen.queryByText('no block at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no block with this number or hash.')).not.toBeInTheDocument();
   });
 
   it('shows exact decoded DAO fields alongside the raw 32-byte header', async () => {
@@ -403,7 +403,7 @@ describe('BlockDetailPage', () => {
       '[data-testid="block-proposal-row"]'
     ) as HTMLElement;
     expect(row).toHaveTextContent('uncle #8,775,637');
-    expect(screen.queryByText('No proposals in this block')).not.toBeInTheDocument();
+    expect(screen.queryByText('No proposals in this block.')).not.toBeInTheDocument();
   });
 
   it('links every included uncle to its uncle page by position (BA-10)', async () => {
@@ -446,8 +446,8 @@ describe('BlockDetailPage', () => {
     render(<BlockDetailPage />);
     await screen.findByRole('heading', { name: 'Proposals' });
 
-    expect(await screen.findByText('No proposals in this block')).toBeInTheDocument();
-    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+    expect(await screen.findByText('No proposals in this block.')).toBeInTheDocument();
+    expect(screen.queryByText('Loading proposals…')).not.toBeInTheDocument();
   });
 
   it('shows an error row instead of loading forever when the proposals request fails', async () => {
@@ -461,7 +461,7 @@ describe('BlockDetailPage', () => {
 
     const row = await screen.findByTestId('block-proposals-error');
     expect(row).toHaveTextContent('ckb_db_path');
-    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading proposals…')).not.toBeInTheDocument();
   });
 
   it('loads block transactions by resolved block number when route id is hash', async () => {

@@ -152,7 +152,8 @@ describe('ActivityFeed', () => {
     // T7 (option A): the type names follow the headline on its line; each call with its args
     // is the name's hover.
     const type = first.querySelector('[data-role="row-head"] [data-role="detail"]') as HTMLElement;
-    expect(type).toHaveTextContent(/^\.bit Time Index State · \.bit Time Info$/);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(type).toHaveTextContent(/^· \.bit Time Index State · \.bit Time Info$/);
     expect(first).not.toHaveTextContent(/type calls/);
     // A line breaks between calls, never inside one.
     const call = within(type).getByRole('link', { name: '.bit Time Info' });
@@ -275,7 +276,8 @@ describe('ActivityFeed', () => {
     expect(within(row).getByText('Object transfer')).toBeInTheDocument();
     const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
     // T7: the calls by name, inline after the headline; the args are each name's hover.
-    expect(details).toEqual(['CKBFS', 'lock Nervape Shadow Lock']);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
     expect(within(row).getByRole('link', { name: 'CKBFS' })).toHaveAttribute(
       'title',
       `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
@@ -322,7 +324,7 @@ describe('ActivityFeed', () => {
       [...row.querySelectorAll('[data-party]')].map((e) => e.textContent?.slice(-2));
     // The five largest |Δ| (900, 700, 500, 300, 200), paid first.
     expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7']);
-    const more = within(row).getByRole('button', { name: '+3 participants' });
+    const more = within(row).getByRole('button', { name: '+3\u00a0participants' });
     expect(more).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(more);

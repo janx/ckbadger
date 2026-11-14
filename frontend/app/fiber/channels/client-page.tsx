@@ -18,7 +18,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
@@ -26,6 +26,8 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 type StateFilter = 'all' | FiberChannelState;
 
@@ -87,7 +89,7 @@ function openNowFigure(summary: FiberNetwork['summary']): TopicDisplayFigure {
   return {
     label: 'open now',
     value: summary.openChannels.toLocaleString('en-US'),
-    unit: summary.openChannels === 1 ? 'channel' : 'channels',
+    unit: countNoun(summary.openChannels, 'channel', 'channels'),
     companion: (
       <>
         locking{' '}
@@ -194,7 +196,7 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
       style={inkStyle(BOARD_INKS.link)}
       title={channel.channelId}
     >
-      {shortId(channel.channelId)}
+      <NoBreak>{shortId(channel.channelId)}</NoBreak>
     </Link>
   );
   const pair = (
@@ -387,7 +389,7 @@ export default function FiberChannelsPage() {
                             className="text-text-bright hover:underline"
                             title={channel.channelId}
                           >
-                            {shortId(channel.channelId)}
+                            <NoBreak>{shortId(channel.channelId)}</NoBreak>
                           </Link>
                           {stateFilter === 'all' && (
                             <span className="text-text-dim text-meta block">
@@ -437,7 +439,11 @@ export default function FiberChannelsPage() {
                       label: 'Opened',
                       minWidth: 120,
                       className: cn(ROW, 'text-text-dim'),
-                      render: (channel) => <span>{formatUtc8Date(channel.openTimestamp)}</span>,
+                      render: (channel) => (
+                        <span>
+                          <Utc8Date timestamp={channel.openTimestamp} />
+                        </span>
+                      ),
                     },
                     {
                       key: 'lifetime',

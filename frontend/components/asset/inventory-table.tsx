@@ -21,7 +21,7 @@ import {
 } from '@/lib/detail-routes';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { formatCompositionTier } from '@/lib/asset-utils';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 
@@ -95,31 +95,26 @@ function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
     border: '1px solid transparent',
   };
 }
-/** CKB held and occupied on a phone row: "2,885,438.81 CKB held · 2,842,315 occupied (98.5%)". */
-function HeldAndOccupied({ asset: a }: { asset: Asset }) {
-  if (a.ownedCapacity === null) return <span>CKB held unavailable</span>;
-  const held = exactUnsignedInteger(a.ownedCapacity, `${a.id} capacity`);
-  const occupied =
-    a.ownedKnowledge === null ? null : exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`);
-  if (occupied !== null && occupied > held)
-    throw new Error(`${a.id}: occupied capacity exceeds held capacity`);
-  return (
-    <Dotted
-      parts={[
-        <span key="held" className="whitespace-nowrap">
-          <ExactCkb shannons={held} signed={false} tone="plain" /> held
-        </span>,
-        occupied === null ? (
-          'occupied unavailable'
-        ) : (
-          <span key="occupied" className="whitespace-nowrap">
-            <OccupiedCkb shannons={occupied} /> occupied
-            {held > BigInt(0) && ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)`}
-          </span>
-        ),
-      ]}
-    />
-  );
+/**
+ * CKB held and occupied on a phone row: "2,885,438.81 CKB held · 2,842,315 occupied (98.5%)", as
+ * parts of the row's one separated list (a list is never nested in another).
+ */
+function heldAndOccupiedParts(a: Asset): ReactNode[] {
+  const { held, occupied } = heldAndOccupied(a);
+  if (held === null) return ['CKB held unavailable'];
+  return [
+    <span key="held" className="whitespace-nowrap">
+      <ExactCkb shannons={held} signed={false} tone="plain" /> held
+    </span>,
+    occupied === null ? (
+      'occupied unavailable'
+    ) : (
+      <span key="occupied" className="whitespace-nowrap">
+        <OccupiedCkb shannons={occupied} /> occupied
+        {held > BigInt(0) && ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)`}
+      </span>
+    ),
+  ];
 }
 
 /** An exact count and its noun, singular for one ("1 holder", "93 objects"). */
@@ -194,7 +189,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
             ? {
                 key: 'figures',
                 tone: 'quiet',
-                left: <Dotted parts={[supply, <HeldAndOccupied key="h" asset={a} />]} />,
+                left: <Dotted parts={[supply, ...heldAndOccupiedParts(a)]} />,
                 right: <Dotted parts={[...activity, hm]} />,
               }
             : {
@@ -206,7 +201,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
           !wide && {
             key: 'figures',
             tone: 'quiet',
-            left: <Dotted parts={[supply, <HeldAndOccupied key="h" asset={a} />]} />,
+            left: <Dotted parts={[supply, ...heldAndOccupiedParts(a)]} />,
           },
         ]}
       />
@@ -234,7 +229,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
       <span key="m" className="whitespace-nowrap">
         of <AssetCount value={a.totalSupply} /> minted
       </span>,
-      <HeldAndOccupied key="c" asset={a} />,
+      ...heldAndOccupiedParts(a),
       a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`,
       <Hash
         key="id"
@@ -307,10 +302,14 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
           ? {
               key: 'figures',
               tone: 'quiet',
-              left: <Dotted parts={[...counts, <HeldAndOccupied key="c" asset={a} />]} />,
+              left: <Dotted parts={[...counts, ...heldAndOccupiedParts(a)]} />,
             }
           : { key: 'activity', tone: 'body', left: <Dotted parts={[sub, ...counts]} /> },
-        !wide && { key: 'figures', tone: 'quiet', left: <HeldAndOccupied asset={a} /> },
+        !wide && {
+          key: 'figures',
+          tone: 'quiet',
+          left: <Dotted parts={heldAndOccupiedParts(a)} />,
+        },
       ]}
     />
   );
@@ -760,7 +759,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         columns={wordHeads(tokenColumns(rows))}
         rows={rows}
         rowKey={(a) => a.id}
-        empty="No tokens found"
+        empty="No tokens."
         density="row"
         rowTitle={tokenTitle}
         mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
@@ -773,7 +772,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         columns={wordHeads(objectColumns(rows))}
         rows={rows}
         rowKey={(a) => a.id}
-        empty="No objects found"
+        empty="No objects."
         density="row"
         rowTitle={objectTitle}
         mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
@@ -785,7 +784,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
       columns={wordHeads(identityColumns(rows))}
       rows={rows}
       rowKey={(a) => a.id}
-      empty="No identities found"
+      empty="No identities."
       density="row"
       rowTitle={identityTitle}
       mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
