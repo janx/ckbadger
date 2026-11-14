@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
+import { useCopy } from '@/hooks/useCopy';
 import { shortenId, type IdKind, type ShortSize } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
@@ -38,7 +38,7 @@ export function HexCode({
   variant = 'default',
   ...shortening
 }: HexCodeProps) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy(value);
 
   const displayValue =
     shortening.truncate === false ? value : shortenId(value, kind, shortening.size);
@@ -49,17 +49,6 @@ export function HexCode({
     bright: 'text-text-bright',
     dim: 'text-text-dim',
     inherit: null,
-  };
-
-  const handleCopy = async () => {
-    if (!copyable) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
   };
 
   const props = {
@@ -75,7 +64,8 @@ export function HexCode({
       !shortened && 'inline-block max-w-full overflow-x-auto whitespace-nowrap align-top',
       className
     ),
-    onClick: handleCopy,
+    // the one copy path (hooks/useCopy): a copy that cannot work shows nothing
+    onClick: copyable ? copy : undefined,
     title: copyable ? 'Click to copy' : value,
     children: copied ? '✓' : displayValue,
   };

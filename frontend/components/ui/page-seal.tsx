@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
 import { Seal } from '@/components/ui/seal';
+import { useCopy } from '@/hooks/useCopy';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { assertSealId, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
 import { TYPE_SCALE } from '@/lib/type-scale';
@@ -170,13 +171,9 @@ const FULL_HASH = /^0x[0-9a-fA-F]{64}$/;
 export function PlateHash({ hash, copyable = false }: { hash: string; copyable?: boolean }) {
   if (!FULL_HASH.test(hash)) throw new Error(`PlateHash: ${hash} is not a full hash`);
   const [ref, width] = useElementWidth<HTMLSpanElement>();
-  const [copied, setCopied] = useState(false);
+  // the one copy path (hooks/useCopy): a copy that cannot work shows no tick
+  const { copied, copy } = useCopy(hash);
   const oneLine = width === null || width >= hash.length * ID_ADVANCE;
-  const copy = async () => {
-    await navigator.clipboard.writeText(hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
   return (
     <span
       ref={ref}

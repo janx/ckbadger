@@ -93,13 +93,14 @@ describe('PlateHash, the full hash on a name plate', () => {
       });
     };
 
+    // each clipboard made in its test (the file's afterEach restores every mock)
     for (const [label, clipboard] of [
-      ['is absent', undefined],
-      ['refuses', { writeText: vi.fn().mockRejectedValue(new DOMException('denied')) }],
+      ['is absent', () => undefined],
+      ['refuses', () => ({ writeText: vi.fn().mockRejectedValue(new DOMException('denied')) })],
     ] as const)
       it(`shows no tick and throws nothing where the clipboard ${label}`, async () => {
         stubChartWidth(600);
-        Object.assign(navigator, { clipboard });
+        Object.assign(navigator, { clipboard: clipboard() });
         render(<PlateHash hash={HASH} copyable />);
         await clickAndSettle();
         expect(screen.queryByText('✓')).toBeNull();
