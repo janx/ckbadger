@@ -551,7 +551,7 @@ function FullAssetFeed({
       <div
         role="tablist"
         aria-label="What happened"
-        className="border-base-border mb-3 flex flex-wrap items-center gap-6 border-b"
+        className="border-base-border mb-3 flex flex-wrap items-center gap-6 border-b max-md:gap-x-4"
       >
         {(['activities', 'transactions'] as const).map((t) => (
           <button
@@ -559,7 +559,7 @@ function FullAssetFeed({
             role="tab"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`text-section border-b-2 py-3 ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+            className={`text-section max-md:text-body border-b-2 py-3 ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
           >
             {t === 'activities' ? 'Activities' : 'Transactions'}
           </button>

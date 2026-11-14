@@ -606,18 +606,22 @@ export default function BlockDetailPage() {
           <div className="grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]">
             <div className="min-w-0">
               <div className="border-base-border-subtle mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
-                <div role="group" aria-label="Block contents" className="flex flex-wrap gap-6">
+                <div
+                  role="group"
+                  aria-label="Block contents"
+                  className="flex flex-wrap gap-6 max-md:gap-x-4"
+                >
                   {(['activities', 'transactions'] as const).map((tab) => (
                     <button
                       type="button"
                       key={tab}
                       aria-pressed={view === tab}
                       onClick={() => setView(tab)}
-                      className={`text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+                      className={`text-section max-md:text-body -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                     >
                       <span>{tab === 'activities' ? 'Activities' : 'Transactions'}</span>
                       {/* One activity row per transaction of the block (the block feed's contract). */}
-                      <span className="text-text-dim text-small font-normal">
+                      <span className="text-text-dim text-small max-md:text-meta font-normal">
                         {block.transactionsCount.toLocaleString('en-US')}
                       </span>
                     </button>

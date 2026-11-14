@@ -453,7 +453,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <div
                   role="group"
                   aria-label="History views"
-                  className="flex flex-wrap gap-x-6 gap-y-1"
+                  className="flex flex-wrap gap-x-6 gap-y-1 max-md:gap-x-4"
                 >
                   {(
                     [
@@ -468,7 +468,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       aria-pressed={tab === id}
                       onClick={() => setTab(id)}
                       className={cn(
-                        'text-section flex h-11 items-center gap-2 border-b-2 font-medium',
+                        'text-section max-md:text-body flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5',
                         tab === id
                           ? 'border-jade text-text-bright'
                           : 'text-text-dim border-transparent'
@@ -476,17 +476,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     >
                       {label}
                       {id === 'activities' && activitiesCount.data !== undefined && (
-                        <span className="text-text-dim text-small font-normal">
+                        <span className="text-text-dim text-small max-md:text-meta font-normal">
                           {activitiesCount.data.toLocaleString('en-US')}
                         </span>
                       )}
                       {id === 'transactions' && (
-                        <span className="text-text-dim text-small font-normal">
+                        <span className="text-text-dim text-small max-md:text-meta font-normal">
                           {a.transactionsCount.toLocaleString('en-US')}
                         </span>
                       )}
                       {id === 'cells' && holdings.data && (
-                        <span className="text-text-dim text-small font-normal">
+                        <span className="text-text-dim text-small max-md:text-meta font-normal">
                           {holdings.data.liveCellsCount.toLocaleString('en-US')}
                         </span>
                       )}

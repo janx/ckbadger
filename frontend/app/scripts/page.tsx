@@ -633,7 +633,7 @@ export default function ScriptsPage() {
               <div
                 role="group"
                 aria-label="Role"
-                className="border-base-border mb-[18px] flex flex-wrap gap-7 border-b"
+                className="border-base-border mb-[18px] flex flex-wrap gap-7 border-b max-md:gap-x-4"
               >
                 {(
                   [
@@ -650,11 +650,11 @@ export default function ScriptsPage() {
                       setRole(value);
                       pagination.reset();
                     }}
-                    className={`text-section -mb-px flex h-11 items-center gap-2 border-b-2 font-medium ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
+                    className={`text-section max-md:text-body -mb-px flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
                   >
                     {label}{' '}
                     {count !== undefined && (
-                      <span className="text-text-dim text-small font-normal">
+                      <span className="text-text-dim text-small max-md:text-meta font-normal">
                         {count.toLocaleString('en-US')}
                       </span>
                     )}

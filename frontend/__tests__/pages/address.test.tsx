@@ -635,6 +635,8 @@ describe('Address v3', () => {
   // type step down below md (13 px labels, 11 px counts, a 6 px label–count gap, 16 px between
   // tabs) they take 249.6 + 18 + 32 = 299.6 px, and three one-digit counts 19.8: 319.4 at 360.
   it('sets the three history tabs one type step smaller below md, one row at 360 (PA-17)', async () => {
+    // the activity total the Activities tab counts (the shared fixture's page declares none)
+    vi.mocked(api.getAddressActivities).mockResolvedValue(pageFixture(addressActivitiesFixture, 3));
     render(<AddressDetailPage />);
     await loaded();
     const views = screen.getByRole('group', { name: 'History views' });
