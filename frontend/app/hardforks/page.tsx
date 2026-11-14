@@ -4,6 +4,7 @@ import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { ExternalLink } from '@/components/ui/external-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -122,27 +123,24 @@ function EditionCard({
           ))}
         </div>
       )}
+      {/* Every one leaves the site, so every one says so (U-20): ` ↗`, a new tab. */}
       <div className="text-small flex flex-wrap gap-x-5 gap-y-1">
         {overview && (
-          <a
+          <ExternalLink
             href={overview.url}
-            target="_blank"
-            rel="noreferrer"
             className="text-text hover:text-text-bright hover:underline"
           >
-            {overview.label} overview ↗
-          </a>
+            {overview.label} overview
+          </ExternalLink>
         )}
         {resources.map((resource) => (
-          <a
+          <ExternalLink
             key={resource.url}
             href={resource.url}
-            target="_blank"
-            rel="noreferrer"
             className="text-text hover:text-text-bright hover:underline"
           >
             {resource.label}
-          </a>
+          </ExternalLink>
         ))}
       </div>
     </article>

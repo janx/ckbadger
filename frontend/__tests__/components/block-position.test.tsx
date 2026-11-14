@@ -3,6 +3,7 @@ import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { BlockPosition } from '@/components/blocks/block-position';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const parent = `0x${'a'.repeat(64)}`;
 const uncle = `0x${'b'.repeat(64)}`;
@@ -142,6 +143,43 @@ describe('BlockPosition', () => {
         />
       )
     ).toThrow('proposal distance disagrees for 0xtx1');
+  });
+  it('draws its block tiles, uncle boxes and the uncle’s parent square (U-02, R1)', () => {
+    // An uncle whose parent is off screen gets its parent box; one whose parent is the tile beside
+    // it forks off that tile in a dashed box of its own.
+    const offScreen = render(
+      <BlockPosition
+        block={block}
+        transactions={[incoming]}
+        proposals={[outgoing]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    expect(rects(offScreen.container).length).toBeGreaterThan(5);
+    expect(roundedRects(offScreen.container)).toEqual([]);
+    offScreen.unmount();
+    const beside = render(
+      <BlockPosition
+        block={block}
+        transactions={[incoming]}
+        proposals={[outgoing]}
+        neighbours={[
+          {
+            number: 930,
+            hash: parent,
+            timestamp: '2026-10-26T08:55:20Z',
+            transactionSizes: [355],
+            proposalsCount: 0,
+            unclesCount: 0,
+          },
+        ]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    expect(beside.container.querySelector('[data-uncle-fork-from="930"]')).not.toBeNull();
+    expect(roundedRects(beside.container)).toEqual([]);
   });
   it('requires proposal evidence for committed non-cellbase transactions', () => {
     expect(() =>

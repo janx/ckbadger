@@ -127,6 +127,13 @@ export interface ChartProps {
    * grid lines stay under the series either way.
    */
   insideYTicks?: boolean | 'over';
+  /**
+   * Lane A5 (UI review 2026-11-14, U-19): the y ticks are bare values ("1.5k"); the unit is said
+   * once, in `plotName`, which is then required. Off (the default), every tick carries its unit.
+   */
+  bareTicks?: boolean;
+  /** A count axis: whole-number ticks only, the step at least 1 (never "0.5 transfers"). */
+  integerTicks?: boolean;
   /** The first series' latest value written at the line's end, from its exact decimal. */
   endLabel?: (value: string) => string;
 }
@@ -202,6 +209,8 @@ export type ChartValueAxisInput = Pick<
   | 'yDomain'
   | 'referenceLines'
   | 'formatAxis'
+  | 'bareTicks'
+  | 'integerTicks'
 >;
 
 /**
@@ -218,6 +227,8 @@ export function chartValueAxis({
   yDomain,
   referenceLines = [],
   formatAxis = formatTick,
+  bareTicks = false,
+  integerTicks = false,
 }: ChartValueAxisInput): {
   values: number[][];
   plotValues: number[];
@@ -257,22 +268,29 @@ export function chartValueAxis({
       yDomain[0] >= yDomain[1])
   )
     throw new Error(`${title}: invalid fixed value domain`);
+  if (integerTicks && yScale === 'log')
+    throw new Error(`${title}: a count axis is linear, not logarithmic`);
+  const counted = { integer: integerTicks };
   const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
     (value) => (yScale === 'log' ? Math.log10(value) : value)
   );
   const ticks = yDomain
-    ? niceTicks(yDomain[0], yDomain[1], 4)
+    ? niceTicks(yDomain[0], yDomain[1], 4, 0, counted)
     : plotValues.length
       ? niceTicks(
           kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
           kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
-          4
+          4,
+          0,
+          counted
         )
       : null;
+  // U-19 (lane A5): a bare tick is the value alone; its plot's name says the unit once.
+  const tickUnit = bareTicks ? '' : unit;
   const tickLabel = (value: number, step: number) =>
     yScale === 'log'
-      ? withUnit(formatAxis(10 ** value, 10 ** step), unit)
-      : withUnit(formatAxis(value, step), unit);
+      ? withUnit(formatAxis(10 ** value, 10 ** step), tickUnit)
+      : withUnit(formatAxis(value, step), tickUnit);
   const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
   return { values, plotValues, ticks, tickLabel, labels };
 }
@@ -317,6 +335,8 @@ export function Chart({
   pin,
   plotName,
   insideYTicks = false,
+  bareTicks = false,
+  integerTicks = false,
   endLabel,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
@@ -389,7 +409,11 @@ export function Chart({
     yDomain,
     referenceLines,
     formatAxis,
+    bareTicks,
+    integerTicks,
   });
+  if (bareTicks && plotName === undefined)
+    throw new Error(`${title}: bare ticks need the plot's name to say the unit`);
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
@@ -911,7 +935,6 @@ export function Chart({
                         y={by}
                         width={boxWidth}
                         height={boxHeight}
-                        rx="6"
                         fill="var(--c-base-surface)"
                         stroke="var(--c-base-border)"
                       />

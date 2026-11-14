@@ -344,7 +344,6 @@ export function BlockPosition({
                     y="0.5"
                     width={tileWidth - 1}
                     height="87"
-                    rx="6"
                     fill={current ? BLOCK_POSITION_COLORS.currentTile : 'var(--c-tile)'}
                     stroke="var(--c-slate-other)"
                   />
@@ -404,7 +403,6 @@ export function BlockPosition({
                       y={top + 0.5}
                       width={tileWidth - 1}
                       height="71"
-                      rx="6"
                       fill="none"
                       stroke="var(--c-ink-quiet)"
                       strokeDasharray="3 3"
@@ -447,14 +445,7 @@ export function BlockPosition({
                   href={`/blocks/${uncle.parentHash}`}
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
-                  <rect
-                    x={parentX}
-                    y={top}
-                    width="178"
-                    height="58"
-                    rx="6"
-                    fill="var(--c-base-surface)"
-                  />
+                  <rect x={parentX} y={top} width="178" height="58" fill="var(--c-base-surface)" />
                   <text x={parentX + 10} y={top + 21} fill="var(--c-text-dim)" fontSize="11">
                     Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
@@ -471,7 +462,6 @@ export function BlockPosition({
                     y={top}
                     width="178"
                     height="58"
-                    rx="6"
                     fill="none"
                     stroke="var(--c-ink-quiet)"
                     strokeDasharray="3 3"

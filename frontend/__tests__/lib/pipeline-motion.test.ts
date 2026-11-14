@@ -83,6 +83,10 @@ describe('paintSquareNode', () => {
     expect(rect.getAttribute('opacity')).toBe('1.000');
     expect(rect.getAttribute('width')).toBe('9.00');
   });
+
+  it('paints a tx square with square corners, as the static square is drawn (U-02, R1)', () => {
+    for (const s of [0.5, 3, 9]) expect(paint(s, false).getAttribute('rx')).toBeNull();
+  });
 });
 
 describe('fresh outline', () => {

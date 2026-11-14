@@ -43,7 +43,6 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
             y={G.cardTop + 0.5}
             width={Math.max(1, card.w - 1)}
             height={Math.max(1, card.h - 1)}
-            rx={6}
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
             fillOpacity={1}
@@ -66,7 +65,6 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
                   y={u.y + 0.5}
                   width={card.w - 2 * G.padX}
                   height={u.h}
-                  rx={3}
                   style={{ fill: tok('surface') }}
                 />
                 <text x={G.padX + 3} y={u.y + 9} className={T10}>

@@ -121,7 +121,6 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
                   y="30"
                   width={Math.max(xs - x1 - (xs === x2 ? 2 : 0), 0)}
                   height="14"
-                  rx="3"
                   fill={ink}
                   fillOpacity="0.28"
                 />
@@ -133,7 +132,6 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
                   y="30"
                   width={Math.max(x2 - xs - 2, 0)}
                   height="14"
-                  rx="3"
                   fill={ink}
                   fillOpacity="0.9"
                 />
@@ -162,7 +160,6 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
               y="30"
               width={x(graceEnd) - x(end)}
               height="14"
-              rx="3"
               fill="none"
               stroke={ink}
               strokeOpacity="0.5"
@@ -181,7 +178,6 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
               y="30"
               width={Math.max(x(now) - x(end), 0)}
               height="14"
-              rx="3"
               fill="none"
               stroke={EXPIRED_COLOR}
               strokeOpacity="0.7"

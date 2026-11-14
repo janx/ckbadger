@@ -550,8 +550,9 @@ describe('Tokens Inventory Page', () => {
 
     render(<TokensPage />);
 
-    // F2 objects (IV-07): the board's search box filters as you type; there is no button.
-    const searchInput = screen.getByPlaceholderText('Search by name...');
+    // F2 objects (IV-07): the board's search box filters as you type; there is no button. Its
+    // placeholder is lowercase without dots, as the header's (U-01, R2).
+    const searchInput = screen.getByPlaceholderText('search by name');
     fireEvent.change(searchInput, { target: { value: 'test' } });
 
     await waitFor(() => {

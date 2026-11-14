@@ -75,10 +75,10 @@ export function AssetEcosystem() {
         <div>
           <div className="eyebrow text-text-dim text-meta mb-2">Capacity Breakdown</div>
           {isLoading ? (
-            <div className="bg-base-elevated h-3 w-full animate-pulse rounded-full" />
+            <div className="bg-base-elevated h-3 w-full animate-pulse" />
           ) : (
             <>
-              <div className="flex h-3 w-full overflow-hidden rounded-full">
+              <div className="flex h-3 w-full overflow-hidden">
                 {data?.capacityBreakdown.map((cat) => (
                   <div
                     key={cat.category}

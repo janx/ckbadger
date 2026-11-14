@@ -34,7 +34,6 @@ export function TxSquare({ sq, on = false }: TxSquareProps) {
       y={sq.y}
       width={sq.s}
       height={sq.s}
-      rx={Math.min(1.5, sq.s * 0.2)}
       fillOpacity={paint.fillOpacity ?? undefined}
       strokeWidth={paint.stroke ? 1 : undefined}
       strokeDasharray={paint.strokeDasharray ?? undefined}

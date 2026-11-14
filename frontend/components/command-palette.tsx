@@ -333,7 +333,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleInputKeyDown}
-                placeholder="Type a command, or search block / tx / address"
+                placeholder="type a command, or search block / tx / address"
                 className="focus:border-jade focus:ring-jade well text-text-bright text-body w-full px-3 py-2 font-mono focus:ring-1 focus-visible:outline-none"
                 aria-label="Command palette input"
               />
@@ -390,8 +390,9 @@ export function CommandPalette() {
                 ))}
               </ul>
             </div>
-            {/* What the status line shows only from md up, for every width (a phone opens this
-                from the footer): the release, and which time its clock tells. */}
+            {/* What the status line shows only from md up: the release, and which time its
+                clock tells (opened by the `?` key or, from md, the footer's button; below md the
+                footer's last row says both). */}
             <p
               data-testid="shortcuts-about"
               className="border-base-border text-text-dim text-small border-t px-4 py-3 font-mono"

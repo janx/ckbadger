@@ -37,7 +37,7 @@ interface ErrorPageShellProps {
   children: ReactNode;
   /**
    * Drawn in place of AppFrame — the frame route's error boundary caught a failure of the frame
-   * itself: the shell draws its own header, page end and footer and fills the screen. Otherwise
+   * itself: the shell draws its own header, footer and page end and fills the screen. Otherwise
    * (the not-found route, a page's not-found, a page's route error) it renders inside the frame,
    * under the frame's header (visual finish V6), and fills what the header leaves.
    */
@@ -104,8 +104,10 @@ export function ErrorPageShell({
           {!contextSafe && <TipSeal />}
         </div>
       </main>
-      {wholeScreen && <PromptEnd />}
+      {/* U-20: the footer is the last quiet row, then the empty prompt ends the page, as the
+          frame's pages end */}
       {standalone && <SiteFooter />}
+      {wholeScreen && <PromptEnd />}
     </div>
   );
 }

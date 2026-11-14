@@ -181,7 +181,7 @@ export function AmongDidCkb({
       <div
         role="img"
         aria-label={`did:ckb identities by personal data server: ${segments.map((s) => `${s.label} ${s.count}`).join(', ')}`}
-        className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full"
+        className="flex h-2.5 w-full gap-0.5 overflow-hidden"
       >
         {segments.map((s) => (
           <span

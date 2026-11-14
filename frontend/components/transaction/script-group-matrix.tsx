@@ -286,10 +286,10 @@ export function ScriptGroupMatrix({
                             aria-hidden="true"
                             data-dot={g.ran ? 'ran' : 'attached'}
                             className={cn(
-                              'block rounded-full',
+                              'block',
                               g.ran
-                                ? 'bg-jade h-2.5 w-2.5'
-                                : 'border-text-dim h-[9px] w-[9px] border-[1.2px]'
+                                ? 'bg-jade h-2.5 w-2.5 rounded-full'
+                                : 'border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]'
                             )}
                           />
                         )}
@@ -390,10 +390,10 @@ function GroupList({
                 aria-hidden="true"
                 data-dot={g.ran ? 'ran' : 'attached'}
                 className={cn(
-                  'mr-2 inline-block rounded-full align-[1px]',
+                  'mr-2 inline-block align-[1px]',
                   g.ran
-                    ? 'bg-jade h-[9px] w-[9px]'
-                    : 'border-text-dim h-[9px] w-[9px] border-[1.2px]'
+                    ? 'bg-jade h-[9px] w-[9px] rounded-full'
+                    : 'border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]'
                 )}
               />
               <button

@@ -5,6 +5,7 @@ import { forkTreeModel, type ForkTreeModel } from '@/lib/fork-tree';
 import type { ReorgDetail } from '@/lib/api';
 import multi from '@/__tests__/fixtures/fork-api-producer/fork-multi-uncle-detail.json';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -82,6 +83,19 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(Number(box.getAttribute('width'))).toBe(72);
   });
 
+  it.each([1248, 358])(
+    'draws every block tile square at %i px, the dropped ones too (U-02, R1)',
+    (width) => {
+      stubChartWidth(width);
+      const { container } = render(
+        <ForkTree model={forkTreeModel(multi as unknown as ReorgDetail)} />
+      );
+      const svg = container.querySelector('svg[data-fork-tree]')!;
+      expect(rects(svg).length).toBeGreaterThanOrEqual(6);
+      expect(roundedRects(svg)).toEqual([]);
+    }
+  );
+
   it('collapses a seven-deep fork’s oldest blocks into "+N earlier" instead of scrolling (V4)', () => {
     stubChartWidth(358);
     const hash = (tag: string) => `0x${tag.padEnd(64, '0')}`;
@@ -126,5 +140,7 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(svg.querySelector('[data-tile="100"]')).toBeNull();
     expect(svg.querySelectorAll('[data-tip-mark]')).toHaveLength(2);
     expect(svg.querySelectorAll('[data-uncle-link]')).toHaveLength(1);
+    // U-02, R1: the "+N earlier" box is a square-cornered tile like the blocks it stands for
+    expect(roundedRects(collapsed)).toEqual([]);
   });
 });

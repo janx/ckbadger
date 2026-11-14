@@ -1,5 +1,9 @@
-/** A header nav link or dropdown trigger: sentence case, normal tracking, a tall hit area. */
-export const NAVBAR_LINK_CLASS = 'py-3 font-mono text-body transition-colors';
+/**
+ * A header nav link or menu button: lowercase as the boards set it (U-01, R2: dao · activities ·
+ * inventory · scripts · charts), by CSS, so the label text and the accessible name keep their
+ * case; normal tracking, a tall hit area.
+ */
+export const NAVBAR_LINK_CLASS = 'py-3 font-mono text-body lowercase transition-colors';
 
 export const NAVBAR_LINK_DEFAULT_CLASS = 'text-text hover:text-jade';
 
@@ -16,8 +20,9 @@ export const NAVBAR_DROPDOWN_TRIGGER_CLASS =
 export const NAVBAR_MENU_PANEL_CLASS =
   'border-base-border bg-base-surface min-w-[11rem] rounded border p-1.5 shadow-lg';
 
+/** A menu's item, lowercase as the nav (U-01). */
 export const NAVBAR_MENU_ITEM_CLASS =
-  'block whitespace-nowrap rounded-sm px-2.5 py-2 font-mono text-body transition-colors hover:bg-base-elevated focus-visible:bg-base-elevated focus-visible:text-jade focus-visible:outline-none';
+  'block whitespace-nowrap rounded-sm px-2.5 py-2 font-mono text-body lowercase transition-colors hover:bg-base-elevated focus-visible:bg-base-elevated focus-visible:text-jade focus-visible:outline-none';
 
 export const NAVBAR_MENU_ITEM_DEFAULT_CLASS = 'text-text hover:text-jade';
 

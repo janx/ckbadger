@@ -23,8 +23,11 @@ describe('Asset history', () => {
         />
       );
       const plot = screen.getByRole('img', { name: 'Supply, T' });
-      // Lane P: the values are written inside the plot (the baseline is not), still scientific.
-      expect(plot).toHaveTextContent(/\de-255 T/);
+      // Re-pinned with the lane A5 follow-up (U-19): the values are bare in the gutter, still
+      // scientific, and the plot's name says the unit once.
+      expect(plot).toHaveTextContent(/\de-255/);
+      expect(plot).not.toHaveTextContent(/e-255 T/);
+      expect(plot.querySelector('[data-role="chart-name"]')).toHaveTextContent('supply in T');
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       const readout = screen.getByLabelText('History readout');
       expect(readout).toHaveTextContent(`0.${'0'.repeat(254)}2`);
@@ -53,12 +56,16 @@ describe('Asset history', () => {
       );
       const plots = screen.getAllByRole('img');
       expect(plots).toHaveLength(3);
-      // Re-pinned with U-19 (UI review 2026-11-14): the ticks are in one gutter sized from the
-      // longest of the three plots' labels, so it holds "5k transactions" whole.
+      // Re-pinned with U-19 (UI review 2026-11-14) and its lane A5 follow-up: the ticks are bare
+      // values in one gutter sized from the longest of the three plots' labels (the unit is said
+      // once, in each plot's name), never under the 48 px least.
       const ticks = yTickLabels(plots[2]);
-      expect(ticks.map((t) => t.textContent)).toContain('5k transactions');
+      expect(ticks.map((t) => t.textContent)).toContain('5k');
       const left = plotLeftOf(plots[2]);
-      expect(left).toBeGreaterThanOrEqual('5k transactions'.length * 6 + 8);
+      const longest = Math.max(
+        ...plots.flatMap((plot) => yTickLabels(plot).map((t) => t.textContent!.length))
+      );
+      expect(left).toBe(Math.max(48, longest * 6 + 8));
       for (const tick of ticks) {
         expect(tick.getAttribute('text-anchor')).toBe('end');
         expect(Number(tick.getAttribute('x'))).toBe(left - 8);

@@ -481,6 +481,15 @@ h2.text-section::before {
   content: '';
   margin-right: 10px;
 }
+/* The search field's prompt (the boards' `.search .sq`, UI review 2026-11-14, U-01): the same
+   cinnabar square, one pixel smaller, 7 px. Placed by the field (components/search-bar.tsx). */
+.search-square {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--c-mark);
+}
 h2.text-section {
   text-transform: lowercase;
 }
@@ -783,14 +792,14 @@ svg a:hover {
 }
 
 /* Move 2b — a well: inset, for what is typed into (the search field, a filter, the command palette)
-   and what is read as bytes (a hex dump, raw JSON). 3 px corners, the row-rule ink; `--well-radius`
-   lets the header's search field keep the board's 6 px. The inset is the boards' (`inset 0 1px
-   3px`, 60 % black by night, the ink at 8 % by day); the lower lip (visual finish V4) is kept as a
-   material and set transparent: the rubbing has none. */
+   and what is read as bytes (a hex dump, raw JSON). Square corners (UI review 2026-11-14, ruling
+   R1): it sets no radius, so the `--well-radius` the header's search field still sets is read by
+   nothing. The row-rule ink; the inset is the boards' (`inset 0 1px 3px`, 60 % black by night, the
+   ink at 8 % by day); the lower lip (visual finish V4) is kept as a material and set transparent:
+   the rubbing has none. */
 .well {
   background: var(--c-well-bg);
   border: 1px solid var(--c-base-border-subtle);
-  border-radius: var(--well-radius, 3px);
   box-shadow:
     inset 0 1px 3px var(--m-well-inset),
     0 1px 0 var(--m-well-lip);

@@ -70,15 +70,34 @@ function tickDecimal(value: number, decimals: number): string {
 }
 
 /**
+ * The step of a count axis: the nice step, but at least 1 and never fractional (a 2.5 step under
+ * 10 becomes 5), so every tick is a whole number of things (UI review 2026-11-14, U-19).
+ */
+function wholeStep(raw: number): number {
+  const step = niceStep(raw);
+  if (step <= 1) return 1;
+  return Number.isInteger(step) ? step : niceStep(step * 1.5);
+}
+
+/**
  * Round ticks covering [min, max]: about `target` of them, evenly spaced by a 1/2/2.5/5 × 10^k
  * step. They are multiples of the step, or — with `anchor` — the anchor plus multiples of it, so a
  * reference value (a consensus target) is itself a tick. A flat series gets a domain around its
- * value (or [0, 1] for zero) so the axis is never degenerate.
+ * value (or [0, 1] for zero) so the axis is never degenerate. `integer`: a count axis, whose step
+ * is a whole number of at least 1 (never "0.5 transfers").
  */
-export function niceTicks(min: number, max: number, target = 4, anchor = 0): Ticks {
+export function niceTicks(
+  min: number,
+  max: number,
+  target = 4,
+  anchor = 0,
+  { integer = false }: { integer?: boolean } = {}
+): Ticks {
   assertFinite('niceTicks: min', min);
   assertFinite('niceTicks: max', max);
   assertFinite('niceTicks: anchor', anchor);
+  if (integer && !Number.isInteger(anchor))
+    throw new Error(`niceTicks: a count axis cannot be anchored at ${anchor}`);
   if (min > max) throw new Error(`niceTicks: min ${min} is above max ${max}`);
   if (!Number.isInteger(target) || target < 2) {
     throw new Error(`niceTicks: target must be an integer of at least 2, got ${target}`);
@@ -94,7 +113,7 @@ export function niceTicks(min: number, max: number, target = 4, anchor = 0): Tic
       hi += pad;
     }
   }
-  const step = niceStep((hi - lo) / (target - 1));
+  const step = (integer ? wholeStep : niceStep)((hi - lo) / (target - 1));
   const decimals = Math.max(stepDecimals(step), anchor === 0 ? 0 : stepDecimals(anchor));
   const first = Math.floor((lo - anchor) / step + 1e-9);
   const last = Math.ceil((hi - anchor) / step - 1e-9);

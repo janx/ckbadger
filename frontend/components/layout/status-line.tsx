@@ -54,8 +54,10 @@ function Segment({
  * clock. The API reports no node version, so none is shown.
  *
  * The narrow form (below md) is one row: the mode, the network, the tip and the clock. The release
- * and the key hints are the wide form's only: a touch screen has no keys, and the release is in the
- * `?` help (the footer's "Keyboard shortcuts" opens it on a phone) — designed, not dropped.
+ * and the key hints are the wide form's only: a touch screen has no keys. From md the release is
+ * here and the clock's zone in the `?` help; below md, where nothing opens the help (the footer's
+ * "Keyboard shortcuts" is drawn from md only, PA-29), the footer's last row says both
+ * (components/layout/site-footer.tsx) — designed, not dropped.
  *
  * It is a polite live region for the mode and the release; the tip (every block) and the clock
  * (every second) are `aria-live="off"`, so a screen reader is not read the time.

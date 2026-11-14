@@ -61,9 +61,9 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}
-      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden rounded-full">
+      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden">
         <div
-          className="from-gold-dim via-gold-dim to-gold h-full rounded-full bg-gradient-to-r transition-all duration-500"
+          className="from-gold-dim via-gold-dim to-gold h-full bg-gradient-to-r transition-all duration-500"
           style={{ width: `${syncStatus.progress}%` }}
         />
       </div>

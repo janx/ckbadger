@@ -56,6 +56,7 @@ import {
 import { FRESH_MS } from '@/lib/pipeline/motion';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const VIEW_W = 1600;
 /** The page container is 1280 px wide; the canvas inside its padding is 1246 px. */
@@ -247,6 +248,15 @@ describe('PipelinePanel static render', () => {
     expect(host.querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
     // An uncle carries a header and proposals, never transactions.
     expect(uncle.querySelectorAll('[data-sq]')).toHaveLength(0);
+  });
+
+  it('draws its cards, uncles, NEXT, ghost txs and tx squares square-cornered (U-02, R1)', async () => {
+    const svg = await renderPanel();
+    expect(svg.querySelectorAll('[data-box]').length).toBeGreaterThan(1);
+    expect(svg.querySelectorAll('[data-uncle] rect').length).toBeGreaterThan(0);
+    expect(svg.querySelectorAll('[data-ghost="tx"]').length).toBeGreaterThan(0);
+    expect(svg.querySelectorAll('rect[data-sq]').length).toBeGreaterThan(0);
+    expect(roundedRects(svg)).toEqual([]);
   });
 
   it('draws committed txs as squares after the cellbase and counts the rest as +N', async () => {
@@ -1496,6 +1506,17 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-window-label]')).toHaveAttribute('opacity', '0.15');
   });
 
+  it('rings a hovered and a pinned tx square with square corners (U-02, R1)', async () => {
+    const svg = await renderPanel(snapshot);
+    const id = poolTxHash('q1');
+    const q = scene.pool?.pending.squares.find((k) => k.id === id);
+    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    fireEvent.pointerMove(svg, squareCentre(T, committedTxHash(T, 2)));
+    const rings = ['halo', 'ring', 'pin-ring'].map((h) => svg.querySelector(`[data-hover="${h}"]`));
+    expect(rings.map((r) => r?.tagName)).toEqual(['rect', 'rect', 'rect']);
+    expect(roundedRects(svg)).toEqual([]);
+  });
+
   it('pins a tx on click and lets Escape unpin it', async () => {
     const svg = await renderPanel(snapshot);
     const id = poolTxHash('q1');
@@ -1689,6 +1710,14 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     ).toEqual([T, T - 1, T - 2, T - 3]);
   });
 
+  it('draws its rows, uncles, NEXT, ghost txs and pool wells square-cornered (U-02, R1)', async () => {
+    const svg = await renderPanel(quiet);
+    expect(svg.querySelectorAll('[data-tray]')).toHaveLength(2);
+    expect(svg.querySelectorAll('[data-box]').length).toBeGreaterThan(1);
+    expect(rects(svg).length).toBeGreaterThan(10);
+    expect(roundedRects(svg)).toEqual([]);
+  });
+
   it('keeps the one-row canvas at the 640–767 band: 606 px, two whole blocks, no minimum width', async () => {
     viewW = 606;
     box(606, G.H);
@@ -1729,13 +1758,14 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       const tray = well.querySelector('[data-tray]') as SVGRectElement;
       expect(tray).toHaveAttribute('stroke', 'none');
       expect(tray.style.getPropertyValue('fill')).toBe(WELL_FILL);
-      expect(['x', 'y', 'width', 'height', 'rx'].map((a) => Number(tray.getAttribute(a)))).toEqual([
+      expect(['x', 'y', 'width', 'height'].map((a) => Number(tray.getAttribute(a)))).toEqual([
         6,
         w.y,
         344,
         30,
-        3,
       ]);
+      // re-pinned with ruling R1 (U-02): the well is square
+      expect(tray).not.toHaveAttribute('rx');
       const name = within(well as unknown as HTMLElement).getByText(w.title);
       expect(name).toHaveClass(w.tone);
       expect(Number(name.closest('text')?.getAttribute('x'))).toBe(12);
@@ -1759,7 +1789,8 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       const el = card(svg, c.block.number);
       const t = tile(svg, c.block.number);
       expect(t.style.getPropertyValue('fill')).toBe(TILE_FILL);
-      expect(t).toHaveAttribute('rx', '3');
+      // re-pinned with ruling R1 (U-02): the tile is square
+      expect(t).not.toHaveAttribute('rx');
       expect(t).toHaveAttribute('stroke-opacity', '0');
       const age = el.querySelector(':scope > [data-age]') as SVGGElement;
       expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);

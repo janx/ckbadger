@@ -22,7 +22,7 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
       <div className="container mx-auto py-4">
         <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
           <div className="flex items-center gap-3">
-            <div className="bg-negative-bright text-index flex h-10 w-10 items-center justify-center rounded-full">
+            <div className="bg-negative-bright text-index flex h-10 w-10 items-center justify-center">
               ⚠️
             </div>
             <div>

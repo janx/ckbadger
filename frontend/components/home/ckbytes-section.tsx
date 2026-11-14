@@ -239,7 +239,7 @@ function Allocation({ d }: { d: Derived<AllocationView> }) {
     return (
       <div aria-hidden="true" className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
         <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
-        <div className="bg-base-surface h-2.5 animate-pulse rounded-full" />
+        <div className="bg-base-surface h-2.5 animate-pulse" />
       </div>
     );
   }
@@ -349,7 +349,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       <div
         role="img"
         aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
-        className="bg-base-surface flex h-2.5 overflow-hidden rounded-full"
+        className="bg-base-surface flex h-2.5 overflow-hidden"
       >
         {knowledge > BigInt(0) && (
           <span

@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@/__tests__/utils/test-utils';
+import { act, fireEvent, render, screen } from '@/__tests__/utils/test-utils';
 import { createAppRouter } from '@/src/routes/router';
 
 const gates = vi.hoisted(() => {
@@ -109,23 +109,68 @@ describe('the header is part of the frame (visual finish V6)', () => {
 
   // Rubbing × Song print, phase 2: the status line is part of the frame too — once, fixed at the
   // foot of the window, last in reading order after the footer.
-  // The page ends on an empty prompt — the square and the block cursor — right under its last
-  // output, inside the page's wrapper, before the footer.
-  it('ends every page on one empty prompt, after the page and before the footer', async () => {
-    mount('/mainnet/dao');
-    const page = await screen.findByText('dao page');
+  // The page ends on an empty prompt — the square and the block cursor (rubric A4). U-20 (UI
+  // review 2026-11-14): the footer came after it, so the page ended on the footer's links; the
+  // footer is now the page's last quiet row, and the prompt the last thing before the status line.
+  /** The page, the footer row, the prompt, the status line: each one after the one before. */
+  function expectFrameOrder(page: HTMLElement) {
     const ends = screen.getAllByTestId('prompt-end');
     expect(ends).toHaveLength(1);
     const end = ends[0];
     expect(end).toHaveAttribute('aria-hidden', 'true');
     expect(end.querySelector('.prompt-square')).not.toBeNull();
     expect(end.querySelector('.cursor')).not.toBeNull();
-    expect(end.previousElementSibling).toBe(page);
-    expect(page.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(
-      end.compareDocumentPosition(screen.getByRole('contentinfo')) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    const footer = screen.getByRole('contentinfo');
+    const status = screen.getByRole('status', { name: 'Status line' });
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(page, footer), 'the footer after the page').toBe(true);
+    expect(end.previousElementSibling, 'the prompt right after the footer').toBe(footer);
+    expect(follows(end, status), 'the status line after the prompt').toBe(true);
+    // nothing but the fixed status line after the prompt
+    expect(end.nextElementSibling).toBeNull();
+    expect(end.parentElement!.nextElementSibling).toBe(status);
+  }
+
+  it('ends every page on one empty prompt, after the footer row, last before the status line (U-20)', async () => {
+    mount('/mainnet/dao');
+    expectFrameOrder(await screen.findByText('dao page'));
+  });
+
+  it('ends the not-found route the same way: the footer row, then the prompt (U-20)', async () => {
+    mount('/mainnet/no-such-page');
+    expectFrameOrder(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+      })
+    );
+  });
+
+  // U-20 (UI review 2026-11-14): no skip link. The frame's first focusable element is one, in the
+  // shell's voice, drawn only while it has the focus; it takes the focus to the frame's hold of
+  // the page (the page renders its own <main>, so the frame adds no second one).
+  it('starts with a "skip to content" link that takes the focus to the page (U-20)', async () => {
+    mount('/mainnet/no-such-page');
+    await screen.findByRole('heading', { level: 1 });
+    const focusable = document.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const skip = focusable[0];
+    expect(skip).toBe(screen.getByRole('link', { name: 'skip to content' }));
+    expect(skip).toHaveClass('sr-only', 'focus:not-sr-only');
+    const href = skip.getAttribute('href')!;
+    expect(href).toMatch(/^#./);
+    const target = document.getElementById(href.slice(1))!;
+    expect(target).not.toBeNull();
+    expect(target.tagName).not.toBe('MAIN');
+    expect(target).toHaveAttribute('tabindex', '-1');
+    expect(target).toContainElement(screen.getByRole('main'));
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    fireEvent.click(skip);
+    expect(target).toHaveFocus();
+    // the page's own content, not the header, follows the focus
+    expect(target).not.toContainElement(screen.getByRole('banner'));
   });
 
   it('closes the frame on one status line, after the footer', async () => {
@@ -184,6 +229,12 @@ describe('the header is part of the frame (visual finish V6)', () => {
     expect(document.querySelector('[data-tint]')).toBeNull();
     expect(screen.getAllByRole('banner')).toHaveLength(1);
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
+    // U-20: drawn in place of the frame it ends the same way: the footer row, then the prompt,
+    // the shell's last element (there is no status line without the frame)
+    const end = screen.getByTestId('prompt-end');
+    expect(end.previousElementSibling).toBe(screen.getByRole('contentinfo'));
+    expect(end.nextElementSibling).toBeNull();
+    expect(end.parentElement).toContainElement(screen.getByRole('main'));
   });
 });
 

@@ -384,7 +384,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           type="text"
           value={props.searchInput ?? ''}
           onChange={(e) => props.onSearchInputChange!(e.target.value)}
-          placeholder={props.searchLabel || 'Search...'}
+          placeholder={props.searchLabel || 'search'}
           aria-label={props.searchLabel || 'Search'}
           className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim text-small w-44 rounded border px-2.5 py-1.5 font-mono transition-colors"
         />

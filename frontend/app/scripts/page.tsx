@@ -560,7 +560,7 @@ export default function ScriptsPage() {
       <input
         value={searchInput}
         onChange={(event) => setSearchInput(event.target.value)}
-        placeholder="Search by name or code hash"
+        placeholder="search by name or code hash"
         aria-label="Search scripts"
         className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 rounded border px-3 align-middle sm:w-64"
       />

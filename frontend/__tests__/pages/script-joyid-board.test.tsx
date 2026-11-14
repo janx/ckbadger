@@ -122,10 +122,11 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(fills).toContain(DATA_COLOR);
     expect(fills).toContain(HELD_CAPACITY_COLOR);
     expect(fills).not.toContain('#58a5b5');
-    // Hierarchy v3: each panel's name is written inside its plot (R13).
+    // Hierarchy v3: each panel's name is written inside its plot (R13). Re-pinned with the lane A5
+    // follow-up (U-19): the ticks are bare, so the occupied panel's name says its unit, CKB.
     expect(
       [...document.querySelectorAll('[data-role="chart-name"]')].map((t) => t.textContent)
-    ).toEqual(['CKB in JoyID cells · occupied and free', "occupied by those cells' own bytes"]);
+    ).toEqual(['CKB in JoyID cells · occupied and free', "CKB occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
@@ -291,6 +292,19 @@ describe('JoyID script page · visual pass', () => {
   // U-19 (UI review 2026-11-14): the history's round values sat inside the plots in the ghost
   // ink, crossed by a spike ("200M CKB"); both plots write them in one dim gutter, and the upgrade
   // lines and labels sit on the plots' x, after it.
+  // Lane A5 follow-up: a tick is the bare value ("200M"), the unit said once in each plot's name,
+  // so the shared gutter is at most 56 px.
+  it('writes bare values in a gutter of at most 56 px, each plot naming CKB once (U-19)', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    const plots = [...history.querySelectorAll('svg[role="img"]')];
+    for (const plot of plots) {
+      for (const t of yTickLabels(plot)) expect(t.textContent).toMatch(/^[\d.,]+[kMB]?$/);
+      expect(plot.querySelector('[data-role="chart-name"]')?.textContent).toContain('CKB');
+      expect(plotLeftOf(plot)).toBeLessThanOrEqual(56);
+    }
+  });
+
   it('writes the history values in one dim gutter left of both plots (U-19)', async () => {
     await renderJoyid();
     const history = screen.getByTestId('script-history');

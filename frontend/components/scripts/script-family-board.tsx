@@ -417,6 +417,7 @@ export function ScriptHistoryFigure({
     data,
     unit: 'CKB',
     kind: 'stacked',
+    bareTicks: true,
     series: [
       { key: 'used', label: 'Occupied', color: DATA_COLOR },
       { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
@@ -427,10 +428,12 @@ export function ScriptHistoryFigure({
     data,
     unit: 'CKB',
     kind: 'area',
+    bareTicks: true,
     series: [{ key: 'used', label: 'Occupied', color: DATA_COLOR }],
   };
   // U-19: the round values sit in one gutter left of both plots, in the dim ink (inside, a spike
-  // crossed them); the upgrade lines and labels start after it, on the plots' x.
+  // crossed them), bare, each plot's name saying CKB once; the upgrade lines and labels start
+  // after the gutter, on the plots' x.
   const plotLeft = alignedPlotLeft([held, occupied]);
   const shared = {
     plotLeft,
@@ -466,7 +469,7 @@ export function ScriptHistoryFigure({
           {...shared}
           {...occupied}
           subtitle="Occupied capacity on its own scale"
-          plotName="occupied by those cells' own bytes"
+          plotName="CKB occupied by those cells' own bytes"
           height={96}
         />
       </div>

@@ -84,7 +84,6 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
           y={y}
           width={TW}
           height={TH}
-          rx={compact ? 3 : 4}
           fill={FORK_COLORS.tileFill}
           stroke={
             dropped ? FORK_COLORS.dropped : lit ? FORK_COLORS.tileStrokeLit : FORK_COLORS.tileStroke
@@ -223,7 +222,6 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             y={yMain}
             width={TW}
             height={TH}
-            rx="3"
             fill={FORK_COLORS.tileFill}
             stroke={FORK_COLORS.tileStroke}
           />

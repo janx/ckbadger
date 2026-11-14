@@ -2,6 +2,8 @@ import { fireEvent, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { render } from '../utils/test-utils';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { CHART_TOOLTIP_BG, CHART_TOOLTIP_BORDER } from '@/lib/chart-colors';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 describe('StackedAreaChart', () => {
   it('rounds shannon tooltip amounts from the exact integer', () => {
@@ -16,6 +18,23 @@ describe('StackedAreaChart', () => {
     Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
     fireEvent.mouseMove(svg, { clientX: 70 });
     expect(screen.getByText('1.01')).toBeInTheDocument();
+  });
+
+  it('draws its hover tooltip in a square-cornered box (U-02, R1)', () => {
+    render(
+      <StackedAreaChart
+        data={[{ date: '2026-02-19', values: { used: '100500000' } }]}
+        series={[{ key: 'used', label: 'Used', color: '#f59e0b' }]}
+        valueUnit="shannon"
+      />
+    );
+    const svg = document.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    const tooltipBox = () => rects(svg).find((r) => r.getAttribute('fill') === CHART_TOOLTIP_BG);
+    expect(tooltipBox()).toBeUndefined();
+    fireEvent.mouseMove(svg, { clientX: 70 });
+    expect(tooltipBox()).toHaveAttribute('stroke', CHART_TOOLTIP_BORDER);
+    expect(roundedRects(svg)).toEqual([]);
   });
 
   it('rounds percentage tooltips from exact series ratios', () => {

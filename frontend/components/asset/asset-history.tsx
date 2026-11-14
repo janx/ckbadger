@@ -140,7 +140,10 @@ export function AssetHistory({
     ],
     unit: 'CKB',
     kind: 'stacked',
+    // U-19 (lane A5): bare values in the gutter; the plot's name says the unit once.
+    bareTicks: true,
   };
+  const supplyUnit = token ? (token.decimals === null ? 'raw' : (token.symbol ?? 'tokens')) : null;
   const supplyAxis: ChartValueAxisInput | null = token
     ? {
         title: 'Supply',
@@ -150,7 +153,8 @@ export function AssetHistory({
           values: { supply: formatTokenBalance(p.supply!, token.decimals).replace(/,/g, '') },
         })),
         series: [{ key: 'supply', label: 'Supply', assetClass: 'tokens' }],
-        unit: token.decimals === null ? 'raw' : (token.symbol ?? 'tokens'),
+        unit: supplyUnit!,
+        bareTicks: true,
       }
     : null;
   const weeklyAxis: ChartValueAxisInput | null =
@@ -171,6 +175,9 @@ export function AssetHistory({
           ],
           unit: weeklyNoun,
           kind: 'bars',
+          bareTicks: true,
+          // a count of transfers or transactions: whole-number ticks only
+          integerTicks: true,
         }
       : null;
   // U-19 / DY-05 (UI review 2026-11-14): the round values sit in one gutter left of the plots, in
@@ -362,6 +369,8 @@ export function AssetHistory({
             <Chart
               {...supplyAxis}
               subtitle="Exact total supply"
+              // the unit once, as the ticks are bare (U-19)
+              plotName={supplyUnit === 'raw' ? 'supply in raw units' : `supply in ${supplyUnit}`}
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
               plotLeft={plotLeft}
@@ -377,6 +386,8 @@ export function AssetHistory({
             <Chart
               {...weeklyAxis}
               subtitle="Completed UTC+8 weeks"
+              // the unit once, as the ticks are bare (U-19)
+              plotName={`${weeklyNoun} per week`}
               formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
               plotLeft={plotLeft}
