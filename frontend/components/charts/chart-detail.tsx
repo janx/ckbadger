@@ -18,6 +18,8 @@ import {
 import {
   axisStyle,
   axisTicks,
+  bucketName,
+  bucketUnit,
   categoricalAxis,
   chartModel,
   chartSpan,
@@ -28,6 +30,7 @@ import {
   type SubChart,
 } from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
+import { chartAxisFormat } from '@/components/charts/chart-format';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
@@ -225,8 +228,14 @@ function DetailBody({
     label: `${title} readout`,
     idle: `A ${style === 'date' ? 'day' : 'point'} on the chart reads its value here.`,
   });
+  // A point read on the page: an epoch numbered, a bucket with its unit (CH-12, CH-35).
+  const xUnit = bucketUnit(definition);
   const pointLabel = (label: string) =>
-    style === 'epoch' ? `#${formatEpochLabel(label, definition.slug)}` : label;
+    style === 'epoch'
+      ? `#${formatEpochLabel(label, definition.slug)}`
+      : style === 'bucket'
+        ? bucketName(label, xUnit)
+        : label;
   // Method and evidence are the quieter developer tier, after related charts (CH-20).
   const method = (
     <DetailSection title="How it is computed / Evidence">
@@ -304,7 +313,9 @@ function DetailBody({
     >
       <Reading
         label={
-          style === 'bucket' ? `most common, ${model.latest.label}` : pointLabel(model.latest.label)
+          style === 'bucket'
+            ? `most common, ${pointLabel(model.latest.label)}`
+            : pointLabel(model.latest.label)
         }
         raw={model.latest.raw}
         unit={model.unit}
@@ -446,14 +457,17 @@ function DetailBody({
               }
               formatValue={(value) => formatChartHover(value, model.unit)}
               // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
-              xTicks={axisTicks(points, style, 8)}
+              xTicks={axisTicks(points, style, 8, xUnit)}
+              formatAxis={chartAxisFormat(model.unit)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
               categoricalX={categoricalAxis(definition)}
               hideMarkerLegend
               yDomain={model.yDomain}
               referenceLines={model.referenceLines}
-              formatLabel={(label) => (style === 'epoch' ? `epoch ${pointLabel(label)}` : label)}
+              formatLabel={(label) =>
+                style === 'epoch' ? `epoch ${pointLabel(label)}` : pointLabel(label)
+              }
               pinnedReadout={readout(definition.title)}
               // The caption is hidden, so several bands (the HODL wave's eight) get a swatch key
               // under the plot: name and value at the reading, latest by default (C#4).
@@ -481,6 +495,7 @@ function DetailBody({
                   hideCaption
                   formatValue={(value) => formatChartHover(value, history.unit)}
                   xTicks={axisTicks(shown, 'date', 8)}
+                  formatAxis={chartAxisFormat(history.unit)}
                   pointDots
                   // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
                   seriesLegend
@@ -510,7 +525,9 @@ function DetailBody({
               kind={definition.visual === 'bars' ? 'bars' : 'line'}
               height={220}
               formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
-              xTicks={axisTicks(secondaryPoints, style, 8)}
+              xTicks={axisTicks(secondaryPoints, style, 8, xUnit)}
+              formatAxis={chartAxisFormat(model.secondary.unit)}
+              formatLabel={pointLabel}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
               categoricalX={categoricalAxis(definition)}
@@ -536,6 +553,7 @@ function DetailBody({
               height={220}
               formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
               xTicks={axisTicks(rangePoints(model.dailyFlow.points, range), 'date', 8)}
+              formatAxis={chartAxisFormat(model.dailyFlow.unit)}
               pointDots
               pinnedReadout={readout(model.dailyFlow.title)}
             />

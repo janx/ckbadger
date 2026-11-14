@@ -369,7 +369,13 @@ describe('shared chart detail', () => {
     await screen.findByRole('heading', { name: 'Distribution 6 buckets' });
     const props = lastChart('Cell size');
     expect(props.categoricalX).toBe(true);
-    expect(props.xTicks).toEqual(labels.map((label, index) => ({ index, label })));
+    // Every bucket named, in the axis' words with the unit once (re-pinned for CH-12: the API's
+    // labels, 'CKB' on each and '100k-1m').
+    expect(props.xTicks).toEqual(
+      ['< 100', '100 – 1k', '1k – 10k', '10k – 100k', '100k – 1M', '≥ 1M CKB'].map(
+        (label, index) => ({ index, label })
+      )
+    );
   });
 
   it('prints epoch numbers with thousands groups (CH-35)', async () => {

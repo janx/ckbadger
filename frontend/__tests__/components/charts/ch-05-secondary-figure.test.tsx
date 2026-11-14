@@ -57,8 +57,9 @@ describe('a secondary figure says what it reads (CH-05)', () => {
     const reading = await screen.findByRole('group', { name: 'Common knowledge reading' });
     expect(reading).toHaveTextContent(/^largest, 100.*1k CKB75,000,000CKB$/);
     expect(reading).not.toHaveTextContent('1,048,617');
+    // The bucket in the axis' words (re-pinned for CH-12: was the API's '100-1k CKB').
     expect(lastChart('Common knowledge').reading).toEqual({
-      label: '100-1k CKB',
+      label: '100 – 1k CKB',
       values: { secondary: '75000000' },
     });
   });

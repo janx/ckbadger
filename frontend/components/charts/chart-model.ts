@@ -12,8 +12,8 @@ import {
   formatExactDecimal,
   formatScaledInteger,
 } from '@/lib/exact-integer';
-import { niceStep } from '@/lib/chart-ticks';
-import { formatDateWindow } from '@/components/charts/chart-format';
+import { niceStep, stepDecimals } from '@/lib/chart-ticks';
+import { cellSizeBucketLabel, formatDateWindow } from '@/components/charts/chart-format';
 import { formatCount } from '@/lib/format-count';
 import {
   ACTIVITY_KIND_COLORS,
@@ -289,6 +289,9 @@ function singleChart(
   ) {
     throw new Error(`${definition.slug}: secondary series is missing at a returned point`);
   }
+  // Cell size names its buckets in the axis' words (CH-12); every other label is the API's own.
+  const pointLabel = (date: string) =>
+    definition.slug === 'cell-size-distribution' ? cellSizeBucketLabel(date) : date;
   const points: ChartPoint[] = payload.data.map((point) => {
     const primary = point[primaryField];
     if (primary === undefined || primary === null)
@@ -306,7 +309,7 @@ function singleChart(
         `${definition.slug} companion at ${point.date}`
       );
     }
-    return { label: point.date, values };
+    return { label: pointLabel(point.date), values };
   });
   const currentIndex = timelineMarkers ? timelineCurrentIndex(definition.slug, payload.data) : null;
   const series: ChartSeries[] = [
@@ -329,7 +332,7 @@ function singleChart(
     hasSecond && definition.secondary
       ? {
           points: payload.data.map((point) => ({
-            label: point.date,
+            label: pointLabel(point.date),
             values: {
               secondary: chartUnitValue(
                 point.value2!,
@@ -1064,8 +1067,8 @@ function shortSeriesId(id: string): string {
 }
 
 /** A bucket label without the unit word its subtitle already names: "100-1k CKB" → "100-1k". */
-export function shortBucketLabel(label: string): string {
-  return label.replace(/ CKB$/, '');
+export function shortBucketLabel(label: string, unit = 'CKB'): string {
+  return label.endsWith(` ${unit}`) ? label.slice(0, -unit.length - 1) : label;
 }
 
 /**
@@ -1352,11 +1355,9 @@ function bucketHeadline(
       ),
       unit: '%',
     };
-  return {
-    pre: 'most common',
-    display: leading.label,
-    unit: definition.slug === 'block-time-distribution' ? 's' : 'hours',
-  };
+  const unit = bucketUnit(definition);
+  if (unit === undefined) throw new Error(`${definition.slug}: a bucket histogram with no unit`);
+  return { pre: 'most common', display: leading.label, unit };
 }
 
 /** A model's exact age in years, at two decimals: "6.96" (CH-33). */
@@ -1407,31 +1408,138 @@ export function categoricalAxis(definition: ChartDefinition): boolean {
   return CATEGORY_BUCKETS.includes(definition.slug);
 }
 
-function thin<T>(items: readonly T[], max: number): T[] {
-  if (items.length <= max) return [...items];
-  if (max === 1) return [items[items.length - 1]];
-  // Evenly spaced, always keeping the first and the last.
-  return Array.from(
-    { length: max },
-    (_, i) => items[Math.round((i * (items.length - 1)) / (max - 1))]
-  );
+/**
+ * Every k-th item from the first, for the smallest k that keeps at most `max`: a regular sequence
+ * stays regular (CH-12: thinning 9 model years evenly to 8 dropped year 10).
+ */
+function everyKth<T>(items: readonly T[], max: number): T[] {
+  if (!Number.isSafeInteger(max) || max < 1) throw new Error(`axis ticks: invalid maximum ${max}`);
+  const k = Math.ceil(items.length / max);
+  return items.filter((_, i) => i % k === 0);
+}
+
+/** The smallest 1 / 2 / 2.5 / 5 × 10^k step putting at most `max` round values in [from, to]. */
+function tickStep(from: number, to: number, max: number): number {
+  let step = niceStep((to - from) / max);
+  const count = (s: number) => Math.floor(to / s + 1e-9) - Math.ceil(from / s - 1e-9) + 1;
+  while (count(step) > max) step = niceStep(step * (1 + 1e-6));
+  return step;
+}
+
+/** The round values from `values[lo]` to `values[hi]` by `step`, each at the first point reaching it. */
+function roundTicks(
+  values: readonly number[],
+  lo: number,
+  hi: number,
+  step: number,
+  label: (value: number, index: number) => string
+): { index: number; label: string }[] {
+  const ticks: { index: number; label: string }[] = [];
+  const first = Math.ceil(values[lo] / step - 1e-9);
+  const last = Math.floor(values[hi] / step + 1e-9);
+  for (let n = first; n <= last; n++) {
+    const tick = n * step;
+    let index = lo;
+    while (index < hi && values[index] < tick - step * 1e-9) index++;
+    if (!ticks.some((t) => t.index === index)) ticks.push({ index, label: label(tick, index) });
+  }
+  return ticks;
+}
+
+/** A bucket axis' x unit: what its bucket labels measure (CH-12). */
+const BUCKET_UNITS: Readonly<Record<string, string>> = {
+  'cell-size-distribution': 'CKB',
+  'block-time-distribution': 's',
+  'epoch-time-distribution': 'h',
+};
+
+/** The x unit of a bucket histogram, which its axis writes once (CH-12). */
+export function bucketUnit(definition: ChartDefinition): string | undefined {
+  return BUCKET_UNITS[definition.slug];
+}
+
+const NUMERIC_BUCKET = /^\d+(\.\d+)?$/;
+
+/** A bucket as read on the page, with its unit: `0.8 s`, `4.02 h`, `< 100 CKB` (CH-12, CH-14). */
+export function bucketName(label: string, unit: string | undefined): string {
+  if (unit === undefined) return label;
+  if (NUMERIC_BUCKET.test(label)) return `${label} ${unit}`;
+  if (!label.endsWith(` ${unit}`)) throw new Error(`bucket ${label} is not in ${unit}`);
+  return label;
 }
 
 /**
- * X-axis ticks at the points where a calendar unit starts (years, else months), at round epoch
- * numbers, at round model years, or at buckets; at most `max`, evenly thinned (CH-24, CH-09).
+ * A numeric histogram's ticks (CH-12): round values over its regular run of buckets — the longest
+ * stretch with no gap wider than one tick step — and, beyond the run at either end, the outlying
+ * buckets marked open-ended on the run's side (`≤ 2.05`, `≥ 50.50`). `max` bounds the round values.
+ */
+function numericBucketTicks(
+  points: readonly ChartPoint[],
+  max: number
+): { index: number; label: string }[] {
+  const values = points.map((point) => Number(point.label));
+  values.forEach((value, i) => {
+    if (i > 0 && !(value > values[i - 1]))
+      throw new Error(`bucket axis: ${points[i].label} does not follow ${points[i - 1].label}`);
+  });
+  let lo = 0;
+  let hi = values.length - 1;
+  let step = values[hi] > values[lo] ? tickStep(values[lo], values[hi], max) : 1;
+  while (values[hi] > values[lo]) {
+    // Split the run where neighbours lie further apart than a step; keep its longest part.
+    let best = { lo, hi: lo };
+    let from = lo;
+    for (let i = lo + 1; i <= hi + 1; i++)
+      if (i > hi || values[i] - values[i - 1] > step * (1 + 1e-9)) {
+        if (i - 1 - from > best.hi - best.lo) best = { lo: from, hi: i - 1 };
+        from = i;
+      }
+    if (best.lo === lo && best.hi === hi) break;
+    lo = best.lo;
+    hi = best.hi;
+    if (values[hi] > values[lo]) step = tickStep(values[lo], values[hi], max);
+  }
+  const decimals = stepDecimals(step);
+  const ticks =
+    values[hi] > values[lo]
+      ? roundTicks(values, lo, hi, step, (value) => value.toFixed(decimals))
+      : [{ index: lo, label: points[lo].label }];
+  return [
+    ...(lo > 0 ? [{ index: lo - 1, label: `≤ ${points[lo - 1].label}` }] : []),
+    ...ticks,
+    ...(hi < points.length - 1 ? [{ index: hi + 1, label: `≥ ${points[hi + 1].label}` }] : []),
+  ];
+}
+
+/**
+ * X-axis ticks (CH-24, CH-09, CH-12): where a calendar unit starts (years, else months), at round
+ * epoch numbers or model years, or at a histogram's round values — a regular sequence, every k-th
+ * kept so that at most `max` remain and none in between is skipped. A bucket axis writes its
+ * `unit` once, on its last label; named buckets (Cell size) are all kept, each a category.
  */
 export function axisTicks(
   points: readonly ChartPoint[],
   style: AxisStyle,
-  max: number
+  max: number,
+  unit?: string
 ): { index: number; label: string }[] {
   if (!points.length) return [];
-  if (style === 'bucket')
-    return thin(
-      points.map((point, index) => ({ index, label: point.label })),
-      max
+  if (style === 'bucket') {
+    const numeric = points.every((point) => NUMERIC_BUCKET.test(point.label));
+    const ticks = numeric
+      ? numericBucketTicks(points, max)
+      : points.map((point, index) => ({
+          index,
+          label:
+            unit === undefined
+              ? point.label
+              : shortBucketLabel(bucketName(point.label, unit), unit),
+        }));
+    if (unit === undefined) return ticks;
+    return ticks.map((tick, i) =>
+      i === ticks.length - 1 ? { ...tick, label: `${tick.label} ${unit}` } : tick
     );
+  }
   if (style === 'epoch' || style === 'model-year') {
     const values = points.map((point) => {
       const value = Number(point.label);
@@ -1441,33 +1549,28 @@ export function axisTicks(
     const first = values[0];
     const last = values[values.length - 1];
     if (last <= first) return [{ index: 0, label: tickLabel(style, first) }];
-    const step = niceStep((last - first) / max);
-    const ticks: { index: number; label: string }[] = [];
-    for (let tick = Math.ceil(first / step) * step; tick <= last; tick += step) {
-      const index = values.findIndex((value) => value >= tick);
-      if (index >= 0 && !ticks.some((t) => t.index === index))
-        ticks.push({ index, label: tickLabel(style, values[index]) });
-    }
-    return thin(ticks, max);
+    return roundTicks(values, 0, values.length - 1, tickStep(first, last, max), (_, index) =>
+      tickLabel(style, values[index])
+    );
   }
-  const unit = (label: string) => {
+  const dated = (label: string) => {
     if (style === 'month' ? !/^\d{4}-\d{2}$/.test(label) : !/^\d{4}-\d{2}-\d{2}$/.test(label))
       throw new Error(`invalid ${style} axis label ${label}`);
     return label;
   };
   const starts = (cut: number) =>
     points.flatMap((point, index) => {
-      const key = unit(point.label).slice(0, cut);
+      const key = dated(point.label).slice(0, cut);
       return index > 0 && key !== points[index - 1].label.slice(0, cut)
         ? [{ index, label: key }]
         : [];
     });
   const years = starts(4);
-  if (years.length >= 2 || style === 'month') return thin(years, max);
+  if (years.length >= 2 || style === 'month') return everyKth(years, max);
   const months = starts(7);
-  if (months.length >= 2) return thin(months, max);
+  if (months.length >= 2) return everyKth(months, max);
   // Inside one or two months: the days themselves, month-day (CH-58).
-  return thin(
+  return everyKth(
     points.map((point, index) => ({ index, label: point.label.slice(5) })),
     max
   );

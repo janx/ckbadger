@@ -98,6 +98,12 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'most-utilized-scripts' || definition.slug === 'most-utilized-assets')
     return utilized;
   if (definition.slug === 'miner-address-distribution') return miners;
+  // The API's own size buckets: an unknown bucket fails (re-pinned for CH-12).
+  if (definition.slug === 'cell-size-distribution')
+    return {
+      ...simple,
+      data: simple.data.map((point, i) => ({ ...point, date: ['<100 CKB', '>=1m CKB'][i] })),
+    };
   if (
     [
       'cell-count',
@@ -430,7 +436,8 @@ describe('29 chart variants', () => {
         { date: '>=1m CKB', value: '1', value2: '10' },
       ],
     });
-    expect(buckets.latest?.label).toBe('<100 CKB');
+    // In the axis' words (re-pinned for CH-12: was the API's '<100 CKB').
+    expect(buckets.latest?.label).toBe('< 100 CKB');
     expect(buckets.delta).toBeNull();
   });
 

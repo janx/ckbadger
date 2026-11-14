@@ -5,14 +5,15 @@ import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ClassMark } from '@/components/ui/class-mark';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
+import { chartAxisFormat } from '@/components/charts/chart-format';
 import {
   axisStyle,
   axisTicks,
+  bucketUnit,
   categoricalAxis,
   chartModel,
   formatChartExact,
   formatChartReadout,
-  shortBucketLabel,
   type ChartHeadline,
   type ChartModel,
 } from '@/components/charts/chart-model';
@@ -83,8 +84,12 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   if (data) {
     try {
       model = chartModel(definition, data);
-      ticks = axisTicks(model.card?.points ?? model.points, style, style === 'bucket' ? 6 : 3).map(
-        (tick) => (style === 'bucket' ? { ...tick, label: shortBucketLabel(tick.label) } : tick)
+      // The bucket unit once, on the axis' last label (CH-12).
+      ticks = axisTicks(
+        model.card?.points ?? model.points,
+        style,
+        style === 'bucket' ? 6 : 3,
+        bucketUnit(definition)
       );
     } catch (cause) {
       model = null;
@@ -175,6 +180,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             yDomain={model.yDomain}
             referenceLines={model.referenceLines}
             formatValue={(value) => formatChartReadout(value, model.unit)}
+            formatAxis={chartAxisFormat(model.unit)}
           />
         ))}
       {model?.card && model.card.legend.length > 0 && (

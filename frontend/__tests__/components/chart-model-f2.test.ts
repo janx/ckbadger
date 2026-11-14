@@ -208,11 +208,13 @@ describe('Charts index encodings (F2 charts)', () => {
       yAxisLabel: 'Cells',
       data: [
         { date: '<100 CKB', value: '600', value2: '1' },
-        { date: '100+ CKB', value: '300', value2: '1' },
+        { date: '100-1k CKB', value: '300', value2: '1' },
         { date: '>=1m CKB', value: '100', value2: '1' },
       ],
     });
-    expect(cellSize.headline).toEqual({ pre: '<100 CKB', display: '60.00', unit: '%' });
+    // Re-pinned for CH-12: the API's buckets only ('100+ CKB' is none of them), named in the
+    // axis' words, and a bucket's unit is its symbol ('h', was 'hours'; CH-14).
+    expect(cellSize.headline).toEqual({ pre: '< 100 CKB', display: '60.00', unit: '%' });
     // Re-pinned for CH-18: no fact restates the head's bucket (was: not "Largest bucket").
     expect(cellSize.facts).toBeUndefined();
     const epochs = chartModel(def('epoch-time-distribution'), {
@@ -224,7 +226,7 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '50.50', value: '1' },
       ],
     });
-    expect(epochs.headline).toEqual({ pre: 'most common', display: '4.02', unit: 'hours' });
+    expect(epochs.headline).toEqual({ pre: 'most common', display: '4.02', unit: 'h' });
     const cohort = chartModel(def('address-cohort-retention'), {
       title: 'Cohorts',
       yAxisLabel: '%',
