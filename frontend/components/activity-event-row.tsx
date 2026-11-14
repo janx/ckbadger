@@ -8,11 +8,10 @@ import {
   getIdentityItemDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { formatCkbAmount, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
-export type { ActivityBody } from '@/lib/activity-classify';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
@@ -47,11 +46,6 @@ export function formatStandard(standard: string): string {
   return standard.charAt(0).toUpperCase() + standard.slice(1);
 }
 
-export function capitalizeAction(action: string): string {
-  if (!action) return '';
-  return action.charAt(0).toUpperCase() + action.slice(1);
-}
-
 /**
  * A call's script as a reader names it: the registry name, else its code hash (what kind of
  * script it is), never the script hash, which reads as `code(args)` (F2-tx, TX-31).
@@ -62,31 +56,6 @@ export function formatScriptRef(
 ): string {
   if (sc.scriptName?.trim()) return sc.scriptName!.trim();
   return shortenHash(sc.codeHash, size);
-}
-
-// ---------------------------------------------------------------------------
-// CkbDelta — color-coded CKB amount
-// ---------------------------------------------------------------------------
-
-export function CkbDelta({ delta }: { delta: string }) {
-  const value = BigInt(delta);
-  const formatted = formatCkbAmount(delta);
-  const isPositive = value > BigInt(0);
-  const isNegative = value < BigInt(0);
-
-  return (
-    <span
-      className={cn(
-        'text-small whitespace-nowrap font-mono tabular-nums',
-        isPositive && 'text-positive',
-        isNegative && 'text-negative',
-        !isPositive && !isNegative && 'text-text-dim'
-      )}
-    >
-      {isPositive ? '+' : ''}
-      {formatted.full} CKB
-    </span>
-  );
 }
 
 /** The label of a DAO step, as its badge and the compact summary both print it. */

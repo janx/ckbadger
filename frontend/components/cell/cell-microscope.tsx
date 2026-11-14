@@ -33,8 +33,6 @@ import {
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { formatCount } from '@/lib/format-count';
 
-export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
-
 /** Excerpt ranges align to 24 bytes, which every dump row length (24, 16, 8) divides or fits. */
 const ROW = 24;
 /** The capacity map's gap between parts (`gap-[2px]`). */

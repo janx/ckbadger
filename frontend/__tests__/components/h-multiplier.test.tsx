@@ -1,19 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
-import { computeHMulValue, formatHMulValue } from '@/components/ui/hmul-info';
-
-describe('HMul exact display', () => {
-  it('formats a large ratio with integer arithmetic', () => {
-    expect(computeHMulValue('9007199254740993', '3')).toBe('3002399751580331.00');
-    expect(formatHMulValue(computeHMulValue('9007199254740993', '3'))).toBe('×3002399751580331.00');
-  });
-
-  it('distinguishes absent and invalid required capacity', () => {
-    expect(computeHMulValue(null, null)).toBeNull();
-    expect(() => computeHMulValue('bad', '1')).toThrow('totalCapacity');
-  });
-});
 
 describe('HMultiplierReading (consistency plan C12)', () => {
   it('reads "H-multiplier ×N" with its definition wherever it is shown', () => {

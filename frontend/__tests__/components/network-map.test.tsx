@@ -3,7 +3,8 @@ import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
-import { layoutMapPoints, NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
+import { layoutCountryClusters, NetworkMapNotes } from '@/app/network/network-map';
+import { NetworkMapView } from '@/__tests__/utils/network-map-view';
 import type { NetworkMap } from '@/lib/api';
 import producerMap from '@/__tests__/fixtures/network-api-producer/network-map.json';
 
@@ -98,7 +99,8 @@ describe('NetworkMapView', () => {
   });
 
   it('displaces coincident dots deterministically without changing source coordinates', () => {
-    const layout = layoutMapPoints([second, first]);
+    // the dots of the default 720 × 353 map (720 × 0.49, rounded)
+    const layout = layoutCountryClusters([second, first], 720, 353).dots;
     expect(layout.map(({ point }) => point.peerId)).toEqual(['a', 'b']);
     expect([layout[0].x, layout[0].y]).not.toEqual([layout[1].x, layout[1].y]);
     expect(Math.hypot(layout[0].x - layout[1].x, layout[0].y - layout[1].y)).toBeGreaterThanOrEqual(

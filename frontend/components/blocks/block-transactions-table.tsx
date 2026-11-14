@@ -12,9 +12,6 @@ import { formatCount } from '@/lib/format-count';
 
 const TRACK = 96;
 
-/** The column budget fits the block page's main column (≈ 968 px at 1440) without scrolling. */
-export const BLOCK_TXS_MIN_WIDTH = 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172;
-
 /** Output capacity with its unit, for the phone row. */
 function capacity(tx: Transaction) {
   return (

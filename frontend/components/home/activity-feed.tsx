@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { ActivityRow, ActivityRowHead, activityRowTitle } from '@/components/activity/activity-row';
 import { ACTIVITY_HEAD_CLASS, SectionHeading } from '@/components/home/section';
-export { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { useFreshKeys } from '@/hooks/useFreshKeys';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { api, type Transaction } from '@/lib/api';

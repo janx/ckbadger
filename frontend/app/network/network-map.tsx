@@ -149,15 +149,6 @@ export function layoutCountryClusters(
   return { dots, labels, listed };
 }
 
-/** The dots alone, on the default 720 × 353 map (kept for callers that place only dots). */
-export function layoutMapPoints(
-  points: Point[],
-  width = 720,
-  height = Math.round(720 * 0.49)
-): Array<{ point: Point; x: number; y: number }> {
-  return layoutCountryClusters(points, width, height).dots;
-}
-
 /** The map's counts, one derivation for the key, the reading row and the notes. */
 export function mapCounts(map: NetworkMap): {
   reachable: number;
@@ -604,16 +595,5 @@ export function NetworkMapNotes() {
       connections to others. Those links cannot be seen from outside, so none are drawn: not even
       this node&apos;s, which would make it look like a centre.
     </p>
-  );
-}
-
-/** The map and the lines under it, together (a page without a hero to split them across). */
-export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
-  const map = useNetworkMap(neverVerified);
-  return (
-    <div className="min-w-0">
-      <NetworkMapPicture map={map} />
-      <NetworkMapFootnotes map={map} />
-    </div>
   );
 }

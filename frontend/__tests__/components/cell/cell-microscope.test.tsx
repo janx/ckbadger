@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
+import { CellMicroscope } from '@/components/cell/cell-microscope';
+import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
