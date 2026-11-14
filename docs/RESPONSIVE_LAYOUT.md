@@ -97,8 +97,10 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Formats** (`frontend/lib/shorten.ts`, `frontend/lib/format-unit.ts`; UI review 2026-11-14,
   U-09, CH-14, PA-22): a shortened id has three sizes, counted in characters of the value as
   written (`0x` and `ckb1` included) — `head` 12…8 for an h1 or a lede, `row` 10…6 in tables, feeds
-  and tiles, `tight` 6…4 for a hash and 8…6 for an address in a phone row, a chart label or a tile
-  under 200 px; a list with a table and a phone row takes the size of the form it is drawn in. Any
+  and tiles, `tight` 6…4 for a hash and 4…6 for an address (the network and the identity: the
+  characters after `ckb1` start the lock's code hash, the same for every address of a lock) in a
+  phone row, a chart label or a tile under 200 px; a list with a table and a phone row takes the size
+  of the form it is drawn in. Any
   other hex id takes the hash's sizes; an out point is its hash and `:N`; a value no longer than
   its shortened form is written whole. The ellipsis is the one character `…`, never `...`. A
   renderer takes a size, never a length (gate `__tests__/lib/shorten-gate.test.ts`). A

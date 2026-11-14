@@ -277,7 +277,7 @@ describe('Fiber channel phone row (board L8)', () => {
       [
         'pair',
         'body',
-        'ckb1qzqq…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
+        'ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
         '3,000.00000000 CKB',
       ],
       [
@@ -305,7 +305,7 @@ describe('Fiber channel phone row (board L8)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       [
         'channel',
-        '0x0101…0101 · ckb1qzqq…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
+        '0x0101…0101 · ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
         '3,000.00000000 CKB',
       ],
       ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],

@@ -36,14 +36,16 @@ describe('Address', () => {
       expect(link.textContent).not.toContain('...');
     });
 
-    it('writes the tight size, 8…6 for an address (no length is passed)', () => {
+    // U-09 (re-pinned, the lead's ruling): a tight address is 4…6 (it was 8…6)
+    it('writes the tight size, 4…6 for an address (no length is passed)', () => {
       render(<Address address={testAddress} size="tight" />);
       const link = screen.getByRole('link');
-      expect(link.textContent).toBe('ckb1qzda…wj5clj');
+      expect(link.textContent).toBe('ckb1…wj5clj');
     });
 
     it('does not shorten an address no longer than its shortened form', () => {
-      const shortAddress = 'ckb1qzda0cr08m';
+      // 11 characters, the tight form's 4 + 1 + 6 (it was 14 against 8…6's 15)
+      const shortAddress = 'ckb1qzda0cr';
       render(<Address address={shortAddress} size="tight" />);
       const link = screen.getByRole('link');
       expect(link.textContent).toBe(shortAddress);

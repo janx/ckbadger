@@ -64,7 +64,7 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
     expect(tile).toHaveTextContent(/^input 0 0x9486…d667:3/);
     expect(within(tile).queryByRole('link', { name: 'input 0' })).toBeNull();
     // the owner keeps its own link
-    expect(within(tile).getByRole('link', { name: /^ckb1qzda…[0-9a-z]{6}$/ })).toHaveAttribute(
+    expect(within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
     );
@@ -91,7 +91,7 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
     // outside a router the anchors would ask jsdom to navigate, which it cannot
     tile.addEventListener('click', (event) => event.preventDefault());
     fireEvent.click(within(tile).getByRole('link', { name: '0xdcd1…334d:0' }));
-    fireEvent.click(within(tile).getByRole('link', { name: /^ckb1qzda…[0-9a-z]{6}$/ }));
+    fireEvent.click(within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ }));
     expect(onClick).not.toHaveBeenCalled();
     fireEvent.click(tile);
     expect(onClick).toHaveBeenCalledTimes(1);

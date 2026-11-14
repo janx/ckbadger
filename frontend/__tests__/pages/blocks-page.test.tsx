@@ -540,8 +540,8 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
         // the head line: what every reader comes for, the height, the transactions and the age
         ['identity', '#20,828,894', expect.stringMatching(/^5\stxs · \d+[smhd] ago$/)],
-        // U-09 (re-pinned): the phone row's unnamed miner at the tight size, 8…6
-        ['miner', 'miner ckb1qzda…93hhsj', 'fees 0.05060000 CKB'],
+        // U-09 (re-pinned): the phone row's unnamed miner at the tight size, 4…6 (the lead's ruling)
+        ['miner', 'miner ckb1…93hhsj', 'fees 0.05060000 CKB'],
         [
           'figures',
           // Every desktop column: hash, the proposals (consensus detail, after the hash that
@@ -611,13 +611,13 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)
     // missed the 324 px text column by a few px with the 12 px gap, so the fees dropped to a line
-    // of their own and rows took different shapes by their fee. U-09 (re-pinned): the phone row
-    // writes an unnamed miner at the tight size, 8…6 for an address (it had a 4-character head of
-    // its own, "ckb1...93hhsj"). So the miner and any fee below 10 CKB (always eight decimals) hold
-    // one line at 390 (324 px); at 360 (294 px) the fee of an unnamed miner takes its own line,
-    // right-aligned (PhoneRow's rule), as a fee from 100 CKB did before. jsdom cannot measure: the
-    // characters are the measure, 12 px Courier Prime at 7.2 px each, the unit at 11 px.
-    it('keeps the miner and a fee below 10 CKB on one line at 390 px', async () => {
+    // of their own and rows took different shapes by their fee. U-09 (re-pinned twice): the phone
+    // row writes an unnamed miner at the tight size, 4…6 for an address by the lead's ruling (8…6
+    // in lane B3 dropped the fee under the miner at 360; before B3 it was "ckb1...93hhsj"). So the
+    // miner and any fee below 1,000 CKB (always eight decimals) hold one line at 360 (292 px after
+    // the stone) and at 390 (324 px). jsdom cannot measure: the characters are the measure, 12 px
+    // at 7.2 px each, the unit at 11 px.
+    it('keeps the miner and a fee below 10 CKB on one line at 360 and 390 px', async () => {
       atContainerWidth(358);
       const testnetMiner = 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgx3ze7p';
       vi.mocked(api.getBlocks).mockResolvedValue({
@@ -638,16 +638,16 @@ describe('BlocksPage · Blocks v3 board', () => {
       const [unnamed, pooled, testnet] = cards.map((card) => phoneLines(card)[1]);
       expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
         'miner',
-        'miner ckb1qzda…93hhsj',
+        'miner ckb1…93hhsj',
         'fees 9.99999999 CKB',
       ]);
       expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
-      expect(testnet.left).toBe('miner ckt1qzda…x3ze7p'); // testnet's prefix, same form
+      expect(testnet.left).toBe('miner ckt1…x3ze7p'); // testnet's prefix, same form
       // the miner stays a link to its address, the full address its title
       for (const [card, name, address] of [
-        [cards[0], 'ckb1qzda…93hhsj', miner],
+        [cards[0], 'ckb1…93hhsj', miner],
         [cards[1], 'Example Pool', miner],
-        [cards[2], 'ckt1qzda…x3ze7p', testnetMiner],
+        [cards[2], 'ckt1…x3ze7p', testnetMiner],
       ] as const) {
         const line = card.querySelector('[data-line="miner"]') as HTMLElement;
         const link = within(line).getByRole('link', { name });
@@ -660,19 +660,23 @@ describe('BlocksPage · Blocks v3 board', () => {
       const width = (text: string) =>
         chars(text.length - ' CKB'.length, 12) + (text.endsWith(' CKB') ? chars(4, 11) : 0);
       const lineWidth = (left: string, right: string) => chars(left.length, 12) + 12 + width(right);
-      // the widest fee below 10 CKB with "miner ckb1qzda…93hhsj": 151.2 + 12 + 134.4 = 297.6 px,
-      // 3.6 over at 360 (the fee drops under the miner there) and 26.4 to spare at 390
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(297.6, 6);
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeGreaterThan(294);
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(324);
-      // a fee of 10–99 CKB adds a digit and still fits at 390, as does a fee from 100 CKB
-      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeCloseTo(304.8, 6);
-      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeLessThanOrEqual(324);
+      // the room after the stone: 326 − 34 = 292 px at 360, 358 − 34 = 324 at 390
+      const room360 = 326 - ROW_SEAL.block.footprint;
+      expect(room360).toBe(292);
+      // the widest fee below 10 CKB with "miner ckb1…93hhsj": 122.4 + 12 + 134.4 = 268.8 px,
+      // 23.2 to spare at 360 and 55.2 at 390
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(268.8, 6);
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(room360);
+      // a fee of 10–99 CKB adds a digit and still fits at 360, as does a fee from 100 CKB
+      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeCloseTo(276, 6);
+      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeLessThanOrEqual(room360);
+      // at 8…6 ("miner ckb1qzda…93hhsj") it was 297.6 px, 5.6 over at 360
+      expect(lineWidth('miner ckb1qzda…93hhsj', unnamed.right!)).toBeGreaterThan(room360);
       // with the tables' 10-character head it was 180 + 12 + 134.4 = 326.4 px, past both columns
       expect(lineWidth('miner ckb1qzda0c...93hhsj', unnamed.right!)).toBeGreaterThan(324);
       // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
       expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
-      expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
+      expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(room360);
     });
 
     // The lead's ruling (B3 follow-up, 2026-11-14): the miner line is the model of every phone row,

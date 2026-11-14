@@ -240,7 +240,7 @@ describe('Token holders (board L5)', () => {
         key: 'holder',
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
-        left: '1ckb1qrgq…tllakf JoyID',
+        left: '1ckb1…tllakf JoyID',
         right: '562,997.00000000',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis

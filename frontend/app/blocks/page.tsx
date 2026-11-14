@@ -317,7 +317,7 @@ const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
 /**
  * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`
  * names, else the address at the form's size (U-09): `ckb1qzda0c…93hhsj` in the tables (row),
- * `ckb1qzda…93hhsj` in the phone row (tight). Genesis is mined by no one.
+ * `ckb1…93hhsj` in the phone row (tight). Genesis is mined by no one.
  */
 function miner(block: Block, size: ShortSize) {
   if (!block.minerAddress) return <span className="text-text-dim">Genesis</span>;
@@ -392,13 +392,14 @@ function reward(block: Block) {
  * device's clock is behind" (29 characters), drops it under the height, whole. With the counts it
  * read "4 txs · 1 proposal · 13s ago" (28) and dropped at 360 while its neighbours did not.
  *
- * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 294 px beside the
- * stone; 12 px Courier Prime, 7.2 px a character, the unit 11 px, 6.6): "miner ckb1...93hhsj" (19
- * characters, 136.8 px), the 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15,
- * 108) and " CKB" (26.4), make 283.2 px, 10.8 to spare at 360; a fee of 10–99 CKB makes 290.4.
- * With the tables' head, "miner ckb1qzda0c...93hhsj" (180 px), it was 326.4 and the fees dropped
- * to a line of their own at both widths. A fee from 100 CKB at 360, from 100,000 CKB at 390, or a
- * long pool name drops the fees under the miner whole, right-aligned (PhoneRow's rule).
+ * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 292 px beside the
+ * stone: the content width, 358 and 326, less the block stone's 34; 12 px, 7.2 px a character, the
+ * unit 11 px, 6.6): "miner ckb1…93hhsj" (17 characters, 122.4 px, the tight address at 4…6), the
+ * 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15, 108) and " CKB" (26.4), make
+ * 268.8 px, 23.2 to spare at 360; a fee of 100–999 CKB makes 283.2. At 8…6, "miner ckb1qzda…93hhsj"
+ * (151.2 px), it was 297.6 and the fee dropped under the miner at 360. A fee from 1,000 CKB at 360
+ * (the separator: 297.6), from 1,000,000 CKB at 390, or a long pool name drops the fees under the
+ * miner whole, right-aligned (PhoneRow's rule).
  */
 function BlockPhoneRow({ block }: { block: Block }) {
   return (

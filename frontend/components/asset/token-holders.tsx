@@ -358,8 +358,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                   rank={rank(h)}
                   party={
                     <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
-                      {/* The phone row's tight size (U-09), 15 characters for an address (it was
-                          10…6, 17): rank, address, lock and amount share a 358 px line (L5). */}
+                      {/* The phone row's tight size (U-09), 11 characters for an address, 4…6 (it
+                          was 10…6, 17): rank, address, lock and amount share a 358 px line (L5). */}
                       <Hash
                         hash={h.address ?? h.lockScriptHash}
                         kind={h.address ? 'address' : 'hash'}

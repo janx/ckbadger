@@ -42,7 +42,7 @@ describe('MinerLink', () => {
   });
 
   it('has one naming rule for text-only places (tree tiles, the narrative)', () => {
-    expect(minerName(address, null, 'tight')).toBe('ckb1qzda…93hhsj');
+    expect(minerName(address, null, 'tight')).toBe('ckb1…93hhsj');
     expect(minerName(address, null, 'head')).toBe('ckb1qzda0cr0…qw93hhsj');
     expect(minerName(address, 'Example Pool', 'row')).toBe('Example Pool');
   });

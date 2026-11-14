@@ -93,7 +93,7 @@ describe('BalanceChanges form by measured width', () => {
     ]);
     // First line: the address and its lock, the lock never split ("Default / Lock").
     // U-09 (re-pinned): the list forms are phone rows, their ids at the tight size
-    expect(lines[0]).toHaveTextContent('ckb1qzda…cjk9lzDefault Lock');
+    expect(lines[0]).toHaveTextContent('ckb1…cjk9lzDefault Lock');
     expect(lines[0].querySelector('[data-role="lock"]')).toHaveClass('whitespace-nowrap');
     // Second line: the CKB change and the occupied change.
     expect(lines[1]).toHaveTextContent('−528.00064119 CKB');
@@ -113,7 +113,7 @@ describe('BalanceChanges form by measured width', () => {
     ).toEqual(['party', 'ckb', 'items', 'occupied']);
     expect(card).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_auto]');
     expect(card.querySelector('[data-role="party"]')).toHaveTextContent(
-      'ckb1qzda…shp3hrNervape Shadow Lock'
+      'ckb1…shp3hrNervape Shadow Lock'
     );
     expect(card.querySelector('[data-role="ckb"]')).toHaveTextContent('+320.00000000 CKB');
     expect(card.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +320');
