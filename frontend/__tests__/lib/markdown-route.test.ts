@@ -16,11 +16,17 @@ function walk(dir: string): string[] {
   return files;
 }
 
+/**
+ * A route directory's page module: its `page.tsx`, or its `client-page.tsx`, which the router loads
+ * directly for a page that takes its route params as props (`lazyParamPage` in src/routes/router.tsx).
+ */
+const PAGE_FILE = /(?:^|\/)(?:client-)?page\.tsx$/;
+
 function routeFromPageFile(filePath: string): string {
   const appRoot = path.join(process.cwd(), 'app');
   const relativePath = path.relative(appRoot, filePath).replace(/\\/g, '/');
-  const routePath = relativePath.replace(/\/page\.tsx$/, '');
-  if (routePath.length === 0 || routePath === 'page.tsx') return '/';
+  const routePath = relativePath.replace(PAGE_FILE, '');
+  if (routePath.length === 0) return '/';
   return `/${routePath}`;
 }
 
@@ -46,13 +52,13 @@ function sampleDynamicPath(routePath: string): string {
 
 function collectMarkdownRoutes(): string[] {
   const appDir = path.join(process.cwd(), 'app');
-  return walk(appDir)
-    .filter((file) => file.endsWith('/page.tsx'))
+  const routes = walk(appDir)
+    .filter((file) => PAGE_FILE.test(file))
     .filter((file) => !file.includes('/ai-md/'))
     .filter((file) => !file.includes('/ai-raw/'))
     .filter((file) => !/\/\[\[?\.\.\.[^/]+\]\]?\//.test(file))
-    .map((file) => routeFromPageFile(file))
-    .sort();
+    .map((file) => routeFromPageFile(file));
+  return [...new Set(routes)].sort();
 }
 
 describe('parseMarkdownSourcePath', () => {
@@ -73,6 +79,10 @@ describe('parseMarkdownSourcePath', () => {
     expect(parseMarkdownSourcePath('/identities/bit-cell/0x123').kind).toBe('bit_cell_item_detail');
     expect(parseMarkdownSourcePath('/identities/dotcell/0x123').kind).toBe('dotcell_item_detail');
     expect(parseMarkdownSourcePath('/objects/mnft/0x123').kind).toBe('mnft_item_detail');
+    // The router's legacy aliases (LegacyRedirect in createAppRouter), which no app page file holds.
+    expect(parseMarkdownSourcePath('/tokens').kind).toBe('tokens_list');
+    expect(parseMarkdownSourcePath('/objects').kind).toBe('objects_list');
+    expect(parseMarkdownSourcePath('/dao/charts').kind).toBe('dao_charts');
     expect(parseMarkdownSourcePath('/unknown/path').kind).toBe('unknown');
   });
 
