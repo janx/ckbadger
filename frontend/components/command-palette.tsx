@@ -390,8 +390,8 @@ export function CommandPalette() {
                 ))}
               </ul>
             </div>
-            {/* What the status line shows only from md up, for every width (a phone opens this
-                from the footer): the release, and which time its clock tells. */}
+            {/* What the status line shows only from md up: the release, and which time its
+                clock tells (opened by the `?` key or, from md, the footer's button). */}
             <p
               data-testid="shortcuts-about"
               className="border-base-border text-text-dim text-small border-t px-4 py-3 font-mono"

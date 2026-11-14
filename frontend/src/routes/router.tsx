@@ -24,8 +24,9 @@ type ParamRecord = Record<string, string | undefined>;
  * The page root (material pass v2): `data-tint` names the page's class hue for the ambient pools
  * (lib/page-tint, from the path after the network segment), the atmosphere paints the night sky,
  * the grain and the CRT layers once for every route, and the tap-or-hover registry lets one hint
- * per page render; then, in the network's query scope, the header and page, the footer and the
- * status line fixed at the foot of the window (rubbing × Song print, phase 2).
+ * per page render; then, in the network's query scope, the header and page, the footer, the empty
+ * prompt that ends the page, and the status line fixed at the foot of the window (rubbing × Song
+ * print, phase 2; the order since UI review 2026-11-14, U-20).
  *
  * The header is part of the frame (visual finish V6): it renders here, once, above the page — so
  * a cold load shows it from the first paint, before the page's lazy chunk arrives, and no page
@@ -48,14 +49,17 @@ function AppFrame() {
           <div className="flex min-h-screen flex-1 flex-col">
             <Header />
             {/* Visual finish V7: keyed by the path, so each route change mounts the new page and it
-                fades in (`.arrive`); the header, outside, stays. The page ends on an empty prompt
-                right under its last output (rubbing × Song print, phase 2). */}
+                fades in (`.arrive`); the header, outside, stays. */}
             <div key={pathname} className="arrive flex flex-1 flex-col">
               <Outlet />
-              <PromptEnd />
             </div>
+            {/* The page ends on an empty prompt (rubbing × Song print, phase 2; rubric A4): the
+                footer is its last quiet row, then the prompt, the last thing before the status
+                line (UI review 2026-11-14, U-20). In the screen-tall column, so on a short page
+                both sit at the foot of the first screen, the prompt just above the status line. */}
+            <SiteFooter />
+            <PromptEnd />
           </div>
-          <SiteFooter />
           {/* Fixed at the foot of the window; last in reading order. In the network's scope, so it
               reads the vitals strip's own query. */}
           <StatusLine />

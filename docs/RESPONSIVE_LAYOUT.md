@@ -57,8 +57,12 @@ The 640–767 band has one content width to design for. Below 640 the container 
   clock — and it must fit at 768 px (measured: 753 of 753 px with 26 px to spare, so a release
   string five or more characters longer than `0.8.2` would clip the clock). Below `md` it is one
   row of the mode, the network, the tip and the clock; the release and the hints are the wide
-  form's only (a touch screen has no keys; the release is in the `?` help) — designed, not
-  dropped. Never two rows, never a sideways scroller, never over the page's last prompt.
+  form's only (a touch screen has no keys; the release is in the `?` help, which the `?` key and,
+  from `md`, the footer's "keyboard shortcuts" open). Never two rows, never a sideways scroller,
+  never over the page's last prompt.
+- **Page end** (every page, the not-found and error pages too): the footer is the page's last
+  quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
+  status line. The footer's "keyboard shortcuts" is drawn from `md` only.
 - **Transaction pipeline** (homepage): one row down to a 589 px canvas (two whole blocks); below
   that a vertical timeline (mempool, proposed, NEXT, the tip, older blocks as rows; one vertical
   chain line in the gaps). Never scaled, never folded, cards never smaller than 89 px.
