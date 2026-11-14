@@ -127,12 +127,11 @@ export interface ChartModel {
     assetClass?: AssetClass;
   }[];
   /** Card preview of a ranking: the top five plus an exact "Others" for every remaining rank. */
-  rankedPreview?: { rows: RankedPreviewRow[]; summaryLabel: string | undefined };
+  rankedPreview?: { rows: RankedPreviewRow[] };
   /** Exact signed day-over-day change in occupied CKB, when the source is knowledge size. */
   dailyFlow?: SubChart;
   /** Exact daily histories from both distinct utilization scopes. */
   historicalShares?: SubChart[];
-  summaryLabel?: string;
   /** A model timeline's "today" index: drawn solid up to it and dashed ahead (CH-03). */
   projectedAfter?: number;
   /**
@@ -141,7 +140,6 @@ export interface ChartModel {
    * Absent on every other chart.
    */
   today?: ChartPoint | null;
-  contextFacts?: { label: string; value: string }[];
   /** Developer facts, in the page's evidence tier, never under the lede (CH-04, CH-18). */
   evidence?: ChartFact[];
   /**
@@ -414,13 +412,6 @@ function singleChart(
         : last && previous
           ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
           : null,
-    summaryLabel: leadingBucket
-      ? 'Most common'
-      : todayPoint
-        ? 'Today'
-        : cohorts
-          ? 'Newest cohort'
-          : undefined,
     projectedAfter: currentIndex ?? undefined,
     today: timelineMarkers ? today : undefined,
     // A bucket histogram's peak is its most common bucket, already the headline; a model has none.
@@ -649,17 +640,24 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
       : last && previous && previousTotal !== null && lastTotal !== null
         ? exactDelta(previousTotal, lastTotal, definition.slug)
         : null,
-    summaryLabel: isSecondaryIssuance
-      ? 'Protocol secondary issuance'
-      : leadingAge
-        ? `Largest age band: ${leadingAge.label}`
+    // The head reads the largest band's share; the fact names it (CH-18).
+    facts:
+      leadingAge && last
+        ? [
+            {
+              label: 'Largest age band',
+              name: series.find((entry) => entry.key === leadingAge.key)!.label,
+              value: `${summary(last.values[leadingAge.key], '%')}%`,
+            },
+          ]
         : undefined,
-    contextFacts:
+    // The frozen phase-1 overlap explains the protocol total for developers (CH-18).
+    evidence:
       isSecondaryIssuance && payload.data.length
         ? [
             {
               label: 'Frozen phase-1 overlap',
-              // Grouped like the line above it (CH-34).
+              // Grouped like the head figure (CH-34).
               value: `${formatChartExact(chartUnitValue(payload.data.at(-1)!.phase1CompensationShannons!, 'shannons', `${definition.slug} latest phase-1`), 'CKB')} CKB`,
             },
           ]
@@ -795,7 +793,6 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
       last && previous
         ? exactDelta(previous.values.liveCells, last.values.liveCells, definition.slug)
         : null,
-    summaryLabel: 'Live cells',
     peak:
       peak === undefined
         ? undefined
@@ -983,7 +980,6 @@ function shareRows(
         }
   );
   const leader = named[0] ?? sorted[0];
-  const summaryLabel = `Largest ${definition.source === 'scripts' ? 'script' : 'asset'}: ${distinctLabel(leader)}`;
   return {
     title: definition.title,
     points: [],
@@ -1016,8 +1012,15 @@ function shareRows(
           ? { ...row, assetClass: assetLabel(row.title).assetClass }
           : row
       ),
-      summaryLabel,
     },
+    // The leader by name, bright, with its amount and share (CH-18).
+    facts: [
+      {
+        label: `Largest ${entity}`,
+        name: distinctLabel(leader),
+        value: `${formatChartExact(leader.value, 'CKB')} CKB · ${share(leader.shannons)}`,
+      },
+    ],
     historicalShares: histories,
     evidence: [
       {
@@ -1025,7 +1028,6 @@ function shareRows(
         value: formatCount(payload.capacityShare.data.length, 'day'),
       },
     ],
-    summaryLabel,
     headline:
       total === BigInt(0)
         ? null
@@ -1158,7 +1160,6 @@ function minerRows(
         percent2,
         definition.slug
       ),
-      summaryLabel: undefined,
     },
     // The leader by name, in the card's head…tail form, never broken; the window's own total
     // (CH-03, CH-18).
@@ -1199,9 +1200,7 @@ export function chartModel(definition: ChartDefinition, payload: ChartPayload): 
       denominator <= 0
     )
       throw new Error(`${definition.slug}: invalid consensus orphan-rate target`);
-    model.contextFacts = [
-      { label: 'Consensus target', value: `${numerator} / ${denominator} blocks` },
-    ];
+    model.facts = [{ label: 'Consensus target', value: `${numerator} / ${denominator} blocks` }];
     // The target as a percentage of blocks: exact, at the rate units' two decimals (CH-12).
     const percent = formatScaledInteger(BigInt(numerator) * BigInt(100), BigInt(denominator), 2);
     model.referenceLines = [{ value: Number(percent), label: `target ${percent} %` }];

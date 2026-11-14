@@ -277,7 +277,8 @@ describe('29 chart variants', () => {
     });
     const model = chartModel(definition, timeline(['past', 'past', 'current', 'future', 'future']));
     expect(model.latest).toEqual({ label: 'year 6.5', raw: '2.3297', display: '2.33' });
-    expect(model.summaryLabel).toBe('Today');
+    // Re-pinned for CH-18: the head reads today; no "Today" fact repeats it.
+    expect(model.facts).toBeUndefined();
     expect(model.projectedAfter).toBe(2);
     expect(model.delta).toBeNull();
     expect(model.series).toHaveLength(1);
@@ -398,7 +399,8 @@ describe('29 chart variants', () => {
   it('summarizes live cells, the largest HODL band, and bucket distributions semantically', () => {
     const cells = chartModel(CHART_BY_SLUG.get('cell-count')!, stacked);
     expect(cells.latest?.raw).toBe('3');
-    expect(cells.summaryLabel).toBe('Live cells');
+    // Re-pinned for CH-18: no "Live cells" fact repeats the head figure.
+    expect(cells.facts).toBeUndefined();
     const hodl = chartModel(CHART_BY_SLUG.get('hodl-wave')!, {
       title: 'HODL',
       series: HODL_KEYS.map((key) => ({ key, label: key, color: '#a' })),
@@ -438,7 +440,8 @@ describe('29 chart variants', () => {
     expect(script.historicalShares?.[0].points[0].values.top0).toBe('9007199254.740993');
     expect(script.historicalShares?.[1].points[0].values.top0).toBe('0.00000001');
     expect(script.latest?.display).not.toContain('Alpha');
-    expect(script.summaryLabel).toContain('Alpha');
+    // Re-pinned for CH-18: the leader is the named fact (was the label "Largest script: Alpha").
+    expect(script.facts?.[0]).toMatchObject({ label: 'Largest script', name: 'Alpha' });
     const miner = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, miners);
     expect(miner.latest?.display).toBe('50');
     // Re-pinned for CH-03: the leader is a named fact at the one share form.
@@ -447,7 +450,7 @@ describe('29 chart variants', () => {
       ...simple,
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
-    expect(uncle.contextFacts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);
+    expect(uncle.facts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);
   });
 
   it('links to the actual source endpoint for client-derived activity charts', () => {
@@ -489,7 +492,8 @@ describe('29 chart variants', () => {
       ],
     });
     expect(model.latest?.raw).toBe('4.00000001');
-    expect(model.contextFacts).toContainEqual({ label: 'Frozen phase-1 overlap', value: '1 CKB' });
+    // Re-pinned for CH-18: a developer fact, in the evidence tier.
+    expect(model.evidence).toContainEqual({ label: 'Frozen phase-1 overlap', value: '1 CKB' });
     expect(model.points[0].values).toEqual({ compensation: '2', burnt: '3' });
   });
 

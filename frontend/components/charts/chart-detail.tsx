@@ -331,14 +331,6 @@ function DetailBody({
         fact.value
       ),
     })),
-    ...(model.latest && model.summaryLabel
-      ? [
-          {
-            label: model.summaryLabel,
-            value: `${pointLabel(model.latest.label)} · ${formatChartHover(model.latest.raw, model.unit)} ${model.unit}`,
-          },
-        ]
-      : []),
     ...(model.delta
       ? [
           {
@@ -347,7 +339,6 @@ function DetailBody({
           },
         ]
       : []),
-    ...(model.contextFacts ?? []),
   ];
   return (
     <>

@@ -213,7 +213,8 @@ describe('Charts index encodings (F2 charts)', () => {
       ],
     });
     expect(cellSize.headline).toEqual({ pre: '<100 CKB', display: '60.00', unit: '%' });
-    expect(cellSize.summaryLabel).not.toBe('Largest bucket');
+    // Re-pinned for CH-18: no fact restates the head's bucket (was: not "Largest bucket").
+    expect(cellSize.facts).toBeUndefined();
     const epochs = chartModel(def('epoch-time-distribution'), {
       title: 'Epochs',
       yAxisLabel: 'Epochs',
@@ -484,7 +485,8 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
     ]);
     expect(a.rankedPreview?.rows[1].label).toBe('MEMES · 0x5cb3…b4fa');
     // The fact names the leader like the rows do, its class as the mark (detail shot: "RGB++ (token)").
-    expect(a.summaryLabel).toBe('Largest asset: RGB++');
+    // Re-pinned for CH-18: the name is the fact's bright value, not part of its label.
+    expect(a.facts?.[0]).toMatchObject({ label: 'Largest asset', name: 'RGB++' });
     const unknown = series([
       ['top0', 'X', 'nft:0x01'],
       ['top1', 'Y', 'family:y'],
