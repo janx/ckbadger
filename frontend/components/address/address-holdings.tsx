@@ -5,6 +5,8 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type Address, type AddressHoldings, type AddressCellClass } from '@/lib/api';
 import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash } from '@/lib/shorten';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
@@ -12,7 +14,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
@@ -27,6 +29,7 @@ import { META_CHAR_PX } from '@/lib/byte-map';
 import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
+import { percentOf } from '@/lib/format-unit';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -205,7 +208,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
       { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
-  const share = (v: bigint) => `${formatScaledInteger(v * BigInt(100), sum, 2)} %`;
+  const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const { integer, decimal } = formatCkbAmount(sum);
   const zero = sum === BigInt(0);
@@ -382,7 +385,7 @@ export function AddressMetrics({
               })}
               className="text-text-bright"
             >
-              {lockName ?? `${lock.codeHash.slice(0, 10)}…${lock.codeHash.slice(-4)}`}
+              {lockName ?? <ShortId value={lock.codeHash} kind="hash" size="row" />}
             </Link>
           ),
           note: `${lock.hashType} · ${argsNote(lock.args)}`,
@@ -624,12 +627,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 </span>
                 {occupied > BigInt(0) && (
                   <span className="text-text-dim">
-                    {formatScaledInteger(
-                      BigInt(holdings.classes[c.key].occupiedCapacity) * BigInt(100),
-                      occupied,
-                      2
-                    )}
-                    %
+                    {percentOf(BigInt(holdings.classes[c.key].occupiedCapacity), occupied)}
                   </span>
                 )}
               </button>
@@ -818,7 +816,12 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         className="text-text-bright hover:text-jade"
                       >
                         {tokenName(t) ?? (
-                          <Hash hash={t.typeScriptHash} copyable={false} className="text-small" />
+                          <Hash
+                            hash={t.typeScriptHash}
+                            size="row"
+                            copyable={false}
+                            className="text-small"
+                          />
                         )}
                       </Link>{' '}
                       <span className="text-text-dim">{formatStandard(t.standard)}</span>
@@ -826,8 +829,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         <span data-type-hash className="text-meta ml-2">
                           <Hash
                             hash={t.typeScriptHash}
-                            startChars={4}
-                            endChars={2}
+                            size="row"
                             copyable={false}
                             className="text-meta"
                           />
@@ -883,7 +885,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           href={getIdentityItemDetailHref(d.standard, d.id)}
                           className="text-text-bright text-body"
                         >
-                          {d.name ?? <Hash hash={d.id} copyable={false} />}
+                          {d.name ?? <Hash hash={d.id} size="row" copyable={false} />}
                         </Link>
                         <span className="text-text-dim text-small">
                           {formatStandard(d.standard)}
@@ -983,11 +985,12 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
       {groups.map((g) => {
         const key = `${g.standard}:${g.id}`;
         const isOpen = open === key;
-        const label =
+        // the group's id at the row size (U-09): as text in the names its objects' table takes
+        const labelText =
           g.name ??
-          (g.id === null
-            ? `Uncollected ${formatStandard(g.standard)}`
-            : `${g.id.slice(0, 10)}…${g.id.slice(-4)}`);
+          (g.id === null ? `Uncollected ${formatStandard(g.standard)}` : shortenHash(g.id, 'row'));
+        const label =
+          g.id === null || g.name ? labelText : <ShortId value={g.id} kind="hash" size="row" />;
         const href =
           g.id === null ? null : g.standard === 'm-nft' ? `/classes/${g.id}` : `/clusters/${g.id}`;
         return (
@@ -1044,7 +1047,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
               <AddressCollectionObjects
                 addr={holdings.lockScriptHash}
                 group={g}
-                label={label}
+                label={labelText}
                 href={href}
               />
             )}
@@ -1123,7 +1126,7 @@ function AddressCollectionObjects({
                       title={d.id}
                       className="text-text-bright text-body min-w-0 truncate"
                     >
-                      {d.name ?? `${d.id.slice(0, 10)}…${d.id.slice(-4)}`}
+                      {d.name ?? <ShortId value={d.id} kind="hash" size="row" />}
                     </Link>
                   </span>
                   <span role="cell" className="min-w-0">

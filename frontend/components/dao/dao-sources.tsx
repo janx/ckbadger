@@ -61,6 +61,7 @@ export function DaoSources() {
             key={`${row.txHash}:${row.txIndex}`}
             activity={row}
             lockColumn
+            age
             className="py-2.5"
           />
         ))

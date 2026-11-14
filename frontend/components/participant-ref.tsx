@@ -3,15 +3,9 @@
 import { Address } from '@/components/ui/address';
 import Link from '@/components/ui/link';
 import type { ParticipantRef } from '@/lib/api';
-import { cn, truncateHash } from '@/lib/utils';
-import { NoBreak } from '@/components/ui/no-break';
-
-function compactLabel(value: string): string {
-  if (value.startsWith('ckb1') || value.startsWith('ckt1')) {
-    return `${value.slice(0, 8)}...${value.slice(-6)}`;
-  }
-  return truncateHash(value, 8, 6);
-}
+import { ShortId } from '@/components/ui/short-id';
+import type { ShortSize } from '@/lib/shorten';
+import { cn } from '@/lib/utils';
 
 /**
  * One transaction party — the ONE place a party is rendered.
@@ -34,15 +28,18 @@ function compactLabel(value: string): string {
  * same page.
  * In a column too narrow for the address and its roles, the roles wrap under the
  * address rather than being clipped ("ow" for owner_from in a 136 px track).
+ * `size` is the size of the row the party stands in (U-09), for its address or lock hash alike.
  */
 export function ParticipantRefView({
   participant,
+  size,
   compact = false,
   quiet = false,
   linked = true,
   className,
 }: {
   participant: ParticipantRef;
+  size: ShortSize;
   compact?: boolean;
   quiet?: boolean;
   /** Consistency C3: false writes a compact party as text (the page's own party). */
@@ -63,7 +60,7 @@ export function ParticipantRefView({
             className="this-address text-text-dim text-small shrink-0 font-mono"
             title={address}
           >
-            <NoBreak>{compactLabel(address)}</NoBreak>
+            <ShortId value={address} kind="address" size={size} />
           </span>
         ) : compact ? (
           <Link
@@ -79,10 +76,10 @@ export function ParticipantRefView({
             title={address}
             onClick={(e) => e.stopPropagation()}
           >
-            <NoBreak>{compactLabel(address)}</NoBreak>
+            <ShortId value={address} kind="address" size={size} />
           </Link>
         ) : (
-          <Address address={address} />
+          <Address address={address} size={size} />
         )}
         {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
@@ -98,7 +95,7 @@ export function ParticipantRefView({
             className="this-address text-text-dim text-small shrink-0 font-mono"
             title={lockHash}
           >
-            <NoBreak>{compactLabel(lockHash)}</NoBreak>
+            <ShortId value={lockHash} kind="hash" size={size} />
           </span>
           {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
         </span>
@@ -114,7 +111,7 @@ export function ParticipantRefView({
           title={lockHash}
           onClick={(e) => e.stopPropagation()}
         >
-          {compact ? compactLabel(lockHash) : truncateHash(lockHash, 10, 6)}
+          <ShortId value={lockHash} kind="hash" size={size} />
         </Link>
         {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
@@ -133,7 +130,7 @@ export function ParticipantRefView({
         className={cn('text-text-dim font-mono', compact ? 'text-small' : 'text-body')}
         title={prefix}
       >
-        {compact ? compactLabel(prefix) : truncateHash(prefix, 10, 6)}
+        <ShortId value={prefix} kind="hash" size={size} />
       </span>
       <span
         className={cn(

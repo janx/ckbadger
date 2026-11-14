@@ -13,6 +13,7 @@ import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { ShortId } from '@/components/ui/short-id';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
   /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
@@ -138,7 +139,7 @@ export function ItemTransactionContext({
             <span className="text-text-dim block">
               to{' '}
               <AppLink href={`/address/${context.createdCell.ownerAddress}`}>
-                {`${context.createdCell.ownerAddress.slice(0, 10)}…${context.createdCell.ownerAddress.slice(-6)}`}
+                <ShortId value={context.createdCell.ownerAddress} kind="address" size="row" />
               </AppLink>{' '}
               (output {context.createdCell.outputIndex})
             </span>

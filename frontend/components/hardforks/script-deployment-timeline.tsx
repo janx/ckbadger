@@ -7,6 +7,9 @@ import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -48,9 +51,12 @@ function headerMs(timestampMs: number): number {
   return timestampMs;
 }
 
-/** A version's name is not unique (two "PW Lock" versions): the version hash tells them apart. */
-export function markName(mark: HardforkScriptDeployment): string {
-  return `${mark.versionName} · ${mark.familyName} · version ${mark.versionHash.slice(0, 10)}…`;
+/**
+ * A version's name is not unique (two "PW Lock" versions): the version hash tells them apart, at
+ * the size of where the name stands (U-09): a mark's name on the chart, tight; the reading, row.
+ */
+export function markName(mark: HardforkScriptDeployment, size: ShortSize): string {
+  return `${mark.versionName} · ${mark.familyName} · version ${shortenHash(mark.versionHash, size)}`;
 }
 
 /**
@@ -177,7 +183,7 @@ export function ScriptDeploymentTimeline({
                 <button
                   type="button"
                   title={`${mark.versionName} · deployed ${formatUtc8Date(mark.timestampMs)}`}
-                  aria-label={`${markName(mark)}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
+                  aria-label={`${markName(mark, 'tight')}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
                   {...readout.bind(mark.versionHash)}
                   className={`focus-visible:outline-jade block h-[7px] w-[7px] -translate-x-1/2 rounded-full border focus-visible:outline ${active ? 'bg-jade border-jade' : 'border-text-bright bg-base-bg hover:bg-jade'}`}
                 />
@@ -217,7 +223,7 @@ export function DeploymentEvidence({
         idle="a dot reads its script version, its first code cell and its block (keyboard: focus it)"
       >
         {selected
-          ? `${markName(selected)} · deployed ${formatUtc8Date(selected.timestampMs)}`
+          ? `${markName(selected, 'row')} · deployed ${formatUtc8Date(selected.timestampMs)}`
           : null}
       </ReadoutRow>
       {selected && (
@@ -248,7 +254,8 @@ export function DeploymentEvidence({
                 href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
                 className="text-text hover:text-text-bright hover:underline"
               >
-                Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
+                Code cell <ShortId value={selected.codeCellTxHash} kind="hash" size="row" />
+                <OutpointIndex index={selected.codeCellOutputIndex} />
               </Link>
               <Link
                 href={`/blocks/${selected.blockNumber}`}

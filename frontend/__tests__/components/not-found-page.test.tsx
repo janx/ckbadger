@@ -163,7 +163,8 @@ describe('NotFoundPage', () => {
       </MemoryRouter>
     );
 
-    const short = `${HASH.slice(0, 10)}...${HASH.slice(-8)}`;
+    // U-09 (re-pinned): the endpoint's id at the row size, 10…6
+    const short = `${HASH.slice(0, 10)}…${HASH.slice(-6)}`;
     const lines = factLines();
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveTextContent(
@@ -209,10 +210,10 @@ describe('NotFoundPage', () => {
     const lines = factLines();
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveTextContent(
-      'checked /transactions/0xffffffff...ffffffff → 404 · the /search check could not complete: search unavailable'
+      'checked /transactions/0xffffffff…ffffff → 404 · the /search check could not complete: search unavailable'
     );
     // the words of the line wrap between words; only the id breaks anywhere
-    expect(within(lines[0]).getByText('0xffffffff...ffffffff')).toHaveAttribute('data-nobreak');
+    expect(within(lines[0]).getByText('0xffffffff…ffffff')).toHaveAttribute('data-nobreak');
     expect(lines[0]).not.toHaveClass('break-all');
     expect(lines[0]).toHaveClass('[overflow-wrap:anywhere]');
   });

@@ -104,7 +104,7 @@ describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
 
   it('starts on the occupied share when the URL says ?bar=occupied: occupied ÷ CKB, 0 · 50 · 100 %', async () => {
     renderAt('/mainnet/scripts?bar=occupied');
-    expect(await ticks()).toEqual(['0', '50', '100 %']);
+    expect(await ticks()).toEqual(['0', '50', '100%']);
     expect(option('occupied')).toHaveAttribute('aria-pressed', 'true');
     const table = await screen.findByRole('table', { name: 'Scripts' });
     expect(within(table).getAllByRole('columnheader')[3]).toHaveTextContent(
@@ -128,7 +128,7 @@ describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
     await waitFor(() => expect(router.state.location.search).toBe('?bar=occupied'));
     expect(router.state.location.pathname).toBe('/mainnet/scripts');
     expect(router.state.historyAction).toBe('REPLACE');
-    expect(await ticks()).toEqual(['0', '50', '100 %']);
+    expect(await ticks()).toEqual(['0', '50', '100%']);
     fireEvent.click(option('CKB'));
     await waitFor(() => expect(router.state.location.search).toBe(''));
     expect(await ticks()).toEqual(['0', '20B', '40B']);
@@ -136,7 +136,7 @@ describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
 
   it('follows the URL when it changes under the mounted page, and ignores an unknown value', async () => {
     const router = renderAt('/mainnet/scripts?bar=occupied');
-    expect(await ticks()).toEqual(['0', '50', '100 %']);
+    expect(await ticks()).toEqual(['0', '50', '100%']);
     await act(async () => {
       await router.navigate('/mainnet/scripts?bar=ckb');
     });
@@ -157,7 +157,7 @@ describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
     await screen.findByRole('table', { name: 'Scripts' });
     const calls = vi.mocked(api.getScripts).mock.calls.length;
     fireEvent.click(option('occupied'));
-    expect(await ticks()).toEqual(['0', '50', '100 %']);
+    expect(await ticks()).toEqual(['0', '50', '100%']);
     expect(vi.mocked(api.getScripts).mock.calls.length).toBe(calls);
     expect(screen.getByRole('combobox', { name: 'Sort scripts' })).toHaveValue('capacity');
   });

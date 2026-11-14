@@ -58,7 +58,9 @@ it('presents Bitcoin media as a copper link plate without fetching an image', ()
     />
   );
   // OB-2: browsers cannot open btcfs://; the inscription is read on its Bitcoin transaction.
-  const inscription = screen.getByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗' });
+  const inscription = screen.getByRole('link', {
+    name: 'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗',
+  });
   expect(inscription).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);
   expect(inscription).toHaveAttribute('target', '_blank');
   expect(inscription).toHaveAttribute('rel', 'noopener noreferrer');
@@ -186,7 +188,7 @@ it('shows a malformed minted BTCFS reference as plain text, never a link or a cr
   expect(screen.getByText('Not a recognisable btcfs inscription reference.')).toBeInTheDocument();
   expect(screen.queryByRole('link', { name: /abc123/ })).not.toBeInTheDocument();
   expect(
-    screen.getByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i1 ↗' })
+    screen.getByRole('link', { name: 'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i1 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);
 });
 // PB-15 (UI review 2026-11-14): with many content references the box printed every raw btcfs://
@@ -221,7 +223,8 @@ it('shows the first reference and the action under the title, the rest in the di
   // title → the first reference (its URI, then its inscription) → the action
   const uri = within(box).getByText(`btcfs://${txid}i0`);
   const inscription = within(box).getByRole('link', {
-    name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗',
+    // U-09 (re-pinned): the txid at the row size (it was 4…4)
+    name: 'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗',
   });
   const view = within(box).getByRole('link', { name: 'View image ↗' });
   expect(follows(title, uri)).toBe(true);
@@ -236,7 +239,7 @@ it('shows the first reference and the action under the title, the rest in the di
   expect(follows(box, details)).toBe(true);
   expect(within(details).getByText(later)).toBeInTheDocument();
   expect(
-    within(details).getByRole('link', { name: 'Bitcoin tx abab…abab · inscription i3 ↗' })
+    within(details).getByRole('link', { name: 'Bitcoin tx ababababab…ababab · inscription i3 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${'ab'.repeat(32)}`);
   expect(within(details).getByText(malformed)).toBeInTheDocument();
   expect(
@@ -261,7 +264,9 @@ it('follows the page network: no mainnet links from a testnet object (#8)', () =
     </MemoryRouter>
   );
   // Which Bitcoin network testnet DOB inscriptions name is not established: no explorer link.
-  expect(screen.getByText(/Bitcoin tx 0bfb…5719 · inscription i0/)).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Object media' })).toHaveTextContent(
+    'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0'
+  );
   expect(screen.queryByRole('link', { name: /Bitcoin tx/ })).not.toBeInTheDocument();
   expect(
     screen.getByText(/Bitcoin network of testnet inscriptions is not established/)

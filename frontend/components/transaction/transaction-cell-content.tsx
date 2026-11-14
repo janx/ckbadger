@@ -13,10 +13,13 @@ import {
 } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
+import type { ShortSize } from '@/lib/shorten';
 
 interface TransactionCellContentProps {
   display: TransactionCellDisplay;
   cellHref: string;
+  /** The size of the place it stands in (U-09): `tight` in a tile, `row` in a table row. */
+  size: ShortSize;
 }
 
 /** A token cell without an amount carries the API's reason; anything else is a broken contract. */
@@ -27,7 +30,7 @@ function noAmountReason(display: TransactionCellDisplay): string {
 }
 
 /** Compact cell identity; all amounts, names and media provenance come from its API descriptor. */
-export function TransactionCellContent({ display, cellHref }: TransactionCellContentProps) {
+export function TransactionCellContent({ display, cellHref, size }: TransactionCellContentProps) {
   const standard =
     display.standard === 'xudt'
       ? 'xUDT'
@@ -70,26 +73,14 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
               )
             )}{' '}
             {display.symbol ?? display.name ?? (
-              <Hash
-                hash={display.id}
-                startChars={10}
-                endChars={6}
-                copyable={false}
-                className="text-small"
-              />
+              <Hash hash={display.id} size={size} copyable={false} className="text-small" />
             )}
           </span>
         ) : (
           <>
             {name && <span>{name} </span>}
             {display.kind !== 'file' || name === null ? (
-              <Hash
-                hash={display.id}
-                startChars={10}
-                endChars={6}
-                copyable={false}
-                className="text-small"
-              />
+              <Hash hash={display.id} size={size} copyable={false} className="text-small" />
             ) : null}
           </>
         )}

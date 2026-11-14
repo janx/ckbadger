@@ -110,13 +110,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       minWidth: 178,
       render: (r) => (
         <AppLink href={`/tx/${r.hash}`}>
-          <Hash
-            hash={r.hash}
-            copyable={false}
-            startChars={10}
-            endChars={6}
-            className="text-small"
-          />
+          <Hash hash={r.hash} size="row" copyable={false} className="text-small" />
         </AppLink>
       ),
     },
@@ -291,13 +285,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                 tone: 'head',
                 left: (
                   <AppLink href={`/tx/${r.hash}`}>
-                    <Hash
-                      hash={r.hash}
-                      copyable={false}
-                      startChars={10}
-                      endChars={6}
-                      className="text-body"
-                    />
+                    <Hash hash={r.hash} size="tight" copyable={false} className="text-body" />
                   </AppLink>
                 ),
                 right: (

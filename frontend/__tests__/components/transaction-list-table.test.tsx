@@ -406,17 +406,18 @@ describe('TransactionListTable row stones', () => {
     expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
-    // "0x" and 8 digits, the ellipsis, 6 digits: 19 characters of JetBrains Mono at 13 px (7.8)
+    // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
+    // characters of JetBrains Mono at 13 px (7.8; it was 19 with three dots)
     const [, row] = within(table).getAllByRole('row');
     const shown = within(row).getByTitle(scriptCall.hash);
-    expect(shown).toHaveTextContent(/^0x00de304b\.\.\.25cbbc$/);
+    expect(shown).toHaveTextContent(/^0x00de304b…25cbbc$/);
     const chars = shown.textContent!.length;
-    expect(chars).toBe(19);
-    // the stone, the hash and the 16 px gap fit the 221 px; one more character would not
+    expect(chars).toBe(17);
+    // the stone, the hash and the 16 px gap fit the 221 px with 15.9 px to spare; the column
+    // keeps its 221 so the table keeps its 1,230 px and changes form where it did
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(220.7, 6);
-    expect(used).toBeLessThanOrEqual(221);
-    expect(used + 7.8).toBeGreaterThan(221);
+    expect(used).toBeCloseTo(205.1, 6);
+    expect(221 - used).toBeCloseTo(15.9, 6);
     // What it did keeps the longest DAO headline whole beside its 16 px mark and two 8 px gaps
     expect(16 + 8 + 'DAO Withdraw Complete'.length * 7.2 + 8 + 16).toBeLessThanOrEqual(widths[2]);
     // Size: its 56 px track, the bar's 10 px gap, a 5-digit scale's figure (5 ch at 12 px) and the
@@ -424,12 +425,15 @@ describe('TransactionListTable row stones', () => {
     expect(widths[6] - (56 + 10 + 5 * 7.2 + 16)).toBeCloseTo(3, 6);
   });
 
-  // Old issue C: the table and the phone row show the same 19 characters of the hash.
-  it('shows the hash 10 + 6 in the table and in the phone row alike', () => {
+  // U-09 (re-pinned; old issue C had the table and the phone row alike at 10 + 6): the size is
+  // the form's, the row size in the table and the tight size in the phone row.
+  it('shows the hash at the row size in the table and the tight size in the phone row', () => {
     for (const width of [1232, 608, 358]) {
       atContainerWidth(width);
       const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
-      expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(/^0x00de304b\.\.\.25cbbc$/);
+      expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(
+        width === 1232 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
+      );
       expect(screen.queryByRole('table') === null).toBe(width < 1230);
       unmount();
       vi.unstubAllGlobals();
@@ -494,9 +498,10 @@ describe('TransactionListTable phone row (board L2)', () => {
       {
         key: 'identity',
         tone: 'head',
-        left: '0x00de304b...25cbbc',
+        left: '0x00de…cbbc',
         // Lane P: the block's UTC+8 date; its age is the date's hover.
-        right: expect.stringMatching(/^#20,829,775 · \d{4}-\d\d-\d\d$/),
+        // PA-22 (re-pinned): the live list's row says its age (it was the date)
+        right: expect.stringMatching(/^#20,829,775 · \d+[smhdy] ago$/),
       },
       {
         key: 'what',
@@ -516,7 +521,7 @@ describe('TransactionListTable phone row (board L2)', () => {
     expect(call.querySelector('[data-line="what"] .truncate')).toBeNull();
     // A cellbase pays its reward on the what line; its fee is a quiet figure.
     expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0xc89d2d25...9a2cd7', expect.stringMatching(/^#20,829,775 · /)],
+      ['identity', '0xc89d…2cd7', expect.stringMatching(/^#20,829,775 · /)],
       ['what', 'Cellbase pays #20,829,764 · reward 559.61739927 CKB', null],
       ['figures', '0 → 1\u00a0cell · 360 B · fee 0 CKB', '0 cycles'],
     ]);
@@ -528,7 +533,7 @@ describe('TransactionListTable phone row (board L2)', () => {
     render(<TransactionListTable transactions={[scriptCall]} />);
     const [call] = screen.getAllByTestId('transaction-row-mobile');
     expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0x00de304b...25cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      ['identity', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · /)],
       [
         'what',
         'Script call · .bit Time Index State · .bit Time Info · 0 CKB · fee 0.00030000 CKB',

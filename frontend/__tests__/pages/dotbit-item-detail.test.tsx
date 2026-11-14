@@ -1,5 +1,4 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
-import { truncateHash } from '@/lib/utils';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import Page from '@/app/identities/dotbit/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
@@ -178,7 +177,7 @@ it('reports missing identity and unavailable raw evidence without inventing a do
   ).toBeInTheDocument();
   // U-18: the facts name the checked endpoint with the id shortened, once
   expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-    `/assets/identities/dotbit/items/${truncateHash(evidence.itemId)}`
+    `/assets/identities/dotbit/items/${evidence.itemId.slice(0, 10)}…${evidence.itemId.slice(-6)}`
   );
   unmount();
   vi.mocked(api.getDotbitItemDetail).mockResolvedValue({ ...identityItem('dotbit'), bitCells: [] });
@@ -281,7 +280,7 @@ it('lists every live .bit Cell that names the account, linked to its page (L3)',
   ]);
   expect(value).toHaveTextContent('alice.bit · expires 2030-03-18');
   // A .bit Cell whose data names no account text is named by its id.
-  expect(value).toHaveTextContent('0xb2b2b2b2...b2b2');
+  expect(value).toHaveTextContent('0xb2b2b2b2…b2b2b2');
 });
 it('says no .bit Cell names the account when there is none', async () => {
   render(<Page identityId={evidence.itemId} />);

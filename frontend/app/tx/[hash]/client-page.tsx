@@ -58,7 +58,8 @@ import {
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { cn, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { cn, formatUtc8DateTime } from '@/lib/utils';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { formatAgeTwoUnits } from '@/lib/format-age';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
@@ -78,6 +79,8 @@ import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 import type { SealState } from '@/lib/seal/stones';
 import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
@@ -118,7 +121,7 @@ function registeredName(lookup: ScriptLookupResponse | undefined, codeHash: stri
   return name && name.toLowerCase() !== 'unknown' ? name : null;
 }
 function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return registeredName(lookup, g.script.codeHash) ?? truncateHash(g.script.codeHash, 10, 6);
+  return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
 }
 function groupHref(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
   return getScriptDetailHref({
@@ -166,7 +169,10 @@ function CopyHash({ hash }: { hash: string }) {
   );
 }
 
-/** `A`, `A and B`, `A, B and 3 more`: the parties on one side of a movement. */
+/**
+ * `A`, `A and B`, `A, B and 3 more`: the parties on one side of a movement, in the summary under
+ * the headline, the page's lede (U-09: head).
+ */
 function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
   const shown = parties.slice(0, 2);
   return (
@@ -174,7 +180,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
       {shown.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (parties.length > 2 ? ', ' : ' and ')}
-          <ParticipantRefView participant={p} compact quiet />
+          <ParticipantRefView participant={p} size="head" compact quiet />
         </Fragment>
       ))}
       {parties.length > 2 && ` and ${parties.length - 2} more`}
@@ -182,7 +188,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
   );
 }
 
-/** An item as the summary names it: its class mark and a link (`Nervape 3x 0x51c7...96f2`). */
+/** An item as the summary names it: its class mark and a link (`Nervape 3x 0x51c7a1b2c3…5e6f96f2`). */
 function ItemName({ item }: { item: ItemDelta }) {
   switch (item.kind) {
     case 'object':
@@ -194,7 +200,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             className="text-text-bright hover:text-jade"
           >
             {item.collection?.name ? `${item.collection.name} ` : 'Object '}
-            <NoBreak>{truncateHash(item.objectId, 6, 4)}</NoBreak>
+            <ShortId value={item.objectId} kind="hash" size="head" />
           </Link>
         </>
       );
@@ -206,7 +212,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             href={getTokenDetailHref(item.typeScriptHash)}
             className="text-text-bright hover:text-jade"
           >
-            {item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6)}
+            {item.symbol?.trim() || <ShortId value={item.typeScriptHash} kind="hash" size="head" />}
           </Link>
         </>
       );
@@ -218,7 +224,8 @@ function ItemName({ item }: { item: ItemDelta }) {
             href={getIdentityItemDetailHref(item.standard, item.identityId)}
             className="text-text-bright hover:text-jade"
           >
-            {formatStandard(item.standard)} <NoBreak>{truncateHash(item.identityId, 6, 4)}</NoBreak>
+            {formatStandard(item.standard)}{' '}
+            <ShortId value={item.identityId} kind="hash" size="head" />
           </Link>
         </>
       );
@@ -254,6 +261,7 @@ function FeePayer({
         lockHashPrefix: null,
         roles: [],
       }}
+      size="head"
       compact
       quiet
     />
@@ -277,7 +285,7 @@ function TxSummary({
       ? [
           ...new Set(
             activity.typeCalls.map((sc) =>
-              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })
+              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'head')
             )
           ),
         ]
@@ -316,7 +324,7 @@ function TxSummary({
           <Fragment key={i}>
             {readable(activity.txHash, () => {
               // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
-              const parts = protocolActionNoteParts(pa);
+              const parts = protocolActionNoteParts(pa, 'head');
               return parts.length ? (
                 <>
                   {parts.map((part, j) => (
@@ -341,7 +349,7 @@ function TxSummary({
   );
 }
 
-/** `pubkey hash 0x111111...1111`: the API's decoded lock args, as words. */
+/** `pubkey hash 0x11111111…111111`: the API's decoded lock args, as words. */
 function witnessKindLabel(kind: TransactionWitness['kind']): string {
   switch (kind) {
     case 'witness_args':
@@ -397,17 +405,17 @@ function WitnessRow({
   const noteText = (): string => {
     if (w.kind === 'cobuild' && w.actions && w.actions.length > 0) {
       const names = w.actions.map((a) => {
-        const script = groupNameByHash.get(a.scriptHash) ?? truncateHash(a.scriptHash, 8, 4);
+        const script = groupNameByHash.get(a.scriptHash) ?? shortenHash(a.scriptHash, 'row');
         return a.name
           ? `${script}: ${a.name}`
-          : `${script} (script info ${truncateHash(a.scriptInfoHash, 8, 4)})`;
+          : `${script} (script info ${shortenHash(a.scriptInfoHash, 'row')})`;
       });
       return `message: ${formatCount(w.actions.length, 'action')} for ${[...new Set(names)].join(', ')}`;
     }
     if (w.kind === 'cellbase') {
       const witness = required(tx.cellbaseWitness, tx.hash, 'cellbaseWitness');
       const lock =
-        registeredName(lookup, witness.lock.codeHash) ?? truncateHash(witness.lock.codeHash, 10, 6);
+        registeredName(lookup, witness.lock.codeHash) ?? shortenHash(witness.lock.codeHash, 'row');
       if (minerMessage && minerMessage.raw !== witness.message)
         throw new Error(
           `${tx.hash}: the block's miner message ${minerMessage.raw} is not its cellbase witness message ${witness.message}`
@@ -418,7 +426,7 @@ function WitnessRow({
           : minerMessage.text === null
             ? `${formatCount((witness.message.length - 2) / 2, 'byte')}, not text`
             : `“${minerMessage.text}”`;
-      return `miner lock ${lock}(${truncateHash(witness.lock.args, 6, 4)}) · message ${message}`;
+      return `miner lock ${lock}(${shortenHash(witness.lock.args, 'row')}) · message ${message}`;
     }
     return fields.map((f) => `${f.name} ${formatCount(f.end - f.start, 'B', 'B')}`).join(' · ');
   };
@@ -576,9 +584,8 @@ function DepRow({
         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
         className="text-text-bright decoration-aqua/35 min-w-0 self-start underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
       >
-        <NoBreak>
-          {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
-        </NoBreak>
+        <ShortId value={dep.outPointTxHash} kind="hash" size="row" />
+        <OutpointIndex index={dep.outPointIndex} />
       </Link>
       <span className="text-text-dim">
         {serves.length > 0 ? (
@@ -599,10 +606,8 @@ function DepRow({
             return (
               <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
                 <Link href={`/cell/${cell.txHash}-${cell.index}`} className="hover:text-jade">
-                  ↳{' '}
-                  <NoBreak>
-                    {truncateHash(cell.txHash, 10, 6)}:{cell.index}
-                  </NoBreak>
+                  ↳ <ShortId value={cell.txHash} kind="hash" size="row" />
+                  <OutpointIndex index={cell.index} />
                 </Link>
                 {memberServes.length > 0
                   ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
@@ -731,8 +736,8 @@ export default function TransactionDetailPage() {
           className="text-text-dim text-small space-y-3"
         >
           <p>
-            waiting for the node... the inputs of this unconfirmed transaction cannot be resolved
-            yet. Retrying automatically.
+            waiting for the node… the inputs of this unconfirmed transaction cannot be resolved yet.
+            Retrying automatically.
           </p>
           <p className="break-all">{error.apiMessage}</p>
         </div>
@@ -920,13 +925,13 @@ export default function TransactionDetailPage() {
       name: groupLabel(g, lookup),
       href: groupHref(g, lookup),
       mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
-      sub: (() => {
+      sub: (size: ShortSize) => {
         const line =
           g.kind === 'lock' && firstCell
-            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError)
+            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError, size)
             : null;
-        return line ?? `args ${truncateHash(g.script.args, 6, 4)}`;
-      })(),
+        return line ?? `args ${shortenHash(g.script.args, size)}`;
+      },
       ran: g.ran,
       cellIds: groupCells(g),
       cycles: g.cycles,
@@ -941,51 +946,50 @@ export default function TransactionDetailPage() {
               detail: w ? { kind: witnessKindLabel(w.kind), size: w.size } : null,
               onSelect: () => select(g.witnessIndex, selectedGroup === key ? null : key),
             },
-      code: !g.ran ? (
-        attachedDeps.length > 0 ? (
-          attachedDeps.map(({ d, i }) => (
-            <span key={i} className="text-text-dim block">
+      code: (size: ShortSize) =>
+        !g.ran ? (
+          attachedDeps.length > 0 ? (
+            attachedDeps.map(({ d, i }) => (
+              <span key={i} className="text-text-dim block">
+                <a href={`#tx-dep-${i}`} className="hover:text-jade">
+                  code
+                </a>{' '}
+                <Link
+                  href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
+                  className="hover:text-jade"
+                >
+                  <ShortId value={d.outPointTxHash} kind="hash" size={size} />
+                  <OutpointIndex index={d.outPointIndex} />
+                </Link>{' '}
+                · not run here
+              </span>
+            ))
+          ) : null
+        ) : isProvisional ? (
+          <span className="text-text-dim">read once committed</span>
+        ) : depsError ? (
+          <span className="text-text-dim">cell deps unreadable</span>
+        ) : !deps ? (
+          <span className="text-text-dim">Resolving code…</span>
+        ) : codeDeps.length === 0 ? (
+          <span className="text-text-dim">No matching dep</span>
+        ) : (
+          // The kind jumps to the dep row's evidence below; the out point opens the code cell.
+          codeDeps.map(({ d, i }) => (
+            <span key={i} className="block">
               <a href={`#tx-dep-${i}`} className="hover:text-jade">
-                code
+                {d.depType === 'dep_group' ? 'dep group' : 'code'}
               </a>{' '}
               <Link
                 href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-                className="hover:text-jade"
+                className="text-text-dim hover:text-jade"
               >
-                <NoBreak>
-                  {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
-                </NoBreak>
-              </Link>{' '}
-              · not run here
+                <ShortId value={d.outPointTxHash} kind="hash" size={size} />
+                <OutpointIndex index={d.outPointIndex} />
+              </Link>
             </span>
           ))
-        ) : null
-      ) : isProvisional ? (
-        <span className="text-text-dim">read once committed</span>
-      ) : depsError ? (
-        <span className="text-text-dim">cell deps unreadable</span>
-      ) : !deps ? (
-        <span className="text-text-dim">Resolving code…</span>
-      ) : codeDeps.length === 0 ? (
-        <span className="text-text-dim">No matching dep</span>
-      ) : (
-        // The kind jumps to the dep row's evidence below; the out point opens the code cell.
-        codeDeps.map(({ d, i }) => (
-          <span key={i} className="block">
-            <a href={`#tx-dep-${i}`} className="hover:text-jade">
-              {d.depType === 'dep_group' ? 'dep group' : 'code'}
-            </a>{' '}
-            <Link
-              href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-              className="text-text-dim hover:text-jade"
-            >
-              <NoBreak>
-                {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
-              </NoBreak>
-            </Link>
-          </span>
-        ))
-      ),
+        ),
     };
   });
 
@@ -1345,6 +1349,7 @@ export default function TransactionDetailPage() {
                       lockHashPrefix: null,
                       roles: [],
                     }}
+                    size="row"
                     compact
                     quiet
                   />
@@ -1602,7 +1607,7 @@ export default function TransactionDetailPage() {
                       </Link>
                     )}
                     <span className="text-text-dim">
-                      <NoBreak>{truncateHash(h.blockHash, 10, 6)}</NoBreak>
+                      <ShortId value={h.blockHash} kind="hash" size="row" />
                     </span>
                   </div>
                 ))}
@@ -1737,7 +1742,7 @@ export default function TransactionDetailPage() {
           {(tx.outputs ?? []).flatMap((cell, i) => {
             // R-8 (TX-20): an output lock read by a registry field layout, or — revised R-8 — one
             // whose args do not fit its layout, with the API's reason in place of the fields.
-            const line = lockArgsLine(cell.lockArgsDecoded, cell.lockArgsDecodeError);
+            const line = lockArgsLine(cell.lockArgsDecoded, cell.lockArgsDecodeError, 'row');
             const shown =
               cell.lock &&
               line !== null &&
@@ -1756,8 +1761,9 @@ export default function TransactionDetailPage() {
                     : `Lock of output ${i}`}
                 </dt>
                 <dd>
-                  {registeredName(lookup, cell.lock.codeHash) ??
-                    truncateHash(cell.lock.codeHash, 10, 6)}
+                  {registeredName(lookup, cell.lock.codeHash) ?? (
+                    <ShortId value={cell.lock.codeHash} kind="hash" size="row" />
+                  )}
                   ,{' '}
                   <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>
                     {line}

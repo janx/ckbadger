@@ -29,11 +29,11 @@ import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
 import { formatCompactInteger } from '@/lib/exact-integer';
-import { formatTimeAgo, formatUtc8Time, truncateHash } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8Time } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { PlateHash } from '@/components/ui/page-seal';
 
@@ -279,7 +279,8 @@ export default function BlockDetailPage() {
                   <MinerLink
                     address={block.minerAddress}
                     pool={block.minerPool}
-                    unnamed={<Address address={block.minerAddress} />}
+                    size="head"
+                    unnamed={<Address address={block.minerAddress} size="head" />}
                   />
                 </>
               )}{' '}
@@ -496,6 +497,7 @@ export default function BlockDetailPage() {
                             <Link href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
                                 hash={proposal.committedTxHash}
+                                size="row"
                                 copyable={false}
                                 className="text-small"
                               />
@@ -654,7 +656,7 @@ export default function BlockDetailPage() {
                                 href={`/tx/${activity.txHash}`}
                                 className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
                               >
-                                <NoBreak>{truncateHash(activity.txHash, 10, 6)}</NoBreak>
+                                <ShortId value={activity.txHash} kind="hash" size="row" />
                               </Link>
                             </>
                           }
@@ -732,7 +734,8 @@ export default function BlockDetailPage() {
                       <MinerLink
                         address={block.minerAddress}
                         pool={block.minerPool}
-                        unnamed={<Address address={block.minerAddress} />}
+                        size="row"
+                        unnamed={<Address address={block.minerAddress} size="row" />}
                       />
                     ) : (
                       'Genesis'
@@ -922,7 +925,7 @@ function UncleRow({
         </Link>
         <span className="text-text-dim">uncle</span>
         <Link href={getUncleDetailHref(blockNumber, index)}>
-          <Hash hash={uncle.hash} copyable={false} className="text-small" />
+          <Hash hash={uncle.hash} size="row" copyable={false} className="text-small" />
         </Link>
       </span>
       <span className="text-text-dim">
@@ -947,8 +950,7 @@ function UncleRow({
             <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
               <Hash
                 hash={detail.canonicalAtHeight.hash}
-                startChars={6}
-                endChars={4}
+                size="row"
                 copyable={false}
                 className="text-small"
               />

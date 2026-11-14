@@ -3,9 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -65,14 +64,14 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
                 title={edge.advertiserPeerId}
                 className="text-text text-small whitespace-nowrap"
               >
-                <NoBreak>{truncateHash(edge.advertiserPeerId)}</NoBreak>
+                <ShortId value={edge.advertiserPeerId} kind="hash" size="row" />
               </span>
               <span className="text-text-dim text-meta">named</span>
               <span
                 title={edge.targetPeerId}
                 className="text-body text-text-bright whitespace-nowrap leading-[18px]"
               >
-                <NoBreak>{truncateHash(edge.targetPeerId)}</NoBreak>
+                <ShortId value={edge.targetPeerId} kind="hash" size="row" />
               </span>
               <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}

@@ -107,8 +107,9 @@ describe('AdvertisementGraph', () => {
       </QueryClientProvider>
     );
     const head = await screen.findByTitle(advertiser);
-    expect(head).toHaveTextContent(/^1220094f56\.\.\.0badc0de$/);
-    expect(screen.getByTitle(target)).toHaveTextContent(/^122007d7be\.\.\.b23985be$/);
+    // U-09 (re-pinned): the observation rows' peer ids at the row size, 10…6
+    expect(head).toHaveTextContent(/^1220094f56…adc0de$/);
+    expect(screen.getByTitle(target)).toHaveTextContent(/^122007d7be…3985be$/);
     const addr = screen.getByText(alias);
     expect(addr).toHaveClass('[overflow-wrap:anywhere]');
     expect(addr).not.toHaveClass('truncate');
@@ -149,9 +150,9 @@ describe('AdvertisementGraph', () => {
     expect(row).toHaveClass('flex', 'flex-wrap', 'items-baseline');
     const parts = Array.from(row.children).map((part) => part.textContent);
     expect(parts).toEqual([
-      expect.stringMatching(/^1220aaaa\w\w\.\.\./),
+      expect.stringMatching(/^1220aaaa\w\w…\w{6}$/),
       'named',
-      expect.stringMatching(/^1220bbbb\w\w\.\.\./),
+      expect.stringMatching(/^1220bbbb\w\w…\w{6}$/),
       edge(1).alias,
     ]);
     const [who, named, whom, addr] = Array.from(row.children);

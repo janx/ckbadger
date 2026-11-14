@@ -1,33 +1,31 @@
 'use client';
 
-import { HexCode } from '@/components/ui/hex-code';
+import { HexCode, type IdShortening } from '@/components/ui/hex-code';
+import type { IdKind } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
-interface HashProps {
+type HashProps = IdShortening & {
   hash: string;
-  truncate?: boolean;
-  startChars?: number;
-  endChars?: number;
+  /** An address written where a lock hash could stand (a party): `address`. */
+  kind?: IdKind;
   className?: string;
   copyable?: boolean;
   variant?: 'default' | 'bright' | 'dim';
-}
+};
 
 export function Hash({
   hash,
-  truncate = true,
-  startChars = 10,
-  endChars = 8,
+  kind,
   className,
   copyable = true,
   variant = 'default',
+  ...shortening
 }: HashProps) {
   return (
     <HexCode
       value={hash}
-      truncate={truncate}
-      startChars={startChars}
-      endChars={endChars}
+      kind={kind}
+      {...shortening}
       className={cn('text-body', className)}
       copyable={copyable}
       variant={variant}

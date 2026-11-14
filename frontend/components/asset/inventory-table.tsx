@@ -147,7 +147,9 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
     const name = (
       <AppLink href={href} className="text-text-bright">
         <span className="font-medium">
-          {a.symbol ?? a.name ?? <Hash hash={a.id} copyable={false} className="text-small" />}
+          {a.symbol ?? a.name ?? (
+            <Hash hash={a.id} size="tight" copyable={false} className="text-small" />
+          )}
         </span>
         {a.symbol && a.name && <span className="text-text"> {a.name}</span>}
       </AppLink>
@@ -209,7 +211,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
   }
   const title = (
     <AppLink href={href} className="text-text-bright font-medium">
-      {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+      {a.name || <Hash hash={a.id} size="tight" copyable={false} className="text-small" />}
     </AppLink>
   );
   if (a.assetType === 'object') {
@@ -231,14 +233,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
       </span>,
       ...heldAndOccupiedParts(a),
       a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`,
-      <Hash
-        key="id"
-        hash={a.id}
-        startChars={6}
-        endChars={4}
-        copyable={false}
-        className="text-meta"
-      />,
+      <Hash key="id" hash={a.id} size="tight" copyable={false} className="text-meta" />,
     ];
     return (
       <PhoneRow
@@ -478,7 +473,9 @@ function TokenName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright min-w-0 truncate leading-[18px]"
       >
-        {a.name ?? a.symbol ?? <Hash hash={a.id} copyable={false} className="text-small" />}
+        {a.name ?? a.symbol ?? (
+          <Hash hash={a.id} size="row" copyable={false} className="text-small" />
+        )}
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
       {a.standard !== 'xudt' && a.standard !== 'xudt_compatible' && (
@@ -606,7 +603,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright min-w-0 truncate leading-[18px]"
       >
-        {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
       {a.compositionTier ? (
@@ -701,7 +698,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright min-w-0 truncate leading-[18px]"
       >
-        {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
       {a.name !== standard && <RowTag>{standard}</RowTag>}
     </span>

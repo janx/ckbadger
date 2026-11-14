@@ -18,9 +18,10 @@ import {
 } from '@/components/activity-event-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { Utc8Date } from '@/components/ui/utc8-date';
+import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 
@@ -38,12 +39,6 @@ const CYCLES_TRACK = 80;
  * reader reads.
  */
 const SIZE_TRACK = 56;
-
-/**
- * The hash of a committed transaction, in the table and the phone row alike: "0x" and 8 digits,
- * the ellipsis, 6 digits (19 characters; at 13 px 148.2 px).
- */
-const HASH_CHARS = { start: 10, end: 6 } as const;
 
 /** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
 function consumedCells(tx: Transaction): number {
@@ -82,12 +77,12 @@ function paysNote(tx: Transaction): ReactNode {
 
 /**
  * The quiet note beside a row's kind, as parts of the row's one separated list (PA-25): its
- * protocol facts, its type scripts, or its parties.
+ * protocol facts, its type scripts, or its parties; their ids at the form's size (U-09).
  */
-function whatNote(activity: GlobalActivity): ReactNode[] {
+function whatNote(activity: GlobalActivity, size: ShortSize): ReactNode[] {
   if (activity.protocolActions.length > 0) {
     try {
-      return activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa));
+      return activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa, size));
     } catch (error) {
       return [<ActivityReadError key="error" txHash={activity.txHash} error={error} />];
     }
@@ -95,7 +90,7 @@ function whatNote(activity: GlobalActivity): ReactNode[] {
   const names = [
     ...new Set(
       activity.typeCalls.map((sc) =>
-        formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })
+        formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, size)
       )
     ),
   ];
@@ -149,7 +144,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
           <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
         </>,
-        ...whatNote(tx.activity!).map((part, i) => (
+        ...whatNote(tx.activity!, 'tight').map((part, i) => (
           <span key={i} className="text-text-dim">
             {part}
           </span>
@@ -190,13 +185,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} className="hover:underline">
-              <Hash
-                hash={tx.hash}
-                startChars={HASH_CHARS.start}
-                endChars={HASH_CHARS.end}
-                copyable={false}
-                className="text-body"
-              />
+              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
           right: (
@@ -206,7 +195,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
               </Link>
               <span className="text-text">
                 {' · '}
-                <Utc8Date timestamp={tx.timestamp} />
+                <Utc8Age timestamp={tx.timestamp} />
               </span>
             </span>
           ),
@@ -272,8 +261,9 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 19 characters at
-      // 13 px (148.2 px) and the 16 px gap: 220.7 of its 221 px. The 29 px it gained over 192 came
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
+      // characters at 13 px (132.6 px; it was 19 with three dots, 148.2 px), and the 16 px gap:
+      // 205.1 of its 221 px. The 29 px it gained over 192 came
       // from the Size bar's track (24, SIZE_TRACK) and What it did's note (5), so the table keeps
       // its 1,230 px and changes form where it did (old issue C: the stone had taken them from
       // the hash, 10 + 6 → 8 + 4).
@@ -286,8 +276,7 @@ export function TransactionListTable({
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
             <Hash
               hash={tx.hash}
-              startChars={HASH_CHARS.start}
-              endChars={HASH_CHARS.end}
+              size="row"
               copyable={false}
               className="text-body text-text-bright leading-[18px]"
             />
@@ -306,7 +295,7 @@ export function TransactionListTable({
           </Link>
           <span className="text-text-dim">
             {' · '}
-            <Utc8Date timestamp={tx.timestamp} />
+            <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
       ),
@@ -327,7 +316,11 @@ export function TransactionListTable({
               {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
             </span>
             <span className="text-text-dim text-small min-w-0 truncate">
-              {tx.isCellbase ? paysNote(tx) : <Dotted oneLine parts={whatNote(tx.activity!)} />}
+              {tx.isCellbase ? (
+                paysNote(tx)
+              ) : (
+                <Dotted oneLine parts={whatNote(tx.activity!, 'row')} />
+              )}
             </span>
           </span>
         );

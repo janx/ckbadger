@@ -18,9 +18,9 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import { LockKind } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
-import { formatCkbAmount, truncateHash } from '@/lib/utils';
+import { formatCkbAmount } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { Dotted } from '@/components/ui/phone-row';
 import { formatCount } from '@/lib/format-count';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
@@ -227,14 +227,19 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
-                      <Hash hash={other.typeScriptHash} copyable={false} className="text-small" />
+                      <Hash
+                        hash={other.typeScriptHash}
+                        size="head"
+                        copyable={false}
+                        className="text-small"
+                      />
                     </AppLink>
                     , {formatCount(other.holdersCount, 'holder')}
                   </span>
                 ))}
                 . Tell them apart by type hash; this one is{' '}
-                {/* U-16: the shortened type hash is one unit */}
-                <NoBreak>{truncateHash(t.typeScriptHash, 10, 4).replace('...', '…')}</NoBreak>.
+                {/* U-16: the shortened type hash is one unit; the head's note (U-09: head) */}
+                <ShortId value={t.typeScriptHash} kind="hash" size="head" />.
               </p>
             )
           )}
@@ -270,12 +275,12 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               size: 'body',
               value: t.issuer ? (
                 <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
-                  <Hash
-                    hash={t.issuer.address ?? t.issuer.lockHash}
-                    startChars={12}
-                    endChars={6}
-                    copyable={false}
-                    className="text-body"
+                  <ShortId
+                    value={t.issuer.address ?? t.issuer.lockHash}
+                    kind={t.issuer.address ? 'address' : 'hash'}
+                    size="row"
+                    title={t.issuer.address ?? t.issuer.lockHash}
+                    className="text-body font-mono"
                   />
                 </AppLink>
               ) : (
@@ -289,6 +294,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                       <LockKind
                         lockKind={t.issuer.lockKind}
                         lockCodeHash={t.issuer.lockCodeHash}
+                        size="row"
                         className="text-text-dim text-small"
                       />
                     ),

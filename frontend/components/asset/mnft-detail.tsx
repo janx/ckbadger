@@ -286,7 +286,13 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               value: history ? (
                 current ? (
                   <AppLink href={`/address/${current.ownerAddress}`}>
-                    <Hash hash={current.ownerAddress} className="text-body" copyable={false} />
+                    <Hash
+                      hash={current.ownerAddress}
+                      kind="address"
+                      size="row"
+                      className="text-body"
+                      copyable={false}
+                    />
                   </AppLink>
                 ) : (
                   'No live owner'

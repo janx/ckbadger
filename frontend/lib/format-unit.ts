@@ -1,10 +1,14 @@
 /**
- * How the chart pages and the charts index write numbers, units and ranges (UI review 2026-11-14,
- * CH-03, CH-12, CH-14): one place for the chart template's forms, until the site's format helpers
- * (plan phase B3) take them over. Counts are grouped by `formatCount` and exact values by the
- * chart model's `formatChartExact`; this module only joins and spells.
+ * How a number meets its unit (UI review 2026-11-14, CH-03, CH-12, CH-14; `docs/RESPONSIVE_LAYOUT.md`,
+ * "Formats"): the one home for unit forms, lifted from the chart template (lane B3). A percentage
+ * takes `%` with no space, any other unit follows its number after a space (a no-break space in a
+ * display figure); a physical quantity keeps its SI prefix with its unit symbol (`PH/s`), a count
+ * or a CKB amount the compact k / M / B / T of `formatCompactInteger` and `formatTick`. Counts are
+ * grouped by `formatCount`, exact values by their own formatters; this module only joins and
+ * spells.
  */
 import { MINUS, formatTick, stepDecimals } from '@/lib/chart-ticks';
+import { formatPercent } from '@/lib/ckb-decimal';
 
 /**
  * What follows a number to name its unit (CH-14): a percentage takes its sign with no space
@@ -19,6 +23,14 @@ export function unitAfter(unit: string, space = ' '): string {
 /** A value with its unit, in the one form: `24.79%`, `10.43 s`, `16,826 transactions` (CH-14). */
 export function withUnit(value: string, unit: string): string {
   return `${value}${unitAfter(unit)}`;
+}
+
+/**
+ * The one percentage of a part in a whole (CH-14): two decimals, the sign with no space, `24.79%`.
+ * More decimals stand only where a page says why in its own words.
+ */
+export function percentOf(part: bigint, total: bigint): string {
+  return withUnit(formatPercent(part, total, 2), '%');
 }
 
 /** A window between two dates: `2026-11-07 → 2026-11-13` (CH-03). */

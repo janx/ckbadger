@@ -27,6 +27,7 @@ import {
   type FiberGraphNode,
 } from '@/lib/fiber-network-model';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { ShortId } from '@/components/ui/short-id';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -76,10 +77,13 @@ export function useFiberGraphPin(): PinnedReadout<FiberGraphTarget> {
   return usePinnedReadout<FiberGraphTarget>(targetKey);
 }
 
+/** A party in the graph's reading panel, a row: its address, else its lock hash (U-09). */
 function PartyLink({ party }: { party: FiberParty }) {
-  const text = party.address
-    ? `${party.address.slice(0, 10)}…${party.address.slice(-6)}`
-    : `${party.lockScriptHash.slice(0, 10)}…${party.lockScriptHash.slice(-6)}`;
+  const text = party.address ? (
+    <ShortId value={party.address} kind="address" size="row" />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size="row" />
+  );
   return party.address ? (
     <Link href={`/address/${party.address}`} className="text-text-bright hover:text-jade">
       {text}
@@ -124,7 +128,7 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
       </div>
       <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
         {party.lockScriptName ? `${party.lockScriptName} · ` : ''}lock hash{' '}
-        {party.lockScriptHash.slice(0, 10)}…{party.lockScriptHash.slice(-6)}
+        <ShortId value={party.lockScriptHash} kind="hash" size="row" />
       </div>
       <Rows
         rows={[

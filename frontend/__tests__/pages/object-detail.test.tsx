@@ -10,7 +10,6 @@ import {
 } from '@/__tests__/utils/test-utils';
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import {
   sporeDetailProducer,
@@ -153,7 +152,7 @@ it('presents BTCFS as link-only media even when a decoded image URL exists', asy
   });
   const { container } = render(<SporeDetailPage sporeId={id} />);
   expect(
-    await screen.findByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗' })
+    await screen.findByRole('link', { name: 'Bitcoin tx 0bfb000000…005719 · inscription i0 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${'0bfb'.padEnd(60, '0')}5719`);
   // Lane U follow-up: the one Omiga link is the media frame's "View image ↗" button; the outlined
   // h1-row button (U5) is gone, so the page has exactly one link to Omiga.
@@ -330,7 +329,7 @@ it('renders not found for both absent namespaces or an unrecognized identifier',
   // U-18: one fact line: the lookup that decided (the collection is asked only after the
   // object's 404), the id shortened, once
   expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-    `/assets/objects/${truncateHash(id)}`
+    `/assets/objects/${id.slice(0, 10)}…${id.slice(-6)}`
   );
   // U-06: an identifier no object route owns is not an id: the same voice page, its own line
   rerender(<SporeDetailPage sporeId="not-an-id" />);

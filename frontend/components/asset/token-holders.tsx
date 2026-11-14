@@ -257,9 +257,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           >
             <Hash
               hash={h.address ?? h.lockScriptHash}
+              kind={h.address ? 'address' : 'hash'}
+              size="row"
               copyable={false}
-              startChars={10}
-              endChars={6}
               variant="bright"
               className="text-body leading-[18px]"
             />
@@ -279,6 +279,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             <LockKind
               lockKind={h.lockKind}
               lockCodeHash={h.lockCodeHash}
+              size="row"
               className={rowTagClass('default', 'min-w-0 truncate')}
             />
           </span>
@@ -357,12 +358,13 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                   rank={rank(h)}
                   party={
                     <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
-                      {/* 10…6 lets rank, address, lock and amount share a 358 px line (L5). */}
+                      {/* The phone row's tight size (U-09), 15 characters for an address (it was
+                          10…6, 17): rank, address, lock and amount share a 358 px line (L5). */}
                       <Hash
                         hash={h.address ?? h.lockScriptHash}
+                        kind={h.address ? 'address' : 'hash'}
+                        size="tight"
                         copyable={false}
-                        startChars={10}
-                        endChars={6}
                         className="text-body"
                       />
                     </AppLink>
@@ -372,6 +374,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                     <LockKind
                       lockKind={h.lockKind}
                       lockCodeHash={h.lockCodeHash}
+                      size="tight"
                       className="text-text-dim text-small"
                     />
                   }

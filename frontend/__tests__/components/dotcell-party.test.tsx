@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DotCellParty } from '@/components/identity/dotcell-party';
-import { truncateHash } from '@/lib/utils';
 
 /** Real testnet owner prefix of `support.cell`, and what it resolves to. */
 const PREFIX = '0x57d926a44d83fc13b21ce037b1e31f4223e3c867';
@@ -54,10 +53,11 @@ describe('DotCellParty', () => {
     render(
       <DotCellParty
         party={{ hashPrefix: PREFIX, lockHash: null, address: null, scriptName: null }}
-        truncate
+        size="row"
       />
     );
-    expect(screen.getByTitle(PREFIX)).toHaveTextContent(truncateHash(PREFIX, 12, 10));
+    // U-09 (re-pinned): a list row's size, 10…6 (it was 12…10)
+    expect(screen.getByTitle(PREFIX)).toHaveTextContent(/^0x57d926a4…e3c867$/);
   });
 
   it('carries the test id it is given', () => {

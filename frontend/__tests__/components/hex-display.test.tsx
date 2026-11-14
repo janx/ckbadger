@@ -25,12 +25,13 @@ describe('HexDisplay', () => {
     expect(container).toHaveTextContent('0xabcdef12');
   });
 
-  it('truncates long hex values by default', () => {
+  // U-09 (re-pinned): it shortens at its size, the one ellipsis between the halves
+  it('shortens a long hex value at its size', () => {
     const { container } = render(
-      <HexDisplay value="0xabcdef1234567890abcdef1234567890" truncate copyable={false} />
+      <HexDisplay value="0xabcdef1234567890abcdef1234567890" size="row" copyable={false} />
     );
 
-    expect(container).toHaveTextContent('0xabcdef1234...34567890');
+    expect(container).toHaveTextContent('0xabcdef12…567890');
   });
 
   it('copies the full hex value when clicked', async () => {

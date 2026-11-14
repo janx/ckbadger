@@ -106,7 +106,8 @@ describe('DAO depositors page (DAO-12)', () => {
     // bar with its number, and the deposit count. Re-pinned with ruling R7 (UI review 2026-11-14):
     // the bar is on the page's rounded maximum (1 % for two 1.00 % depositors), not 10 % = full.
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '1ckb1qzda0cr0…ssd2hqn', right: '999.00000000 CKB' },
+      // U-09 (re-pinned): the phone row's depositor at the tight size, 8…6
+      { key: 'holder', tone: 'head', left: '1ckb1qzda…sd2hqn', right: '999.00000000 CKB' },
       { key: 'axis', tone: 'quiet', left: '01%', right: null },
       { key: 'share', tone: 'quiet', left: '1.00%', right: '1\u00a0deposit' },
     ]);
@@ -119,7 +120,8 @@ describe('DAO depositors page (DAO-12)', () => {
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
     render(<DaoDepositorsPage />);
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
-    const depositor = within(table).getByRole('link', { name: 'ckb1qzda0cr0…ssd2hqn' });
+    // U-09 (re-pinned): the table's depositor at the row size, 10…6 (it was 12…7)
+    const depositor = within(table).getByRole('link', { name: 'ckb1qzda0c…sd2hqn' });
     expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
     const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
     expect(rank.firstElementChild).toHaveClass('text-text-dim');
@@ -146,7 +148,7 @@ describe('DAO depositors page (DAO-12)', () => {
       {
         key: 'holder',
         tone: 'head',
-        left: '1ckb1qzda0cr0…ssd2hqn',
+        left: '1ckb1qzda…sd2hqn',
         right: '1\u00a0deposit999.00000000 CKB1.00%',
       },
     ]);
@@ -196,7 +198,7 @@ describe('DAO depositors page (DAO-12)', () => {
     });
     render(<DaoDepositorsPage />);
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
-    expect(within(table).getByRole('link', { name: /^0x0000000000…0000001$/ })).toHaveAttribute(
+    expect(within(table).getByRole('link', { name: /^0x00000000…000001$/ })).toHaveAttribute(
       'href',
       `/mainnet/address/0x${'1'.padStart(64, '0')}`
     );

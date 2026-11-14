@@ -11,11 +11,12 @@ import { Hash } from '@/components/ui/hash';
 import { LockKind } from '@/components/ui/lock-kind';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { exactUnsignedInteger, formatExactDecimal, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
 const DAY = 86400000;
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
@@ -250,9 +251,9 @@ export function AssetHistory({
           <AppLink href={`/address/${e.address ?? e.lockHash}`}>
             <Hash
               hash={e.address ?? e.lockHash}
+              kind={e.address ? 'address' : 'hash'}
+              size="row"
               copyable={false}
-              startChars={8}
-              endChars={4}
               className="text-small"
             />
           </AppLink>
@@ -260,6 +261,7 @@ export function AssetHistory({
           <LockKind
             lockKind={e.lockKind}
             lockCodeHash={e.lockCodeHash}
+            size="row"
             className="text-text-dim text-meta block"
           />
         </>
@@ -301,12 +303,7 @@ export function AssetHistory({
           {BigInt(point.capacity) > BigInt(0) && (
             <span className="text-text-dim">
               {' '}
-              {formatScaledInteger(
-                BigInt(point.occupiedCapacity) * BigInt(100),
-                BigInt(point.capacity),
-                2
-              )}{' '}
-              %
+              {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
             </span>
           )}
         </>,
@@ -473,15 +470,16 @@ export function AssetHistory({
                   <AppLink href={`/address/${e.address ?? e.lockHash}`}>
                     <Hash
                       hash={e.address ?? e.lockHash}
+                      kind={e.address ? 'address' : 'hash'}
+                      size="tight"
                       copyable={false}
-                      startChars={8}
-                      endChars={4}
                       className="text-meta"
                     />
                   </AppLink>{' '}
                   <LockKind
                     lockKind={e.lockKind}
                     lockCodeHash={e.lockCodeHash}
+                    size="tight"
                     className="text-text-dim text-meta"
                   />
                 </span>

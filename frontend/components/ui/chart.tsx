@@ -15,7 +15,7 @@ import {
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
-import { unitAfter, withUnit } from '@/components/charts/chart-format';
+import { unitAfter, withUnit } from '@/lib/format-unit';
 
 export interface ChartPoint {
   label: string;

@@ -54,7 +54,8 @@ describe('CellInventoryLine (lane U, U6)', () => {
     view(spore);
     const line = await screen.findByTestId('cell-inventory');
     expect(await within(line).findByText(/Nervape Mask/)).toBeInTheDocument();
-    expect(line).toHaveTextContent(/^This cell is Nervape Mask 0x7e3bc1bc…216539 BTC\+CKB$/);
+    // U-09 (re-pinned): the hero's lede line writes the id at the head size
+    expect(line).toHaveTextContent(/^This cell is Nervape Mask 0x7e3bc1bce9…15216539 BTC\+CKB$/);
     expect(line.querySelector('[data-class="objects"]')).not.toBeNull();
     expect(line.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     const links = within(line).getAllByRole('link');
@@ -72,7 +73,7 @@ describe('CellInventoryLine (lane U, U6)', () => {
     vi.mocked(api.getSporeObject).mockRejectedValue(new Error('node unavailable'));
     view(spore);
     const line = await screen.findByTestId('cell-inventory');
-    expect(line).toHaveTextContent(/^This cell is a Spore object 0x7e3bc1bc…216539/);
+    expect(line).toHaveTextContent(/^This cell is a Spore object 0x7e3bc1bce9…15216539/);
     expect(await within(line).findByRole('alert')).toHaveTextContent(
       'could not read the object: node unavailable'
     );

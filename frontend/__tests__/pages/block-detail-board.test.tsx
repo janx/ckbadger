@@ -804,7 +804,7 @@ describe('Block board · R2b-a fields', () => {
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
     const row = uncles.querySelector('article')!;
     expect(row).toHaveClass('flex-col');
-    await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x9595\.\.\.9595,/));
+    await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x95959595…959595,/));
   });
 
   it('lists the block bytes in the raw data (BA-19)', async () => {

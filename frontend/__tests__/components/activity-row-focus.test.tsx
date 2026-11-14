@@ -81,7 +81,7 @@ describe('focusLockHash: the participant the page is about', () => {
     const party = focus.querySelector('[data-role="party"]') as HTMLElement;
     expect(party).toHaveAttribute('data-party');
     expect(within(party).queryByRole('link')).toBeNull();
-    expect(within(party).getByTitle(receiver.address!)).toHaveTextContent('ckb1qzda...hprdnn');
+    expect(within(party).getByTitle(receiver.address!)).toHaveTextContent('ckb1qzda0c…hprdnn');
     expect(container.querySelector(`a[href="/mainnet/address/${receiver.address}"]`)).toBeNull();
     // Every other participant is unchanged: its address is the link to its page.
     expect(
@@ -126,7 +126,7 @@ describe('focusLockHash: the participant the page is about', () => {
     expect(lines(container)).toHaveLength(4);
     expect(container.querySelectorAll('[data-party]')).toHaveLength(4);
     // The others keep their own order (negative by size, then zero).
-    expect(lines(container).map((l) => l.textContent?.match(/\.\.\.(\w{6})/)?.[1])).toEqual([
+    expect(lines(container).map((l) => l.textContent?.match(/…(\w{6})/)?.[1])).toEqual([
       'hprdnn',
       'sendr1',
       'third1',

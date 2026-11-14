@@ -22,11 +22,11 @@ import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { Wordmark } from '@/components/layout/wordmark';
 import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { api } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 
 interface ErrorPageShellProps {
   /** The eyebrow: what happened (`Not found · 404`, `Error · not a 404`). */
@@ -166,7 +166,9 @@ function TipSeal() {
       <p data-seal-caption="" className="text-text-dim text-meta m-0 mt-8 min-w-0">
         behind: the seal of the newest block, <BlockLink number={block.number} />{' '}
         {/* U-16: the shortened hash is one unit, and the dot goes with it to a new line */}
-        <NoBreak>· {truncateHash(block.hash)}</NoBreak>
+        <NoBreak>
+          · <ShortId value={block.hash} kind="hash" size="row" />
+        </NoBreak>
       </p>
     </>
   );

@@ -5,6 +5,8 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { HexCode } from '@/components/ui/hex-code';
 import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { useParams } from '@/src/navigation';
 import {
   api,
@@ -57,12 +59,11 @@ function minerAddressOf(block: MinerBlock): string {
   return block.minerAddress;
 }
 
-function Miner({ block }: { block: MinerBlock }) {
+function Miner({ block, size }: { block: MinerBlock; size: ShortSize }) {
   if (block.minerLockHash === null && block.minerAddress === null)
     return <span className="text-text-dim">witness unavailable</span>;
-  return <MinerLink address={minerAddressOf(block)} pool={block.minerPool} />;
+  return <MinerLink address={minerAddressOf(block)} pool={block.minerPool} size={size} />;
 }
-const hashShort = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 
 /**
  * A full hash in tier 2 (U-16): one token, whole on its line where the line holds it, else one
@@ -143,7 +144,7 @@ function answerMismatch(
   if (event.firstOrphanStatus !== 'recorded' || event.firstOrphanHash === null)
     return `API answered ${address} with ${event.eventType === 'deep' ? 'a deep detection' : 'a switch'} at ${at}, which has no first orphan to be addressed by`;
   if (event.forkPointNumber !== route.height || event.firstOrphanHash.slice(2, 10) !== route.orphan)
-    return `API answered ${address} with the fork at ${at} whose first orphan is ${event.firstOrphanHash.slice(0, 10)}`;
+    return `API answered ${address} with the fork at ${at} whose first orphan is ${shortenHash(event.firstOrphanHash, 'row')}`;
   if (evidenceStatus === 'node_reader_unavailable') {
     const lists = [
       orphanedBlocks,
@@ -160,7 +161,7 @@ function answerMismatch(
   const first = orphanedBlocks[0];
   if (!first) return `API answered ${address} with branch evidence but no orphaned block`;
   if (first.hash !== event.firstOrphanHash)
-    return `API answered ${address} with first dropped block ${first.hash.slice(0, 10)}, but its event names first orphan ${event.firstOrphanHash.slice(0, 14)}`;
+    return `API answered ${address} with first dropped block ${shortenHash(first.hash, 'row')}, but its event names first orphan ${shortenHash(event.firstOrphanHash, 'row')}`;
   return null;
 }
 
@@ -200,12 +201,13 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
  * stored event alone and there is no branch evidence. Say so, and tell what the event records.
  */
 function StoredFork({ event }: { event: ReorgEvent }) {
-  // U-16: each shortened hash is one unit
+  // U-16: each shortened hash is one unit; the story is the page's lede (U-09: head)
   const story = (
     <>
       This node switched from {formatBlockNumber(event.oldTipNumber)}{' '}
-      <NoBreak>{hashShort(event.oldTipHash)}</NoBreak> to {formatBlockNumber(event.newTipNumber)}{' '}
-      <NoBreak>{hashShort(event.newTipHash)}</NoBreak>
+      <ShortId value={event.oldTipHash} kind="hash" size="head" /> to{' '}
+      {formatBlockNumber(event.newTipNumber)}{' '}
+      <ShortId value={event.newTipHash} kind="hash" size="head" />
       {` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.`}
       {event.revertedByEvent ? ' A later switch on this node reversed it.' : ''}
     </>
@@ -247,7 +249,7 @@ function narrative(data: ReorgDetail): SentencePart[][] {
         block.minerLockHash !== null && block.competingBlock!.minerLockHash === block.minerLockHash;
       const miner = same
         ? i === 0
-          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool)})`
+          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool, 'head')})`
           : ', again both by it'
         : '';
       push(
@@ -520,7 +522,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             <span className="text-text-dim">before {formatUtc8Time(event.detectedAt)}</span>
             <span className="text-text col-span-2 sm:col-span-1">
               this node’s tip is {formatBlockNumber(event.oldTipNumber)}{' '}
-              <NoBreak className="text-text-dim">{hashShort(event.oldTipHash)}</NoBreak>{' '}
+              <ShortId className="text-text-dim" value={event.oldTipHash} kind="hash" size="row" />{' '}
               {where(event.oldTipHash)}
             </span>
             <span className="text-text-bright">{TIP_MARKS[2]}</span>
@@ -532,7 +534,8 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               ) : (
                 formatBlockNumber(event.newTipNumber)
               )}{' '}
-              <NoBreak className="text-text-dim">{hashShort(event.newTipHash)}</NoBreak> and drops{' '}
+              <ShortId className="text-text-dim" value={event.newTipHash} kind="hash" size="row" />{' '}
+              and drops{' '}
               {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}{' '}
               {/* the dot goes with its item to a new line (PA-25) */}
               <NoBreak className="text-text-dim">· depth {event.depth}</NoBreak>
@@ -544,9 +547,12 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 <span className="text-text col-span-2 sm:col-span-1">
                   <EventRef target={event.revertedByEvent} text="a later switch" /> moves this node
                   to {formatBlockNumber(event.revertedByEvent.newTip.number)}{' '}
-                  <NoBreak className="text-text-dim">
-                    {hashShort(event.revertedByEvent.newTip.hash)}
-                  </NoBreak>{' '}
+                  <ShortId
+                    className="text-text-dim"
+                    value={event.revertedByEvent.newTip.hash}
+                    kind="hash"
+                    size="row"
+                  />{' '}
                   {where(event.revertedByEvent.newTip.hash)}
                 </span>
               </span>
@@ -577,7 +583,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     style={inkStyle(BOARD_INKS.link)}
                     title={row.hash}
                   >
-                    <NoBreak>{hashShort(row.hash)}</NoBreak>
+                    <ShortId value={row.hash} kind="hash" size="row" />
                   </span>
                 ),
               },
@@ -591,7 +597,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 key: 'miner',
                 label: 'Miner',
                 minWidth: 150,
-                render: (row) => <Miner block={row} />,
+                render: (row) => <Miner block={row} size="row" />,
               },
               {
                 key: 'txs',
@@ -621,7 +627,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                           style={inkStyle(BOARD_INKS.link)}
                           title={row.hash}
                         >
-                          <NoBreak>{hashShort(row.hash)}</NoBreak>
+                          <ShortId value={row.hash} kind="hash" size="tight" />
                         </span>
                       </>
                     ),
@@ -633,7 +639,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     left: (
                       <>
                         <span className="text-text-dim">miner </span>
-                        <Miner block={row} />
+                        <Miner block={row} size="tight" />
                       </>
                     ),
                     right: formatCount(row.transactionsCount, 'tx'),

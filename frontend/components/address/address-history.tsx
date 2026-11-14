@@ -26,6 +26,8 @@ import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 interface AddressActivityProps {
@@ -125,31 +127,30 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
     </span>
   );
 }
+/** A transaction's hash and its notes, at the form's size (U-09): row in the table, tight below. */
+function TxHash({ tx, size }: { tx: AddressTransaction; size: ShortSize }) {
+  return (
+    <span className="space-y-1">
+      <Link href={`/tx/${tx.txHash}`}>
+        <Hash hash={tx.txHash} size={size} copyable={false} className="text-small" />
+      </Link>
+      <PoolInterpretationNotice
+        interpretation={tx.interpretation}
+        className="text-warning text-meta block"
+      />
+      {tx.txType === 'named' && (
+        <span className="text-text-dim text-meta block">Named participant</span>
+      )}
+    </span>
+  );
+}
+
 const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'hash',
     label: 'Transaction',
     minWidth: 172,
-    render: (tx) => (
-      <span className="space-y-1">
-        <Link href={`/tx/${tx.txHash}`}>
-          <Hash
-            hash={tx.txHash}
-            startChars={10}
-            endChars={6}
-            copyable={false}
-            className="text-small"
-          />
-        </Link>
-        <PoolInterpretationNotice
-          interpretation={tx.interpretation}
-          className="text-warning text-meta block"
-        />
-        {tx.txType === 'named' && (
-          <span className="text-text-dim text-meta block">Named participant</span>
-        )}
-      </span>
-    ),
+    render: (tx) => <TxHash tx={tx} size="row" />,
   },
   { key: 'block', label: 'Block · date', minWidth: 136, render: (tx) => <TxPosition tx={tx} /> },
   {
@@ -236,7 +237,7 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
       mobileRow={(tx) => (
         <div data-testid="address-tx-row-mobile" className="text-small space-y-3">
           <div className="flex flex-wrap justify-between gap-2">
-            {columns[0].render(tx)}
+            <TxHash tx={tx} size="tight" />
             <TxPosition tx={tx} />
           </div>
           <dl className="space-y-2">
@@ -252,13 +253,43 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
     />
   );
 }
-/** A live cell's out point, the link to its page: "0xdce40476...3993e1:4". */
-function CellOutPoint({ cell: c }: { cell: AddressCell }) {
+/**
+ * A live cell's out point, the link to its page, at the form's size (U-09): "0xdce40476…3993e1:4"
+ * in the table, "0xdce4…93e1:4" in the phone row.
+ */
+function CellOutPoint({ cell: c, size }: { cell: AddressCell; size: ShortSize }) {
   return (
     <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
-      <Hash hash={c.txHash} startChars={10} endChars={6} copyable={false} className="text-small" />:
-      {c.outputIndex}
+      <Hash hash={c.txHash} size={size} copyable={false} className="text-small" />
+      <OutpointIndex index={c.outputIndex} />
     </Link>
+  );
+}
+
+/** What a live cell holds, its ids at the form's size (U-09). */
+function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize }) {
+  return c.display ? (
+    <TransactionCellContent
+      display={c.display}
+      cellHref={`/cell/${c.txHash}-${c.outputIndex}`}
+      size={size}
+    />
+  ) : (
+    <span className="flex items-center gap-2">
+      <ClassMark kind={ADDRESS_CLASSES.find((k) => k.key === c.class)!.mark} />
+      {ADDRESS_CLASSES.find((k) => k.key === c.class)!.label}
+      {c.typeScriptHash && (
+        <Link
+          href={getScriptDetailHref({
+            codeHash: c.typeCodeHash!,
+            hashType: c.typeHashType,
+            scriptKind: 'type',
+          })}
+        >
+          <Hash hash={c.typeScriptHash} size={size} className="text-small" copyable={false} />
+        </Link>
+      )}
+    </span>
   );
 }
 
@@ -267,8 +298,8 @@ function CellOutPoint({ cell: c }: { cell: AddressCell }) {
  * columns, none after the last). Its minimum is 992 px, the width it changes form at. The seals
  * by kind (C4) lead the Cell column with the cell's 30 px row seal, its footprint (30 + 8 = 38 px)
  * taken from measured slack so the total and the form change stay 992:
- * - Cell 200 → 238: the out point with a four-digit index, 24 characters (172.8) + 16, and the
- *   seal's 38: 226.8.
+ * - Cell 200 → 238: the out point at the row size with a four-digit index, 22 characters (158.4;
+ *   it was 24 with three dots) + 16, and the seal's 38: 212.4.
  * - Occupied 196 → 178: a cell is at most a block's 597,000 bytes, so at most "597,000.00000000"
  *   (16 characters, 115.2) and " CKB" at 11 px (26.4) + 16: 157.6.
  * - Created at 120 → 100 (the last column): "#99,999,999" is 11 characters (79.2), and
@@ -286,7 +317,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
     render: (c) => (
       <span className="flex items-start">
         <RowSeal id={addressCellSealId(c)} overhang />
-        <CellOutPoint cell={c} />
+        <CellOutPoint cell={c} size="row" />
       </span>
     ),
   },
@@ -294,29 +325,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
     key: 'content',
     label: 'Contains',
     minWidth: 280,
-    render: (c) =>
-      c.display ? (
-        <TransactionCellContent
-          display={c.display}
-          cellHref={`/cell/${c.txHash}-${c.outputIndex}`}
-        />
-      ) : (
-        <span className="flex items-center gap-2">
-          <ClassMark kind={ADDRESS_CLASSES.find((k) => k.key === c.class)!.mark} />
-          {ADDRESS_CLASSES.find((k) => k.key === c.class)!.label}
-          {c.typeScriptHash && (
-            <Link
-              href={getScriptDetailHref({
-                codeHash: c.typeCodeHash!,
-                hashType: c.typeHashType,
-                scriptKind: 'type',
-              })}
-            >
-              <Hash hash={c.typeScriptHash} className="text-small" copyable={false} />
-            </Link>
-          )}
-        </span>
-      ),
+    render: (c) => <CellContains cell={c} size="row" />,
   },
   {
     key: 'capacity',
@@ -394,13 +403,13 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
             {
               key: 'cell',
               tone: 'head',
-              left: <CellOutPoint cell={c} />,
+              left: <CellOutPoint cell={c} size="tight" />,
               right: <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" />,
             },
             {
               key: 'contains',
               tone: 'body',
-              left: cellColumns[1].render(c),
+              left: <CellContains cell={c} size="tight" />,
               right: wide ? <OccupiedAndCreated cell={c} /> : undefined,
             },
             !wide && { key: 'figures', tone: 'quiet', left: <OccupiedAndCreated cell={c} /> },

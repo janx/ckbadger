@@ -492,15 +492,17 @@ describe('move 5 on the activity row', () => {
   });
 
   it('is the not-linked compact party that carries the underline (ParticipantRefView)', () => {
-    render(<ParticipantRefView participant={sender} compact quiet linked={false} />);
+    render(<ParticipantRefView participant={sender} size="row" compact quiet linked={false} />);
     expect(screen.getByTitle(sender.address!)).toHaveClass('this-address', 'text-text-dim');
   });
 
   it('LockKind: dim small caps by default; a row chip’s classes replace them', () => {
     const code = `0x${'9b'.repeat(32)}`;
-    const { rerender } = render(<LockKind lockKind="JoyID" lockCodeHash={code} />);
+    const { rerender } = render(<LockKind size="row" lockKind="JoyID" lockCodeHash={code} />);
     expect(screen.getByText('JoyID')).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
-    rerender(<LockKind lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />);
+    rerender(
+      <LockKind size="row" lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />
+    );
     expect(screen.getByText('JoyID')).not.toHaveClass('small-caps', 'lowercase');
     expect(screen.getByText('JoyID')).toHaveClass('border', 'rounded-sm');
   });

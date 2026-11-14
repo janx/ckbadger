@@ -3,6 +3,8 @@
 // gene). Everything here reads the API's pattern, byte map and trait counts; nothing is guessed.
 import type { CollectionInsights, CurrentPattern, GeneDefinition, ObjectGenetics } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
+import { parseBtcfsUri } from '@/lib/btcfs';
+import { shortenHash } from '@/lib/shorten';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { stepGenes } from '@/lib/dob-declared';
 
@@ -38,11 +40,25 @@ const CONTROL = /[\u0000-\u001f\u007f]/g;
 const MEDIA_VALUE = /^(?:btcfs|ipfs|ipns|ar|https?|data):/i;
 const SVG_VALUE = /^\s*<svg[\s>]/i;
 
-/** A trait value for people: control bytes dropped, empty named, pointers and markup described. */
+/**
+ * A `btcfs://<txid>i<n>` value as its inscription: the Bitcoin txid at the tight size and its index
+ * (U-09: a trait value stands in a chip, a gel label, a gene cell or a pattern line); null when the
+ * value is not one.
+ */
+export function inscriptionText(value: string): string | null {
+  const inscription = parseBtcfsUri(value.replace(CONTROL, '').trim());
+  return inscription && `${shortenHash(inscription.txid, 'tight')}i${inscription.index}`;
+}
+
+/**
+ * A trait value for people: control bytes dropped, empty named, pointers and markup described; a
+ * btcfs text that is not an inscription is shown as it is.
+ */
 export function traitDisplay(value: string): string {
   const v = value.replace(CONTROL, '').trim();
   if (!v) return 'empty';
-  if (/^btcfs:\/\//i.test(v)) return `Bitcoin inscription …${v.slice(-6)}`;
+  const inscription = inscriptionText(v);
+  if (inscription) return `Bitcoin inscription ${inscription}`;
   if (SVG_VALUE.test(v)) return `SVG image · ${value.length.toLocaleString('en-US')} characters`;
   return v;
 }

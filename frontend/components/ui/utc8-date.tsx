@@ -47,3 +47,19 @@ export function Utc8DateTime({
     </NoBreak>
   );
 }
+
+/**
+ * A chain time as its age on a row of a live list (PA-22: blocks, transactions, activities, the
+ * pool): `20s ago` in the one age form (`formatTimeAgo`), the full date-time on the site's clock its
+ * hover. A list that is historical by nature (an address's history, a block's transactions) keeps
+ * `Utc8Date`. One unit, as every time is.
+ */
+export function Utc8Age({ timestamp, className }: { timestamp: string; className?: string }) {
+  return (
+    <NoBreak>
+      <time className={className} title={formatUtc8DateTime(timestamp)}>
+        {formatTimeAgo(timestamp)}
+      </time>
+    </NoBreak>
+  );
+}

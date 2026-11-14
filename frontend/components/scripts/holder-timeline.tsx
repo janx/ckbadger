@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import type { ScriptCustodyApi, ScriptFamilyDetail, ScriptHistoryMarkerApi } from '@/lib/api';
+import type { ScriptFamilyDetail, ScriptHistoryMarkerApi } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
-import { holderName, shortHex, signingText, type CodeHolder } from '@/lib/script-lineage';
+import { holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
+import { shortenHash } from '@/lib/shorten';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
 
@@ -46,13 +47,6 @@ function day(ms: number): string {
   return formatUtc8Date(ms);
 }
 
-/** `multisig 0xd1dbde…b95c`: the holder's name with a longer hex, for the title. */
-function longName(custody: ScriptCustodyApi): string {
-  if ((custody.class === 'multisig' || custody.class === 'one_key') && custody.lockArgs)
-    return `${custody.class === 'multisig' ? 'multisig' : 'one key'} ${shortHex(custody.lockArgs, 6, 4)}`;
-  return holderName(custody);
-}
-
 function versionList(signed: readonly (number | null)[]): string {
   const names = signed.map((n) => (n === null ? 'an unresolved version' : `v${n}`));
   if (names.length <= 1) return names.join('');
@@ -76,12 +70,15 @@ function holderDates(holder: CodeHolder): string {
     : `since ${day(holder.from.timestamp)}`;
 }
 
-/** Everything known about one holder, for its segment's title. */
+/**
+ * Everything known about one holder, for its segment's title: its name at the row size (U-09; a
+ * title is read as a row is), its full lock args among the facts.
+ */
 function holderTitle(holder: CodeHolder, previous: CodeHolder | null): string {
   const keys = holder.signing?.keyHashes ?? [];
   const before = previous?.signing?.keyHashes ?? [];
   return [
-    longName(holder.custody),
+    holderName(holder.custody, 'row'),
     signingText(holder),
     signedText(holder),
     holderDates(holder),
@@ -92,17 +89,20 @@ function holderTitle(holder: CodeHolder, previous: CodeHolder | null): string {
         ? 'its keys and threshold appear on chain the first time it signs'
         : '',
     previous && keys.length && before.length
-      ? `kept ${keys.filter((key) => before.includes(key)).length} of ${formatCount(before.length, 'key')} of ${holderName(previous.custody)} at the handover on ${day(holder.from.timestamp)}`
+      ? `kept ${keys.filter((key) => before.includes(key)).length} of ${formatCount(before.length, 'key')} of ${holderName(previous.custody, 'row')} at the handover on ${day(holder.from.timestamp)}`
       : '',
   ]
     .filter(Boolean)
     .join(' · ');
 }
 
-/** The longest of a segment's names that fits `px`: full, the name, the lock args, or nothing. */
+/**
+ * The longest of a segment's names that fits `px`: full, the name, the lock args, or nothing; a
+ * label on the chart, its hex at the tight size (U-09).
+ */
 function segmentLabel(holder: CodeHolder, current: boolean, px: number | null): string {
   if (px === null) return '';
-  const name = holderName(holder.custody);
+  const name = holderName(holder.custody, 'tight');
   const signing = signingText(holder);
   // A keyed holder (multisig, one key) shortens to its lock args; any other is its name or nothing.
   const keyed =
@@ -112,7 +112,7 @@ function segmentLabel(holder: CodeHolder, current: boolean, px: number | null): 
   const candidates = [
     current ? `${name} · holds the code now` : signing ? `${name} · ${signing}` : name,
     name,
-    keyed ? shortHex(holder.custody.lockArgs!) : '',
+    keyed ? shortenHash(holder.custody.lockArgs!, 'tight') : '',
   ];
   return (
     candidates.find((text) => text && text.length * advance(LABEL_PX) + 2 * LABEL_PAD <= px) ?? ''
@@ -181,7 +181,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
   const rows = Math.max(...ticks.map((t) => t.row), 0) + 1;
   const described = holders
     .map((holder, i) => {
-      const name = holderName(holder.custody);
+      const name = holderName(holder.custody, 'tight');
       if (!holder.until)
         return i === 0 ? `${name} since ${day(holder.from.timestamp)}` : `${name} since then`;
       return i === 0
@@ -270,7 +270,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
       >
         <span>
           {isNow ? 'held now by' : 'held by'}{' '}
-          <span className="text-text-bright">{holderName(reading.custody)}</span>
+          <span className="text-text-bright">{holderName(reading.custody, 'tight')}</span>
         </span>
         {isNow ? (
           <span>

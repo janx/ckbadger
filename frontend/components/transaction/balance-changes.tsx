@@ -6,7 +6,8 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
-import { cn, truncateHash } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
  * Each address's lock code hash, read off the transaction's own cells (inputs and outputs). An
@@ -57,18 +58,21 @@ function balanceForm(width: number | null): BalanceForm {
  * The participant's lock: its registry name, else its code hash (the transaction's cells carry
  * the script). A party with no cell here (a protocol-named party) or no known script has none.
  */
+/** A party's lock, its code hash at the form's size (U-09) when the registry names none. */
 function LockLabel({
   participant,
   lockCodeHashes,
+  size,
   className,
 }: {
   participant: ParticipantInfo;
   lockCodeHashes: ReadonlyMap<string, string>;
+  size: ShortSize;
   className?: string;
 }) {
   const codeHash =
     participant.address === null ? undefined : lockCodeHashes.get(participant.address);
-  const name = participant.lockKind ?? (codeHash ? `lock ${truncateHash(codeHash, 6, 4)}` : null);
+  const name = participant.lockKind ?? (codeHash ? `lock ${shortenHash(codeHash, size)}` : null);
   if (name === null) return null;
   return (
     <span
@@ -81,11 +85,11 @@ function LockLabel({
   );
 }
 
-function Items({ participant }: { participant: ParticipantInfo }) {
+function Items({ participant, size }: { participant: ParticipantInfo; size: ShortSize }) {
   return (
     <>
       {participant.itemDeltas.map((item, j) => (
-        <ItemDeltaFact key={j} item={item} />
+        <ItemDeltaFact key={j} item={item} size={size} />
       ))}
     </>
   );
@@ -165,8 +169,13 @@ export function BalanceChanges({
                   className={cn(BALANCE_GRID, 'border-row-rule items-baseline border-b py-2')}
                 >
                   <span role="cell" className="min-w-0">
-                    <ParticipantRefView participant={p} compact quiet />
-                    <LockLabel participant={p} lockCodeHashes={lockCodeHashes} className="ml-2" />
+                    <ParticipantRefView participant={p} size="row" compact quiet />
+                    <LockLabel
+                      participant={p}
+                      lockCodeHashes={lockCodeHashes}
+                      size="row"
+                      className="ml-2"
+                    />
                   </span>
                   <span role="cell" className="text-right">
                     <ExactCkb shannons={BigInt(p.ckbDelta)} />
@@ -175,7 +184,7 @@ export function BalanceChanges({
                     {formatOccupiedDelta(p.usedDelta)}
                   </span>
                   <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
-                    <Items participant={p} />
+                    <Items participant={p} size="row" />
                   </span>
                 </div>
               ))}
@@ -204,7 +213,8 @@ export function BalanceChanges({
           ) : (
             <ul aria-label="Balance changes by participant" data-form={form}>
               {activity.participants.map((p, i) => {
-                const party = <ParticipantRefView participant={p} compact quiet />;
+                // the list forms are phone rows: tight (U-09)
+                const party = <ParticipantRefView participant={p} size="tight" compact quiet />;
                 const ckb = <ExactCkb shannons={BigInt(p.ckbDelta)} />;
                 const occupied = (
                   <>
@@ -224,7 +234,7 @@ export function BalanceChanges({
                       className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size="tight" />
                     </div>
                     <div
                       data-line="amounts"
@@ -238,7 +248,7 @@ export function BalanceChanges({
                         data-line="items"
                         className="text-small flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                       >
-                        <Items participant={p} />
+                        <Items participant={p} size="tight" />
                       </div>
                     )}
                   </li>
@@ -255,7 +265,7 @@ export function BalanceChanges({
                       className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size="tight" />
                     </div>
                     <div data-role="ckb" className="text-body text-right">
                       {ckb}
@@ -264,7 +274,7 @@ export function BalanceChanges({
                       data-role="items"
                       className="text-small flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                     >
-                      <Items participant={p} />
+                      <Items participant={p} size="tight" />
                     </div>
                     <div
                       data-role="occupied"

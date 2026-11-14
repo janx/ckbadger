@@ -298,13 +298,22 @@ describe('byte and DNA inspection', () => {
     // the gel lays itself out for its measured box (V3); 896 px holds the side-by-side map
     stubChartWidth(896);
     const onHover = vi.fn();
-    const gene = (key: string, name: string, offset: number, length: number, value: string) => ({
+    // a gene's raw is its bytes as hex, never empty for a gene of one byte or more: the gel
+    // shortens it as an id (U-09), which fails fast on an empty value
+    const gene = (
+      key: string,
+      name: string,
+      offset: number,
+      length: number,
+      value: string,
+      raw: string
+    ) => ({
       key,
       name,
       offset,
       length,
       rule: 'rawString',
-      raw: '',
+      raw,
       owns: true,
       color: CELL_COLORS.type,
       value,
@@ -315,7 +324,10 @@ describe('byte and DNA inspection', () => {
     });
     const layout = {
       bytes: ['01', '02', 'ff'],
-      genes: [gene('0:0', 'flags', 0, 1, 'v1'), gene('0:1', 'body', 1, 2, 'raw payload')],
+      genes: [
+        gene('0:0', 'flags', 0, 1, 'v1', '01'),
+        gene('0:1', 'body', 1, 2, 'raw payload', '02ff'),
+      ],
       owners: ['0:0', '0:1', '0:1'],
       unmapped: [],
       unsupported: [],

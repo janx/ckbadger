@@ -3,12 +3,6 @@ import { useDetailTier } from '@/components/ui/detail-layout';
 import type { MnftProtocol, DotCellPartyRef } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-/** Keep binary profile blobs out of tier 1 (ID-DC2). */
-export function truncateRecordHex(hex: string, head = 18, tail = 8): string {
-  if (!hex.startsWith('0x')) throw new Error(`record hex missing 0x: ${hex.slice(0, 16)}`);
-  if (hex.length <= 2 + head + tail) return hex;
-  return `${hex.slice(0, 2 + head)}…${hex.slice(-tail)}`;
-}
 export function NamedParty({ party, label }: { party: DotCellPartyRef; label: string }) {
   return (
     <div className="min-w-0">
@@ -16,7 +10,13 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
       <dd className="mt-1 break-all">
         {party.lockHash ? (
           <AppLink href={`/address/${party.address ?? party.lockHash}`}>
-            <Hash hash={party.address ?? party.lockHash} className="text-meta" copyable={false} />
+            <Hash
+              hash={party.address ?? party.lockHash}
+              kind={party.address ? 'address' : 'hash'}
+              size="row"
+              className="text-meta"
+              copyable={false}
+            />
           </AppLink>
         ) : (
           <>

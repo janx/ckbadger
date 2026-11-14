@@ -10,7 +10,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 
 export interface FiberStepBox {
   head: ReactNode;
@@ -32,8 +32,6 @@ interface Props {
   carries?: { index: number; role: string };
   box: FiberStepBox;
 }
-
-const short = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 
 function codeHashesOf(tx: TransactionDetail | undefined): string[] {
   if (!tx) return [];
@@ -85,7 +83,7 @@ export function FiberChannelStep({
           style={inkStyle(BOARD_INKS.link)}
           title={txHash}
         >
-          <NoBreak>{short(txHash)}</NoBreak>
+          <ShortId value={txHash} kind="hash" size="row" />
         </Link>
         {' · '}
         <Link href={`/blocks/${blockNumber}`} className="hover:text-jade">

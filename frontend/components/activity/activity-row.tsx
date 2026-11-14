@@ -38,10 +38,10 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn, formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { Utc8Date } from '@/components/ui/utc8-date';
-import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
+import { ShortId } from '@/components/ui/short-id';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
@@ -55,11 +55,12 @@ export function activityRowTitle(hash: string, timestamp: string | null): string
 }
 
 /**
- * The block's date on the UTC+8 clock every dated row uses (consistency C3: one date form on every
- * feed; "ago" drifts as the page is read). The age is the date's own hover.
+ * When the row's block was made: its age on a row of a live feed (PA-22: the activities, the home
+ * feed, the DAO's recent activity), the full date-time its hover; the date on the UTC+8 clock on a
+ * list that is historical by nature (consistency C3), the age its hover.
  */
-function RowDate({ timestamp }: { timestamp: string }) {
-  return <Utc8Date timestamp={timestamp} />;
+function RowDate({ timestamp, age }: { timestamp: string; age: boolean }) {
+  return age ? <Utc8Age timestamp={timestamp} /> : <Utc8Date timestamp={timestamp} />;
 }
 
 /**
@@ -85,6 +86,7 @@ export function ActivityRowHead({
   layout = 'wrap',
   href,
   details,
+  age = false,
 }: {
   /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
   evidence?: ReactNode;
@@ -101,6 +103,8 @@ export function ActivityRowHead({
   href?: string;
   /** T7 (line layout): the tx-level facts after the title, as parts of the head's one list. */
   details?: readonly (ReactNode | DottedGroup)[];
+  /** PA-22: a row of a live list says its age, the date-time its hover; else the date. */
+  age?: boolean;
 }) {
   const line = layout === 'line';
   const linked = line && href !== undefined;
@@ -171,13 +175,13 @@ export function ActivityRowHead({
                 href={`/tx/${hash}`}
                 className="hover:text-jade text-text-dim transition-colors"
               >
-                <NoBreak>{truncateHash(hash, 10, 6)}</NoBreak>
+                <ShortId value={hash} kind="hash" size="row" />
               </Link>
               {' · '}
             </>
           )}
           {timestamp !== null ? (
-            <RowDate timestamp={timestamp} />
+            <RowDate timestamp={timestamp} age={age} />
           ) : timeAddedToPool ? (
             <TimeInPool since={timeAddedToPool} />
           ) : (
@@ -243,7 +247,7 @@ interface CallRef {
 }
 
 function typeCallRef(sc: ActivityTypeCall): CallRef {
-  const name = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName });
+  const name = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row');
   return {
     name,
     call: sc.typeArgs === '0x' ? name : `${name}(${sc.typeArgs})`,
@@ -257,10 +261,10 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 }
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
-  const name = formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName });
+  const name = formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName }, 'row');
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
-  const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError) : null;
+  const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
   return {
     name,
     call: notDecoded ? `${call} ${notDecoded}` : call,
@@ -553,7 +557,7 @@ function activityDetails(
     if (e.kind !== 'protocol') return;
     let facts: ProtocolNoteFact[];
     try {
-      facts = protocolActionNoteFacts(e.action);
+      facts = protocolActionNoteFacts(e.action, 'row');
     } catch (error) {
       errors.push(
         <div key={`p${i}`} data-role="detail-error" className="text-small pl-[18px]">
@@ -641,7 +645,13 @@ function ItemOnLine({
 }) {
   return (
     <span data-role="item" className={cn('min-w-0 max-w-full', className)}>
-      <ItemDeltaFact item={item} tone={tone} symbol="dim" showComposition={showComposition} />
+      <ItemDeltaFact
+        item={item}
+        size="row"
+        tone={tone}
+        symbol="dim"
+        showComposition={showComposition}
+      />
     </span>
   );
 }
@@ -771,7 +781,7 @@ function ParticipantLine({
         data-this-address={focus || undefined}
         className="-ml-3 max-w-full"
       >
-        <ParticipantRefView participant={p} compact quiet linked={!focus} />
+        <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
         {focus && <span className="sr-only">this address</span>}
       </span>
       {p.lockKind && (
@@ -961,6 +971,8 @@ export type ActivityRowProps = {
    * address as text with a "this address" tag; it must be a participant of the transaction.
    */
   focusLockHash?: string;
+  /** PA-22: a row of a live feed says its age, the date-time its hover; else the date. */
+  age?: boolean;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -983,6 +995,7 @@ export function ActivityRow({
   itemTone = 'sign',
   participantNotes,
   focusLockHash,
+  age = false,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -1046,6 +1059,7 @@ export function ActivityRow({
         evidence={evidence}
         poolStatus={activity.poolStatus}
         timeAddedToPool={activity.timeAddedToPool}
+        age={age}
       />
       {listed && <ProtocolActionList actions={actions} groups={groups} />}
       {errors}

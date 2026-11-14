@@ -9,6 +9,7 @@ import type {
   GlobalActivityFilter,
   TxStatsResponse,
 } from '@/lib/api';
+import { shortenHash } from '@/lib/shorten';
 
 /** The activity-type counters a summary or a daily row carries. */
 export type ActivityCounts = Pick<
@@ -79,10 +80,13 @@ export interface ScriptShares {
   others: { scripts: number; count: number; share: number } | null;
 }
 
-/** A script's name when the API knows one, else its short code hash. */
+/**
+ * A script's name when the API knows one, else its code hash at the tight size: the label of a
+ * share bar in the home page's stats card (U-09).
+ */
 export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>): string {
   const name = entry.name?.trim();
-  return name ? name : `${entry.codeHash.slice(0, 10)}…`;
+  return name ? name : shortenHash(entry.codeHash, 'tight');
 }
 
 /** Script calls ranked by count: the `limit` largest, then everything else as one row. */

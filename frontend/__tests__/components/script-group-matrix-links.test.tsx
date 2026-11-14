@@ -22,11 +22,11 @@ const groups: MatrixGroup[] = [
     id: 'lock:run:0xl1',
     kind: 'lock',
     name: 'Default Lock',
-    sub: 'args 0x55c5…a0b9',
+    sub: () => 'args 0x55c5…a0b9',
     ran: true,
     cellIds: ['in:0'],
     witness: null,
-    code: '—',
+    code: () => '—',
     cycles: null,
   },
 ];

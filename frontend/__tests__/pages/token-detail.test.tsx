@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
-import { truncateHash } from '@/lib/utils';
 import {
   api,
   ApiRequestError,
@@ -143,7 +142,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByText('no token with this type hash.')).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/tokens/${truncateHash(hash)}`
+      `/tokens/${hash.slice(0, 10)}…${hash.slice(-6)}`
     );
   });
 
@@ -342,7 +341,8 @@ describe('TokenDetailPage', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/Another token also calls itself/);
-    const self = within(note).getByText(`${hash.slice(0, 10)}…${hash.slice(-4)}`);
+    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8
+    const self = within(note).getByText(`${hash.slice(0, 12)}…${hash.slice(-8)}`);
     expect(self.closest('[data-nobreak]')).not.toBeNull();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     // every dot of the metrics row belongs to the item after it: none is loose text
@@ -360,6 +360,7 @@ describe('TokenDetailPage', () => {
   // U-15 / lane A4b (UI review 2026-11-14): an issuer whose lock the scripts registry does not name
   // read "Lock kind unavailable · owner lock proven by token script"; the answer now carries the
   // lock's code hash, and the note names the lock by it, linked to that code hash's script page.
+  // U-09 (re-pinned): the code hash and the issuer's lock hash take the row size, 10…6.
   it('names an unregistered issuer lock by its code hash, a link to its script page (U-15)', async () => {
     const unregistered = `0x${'43'.repeat(32)}`;
     vi.mocked(api.getToken).mockResolvedValue({
@@ -374,8 +375,8 @@ describe('TokenDetailPage', () => {
     render(<TokenDetailPage typeHash={hash} />);
     await screen.findByRole('heading', { name: 'TEST' });
     const metrics = screen.getByRole('region', { name: 'Metrics' });
-    expect(metrics).toHaveTextContent('lock 0x434343...4343 · owner lock proven by token script');
-    expect(within(metrics).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+    expect(metrics).toHaveTextContent('lock 0x43434343…434343 · owner lock proven by token script');
+    expect(within(metrics).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
       'href',
       expect.stringMatching(new RegExp(`/script/${unregistered}$`))
     );
@@ -390,7 +391,7 @@ describe('TokenDetailPage', () => {
     await screen.findByRole('heading', { name: 'TEST' });
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     // the issuer's lock hash, then the note with no empty part before it
-    expect(metrics).toHaveTextContent(/\.\.\.343434 · owner lock proven by token script/);
+    expect(metrics).toHaveTextContent(/0x34343434…343434 · owner lock proven by token script/);
     expect(metrics.querySelector('[data-lock-kind]')).toBeNull();
     expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
   });

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils';
-import { truncateHash } from '@/lib/utils';
 import { PeersTable } from '@/app/network/nodes-table';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const DIRECT_ONLY_PEER_ID = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+/** A peer id as the table writes it (U-09): the row size in the table, the tight size folded. */
+const rowId = (id: string) => `${id.slice(0, 10)}…${id.slice(-6)}`;
+const tightId = (id: string) => `${id.slice(0, 6)}…${id.slice(-4)}`;
 
 describe('PeersTable', () => {
   it('renders exact peer states and candidate-only metadata as em dashes', async () => {
@@ -14,16 +16,16 @@ describe('PeersTable', () => {
 
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
 
-    expect(screen.getByText(truncateHash(REACHABLE_PEER_ID))).toBeInTheDocument();
-    expect(screen.getByText(truncateHash(UNVERIFIED_PEER_ID))).toBeInTheDocument();
+    expect(screen.getByText(rowId(REACHABLE_PEER_ID))).toBeInTheDocument();
+    expect(screen.getByText(rowId(UNVERIFIED_PEER_ID))).toBeInTheDocument();
     const reachableRow = screen
-      .getByText(truncateHash(REACHABLE_PEER_ID))
+      .getByText(rowId(REACHABLE_PEER_ID))
       .closest<HTMLElement>('[data-testid]');
     expect(within(reachableRow!).getByText('Same-network Identify')).toBeInTheDocument();
     expect(screen.queryByText(/^Unreachable$/)).not.toBeInTheDocument();
 
     const candidateRow = screen
-      .getByText(truncateHash(UNVERIFIED_PEER_ID))
+      .getByText(rowId(UNVERIFIED_PEER_ID))
       .closest<HTMLElement>('[data-testid]');
     expect(within(candidateRow!).getByText('Aliases exhausted')).toBeInTheDocument();
     expect(candidateRow).toHaveTextContent('—');
@@ -39,8 +41,8 @@ describe('PeersTable', () => {
     });
 
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
-    expect(screen.getByText(truncateHash(UNVERIFIED_PEER_ID))).toBeInTheDocument();
-    expect(screen.queryByText(truncateHash(REACHABLE_PEER_ID))).not.toBeInTheDocument();
+    expect(screen.getByText(rowId(UNVERIFIED_PEER_ID))).toBeInTheDocument();
+    expect(screen.queryByText(rowId(REACHABLE_PEER_ID))).not.toBeInTheDocument();
   });
 
   it('offers all six typed observations and refetches with the selected value', async () => {
@@ -67,8 +69,8 @@ describe('PeersTable', () => {
     });
 
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
-    expect(screen.getByText(truncateHash(UNVERIFIED_PEER_ID))).toBeInTheDocument();
-    expect(screen.queryByText(truncateHash(REACHABLE_PEER_ID))).not.toBeInTheDocument();
+    expect(screen.getByText(rowId(UNVERIFIED_PEER_ID))).toBeInTheDocument();
+    expect(screen.queryByText(rowId(REACHABLE_PEER_ID))).not.toBeInTheDocument();
   });
 
   it('expands a peer into address-level probe evidence', async () => {
@@ -111,7 +113,7 @@ describe('PeersTable', () => {
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
 
     const directRow = screen
-      .getByText(truncateHash(DIRECT_ONLY_PEER_ID))
+      .getByText(rowId(DIRECT_ONLY_PEER_ID))
       .closest<HTMLElement>('[data-testid]');
     expect(within(directRow!).getByText('Direct CKB session')).toBeInTheDocument();
     expect(within(directRow!).getByText('peer → observer')).toBeInTheDocument();
@@ -172,7 +174,7 @@ describe('PeersTable form by measured width (T3)', () => {
     expect(toggle).toHaveClass('min-h-[44px]', 'w-full');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveTextContent('▸');
-    expect(toggle).toHaveTextContent(truncateHash(REACHABLE_PEER_ID));
+    expect(toggle).toHaveTextContent(tightId(REACHABLE_PEER_ID));
     expect(toggle).toHaveTextContent('/ip4/1.2.3.4/tcp/8115');
     expect(within(toggle).getByText('Same-network Identify')).toBeInTheDocument();
     // Every other column waits in the expander.

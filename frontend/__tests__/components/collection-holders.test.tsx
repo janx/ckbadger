@@ -103,7 +103,8 @@ describe('Collection holders', () => {
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     const rows = within(table).getAllByRole('row');
     expect(rows[1]).toHaveTextContent('JoyID');
-    expect(rows[2]).toHaveTextContent('0x434343...4343');
+    // U-09 (re-pinned): the table's code hash at the row size
+    expect(rows[2]).toHaveTextContent('lock 0x43434343…434343');
     // No indexed lock: neither a kind nor a code hash is shown.
     expect(rows[3]).not.toHaveTextContent(/JoyID|0x4343/);
   });

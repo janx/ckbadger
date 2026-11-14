@@ -3,7 +3,6 @@ import { render, screen } from '@/__tests__/utils/test-utils';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import FiberChannelDetailPage from '@/app/fiber/channels/[id]/client-page';
-import { truncateHash } from '@/lib/utils';
 
 const id = `0x${'a'.repeat(64)}`;
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -23,7 +22,7 @@ describe('Fiber channel entity error routing', () => {
     expect(await screen.findByText('no fiber channel with this id.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/fiber/channels/${truncateHash(id)}`
+      `/fiber/channels/${id.slice(0, 10)}…${id.slice(-6)}`
     );
   });
 

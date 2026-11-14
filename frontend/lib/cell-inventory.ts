@@ -7,6 +7,7 @@ import {
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import type { IdentityItemKind } from '@/lib/identity-title';
 
 /**
@@ -60,16 +61,13 @@ function isKind(slug: string): slug is CellInventoryKind {
   return (CELL_INVENTORY_KINDS as readonly string[]).includes(slug);
 }
 
-function shortHash(hash: string): string {
-  return `${hash.slice(0, 10)}…${hash.slice(-6)}`;
-}
-
 /**
  * The inventory item this cell is, from its `protocolScript.type` slug; null when the slug is none
  * or one this page does not name. A handled slug whose identifying data is missing or malformed
- * throws with the out point: the line must never name a wrong item.
+ * throws with the out point: the line must never name a wrong item. `size` is the size of the line
+ * the item is named in (U-09), for a token named by its type hash.
  */
-export function cellInventoryItem(cell: Cell): CellInventoryItem | null {
+export function cellInventoryItem(cell: Cell, size: ShortSize): CellInventoryItem | null {
   const at = `Cell ${cell.txHash}:${cell.outputIndex}`;
   if (!cell.protocolScript) throw new Error(`${at}: the cell detail carries no protocolScript`);
   const slug = cell.protocolScript.type;
@@ -127,7 +125,7 @@ export function cellInventoryItem(cell: Cell): CellInventoryItem | null {
         return {
           kind: 'token-without-amount',
           typeHash,
-          unit: token.symbol || token.name || `token ${shortHash(typeHash)}`,
+          unit: token.symbol || token.name || `token ${shortenHash(typeHash, size)}`,
           reason: token.noAmountReason,
           href: getTokenDetailHref(typeHash),
         };
@@ -138,7 +136,7 @@ export function cellInventoryItem(cell: Cell): CellInventoryItem | null {
         kind: 'token',
         typeHash,
         amount: formatTokenBalanceWithRawMarker(token.rawAmount, token.decimals),
-        unit: token.symbol || token.name || `units of token ${shortHash(typeHash)}`,
+        unit: token.symbol || token.name || `units of token ${shortenHash(typeHash, size)}`,
         href: getTokenDetailHref(typeHash),
       };
     }

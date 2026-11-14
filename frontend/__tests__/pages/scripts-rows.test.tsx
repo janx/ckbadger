@@ -244,7 +244,10 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     const t = await table();
     const live = cells(rowOf(t, 'JoyID'))[2];
     expect(live).toHaveTextContent(/^161,008$/);
-    expect(live.firstElementChild).toHaveAttribute('title', '161,008 live of 2,707,977 cells ever');
+    expect(live.firstElementChild).toHaveAttribute(
+      'title',
+      '161,008 live of 2,707,977\u00a0cells ever'
+    );
   });
 
   it('draws CKB in its cells as the page one 8 px bar on the page scale, the amount to 2 dp (T4)', async () => {
@@ -297,16 +300,16 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     const t = await table();
     expect(rowOf(t, 'JoyID')).toHaveAttribute(
       'title',
-      'JoyID · lock · An universal Account Protocol for Web3 Mass-adoption. · upgradable · 5\u00a0versions · by a multisig · since 2023-10-07 · 161,008 live of 2,707,977 cells ever · 454,352,694.86181731 CKB · 19,093,577.00000000 occupied (4.20%)'
+      'JoyID · lock · An universal Account Protocol for Web3 Mass-adoption. · upgradable · 5\u00a0versions · by a multisig · since 2023-10-07 · 161,008 live of 2,707,977\u00a0cells ever · 454,352,694.86181731 CKB · 19,093,577.00000000 occupied (4.20%)'
     );
     expect(rowOf(t, 'Default Lock')).toHaveAttribute(
       'title',
-      'Default Lock · lock · SECP256K1/blake160 is the default lock script · immutable · genesis · code cell unspendable · pinned by data hash · 886,257 live of 78,323,235 cells ever · 46,743,236,111.96022084 CKB · 65,309,701.00000000 occupied (0.14%)'
+      'Default Lock · lock · SECP256K1/blake160 is the default lock script · immutable · genesis · code cell unspendable · pinned by data hash · 886,257 live of 78,323,235\u00a0cells ever · 46,743,236,111.96022084 CKB · 65,309,701.00000000 occupied (0.14%)'
     );
     expect(rowOf(t, 'PW Lock').getAttribute('title')).toContain('PW Lock · lock · deprecated · ');
     expect(rowOf(t, 'AlwaysSuccess')).toHaveAttribute(
       'title',
-      'AlwaysSuccess · lock + type · code evidence unavailable · 0 live of 0 cells ever · 0.00000000 CKB · 0.00000000 occupied (0%)'
+      'AlwaysSuccess · lock + type · code evidence unavailable · 0 live of 0\u00a0cells ever · 0.00000000 CKB · 0.00000000 occupied (0%)'
     );
   });
 

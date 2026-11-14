@@ -13,7 +13,7 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { MINUS, niceStep, stepDecimals } from '@/lib/chart-ticks';
-import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/components/charts/chart-format';
+import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/lib/format-unit';
 import { formatCount } from '@/lib/format-count';
 import {
   ACTIVITY_KIND_COLORS,
@@ -22,6 +22,7 @@ import {
   jadeRamp,
   type AssetClass,
 } from '@/lib/design-tokens';
+import { shortenAddress, shortenHash } from '@/lib/shorten';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
@@ -888,11 +889,6 @@ function rankedPreviewRows(
   ];
 }
 
-/** Long identities share long prefixes; keep the design's head…tail form (CH-04). */
-export function shortRankLabel(label: string): string {
-  return label.length > 20 ? `${label.slice(0, 10)}…${label.slice(-6)}` : label;
-}
-
 function shareRows(
   definition: ChartDefinition,
   payload: {
@@ -1006,7 +1002,7 @@ function shareRows(
     nameCount.set(shownName(entry), (nameCount.get(shownName(entry)) ?? 0) + 1);
   const distinctLabel = (entry: (typeof entries)[number]) =>
     (nameCount.get(shownName(entry)) ?? 0) > 1 && entry.id
-      ? `${shownName(entry)} · ${shortSeriesId(entry.id)}`
+      ? `${shownName(entry)} · ${shortenHash(fullSeriesId(entry.id), 'tight')}`
       : shownName(entry);
   const rankedRows = [...named, ...others].map((entry) =>
     entry.label === othersKey
@@ -1100,15 +1096,12 @@ function rankedSeriesHref(id: string, label: string): string {
   throw new Error(`unknown ranked series id ${id}`);
 }
 
-/** The hash part of a series id, head…tail: "0x5cb3…b4fa". */
-/** The hash a series id names (`token:0x…` → `0x…`); `shortSeriesId` is its short form. */
+/**
+ * The hash a series id names (`token:0x…` → `0x…`); a ranking label writes it at the tight size, a
+ * chart label (U-09): "0x5cb3…b4fa".
+ */
 function fullSeriesId(id: string): string {
   return id.split(':')[1] ?? id;
-}
-
-function shortSeriesId(id: string): string {
-  const hash = fullSeriesId(id);
-  return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
 }
 
 /** A bucket label without the unit word its subtitle already names: "100-1k CKB" → "100-1k". */
@@ -1152,9 +1145,13 @@ function minerRows(
       throw new Error(`${definition.slug}: invalid blocksMined for ${miner.minerLockHash}`);
     exactDecimalRatio(miner.percentage, `${definition.slug} percentage`);
     const identity = miner.address ?? miner.minerLockHash;
-    // A miner is its pool's name, else its address shortened like the card's (CH-03, CH-04); a
-    // miner with no recorded address is its lock hash, said once under the ranking.
-    const label = miner.minerName ?? shortRankLabel(identity);
+    // A miner is its pool's name, else its address at the row size, the ranking being rows (CH-03,
+    // CH-04, U-09); a miner with no recorded address is its lock hash, said once under the ranking.
+    const label =
+      miner.minerName ??
+      (miner.address
+        ? shortenAddress(miner.address, 'row')
+        : shortenHash(miner.minerLockHash, 'row'));
     return {
       row: {
         label,

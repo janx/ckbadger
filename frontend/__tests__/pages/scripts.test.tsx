@@ -216,7 +216,8 @@ describe('ScriptsPage', () => {
   it('routes Unknown script entries to code-hash detail page', async () => {
     const unknownCodeHash = '0x010445a300000000000000000000000000000000000000000000000000000001';
     const unknownScriptRefLabel = 'Unlabeled';
-    const unknownScriptRefDisplay = 'type · 0x010445a3...00000001';
+    // U-09 (re-pinned): the table's reference at the row size
+    const unknownScriptRefDisplay = 'type · 0x010445a3…000001';
     const unknownScriptRefFull = `type ref:${unknownCodeHash}`;
     vi.mocked(api.getScripts).mockResolvedValue({
       data: [

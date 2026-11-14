@@ -186,7 +186,7 @@ describe('HardforksPage', () => {
       'href',
       '/mainnet/scripts/Known%20Lock'
     );
-    expect(screen.getByRole('link', { name: 'Code cell 0x55555555…:0' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Code cell 0x55555555…555555:0' })).toHaveAttribute(
       'href',
       '/mainnet/cell/0x5555555555555555555555555555555555555555555555555555555555555555-0'
     );
@@ -312,8 +312,9 @@ describe('HardforksPage', () => {
     expect(marks.className).not.toMatch(/overflow-y-auto|max-h-/);
     const buttons = within(marks).getAllByRole('button');
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
-      expect.stringMatching(/^Known Lock v2 · Known Lock · version 0x[0-9a-f]{8}…/),
-      expect.stringMatching(/^Known Lock v3 · Known Lock · version 0x[0-9a-f]{8}…/),
+      // U-09 (re-pinned): a mark's name on the chart takes the tight size
+      expect.stringMatching(/^Known Lock v2 · Known Lock · version 0x[0-9a-f]{4}…[0-9a-f]{4},/),
+      expect.stringMatching(/^Known Lock v3 · Known Lock · version 0x[0-9a-f]{4}…[0-9a-f]{4},/),
     ]);
   });
 

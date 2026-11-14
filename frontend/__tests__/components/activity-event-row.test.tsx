@@ -674,7 +674,8 @@ describe('quiet call expressions', () => {
       'href',
       '/mainnet/scripts/Nervape%20Shadow%20Lock'
     );
-    expect(screen.getByText('0x0131...5d74')).toHaveClass('text-text-dim');
+    // U-09 (re-pinned): a feed row's args at the row size
+    expect(screen.getByText('0x0131da00…005d74')).toHaveClass('text-text-dim');
   });
 });
 
@@ -827,6 +828,7 @@ describe('ItemDeltaFact', () => {
   it('states a token change exactly with its sign and symbol', () => {
     render(
       <ItemDeltaFact
+        size="row"
         item={{
           kind: 'token',
           typeScriptHash: '0xseal',
@@ -846,9 +848,11 @@ describe('ItemDeltaFact', () => {
     render(
       <>
         <ItemDeltaFact
+          size="row"
           item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }}
         />
         <ItemDeltaFact
+          size="row"
           item={{
             kind: 'identity',
             standard: 'dotbit',
@@ -861,9 +865,9 @@ describe('ItemDeltaFact', () => {
     // "object <id>" is one unbreakable run; only the verb may wrap onto the next line.
     const run = screen.getByText(/^object/);
     expect(run).toHaveClass('whitespace-nowrap');
-    expect(run.parentElement).toHaveTextContent('object 0x51c75a...96f2 departed');
+    expect(run.parentElement).toHaveTextContent('object 0x51c75a00…0096f2 departed');
     expect(screen.getByText(/^\.bit/).parentElement).toHaveTextContent(
-      '.bit 0xabc000...0def arrived'
+      '.bit 0xabc00000…000def arrived'
     );
   });
 });
@@ -873,6 +877,7 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
     const { container } = render(
       <>
         <ItemDeltaFact
+          size="row"
           item={{
             kind: 'token',
             typeScriptHash: '0xseal',
@@ -882,9 +887,11 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
           }}
         />
         <ItemDeltaFact
+          size="row"
           item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }}
         />
         <ItemDeltaFact
+          size="row"
           item={{
             kind: 'identity',
             standard: 'dotbit',
@@ -906,6 +913,7 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
   it('names the collection and shows the composition badge only when the API sends them (R12)', () => {
     const { rerender, container } = render(
       <ItemDeltaFact
+        size="row"
         item={{
           kind: 'object',
           objectId: '0x51c75a0000000000000096f2',
@@ -915,21 +923,24 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
         }}
       />
     );
-    expect(container).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed');
+    expect(container).toHaveTextContent('Nervape 3x 0x51c75a00…0096f2 departed');
     expect(container.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     rerender(
-      <ItemDeltaFact item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }} />
+      <ItemDeltaFact
+        size="row"
+        item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }}
+      />
     );
     // No field, no badge and no guessed name.
     expect(container.querySelector('[data-composition]')).toBeNull();
-    expect(container).toHaveTextContent('object 0x51c75a...96f2 departed');
+    expect(container).toHaveTextContent('object 0x51c75a00…0096f2 departed');
   });
 });
 
 // The action metadata as the rows read it: its parts in the one separated list (E1 kept a dead
 // ProtocolActionNote wrapper for these tests; it is gone, and they read the live composition).
 function ProtocolActionNote({ pa }: { pa: Parameters<typeof protocolActionNoteParts>[0] }) {
-  return <Dotted parts={protocolActionNoteParts(pa)} />;
+  return <Dotted parts={protocolActionNoteParts(pa, 'row')} />;
 }
 
 describe('protocol action metadata — in one quiet line', () => {
@@ -966,9 +977,9 @@ describe('protocol action metadata — in one quiet line', () => {
         }}
       />
     );
-    expect(document.body).toHaveTextContent('channel 0x0d3870bb...6e26:0 · 750.00000000 CKB');
+    expect(document.body).toHaveTextContent('channel 0x0d3870bb…006e26:0 · 750.00000000 CKB');
     // The channel's out point is its funding cell: it opens that cell's page.
-    expect(screen.getByRole('link', { name: '0x0d3870bb...6e26:0' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '0x0d3870bb…006e26:0' })).toHaveAttribute(
       'href',
       expect.stringMatching(/\/cell\/0x0d3870bb0+6e26-0$/)
     );
@@ -1013,7 +1024,7 @@ describe('row parts (F2-tx)', () => {
         }}
       />
     );
-    expect(screen.getByRole('link', { name: '0x43b292...895d' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '0x43b29200…00895d' })).toBeInTheDocument();
     expect(screen.queryByText(/0xba0e5590/)).not.toBeInTheDocument();
   });
 
@@ -1035,6 +1046,7 @@ describe('row parts (F2-tx)', () => {
   it('draws arrived / departed quiet, the item itself bright (AssetClasses, Main boards)', () => {
     render(
       <ItemDeltaFact
+        size="row"
         item={{ kind: 'object', objectId: `0x51c7${'00'.repeat(28)}96f2`, delta: 1 }}
       />
     );
@@ -1044,6 +1056,7 @@ describe('row parts (F2-tx)', () => {
   it('colours a token amount by its sign when a page asks for it (Address board)', () => {
     const { rerender } = render(
       <ItemDeltaFact
+        size="row"
         item={{
           kind: 'token',
           typeScriptHash: '0xickb',
@@ -1056,6 +1069,7 @@ describe('row parts (F2-tx)', () => {
     expect(screen.getByRole('link')).toHaveClass('text-text-bright');
     rerender(
       <ItemDeltaFact
+        size="row"
         tone="sign"
         item={{
           kind: 'token',
@@ -1069,6 +1083,7 @@ describe('row parts (F2-tx)', () => {
     expect(screen.getByRole('link')).toHaveClass('text-positive');
     rerender(
       <ItemDeltaFact
+        size="row"
         tone="sign"
         item={{ kind: 'token', typeScriptHash: '0xickb', delta: '-1', symbol: 'iCKB', decimals: 8 }}
       />
@@ -1084,10 +1099,10 @@ describe('row parts (F2-tx)', () => {
       symbol: 'iCKB',
       decimals: 8,
     };
-    const { rerender } = render(<ItemDeltaFact tone="sign" item={item} />);
+    const { rerender } = render(<ItemDeltaFact size="row" tone="sign" item={item} />);
     // Default: the symbol shares the amount's ink (Address board, unchanged).
     expect(screen.getByText(/iCKB$/)).toBe(screen.getByRole('link'));
-    rerender(<ItemDeltaFact tone="sign" symbol="dim" item={item} />);
+    rerender(<ItemDeltaFact size="row" tone="sign" symbol="dim" item={item} />);
     const link = screen.getByRole('link', { name: `${MINUS}84,651.87699473 iCKB` });
     expect(link).toHaveClass('text-negative');
     expect(within(link).getByText('iCKB')).toHaveClass('text-text-dim');

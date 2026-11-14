@@ -11,6 +11,8 @@ import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
+import { shortenHash } from '@/lib/shorten';
+import { ShortId } from '@/components/ui/short-id';
 
 type Point = NetworkMap['points'][number];
 
@@ -155,11 +157,6 @@ export function layoutMapPoints(
   return layoutCountryClusters(points, width, height).dots;
 }
 
-/** A peer id is a 34-byte multihash: head…tail is enough to tell peers apart (CH-57). */
-export function shortPeerId(peerId: string): string {
-  return peerId.length > 20 ? `${peerId.slice(0, 10)}…${peerId.slice(-6)}` : peerId;
-}
-
 /** The map's counts, one derivation for the key, the reading row and the notes. */
 export function mapCounts(map: NetworkMap): {
   reachable: number;
@@ -258,8 +255,8 @@ function sessionWords(point: Point): string {
 /** A node's identity in one line, for the readout under the map: who, where, state, client. */
 function peerLine(point: Point): string {
   const who = point.alias
-    ? `${point.alias.address} · peer ${shortPeerId(point.peerId)}`
-    : `peer ${shortPeerId(point.peerId)}`;
+    ? `${point.alias.address} · peer ${shortenHash(point.peerId, 'row')}`
+    : `peer ${shortenHash(point.peerId, 'row')}`;
   const state = point.reachable ? 'reachable now' : 'verified before, not reachable now';
   return `${who} · ${point.country} · ${state} · ${point.clientVersion}`;
 }
@@ -267,7 +264,7 @@ function peerLine(point: Point): string {
 function PeerReadout({ point, roundId }: { point: Point; roundId: number | null }) {
   const rows: [string, string, string?][] = [
     // With an alias the panel is titled by it, so the peer id is a row (R-13).
-    ...(point.alias ? [['peer', shortPeerId(point.peerId)] as [string, string]] : []),
+    ...(point.alias ? [['peer', shortenHash(point.peerId, 'row')] as [string, string]] : []),
     [
       'state',
       point.reachable ? 'reachable now' : 'verified before, not reachable now',
@@ -285,7 +282,13 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
   return (
     <>
       <p className="text-text-bright text-body [overflow-wrap:anywhere]">
-        {point.alias ? point.alias.address : `peer ${shortPeerId(point.peerId)}`}
+        {point.alias ? (
+          point.alias.address
+        ) : (
+          <>
+            peer <ShortId value={point.peerId} kind="hash" size="row" />
+          </>
+        )}
       </p>
       <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-2 gap-y-1">
         {rows.map(([label, value, tone]) => (
@@ -424,7 +427,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                         key={point.peerId}
                         data-peer={point.peerId}
                         {...readout.bind(point.peerId)}
-                        aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
+                        aria-label={`${point.country} peer ${shortenHash(point.peerId, 'row')}, ${
                           point.reachable ? 'reachable now' : 'verified before, not reachable now'
                         }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
                         opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}

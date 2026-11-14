@@ -15,11 +15,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function truncateHash(hash: string, start = 10, end = 8): string {
-  if (hash.length <= start + end) return hash;
-  return `${hash.slice(0, start)}...${hash.slice(-end)}`;
-}
-
 /** Raw block timestamp displayed in the indexer's fixed UTC+8 calendar timezone. */
 export function formatUtc8Date(timestamp: string | number): string {
   return utc8Iso(timestampMs(timestamp, 'block timestamp')).slice(0, 10);
@@ -131,7 +126,7 @@ export function formatCkbCompact(shannons: string | bigint): {
     ['T', BigInt('100000000000000000000')],
     ['B', BigInt('100000000000000000')],
     ['M', BigInt('100000000000000')],
-    ['K', BigInt('100000000000')],
+    ['k', BigInt('100000000000')],
   ] as const) {
     if (amount >= divisor)
       return { value: `${formatScaledInteger(amount, divisor, 2)}${suffix}`, full };
@@ -159,7 +154,7 @@ export function formatCompactCkbDelta(ckbDelta: string): {
   } else if (abs >= BigInt('100000000000000')) {
     compact = `${formatScaledInteger(abs, BigInt('100000000000000'), 2)}M`;
   } else if (abs >= BigInt('100000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}K`;
+    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}k`;
   } else if (abs >= BigInt(100000000)) {
     compact = formatScaledInteger(abs, BigInt(100000000), 2);
   } else {

@@ -92,13 +92,14 @@ describe('BalanceChanges form by measured width', () => {
       'items',
     ]);
     // First line: the address and its lock, the lock never split ("Default / Lock").
-    expect(lines[0]).toHaveTextContent('ckb1qzda...cjk9lzDefault Lock');
+    // U-09 (re-pinned): the list forms are phone rows, their ids at the tight size
+    expect(lines[0]).toHaveTextContent('ckb1qzda…cjk9lzDefault Lock');
     expect(lines[0].querySelector('[data-role="lock"]')).toHaveClass('whitespace-nowrap');
     // Second line: the CKB change and the occupied change.
     expect(lines[1]).toHaveTextContent('−528.00064119 CKB');
     expect(lines[1]).toHaveTextContent('occupied −502');
     // Third line: the items sentence, in the feed's words.
-    expect(lines[2]).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed');
+    expect(lines[2]).toHaveTextContent('Nervape 3x 0x51c7…96f2 departed');
   });
 
   it('puts the amount on the first line and occupied on the second from 480 px (608 px at 640)', () => {
@@ -112,7 +113,7 @@ describe('BalanceChanges form by measured width', () => {
     ).toEqual(['party', 'ckb', 'items', 'occupied']);
     expect(card).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_auto]');
     expect(card.querySelector('[data-role="party"]')).toHaveTextContent(
-      'ckb1qzda...shp3hrNervape Shadow Lock'
+      'ckb1qzda…shp3hrNervape Shadow Lock'
     );
     expect(card.querySelector('[data-role="ckb"]')).toHaveTextContent('+320.00000000 CKB');
     expect(card.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +320');
@@ -132,10 +133,11 @@ describe('BalanceChanges form by measured width', () => {
     (width) => {
       renderAt(width);
       const locks = [...document.querySelectorAll('[data-role="lock"]')];
+      // U-09 (re-pinned): tight in the phone forms (358, 608), row in the table (912)
       expect(locks.map((l) => l.textContent)).toEqual([
         'Default Lock',
         'Nervape Shadow Lock',
-        'lock 0x43b2...895d',
+        width === 912 ? 'lock 0x43b2924e…00895d' : 'lock 0x43b2…895d',
       ]);
       expect(locks[2]).toHaveAttribute('title', UNNAMED_LOCK);
     }

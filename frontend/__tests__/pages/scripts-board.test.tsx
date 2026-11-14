@@ -158,7 +158,7 @@ describe('Scripts list against the Scripts board', () => {
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const joyRow = within(table).getByRole('link', { name: 'JoyID' }).closest('tr') as HTMLElement;
     expect(joyRow.textContent).toContain('161,049');
-    expect(joyRow.getAttribute('title')).toContain('161,049 live of 2,707,778 cells ever');
+    expect(joyRow.getAttribute('title')).toContain('161,049 live of 2,707,778\u00a0cells ever');
     expect(joyRow.textContent).toContain('456,002,179.57');
     expect(joyRow.getAttribute('title')).toContain('456,002,179.57000000 CKB');
     expect(joyRow.textContent).not.toContain('456.00M');

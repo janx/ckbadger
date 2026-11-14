@@ -19,7 +19,7 @@ export const WARMUP_PENDING_RETRY_DELAY_MS = 2000;
  */
 export const NETWORK_INITIALIZING_MAX_RETRY_DELAY_MS = 30_000;
 const DEFAULT_WARMUP_RETRY_LIMIT = 120;
-export const WARMUP_PENDING_BANNER_TEXT = 'Data is being prepared. Retrying automatically...';
+export const WARMUP_PENDING_BANNER_TEXT = 'Data is being prepared. Retrying automatically…';
 export const NETWORK_INITIALIZING_BANNER_TEXT =
   'This network has not started syncing yet — it will begin after the other networks finish their initial sync.';
 

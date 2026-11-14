@@ -18,6 +18,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
@@ -202,7 +203,8 @@ function Shape({ event }: { event: ReorgEvent }) {
   );
 }
 
-function Miners({ event }: { event: ReorgEvent }): ReactNode {
+/** The two miners, at the size of the form the row is drawn in (U-09). */
+function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactNode {
   if (event.eventType === 'deep') return <span className="text-text-dim">—</span>;
   if (!event.preview)
     return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
@@ -227,7 +229,7 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
       );
     return address ? (
       // T5: the fork point is the row's one bright thing; the miners read in body ink.
-      <MinerLink address={address} pool={pool} className="text-text" />
+      <MinerLink address={address} pool={pool} size={size} className="text-text" />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
@@ -456,8 +458,10 @@ export default function ForksPage() {
                       key: 'miners',
                       className: ROW,
                       label: 'Dropped block’s miner vs winner’s',
-                      minWidth: 260,
-                      render: (e) => <Miners event={e} />,
+                      // two unnamed miners at the row size: 17 + 4 + 17 characters at 13 px
+                      // (296 px) and the padding
+                      minWidth: 312,
+                      render: (e) => <Miners event={e} size="row" />,
                     },
                     {
                       key: 'apart',
@@ -483,7 +487,7 @@ export default function ForksPage() {
                       </div>
                       <Shape event={event} />
                       <div>
-                        <Miners event={event} /> · <FoundApart event={event} />
+                        <Miners event={event} size="tight" /> · <FoundApart event={event} />
                       </div>
                       <Fate event={event} />
                     </div>

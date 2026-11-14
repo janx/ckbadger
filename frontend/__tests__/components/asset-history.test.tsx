@@ -133,7 +133,7 @@ describe('Asset history', () => {
       ).toBeTruthy();
       expect(readout).toHaveClass('border-t');
       expect(readout).toHaveTextContent(
-        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50 % · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
+        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50% · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
       );
       expect(within(readout).getByText('occupied')).toHaveAttribute(
         'title',
@@ -291,7 +291,8 @@ describe('Asset history', () => {
       expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
         ['change', 'Burn −1.00000000', '2024-01-02'],
         ['after', 'supply after 12.00000000', null],
-        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbbbb...bbbb JoyID'],
+        // U-09 (re-pinned): the phone row's lock hash at the tight size
+        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbb…bbbb JoyID'],
       ]);
     } finally {
       vi.restoreAllMocks();
@@ -300,8 +301,9 @@ describe('Asset history', () => {
   });
   // U-15 / lane A4b (UI review 2026-11-14): a mint's or burn's party whose lock the scripts registry
   // does not name read "Lock kind unavailable"; the event now carries the lock's code hash, and the
-  // party is named by it, "lock 0x434343...4343", linked to that code hash's script page. A
-  // registered lock reads as before; a lock not indexed shows no kind.
+  // party is named by it, "lock 0x43434343…434343", linked to that code hash's script page. A
+  // registered lock reads as before; a lock not indexed shows no kind. U-09 (re-pinned): the code
+  // hash takes the size of the form it is drawn in, row in the table and tight in the phone row.
   describe('names a supply-event party’s unregistered lock by its code hash (U-15)', () => {
     const unregistered = `0x${'43'.repeat(32)}`;
     const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
@@ -352,9 +354,9 @@ describe('Asset history', () => {
       const table = screen.getByRole('table', { name: 'Mints and burns' });
       const [, unnamed, named, notIndexed] = within(table).getAllByRole('row');
       expect(unnamed.querySelector('[data-lock-kind]')).toHaveTextContent(
-        /^lock 0x434343\.\.\.4343$/
+        /^lock 0x43434343…434343$/
       );
-      expect(within(unnamed).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+      expect(within(unnamed).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
         'href',
         scriptPage
       );
@@ -368,14 +370,12 @@ describe('Asset history', () => {
       try {
         mount();
         const [unnamed, named, notIndexed] = screen.getAllByTestId('supply-event-row-mobile');
-        expect(phoneLines(unnamed)[2].right).toMatch(
-          /^to ckb1qzda\.\.\.1111 lock 0x434343\.\.\.4343$/
-        );
-        expect(within(unnamed).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+        expect(phoneLines(unnamed)[2].right).toMatch(/^to ckb1qzda…111111 lock 0x4343…4343$/);
+        expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
           'href',
           scriptPage
         );
-        expect(phoneLines(named)[2].right).toMatch(/^from ckb1qzda\.\.\.2222 JoyID$/);
+        expect(phoneLines(named)[2].right).toMatch(/^from ckb1qzda…222222 JoyID$/);
         expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
         for (const row of [unnamed, named, notIndexed])
           expect(row).not.toHaveTextContent(/lock kind unavailable/i);

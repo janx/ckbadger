@@ -34,6 +34,7 @@ import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
+import { clipLabel } from '@/lib/shorten';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
@@ -327,10 +328,7 @@ function Gel({
                           lw >= ALLELE_GEL.labelledLane &&
                           !b.isColour &&
                           (() => {
-                            const label =
-                              b.label.length > labelChars
-                                ? `${b.label.slice(0, labelChars - 1)}…`
-                                : b.label;
+                            const label = clipLabel(b.label, labelChars);
                             // words on a fill: the ink the band calls for under the label's run
                             const half = (label.length * ALLELE_GEL.charWidth) / 2;
                             const fill = bandLabelInk(

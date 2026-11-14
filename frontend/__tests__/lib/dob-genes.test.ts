@@ -59,12 +59,17 @@ describe('dob-genes (F2 objects, OB-4/5/7/8, OB-C2)', () => {
     expect(byName.relief.rule).toBe('1 option');
     expect(byName.Color.raw).toBe('03');
     expect(byName.Color.value).toBe('Nature Green');
-    expect(byName['prev.bg'].value).toBe('Bitcoin inscription …79e0i0');
+    // U-09 (re-pinned): an inscription by its txid at the tight size and its index (it was the
+    // URI's last six characters alone)
+    expect(byName['prev.bg'].value).toBe('Bitcoin inscription a94617…79e0i0');
     expect(byName.Note.value).toBe('empty');
   });
 
   it('writes a trait value for people: empty, Bitcoin pointers and SVG source are named (OB-8, OB-16)', () => {
     expect(traitDisplay('')).toBe('empty');
+    expect(traitDisplay(`btcfs://${'0b'.repeat(32)}i2`)).toBe('Bitcoin inscription 0b0b0b…0b0bi2');
+    // a btcfs text that is not an inscription reference is shown as it is
+    expect(traitDisplay('btcfs://aa')).toBe('btcfs://aa');
     expect(traitDisplay('\u0000\u0002\u00003X0125CLNVAP014')).toBe('3X0125CLNVAP014');
     expect(traitDisplay('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).toBe(
       'SVG image · 46 characters'

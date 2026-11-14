@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { ErrorPageShell } from '@/components/error-page-shell';
 import { usePathname } from '@/src/navigation';
 import {
@@ -11,7 +11,7 @@ import {
   type NotFoundEntity,
 } from '@/lib/not-found-evidence';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { truncateHash } from '@/lib/utils';
+import { shortenHash } from '@/lib/shorten';
 
 const NOT_FOUND_TITLE = ['Not found'] as const;
 
@@ -105,16 +105,21 @@ const RETURNS: Partial<Record<EntityKind, { href: string; label: string }>> = {
 
 /**
  * The endpoint a 404 came from, as one fact line shows it: every long segment (a hash, an
- * address) shortened (U-18), each one unit that never breaks inside (U-16); the line wraps
- * between words and around them.
+ * address) shortened at the row size (U-18, U-09), each one unit that never breaks inside (U-16);
+ * the line wraps between words and around them.
  */
 function CheckedEndpoint({ path }: { path: string }) {
   return (
     <span data-endpoint="">
-      {path.split(/([/?&=])/).map((part, i) => {
-        const short = truncateHash(part);
-        return short === part ? part : <NoBreak key={i}>{short}</NoBreak>;
-      })}
+      {path
+        .split(/([/?&=])/)
+        .map((part, i) =>
+          part.length > 0 && shortenHash(part, 'row') !== part ? (
+            <ShortId key={i} value={part} kind="hash" size="row" />
+          ) : (
+            part
+          )
+        )}
     </span>
   );
 }

@@ -32,10 +32,12 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
-import { formatCkbAmount, formatUtc8Date, truncateHash } from '@/lib/utils';
+import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
+import { shortenHash } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import { withUnit } from '@/lib/format-unit';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -194,7 +196,7 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
   );
   const description = hasName(s)
     ? s.description
-    : `${getScriptRefBadgeLabel(s.hashType)} · ${truncateHash(s.codeHash, 10, 8)}`;
+    : `${getScriptRefBadgeLabel(s.hashType)} · ${shortenHash(s.codeHash, 'tight')}`;
   return (
     <PhoneRow
       testId="script-row-mobile"
@@ -249,13 +251,23 @@ function countText(value: number | undefined): string {
   return value === undefined ? 'unavailable' : value.toLocaleString('en-US');
 }
 
+/**
+ * A row's live and ever cells for its hover: "1,234 live of 5,678 cells ever", the noun by the one
+ * plural rule (U-15), or a plain sentence when the API states no count.
+ */
+function cellsEverText(script: KnownScript): string {
+  if (script.liveCellsCount === undefined || script.cellsCount === undefined)
+    return 'cell counts unavailable';
+  return `${script.liveCellsCount.toLocaleString('en-US')} live of ${formatCount(script.cellsCount, 'cell')} ever`;
+}
+
 function roleText(script: KnownScript): string {
   return script.scriptKind ? script.scriptKind.replace('+', ' + ') : 'unregistered';
 }
 
-/** An unlabeled family's identity: its reference, short. */
+/** An unlabeled family's identity in the table: its reference at the row size (U-09). */
 function refText(script: KnownScript): string {
-  return `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
+  return `${getScriptRefBadgeLabel(script.hashType)} · ${shortenHash(script.codeHash, 'row')}`;
 }
 
 /**
@@ -356,10 +368,10 @@ function occupiedPpm(script: KnownScript): number {
   return Number((occupied * scale + total - BigInt(1)) / total);
 }
 
-/** "0 · 50 · 100 %": the occupied-share scale's ticks. */
+/** "0 · 50 · 100%": the occupied-share scale's ticks, the sign on the last (CH-14). */
 function shareTick(ppm: number): string {
   const percent = (ppm / SHARE_SCALE) * 100;
-  return ppm === SHARE_SCALE ? `${percent} %` : String(percent);
+  return ppm === SHARE_SCALE ? withUnit(String(percent), '%') : String(percent);
 }
 
 /**
@@ -376,7 +388,7 @@ function scriptRowTitle(script: KnownScript): string {
     ...(script.deprecated ? ['deprecated'] : []),
     ...(hasName(script) && script.description?.trim() ? [script.description.trim()] : []),
     codeStatusText(script),
-    `${countText(script.liveCellsCount)} live of ${countText(script.cellsCount)} cells ever`,
+    cellsEverText(script),
     `${formatCkbAmount(total).full} CKB`,
     `${formatCkbAmount(occupied).full} occupied (${occupiedShare(script).share})`,
   ].join(' · ');
@@ -500,13 +512,7 @@ export default function ScriptsPage() {
       header: <Head label="Live cells" />,
       minWidth: 110,
       numeric: true,
-      render: (s) => (
-        <span
-          title={`${countText(s.liveCellsCount)} live of ${countText(s.cellsCount)} cells ever`}
-        >
-          {countText(s.liveCellsCount)}
-        </span>
-      ),
+      render: (s) => <span title={cellsEverText(s)}>{countText(s.liveCellsCount)}</span>,
     },
     {
       key: 'capacity',

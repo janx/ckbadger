@@ -15,6 +15,7 @@ import { fmtInt } from '@/components/pipeline/svg-text';
 import { formatCapacity } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { shortenHash } from '@/lib/shorten';
 import { color } from '@/lib/palette';
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
@@ -41,7 +42,6 @@ export const pct = (a: number, b: number) => {
   const p = (a / b) * 100;
   return p <= 0 ? '0%' : p < 0.01 ? '<0.01%' : p < 1 ? `${p.toFixed(2)}%` : `${p.toFixed(1)}%`;
 };
-export const shortHash = (h: string) => `${h.slice(0, 8)}…${h.slice(-6)}`;
 const num = (n: number) => `${formatBlockNumber(n)}`;
 const STEPS = ['few', 'moderate', 'many', 'very many'];
 const TONE = {
@@ -106,7 +106,8 @@ export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipConten
   return {
     key: `tx:${t.hash}`,
     tone: TONE[info.kind],
-    title: shortHash(t.hash),
+    // the card is at least 268 px wide: the row size (U-09)
+    title: shortenHash(t.hash, 'row'),
     tag,
     rows,
     foot,
@@ -224,7 +225,7 @@ export function uncleTip(b: PipelineBlock, index: number): TipContent {
   return {
     key: `uncle:${b.hash}:${index}`,
     tone: TONE.dim,
-    title: `Uncle ${shortHash(u.hash)}`,
+    title: `Uncle ${shortenHash(u.hash, 'row')}`,
     tag: 'not on the chain',
     rows: [
       ['height', num(u.number)],
@@ -261,7 +262,7 @@ export function blockTip(b: PipelineBlock, s: PipelineSnapshot): TipContent {
           : `${fmtCycles(b.cycles)} · ${pct(b.cycles, s.consensus.maxBlockCycles)}`,
       ],
       ['packed from', `${num(from)} – ${num(to)}`],
-      ['parent', shortHash(b.parentHash)],
+      ['parent', shortenHash(b.parentHash, 'row')],
       ['cellbase pays', b.cellbase.pays ? num(b.cellbase.pays.number) : 'none yet'],
     ],
     foot: null,
@@ -306,7 +307,7 @@ export function predictedTip(
   return {
     key: `ghost:${tx.hash}`,
     tone: TONE.committed,
-    title: shortHash(tx.hash),
+    title: shortenHash(tx.hash, 'row'),
     tag: 'predicted',
     rows,
     foot: pool

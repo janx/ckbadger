@@ -27,7 +27,7 @@ export function formatCompactInteger(value: string, context: string): string {
     ['T', BigInt(10) ** BigInt(12)],
     ['B', BigInt(10) ** BigInt(9)],
     ['M', BigInt(10) ** BigInt(6)],
-    ['K', BigInt(10) ** BigInt(3)],
+    ['k', BigInt(10) ** BigInt(3)],
   ] as const) {
     if (integer >= divisor - divisor / BigInt(200000))
       return `${formatScaledInteger(integer, divisor, 2)}${suffix}`;
@@ -70,7 +70,7 @@ export function formatCompactRatio(numerator: bigint, denominator: bigint): stri
     ['T', BigInt(10) ** BigInt(12)],
     ['B', BigInt(10) ** BigInt(9)],
     ['M', BigInt(10) ** BigInt(6)],
-    ['K', BigInt(10) ** BigInt(3)],
+    ['k', BigInt(10) ** BigInt(3)],
   ] as const) {
     if (numerator * BigInt(200000) >= denominator * unit * BigInt(199999)) {
       return `${formatScaledInteger(numerator, denominator * unit, 2)}${suffix}`;

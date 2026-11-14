@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
@@ -294,7 +293,7 @@ describe('CellDetailPage', () => {
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
     // Lane U (U3): a spent cell's origin line names the block that spent it.
     expect(screen.getByTestId('cell-origin')).toHaveTextContent(
-      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
+      /^output 0 of transaction 0xababababab…abababab · spent at #125$/
     );
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);
@@ -387,7 +386,7 @@ describe('CellDetailPage', () => {
     expect(await screen.findByText('no cell at this out point.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the hash shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/cells/${truncateHash(hash)}/0`
+      `/cells/${hash.slice(0, 10)}…${hash.slice(-6)}/0`
     );
     rendered.unmount();
     getCell.mockRejectedValue(new Error('node unavailable'));

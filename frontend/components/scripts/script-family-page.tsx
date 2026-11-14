@@ -45,14 +45,14 @@ import {
   codeHolders,
   holderName,
   orderedVersions,
-  shortHex,
   signerOf,
   typeLineage,
   versionNumbers,
 } from '@/lib/script-lineage';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { useFromMd } from '@/hooks/useFromMd';
-import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 /** One code cell of a version, as its own `/cells` request resolved (or failed). */
@@ -87,10 +87,10 @@ export interface ScriptFamilyPageProps {
   };
 }
 
-function CellOwner({ cell }: { cell: Cell }) {
+function CellOwner({ cell, size }: { cell: Cell; size: ShortSize }) {
   return cell.address ? (
     <Link href={`/address/${cell.address}`} className="text-text hover:text-jade">
-      {cell.address.slice(0, 10)}…{cell.address.slice(-6)}
+      <ShortId value={cell.address} kind="address" size={size} />
     </Link>
   ) : (
     <span role="alert" className="text-negative">
@@ -99,8 +99,11 @@ function CellOwner({ cell }: { cell: Cell }) {
   );
 }
 
-/** The type script beside the lock: its registry name (R6), or its code hash when unregistered. */
-function AlsoGuardedBy({ cell }: { cell: Cell }) {
+/**
+ * The type script beside the lock: its registry name (R6), or its code hash when unregistered, at
+ * the form's size (U-09).
+ */
+function AlsoGuardedBy({ cell, size }: { cell: Cell; size: ShortSize }) {
   if (!cell.typeScriptHash) return <span className="text-text-dim">—</span>;
   if (!cell.typeCodeHash || !cell.typeHashType)
     return (
@@ -115,7 +118,7 @@ function AlsoGuardedBy({ cell }: { cell: Cell }) {
       href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
       className="hover:text-jade text-text"
     >
-      {cell.typeScriptName ?? shortHex(cell.typeCodeHash)}
+      {cell.typeScriptName ?? <ShortId value={cell.typeCodeHash} kind="hash" size={size} />}
     </Link>
   );
 }
@@ -189,8 +192,6 @@ function liveDeployments(family: ScriptFamilyDetail, reference: ReferenceRow) {
   const version = family.versions.find((v) => v.versionHash === reference.currentVersionHash);
   return { version, live: version?.deployments.filter((d) => d.status === 'live') ?? [] };
 }
-
-const shortTx = (hash: string) => `${hash.slice(0, 8)}…${hash.slice(-4)}`;
 
 /** One registered reference in full: the former tier-2 definition list (table-rows L1-5). */
 function ReferenceFacts({
@@ -275,7 +276,8 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
   const references: ReferenceRow[] = family.references ?? [];
   const kind =
     family.scriptKind === 'lock' || family.scriptKind === 'type' ? family.scriptKind : undefined;
-  const depOf = (reference: ReferenceRow) => {
+  // a reference's live code cell, at the form's size (U-09): row in the table, tight in the row
+  const depOf = (reference: ReferenceRow, size: ShortSize) => {
     const { live } = liveDeployments(family, reference);
     if (!live.length)
       return (
@@ -290,7 +292,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
           href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`}
           className="text-text hover:text-jade"
         >
-          <NoBreak>{shortTx(first.codeCellTxHash)}</NoBreak>
+          <ShortId value={first.codeCellTxHash} kind="hash" size={size} />
           <OutpointIndex index={first.codeCellOutputIndex} />
         </Link>
         {live.length > 1 && <span className="text-text-dim"> +{live.length - 1}</span>}
@@ -322,12 +324,9 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'codeHash',
       label: 'code hash',
-      minWidth: 118,
-      render: (r) => (
-        <span className="whitespace-nowrap">
-          <NoBreak>{shortTx(r.referenceHash)}</NoBreak>
-        </span>
-      ),
+      // the row size, 17 characters at 12 px (122.4 px), and the padding
+      minWidth: 140,
+      render: (r) => <ShortId value={r.referenceHash} kind="hash" size="row" />,
     },
     {
       key: 'cells',
@@ -339,8 +338,9 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'dep',
       label: 'cell dep',
-      minWidth: 128,
-      render: (r) => <span className="whitespace-nowrap">{depOf(r)}</span>,
+      // the out point at the row size, 19 characters at 12 px (136.8 px), and the padding
+      minWidth: 154,
+      render: (r) => <span className="whitespace-nowrap">{depOf(r, 'row')}</span>,
     },
     {
       key: 'holder',
@@ -373,10 +373,14 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
                   {
                     key: 'ref',
                     tone: 'head',
-                    left: `${r.hashType} · ${shortTx(r.referenceHash)}`,
+                    left: (
+                      <>
+                        {r.hashType} · <ShortId value={r.referenceHash} kind="hash" size="tight" />
+                      </>
+                    ),
                     right: formatCount(r.liveCellsCount, 'live cell'),
                   },
-                  { key: 'dep', tone: 'body', left: depOf(r), right: holder(r) },
+                  { key: 'dep', tone: 'body', left: depOf(r, 'tight'), right: holder(r) },
                 ]}
               />
             )}
@@ -505,18 +509,18 @@ export function ScriptFamilyPage({
   type Row = (typeof rows)[number];
   type Deployment = Row['version']['deployments'][number];
   const outpointKey = (d: Deployment) => `${d.codeCellTxHash}:${d.codeCellOutputIndex}`;
-  const outpointLink = (d: Deployment) => (
+  // a code cell's out point, at the form's size (U-09): row in the table, tight in the phone row
+  const outpointLink = (d: Deployment, size: ShortSize) => (
     <Link
       href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`}
       className="text-text hover:text-jade hover:underline"
     >
-      <NoBreak>
-        {shortHex(d.codeCellTxHash, 8, 6)}:{d.codeCellOutputIndex}
-      </NoBreak>
+      <ShortId value={d.codeCellTxHash} kind="hash" size={size} />
+      <OutpointIndex index={d.codeCellOutputIndex} />
     </Link>
   );
   /** A code cell's fate: live, or consumed — by the version that replaced it when one did. */
-  const deploymentStatus = (d: Deployment): string => {
+  const deploymentStatus = (d: Deployment, size: ShortSize): string => {
     const successor = d.consumedByTx
       ? [...deploymentOf].find(([outpoint]) => outpoint.startsWith(`${d.consumedByTx}:`))?.[1]
       : undefined;
@@ -525,7 +529,7 @@ export function ScriptFamilyPage({
       : successor
         ? `consumed by v${numbers.get(successor.versionHash)}`
         : d.consumedByTx
-          ? `consumed in ${shortHex(d.consumedByTx, 8, 6)}`
+          ? `consumed in ${shortenHash(d.consumedByTx, size)}`
           : 'consumed';
   };
   const binarySize = (d: Deployment): ReactNode => {
@@ -540,8 +544,14 @@ export function ScriptFamilyPage({
       <span className="text-text-dim">…</span>
     );
   };
-  /** Who signed a deployment (or that it was the first), and to whom it handed the code cell. */
-  const signer = (d: Deployment): { who: string; note: string; marked: boolean } => {
+  /**
+   * Who signed a deployment (or that it was the first), and to whom it handed the code cell; its
+   * holders at `size` (U-09): row in a title and the table, tight in the phone row.
+   */
+  const signer = (
+    d: Deployment,
+    size: ShortSize
+  ): { who: string; note: string; marked: boolean } => {
     const marker = history.find(
       (m) =>
         m.event === 'deployed' &&
@@ -550,23 +560,23 @@ export function ScriptFamilyPage({
     );
     if (!marker)
       return {
-        who: d.custody ? `held by ${holderName(d.custody)}` : 'custody unavailable',
+        who: d.custody ? `held by ${holderName(d.custody, size)}` : 'custody unavailable',
         note: '',
         marked: false,
       };
     const by = signerOf(marker, history);
     return {
-      who: by ? holderName(by) : 'first deployed',
+      who: by ? holderName(by, size) : 'first deployed',
       note: !by
-        ? `into ${holderName(marker.custody)}`
-        : holderName(by) !== holderName(marker.custody)
-          ? `hands it to ${marker.custody.lockArgs ? shortHex(marker.custody.lockArgs) : holderName(marker.custody)}`
+        ? `into ${holderName(marker.custody, size)}`
+        : holderName(by, size) !== holderName(marker.custody, size)
+          ? `hands it to ${marker.custody.lockArgs ? shortenHash(marker.custody.lockArgs, size) : holderName(marker.custody, size)}`
           : '',
       marked: true,
     };
   };
-  const signedText = (d: Deployment) => {
-    const { who, note } = signer(d);
+  const signedText = (d: Deployment, size: ShortSize) => {
+    const { who, note } = signer(d, size);
     return note ? `${who} ${note}` : who;
   };
   const versionCell = (row: Row) => (
@@ -588,12 +598,12 @@ export function ScriptFamilyPage({
       : d.consumedAtBlock !== undefined && d.consumedAtBlock !== null
         ? ['replaced at ', { block: d.consumedAtBlock }]
         : d.status === 'consumed'
-          ? [deploymentStatus(d)]
+          ? [deploymentStatus(d, 'row')]
           : ['status unavailable'];
   const replacedText = (d: Deployment | undefined): string => sentenceText(replacedParts(d));
   /** Who signed a deployment, for the title: "signed by X, hands it to Y" or "first deployed into Y". */
   const signerTitle = (d: Deployment): string => {
-    const { who, note, marked } = signer(d);
+    const { who, note, marked } = signer(d, 'row');
     if (!marked) return who;
     if (who === 'first deployed') return `${who} ${note}`;
     return note ? `signed by ${who}, ${note}` : `signed by ${who}`;
@@ -619,9 +629,9 @@ export function ScriptFamilyPage({
               ? `binary unavailable: ${state.error.message}`
               : 'binary loading',
           ...(state?.cell ? [`${formatCkbAmount(state.cell.capacity).full} CKB`] : []),
-          d.custody ? `held by ${holderName(d.custody)}` : 'custody unavailable',
+          d.custody ? `held by ${holderName(d.custody, 'row')}` : 'custody unavailable',
           signerTitle(d),
-          deploymentStatus(d),
+          deploymentStatus(d, 'row'),
         ];
       }),
       `data hash ${row.version.versionHash}`,
@@ -703,9 +713,8 @@ export function ScriptFamilyPage({
               href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
               className="text-text-dim hover:text-jade truncate"
             >
-              <NoBreak>
-                {shortHex(lead.codeCellTxHash, 6, 4)}:{lead.codeCellOutputIndex}
-              </NoBreak>
+              <ShortId value={lead.codeCellTxHash} kind="hash" size="row" />
+              <OutpointIndex index={lead.codeCellOutputIndex} />
             </Link>
             {more.length > 0 && (
               <RowTag title={more.map(outpointKey).join(', ')}>+{more.length}</RowTag>
@@ -724,8 +733,10 @@ export function ScriptFamilyPage({
       className: `${ROW} truncate`,
       render: (row) => {
         const custody = leadOf(row)?.custody;
+        // the tight size, not the row's: with the code cell at the row size a version keeps the
+        // row's 90 visible characters (table-rows T6) only so (86; 92 at the row size)
         return custody ? (
-          <span>{holderName(custody)}</span>
+          <span>{holderName(custody, 'tight')}</span>
         ) : (
           <span className="text-text-dim">custody unavailable</span>
         );
@@ -793,9 +804,9 @@ export function ScriptFamilyPage({
         <>
           {row.version.deployments.map((d) => (
             <span key={outpointKey(d)} className="block">
-              {outpointLink(d)}
+              {outpointLink(d, 'row')}
               <span className="text-text-dim text-meta block">
-                {binarySize(d)} · {signedText(d)}
+                {binarySize(d)} · {signedText(d, 'row')}
               </span>
             </span>
           ))}
@@ -813,7 +824,7 @@ export function ScriptFamilyPage({
       render: (row) =>
         row.version.deployments.map((d) => (
           <span key={outpointKey(d)} className="block">
-            {deploymentStatus(d)}
+            {deploymentStatus(d, 'row')}
           </span>
         )),
     },
@@ -844,7 +855,7 @@ export function ScriptFamilyPage({
             tone="plain"
           />
         ) : null,
-        signedText(d),
+        signedText(d, 'tight'),
       ].filter((part) => part !== null);
     const joined = (parts: ReactNode[]) =>
       parts.map((part, i) => (
@@ -869,14 +880,16 @@ export function ScriptFamilyPage({
                     <span className="text-text">
                       <Utc8Date timestamp={first.deployedAt} />
                     </span>{' '}
-                    · {outpointLink(first)}
+                    · {outpointLink(first, 'tight')}
                   </>
                 ) : (
                   <span className="text-text-dim">no deployment observed</span>
                 )}
               </>
             ),
-            right: first ? <span className="text-text-dim">{deploymentStatus(first)}</span> : null,
+            right: first ? (
+              <span className="text-text-dim">{deploymentStatus(first, 'tight')}</span>
+            ) : null,
           },
           {
             key: 'hash',
@@ -896,10 +909,10 @@ export function ScriptFamilyPage({
               <>
                 deployed again <Utc8Date timestamp={d.deployedAt} />
               </>,
-              outpointLink(d),
+              outpointLink(d, 'tight'),
               ...detail(d),
             ]),
-            right: deploymentStatus(d),
+            right: deploymentStatus(d, 'tight'),
           })),
         ]}
       />
@@ -909,7 +922,7 @@ export function ScriptFamilyPage({
   const roleCrumb =
     family.scriptKind === 'lock' ? 'Locks' : family.scriptKind === 'type' ? 'Types' : null;
   const binaries = typeReference
-    ? `one type id, ${shortHex(typeReference, 8, 6)}, ${formatCount(rows.length, 'binary', 'binaries')}`
+    ? `one type id, ${shortenHash(typeReference, 'row')}, ${formatCount(rows.length, 'binary', 'binaries')}`
     : formatCount(rows.length, 'binary', 'binaries');
   return (
     <div className="min-h-screen">
@@ -1088,16 +1101,17 @@ export function ScriptFamilyPage({
                       key: 'cell',
                       label: 'Cell',
                       header: <Head label="Cell" />,
-                      minWidth: 160,
+                      // the out point at the row size, 20 characters at 13 px (156 px), and
+                      // the padding
+                      minWidth: 176,
                       width: '15%',
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                           className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
                         >
-                          <NoBreak>
-                            {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
-                          </NoBreak>
+                          <ShortId value={cell.txHash} kind="hash" size="row" />
+                          <OutpointIndex index={cell.outputIndex} />
                         </Link>
                       ),
                     },
@@ -1107,7 +1121,7 @@ export function ScriptFamilyPage({
                       header: <Head label="Owner" />,
                       minWidth: 170,
                       width: '16%',
-                      render: (cell) => <CellOwner cell={cell} />,
+                      render: (cell) => <CellOwner cell={cell} size="row" />,
                     },
                     {
                       key: 'type',
@@ -1115,7 +1129,7 @@ export function ScriptFamilyPage({
                       header: <Head label="Also guarded by" />,
                       minWidth: 140,
                       width: '13%',
-                      render: (cell) => <AlsoGuardedBy cell={cell} />,
+                      render: (cell) => <AlsoGuardedBy cell={cell} size="row" />,
                     },
                     {
                       key: 'anatomy',
@@ -1166,12 +1180,12 @@ export function ScriptFamilyPage({
                         href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                         className="text-text hover:text-jade"
                       >
-                        <NoBreak>
-                          {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
-                        </NoBreak>
+                        <ShortId value={cell.txHash} kind="hash" size="tight" />
+                        <OutpointIndex index={cell.outputIndex} />
                       </Link>
                       <div>
-                        <CellOwner cell={cell} /> · <AlsoGuardedBy cell={cell} />
+                        <CellOwner cell={cell} size="tight" /> ·{' '}
+                        <AlsoGuardedBy cell={cell} size="tight" />
                       </div>
                       <CellAnatomy cell={cell} />
                       <div className="flex flex-wrap justify-between gap-2">

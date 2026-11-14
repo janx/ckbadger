@@ -78,7 +78,8 @@ describe('scriptShares', () => {
       '.bit Time Index State',
       'Bitcoin SPV Type Lock',
       '.bit Lock',
-      '0xeeee0000…',
+      // U-09 (re-pinned): a share bar's label in the home stats card, the tight size
+      '0xeeee…0000',
     ]);
     expect(s.others).toEqual({ scripts: 2, count: 4, share: 4 / 9063 });
   });
@@ -102,7 +103,7 @@ describe('scriptLabel', () => {
         name: null,
         codeHash: '0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95',
       })
-    ).toBe('0x50bd8d66…');
+    ).toBe('0x50bd…1b95');
   });
 });
 

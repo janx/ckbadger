@@ -161,9 +161,9 @@ export function CellVersions({
                     <AppLink href={`/address/${v.ownerAddress}`}>
                       <Hash
                         hash={v.ownerAddress}
+                        kind="address"
+                        size="row"
                         copyable={false}
-                        startChars={10}
-                        endChars={6}
                         className="text-meta"
                       />
                     </AppLink>
@@ -172,8 +172,7 @@ export function CellVersions({
                     {v.lockName ?? 'Lock'}{' '}
                     <Hash
                       hash={v.lock.codeHash}
-                      startChars={6}
-                      endChars={4}
+                      size="row"
                       className="text-meta"
                       copyable={false}
                     />

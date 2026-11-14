@@ -2,7 +2,6 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
-  truncateHash,
   formatUtc8Date,
   formatCkbAmount,
   formatCkbCompact,
@@ -50,23 +49,6 @@ describe('exact CKB decimal readouts', () => {
       compact: '9007199.25B',
       direction: 'down',
     });
-  });
-});
-
-describe('truncateHash', () => {
-  it('truncates long hashes', () => {
-    const hash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-    expect(truncateHash(hash)).toBe('0x12345678...90abcdef');
-  });
-
-  it('does not truncate short hashes', () => {
-    const hash = '0x1234';
-    expect(truncateHash(hash)).toBe('0x1234');
-  });
-
-  it('uses custom start and end lengths', () => {
-    const hash = '0x1234567890abcdef';
-    expect(truncateHash(hash, 4, 4)).toBe('0x12...cdef');
   });
 });
 

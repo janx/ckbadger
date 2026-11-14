@@ -239,7 +239,8 @@ describe('Token holders (board L5)', () => {
       {
         key: 'holder',
         tone: 'head',
-        left: '1ckb1qrgqep...tllakf JoyID',
+        // U-09 (re-pinned): the phone row's address at the tight size
+        left: '1ckb1qrgq…tllakf JoyID',
         right: '562,997.00000000',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
@@ -255,8 +256,10 @@ describe('Token holders (board L5)', () => {
 
 // U-15 / lane A4b (UI review 2026-11-14): a holder whose lock the scripts registry does not name
 // read "Lock kind unavailable", an internal state; the answer now carries the lock's code hash and
-// the row names the lock by it, "lock 0x434343...4343", linked to that code hash's script page, as
-// the collection holders do. A registered lock reads as before; a lock not indexed shows no kind.
+// the row names the lock by it, "lock 0x43434343…434343", linked to that code hash's script page,
+// as the collection holders do. A registered lock reads as before; a lock not indexed shows no kind.
+// U-09 (re-pinned): the code hash takes the size of the form it is drawn in, row in the table and
+// tight in the phone row.
 describe('Token holders name an unregistered lock by its code hash (U-15)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -308,10 +311,8 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     const [, named, unnamed, notIndexed] = within(table).getAllByRole('row');
     expect(within(named).getByText('JoyID')).toHaveClass('truncate');
     expect(named).toHaveAttribute('title', expect.stringContaining(' · JoyID · '));
-    expect(unnamed.querySelector('[data-lock-kind]')).toHaveTextContent(
-      /^lock 0x434343\.\.\.4343$/
-    );
-    expect(within(unnamed).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+    expect(unnamed.querySelector('[data-lock-kind]')).toHaveTextContent(/^lock 0x43434343…434343$/);
+    expect(within(unnamed).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
       'href',
       scriptPage
     );
@@ -329,8 +330,8 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     mount();
     const [named, unnamed, notIndexed] = await screen.findAllByTestId('holder-row-mobile');
     expect(phoneLines(named)[0].left).toMatch(/ JoyID$/);
-    expect(phoneLines(unnamed)[0].left).toMatch(/ lock 0x434343\.\.\.4343$/);
-    expect(within(unnamed).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+    expect(phoneLines(unnamed)[0].left).toMatch(/ lock 0x4343…4343$/);
+    expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
       'href',
       scriptPage
     );
@@ -371,7 +372,7 @@ describe('Token holders where the table does not fit (L5)', () => {
     // Re-pinned with ruling R7: 10.00 % is drawn on the page's rounded maximum (10 %), the axis
     // mark over the bar, the number beside it — no longer full because 10 % was the clamp.
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x11111111...111111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x1111…1111 JoyID', right: '100' },
       { key: 'axis', tone: 'quiet', left: '010%', right: null },
       { key: 'share', tone: 'quiet', left: '10.00%', right: null },
     ]);
