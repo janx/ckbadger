@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -58,6 +60,72 @@ describe('a row rule (R5, DY-01)', () => {
     render(table());
     for (const item of screen.getAllByRole('listitem'))
       expect(item).toHaveClass('border-b', 'border-row-rule');
+  });
+});
+
+/**
+ * A horizontal 1 px line drawn in the hair or the elevated tint: a class string that holds one of
+ * them as a border or divide colour and a top, bottom or y border (or a y divide). A frame (`border`
+ * on every side) is not a rule and is not read.
+ */
+const HAIR_COLOUR =
+  /(?<![\w-])(?:[\w-]+:)*(?:border|divide)-base-(?:border-subtle|elevated)(?![\w-])/;
+const HORIZONTAL = /(?<![\w-])(?:[\w-]+:)*(?:border-[tby]|divide-y)(?![\w-])/;
+const LITERAL = /(['"`])((?:(?!\1).)*)\1/g;
+
+function hairRules(code: string): { line: number; what: string }[] {
+  const out: { line: number; what: string }[] = [];
+  code.split('\n').forEach((text, i) => {
+    for (const m of text.matchAll(LITERAL))
+      if (HAIR_COLOUR.test(m[2]) && HORIZONTAL.test(m[2]))
+        out.push({ line: i + 1, what: m[2].match(HAIR_COLOUR)![0] });
+  });
+  return out;
+}
+
+/** The hair rules that are not row rules, per file in order: a header's or a strip's edge. */
+const EDGE =
+  'the edge of the page header or its vitals strip: a frame’s border, not a rule between rows';
+const HAIR_EDGES: Record<string, readonly string[]> = {
+  'components/layout/header.tsx': [EDGE, EDGE],
+  'components/error-page-shell.tsx': [EDGE],
+};
+
+describe('a horizontal rule in the content is a row rule (R5, DY-01)', () => {
+  it('finds a hair or elevated rule, never a frame or a row-rule', () => {
+    const code = [
+      '<div className="border-base-border-subtle flex border-b py-2">',
+      "const r = 'divide-base-elevated divide-y'; const f = 'border-base-border-subtle rounded border';",
+      '<li className="border-row-rule border-t" /><i className="border-base-elevated border-l" />',
+    ].join('\n');
+    expect(hairRules(code)).toEqual([
+      { line: 1, what: 'border-base-border-subtle' },
+      { line: 2, what: 'divide-base-elevated' },
+    ]);
+  });
+
+  it('draws every rule between rows, under a head and above a closing block in the row-rule ink', () => {
+    const root = join(__dirname, '..', '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.tsx?$/.test(name)) files.push(path);
+      }
+    };
+    walk(join(root, 'app'));
+    walk(join(root, 'components'));
+    const short: string[] = [];
+    for (const file of files) {
+      const path = relative(root, file);
+      const found = hairRules(readFileSync(file, 'utf8'));
+      const edges = HAIR_EDGES[path] ?? [];
+      found.slice(edges.length).forEach((r) => short.push(`${path}:${r.line} ${r.what}`));
+      if (found.length < edges.length)
+        short.push(`${path}: ${edges.length} edges listed, ${found.length} found`);
+    }
+    expect(short).toEqual([]);
   });
 });
 
