@@ -1,4 +1,4 @@
-// Consistency plan C1: the four shared headers name the browser tab, and give it back on unmount;
+// Consistency plan C1: the three shared headers name the browser tab, and give it back on unmount;
 // the 404 and crash pages name it too.
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +6,6 @@ import { render } from '@/__tests__/utils/test-utils';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { AssetDetailShell } from '@/components/asset/detail-shell';
 import { TopicHero } from '@/components/ui/topic-hero';
-import { PageHeader } from '@/components/ui/page-header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { CrashPage } from '@/components/crash-page';
 
@@ -70,15 +69,6 @@ describe('shared headers set document.title (C1)', () => {
   it('TopicHero: [title]', () => {
     render(<TopicHero title="Forks" lede="Where the chain split." figures={undefined} />);
     expect(document.title).toBe('Forks · CKBadger');
-  });
-
-  it('PageHeader: [title]', () => {
-    render(
-      <MemoryRouter>
-        <PageHeader title="Scripts" kind="index" />
-      </MemoryRouter>
-    );
-    expect(document.title).toBe('Scripts · CKBadger');
   });
 
   it('NotFoundPage is "Not found", CrashPage is "Error"', () => {

@@ -1,6 +1,6 @@
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, expect, vi } from 'vitest';
-import { ByteGroupDisplay, HexDisplay } from '@/components/ui/hex-display';
+import { HexDisplay } from '@/components/ui/hex-display';
 
 describe('HexDisplay', () => {
   beforeEach(() => {
@@ -23,14 +23,6 @@ describe('HexDisplay', () => {
     );
 
     expect(container).toHaveTextContent('0xabcdef12');
-  });
-
-  it('groups bytes with separators in byte group mode', () => {
-    const { container } = render(
-      <ByteGroupDisplay value="0xabcdef12" bytesPerGroup={1} color="aqua" />
-    );
-
-    expect(container).toHaveTextContent('0xab cd ef 12');
   });
 
   it('truncates long hex values by default', () => {

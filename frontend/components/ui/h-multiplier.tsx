@@ -1,9 +1,7 @@
 'use client';
 
-import { HMUL_EXPLANATION, HMulHelpPopover } from '@/components/ui/hmul-info';
-import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
+import { HMUL_EXPLANATION } from '@/components/ui/hmul-info';
 import { formatScaledInteger } from '@/lib/exact-integer';
-import { parseShannons } from '@/lib/ckb-decimal';
 
 /**
  * "H-multiplier ×1.02: CKB held ÷ occupied" as it reads in a summary line — the one way the term is
@@ -19,65 +17,5 @@ export function HMultiplierReading({ held, occupied }: { held: bigint; occupied:
       </span>
       : CKB held ÷ occupied
     </span>
-  );
-}
-
-interface HMultiplierProps {
-  totalCapacity: string; // total capacity in shannons (BigInt string)
-  commonKnowledgeSize: string; // common knowledge size in shannons (BigInt string)
-  totalLabel?: string; // defaults to 'Cells Capacity'
-  className?: string;
-}
-
-export function HMultiplier({
-  totalCapacity,
-  commonKnowledgeSize,
-  totalLabel = 'Owned Capacity',
-  className,
-}: HMultiplierProps) {
-  const zero = BigInt(0);
-
-  const total = parseShannons(totalCapacity, 'totalCapacity');
-  const used = parseShannons(commonKnowledgeSize, 'commonKnowledgeSize');
-  if (total < zero || used < zero || used > total)
-    throw new Error(`invalid HMul capacity split ${total}/${used}`);
-  if (used === zero) {
-    return null;
-  }
-
-  const usedBarPercent = (Number(used) / Number(total)) * 100;
-  const hmul = formatScaledInteger(total, used, 2);
-
-  return (
-    <div className={className}>
-      <div className="mb-2 flex items-center justify-between">
-        <span className="eyebrow text-text-dim text-small font-mono">{totalLabel}</span>
-        <span
-          className="text-text-bright text-small font-mono tabular-nums"
-          title={formatCkbAmount(total.toString()).full + ' CKB'}
-        >
-          {formatCkbCompact(total.toString()).value} CKB
-        </span>
-      </div>
-      <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
-        <div
-          className="bg-gold transition-all duration-300"
-          style={{ width: `${usedBarPercent}%` }}
-        />
-        <div className="bg-gold/30 flex-1" />
-      </div>
-      <div className="mt-1.5 flex items-center justify-between">
-        <span
-          className="text-warning text-small font-mono"
-          title={formatCkbAmount(used.toString()).full + ' CKB'}
-        >
-          Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="text-gold text-small font-mono tabular-nums">HMul: {hmul}x</span>
-          <HMulHelpPopover align="end" />
-        </span>
-      </div>
-    </div>
   );
 }

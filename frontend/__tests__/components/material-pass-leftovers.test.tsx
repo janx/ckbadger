@@ -3,7 +3,6 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
-import { HMultiplier } from '@/components/ui/h-multiplier';
 import { Prose } from '@/components/ui/prose';
 import { NAVBAR_DROPDOWN_TRIGGER_CLASS } from '@/components/layout/navbar-dropdown-styles';
 
@@ -48,17 +47,6 @@ describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', ()
       });
     }
     expect(offenders).toEqual([]);
-  });
-
-  it('the H-multiplier bar title', () => {
-    render(
-      <HMultiplier
-        totalCapacity="100000000000"
-        commonKnowledgeSize="50000000000"
-        totalLabel="Multiplier total"
-      />
-    );
-    eyebrow(screen.getByText('Multiplier total'));
   });
 
   it('a .cell records table head', () => {

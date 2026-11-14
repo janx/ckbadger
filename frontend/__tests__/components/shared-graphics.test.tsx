@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { AlignedBar, AlignedBarFootnote } from '@/components/ui/aligned-bar';
+import { AlignedBar } from '@/components/ui/aligned-bar';
 import { IciclePartition } from '@/components/ui/icicle-partition';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { TenureBar } from '@/components/ui/tenure-bar';
@@ -58,13 +58,6 @@ describe('AlignedBar (BA-01)', () => {
         />
       )
     ).toThrow('Cycles: 11 exceeds the scale 10');
-  });
-
-  it('puts the consensus cap in a footnote, not on the bar', () => {
-    render(<AlignedBarFootnote scale="0–4,000 B" cap="the consensus limit is 597,000 B" />);
-    expect(screen.getByText(/0–4,000 B/)).toHaveTextContent(
-      'Scale 0–4,000 B · the consensus limit is 597,000 B'
-    );
   });
 });
 

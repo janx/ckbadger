@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
-import { MiniGel, SequencingGel } from '@/components/ui/sequencing-gel';
+import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { AlleleGel } from '@/components/ui/allele-gel';
 import { alleleLanes, geneOrder, genotypePoints, sequencingGenes } from '@/lib/dob-genes';
 import { BITCOIN_COLORS, GENE_COLORS } from '@/lib/design-tokens';
@@ -336,12 +336,6 @@ describe('SequencingGel at the measured width (V3)', () => {
       expect(roundedRects(container)).toEqual([]);
     }
   );
-
-  it('draws the table row’s mini gel with square bands (U-02, R1)', () => {
-    const { container } = render(<MiniGel dna="0xa9031f" label="Nervape 3x" ink="currentColor" />);
-    expect(container.querySelectorAll('rect[data-nibble]')).toHaveLength(6);
-    expect(roundedRects(container)).toEqual([]);
-  });
 
   it('refuses a box too narrow for 16 lanes of 14 px', () => {
     stubChartWidth(200);
