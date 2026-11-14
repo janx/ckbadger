@@ -141,7 +141,7 @@ describe('FiberNetworkGraph', () => {
       )
     ).toBeInTheDocument();
     // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece (.prose-tier2:
-    // 14 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
+    // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
     // explainer carries its own Prose; the parties note is one paragraph set in the page's.
     const notes = screen.getByText(/^Each circle is a party: the address that funded/);
     expect(notes.closest('[data-prose]')).toHaveClass('prose-tier2');

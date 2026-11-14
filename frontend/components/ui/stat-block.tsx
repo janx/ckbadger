@@ -218,7 +218,7 @@ export function MiniStat({ label, value, color = 'dim', className }: MiniStatPro
 
   return (
     <div className={cn('flex items-center justify-between gap-4', className)}>
-      <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
+      <span className="eyebrow text-text-dim text-meta font-mono">{label}</span>
       <span className={cn('text-body font-mono tabular-nums', miniColorClasses[color])}>
         {value}
       </span>

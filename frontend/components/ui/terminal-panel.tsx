@@ -173,7 +173,7 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
     return (
       <div className={cn('flex items-center gap-3 py-2', className)}>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
+        <span className="eyebrow text-text-dim text-meta font-mono">{label}</span>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
       </div>
     );

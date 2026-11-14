@@ -911,10 +911,12 @@ h1.text-index {
 }
 
 /* Material pass v2, leftovers — tier-2 prose (components/ui/prose.tsx): an explanation reads at
-   14 px on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is the true
-   italic (the 400 italic face above). The piece carries the class; its paragraphs carry nothing. */
+   the body step, 13 px (R12: the scale has no stylesheet-only size, and tier 2 is never larger
+   than tier 1), on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is
+   the true italic (the 400 italic face above). The piece carries the class; its paragraphs carry
+   nothing. */
 .prose-tier2 p {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.7;
   max-width: 64ch;
   color: var(--c-text-dim);

@@ -37,7 +37,7 @@ export function DataField({
     return (
       <div className={cn('flex flex-col gap-1', className)}>
         <div className={cn('flex items-center gap-2', labelClassName)}>
-          <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
+          <span className="eyebrow text-text-dim text-meta font-mono">{label}</span>
           {helpText && (
             <span
               className="text-text-dim hover:text-text relative cursor-help before:absolute before:-inset-3 before:content-['']"
@@ -128,7 +128,7 @@ export function DataSection({ title, children, className }: DataSectionProps) {
   return (
     <div className={cn('', className)}>
       {title && (
-        <h3 className="eyebrow border-base-border text-text-dim text-small mb-3 border-b pb-2 font-mono">
+        <h3 className="eyebrow border-base-border text-text-dim text-meta mb-3 border-b pb-2 font-mono">
           {title}
         </h3>
       )}

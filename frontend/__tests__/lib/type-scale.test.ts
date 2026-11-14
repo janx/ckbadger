@@ -50,11 +50,11 @@ const ALLOWLIST: Record<string, string> = {};
  * text (tier-2 prose was 14 px there, outside the scale and larger than tier 1's 13 px body).
  */
 const CSS_ALLOWLIST: Record<string, string> = {
-  'app/globals.css:941': 'the voice (Courier Prime): a comment line at 14 px',
-  'app/globals.css:962': 'the voice: the 404 verse at 18 px on a phone',
-  'app/globals.css:967': 'the voice: the 404 verse at 21 px from 640 px',
-  'app/globals.css:971': 'the 404 verse’s # at 16 px, sized with the verse it leads',
-  'app/globals.css:991': 'the wordmark’s name at 15 px: a mark, not a step running text may take',
+  '.comment 14px': 'the voice (Courier Prime): a comment line at 14 px',
+  '.comment-lg 18px': 'the voice: the 404 verse at 18 px on a phone',
+  '.comment-lg 21px': 'the voice: the 404 verse at 21 px from 640 px',
+  '.comment-lg::before 16px': 'the 404 verse’s # at 16 px, sized with the verse it leads',
+  '.wordmark 15px': 'the wordmark’s name at 15 px: a mark, not a step running text may take',
 };
 
 /**
@@ -69,20 +69,35 @@ const EYEBROW_ALLOWLIST: Record<string, string> = {
 };
 
 const CSS_FILE = 'app/globals.css';
-const CSS_DECLARED_SIZE = /font-size\s*:\s*([^;]+);/g;
+/** In order on a line: a rule's opening (its selector), a font size, a rule's end. */
+const CSS_TOKEN = /([^{};]*)\{|font-size\s*:\s*([^;]+);|\}/g;
 const STEP_SIZES = new Set<string>(R1.map(([, size]) => size));
 /** A string literal holding the class `eyebrow`. */
 const EYEBROW_LITERAL = /(['"`])((?:(?!\1).)*?(?<![\w-])eyebrow(?![\w-])(?:(?!\1).)*)\1/g;
 const STEP_CLASS =
   /(?<![\w-])(?:[\w-]+:)*text-(meta|small|body|section|hero|index|entity|display)(?![\w-])/g;
 
-/** Every font size declared in a stylesheet that is not a step of the scale. */
+/**
+ * Every font size declared in a stylesheet that is not a step of the scale, as `selector size`
+ * (the rule it is declared in, an `@media` around it skipped): an exception is named by its rule,
+ * so it survives another lane's edits above it.
+ */
 function offScaleCss(css: string): Offence[] {
   const out: Offence[] = [];
-  css.split('\n').forEach((text, i) => {
-    for (const m of text.matchAll(CSS_DECLARED_SIZE))
-      if (!STEP_SIZES.has(m[1].trim())) out.push({ line: i + 1, what: m[0] });
-  });
+  const open: string[] = [];
+  css
+    .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '))
+    .split('\n')
+    .forEach((text, i) => {
+      for (const m of text.matchAll(CSS_TOKEN)) {
+        if (m[0] === '}') open.pop();
+        else if (m[2] === undefined) open.push(m[1].trim());
+        else if (!STEP_SIZES.has(m[2].trim())) {
+          const rule = [...open].reverse().find((s) => !s.startsWith('@')) ?? '(top level)';
+          out.push({ line: i + 1, what: `${rule} ${m[2].trim()}` });
+        }
+      }
+    });
   return out;
 }
 
@@ -288,10 +303,17 @@ describe('the stylesheet and eyebrow gates find what they must, and only that (R
       '}',
       'body { font-size: 13px; }',
       '.x { font-size: 0.85em; } .y { font-size:40px; }',
+      '/* a comment: font-size: 9px; */',
+      '@media (min-width: 640px) {',
+      '  .comment-lg {',
+      '    font-size: 21px;',
+      '  }',
+      '}',
     ].join('\n');
     expect(offScaleCss(css)).toEqual([
-      { line: 2, what: 'font-size: 14px;' },
-      { line: 6, what: 'font-size: 0.85em;' },
+      { line: 2, what: '.prose-tier2 p 14px' },
+      { line: 6, what: '.x 0.85em' },
+      { line: 10, what: '.comment-lg 21px' },
     ]);
   });
 
@@ -315,9 +337,8 @@ describe('the stylesheet and eyebrow gates find what they must, and only that (R
 
 describe('no font size outside the scale in the stylesheet, one size for every eyebrow (R12)', () => {
   const root = join(__dirname, '..', '..');
-  const cssOffences = offScaleCss(readFileSync(join(root, CSS_FILE), 'utf8')).map(
-    (o) => `${CSS_FILE}:${o.line} ${o.what}`
-  );
+  // a stylesheet exception is named by its rule and size (`.comment 14px`), not by a line
+  const cssOffences = offScaleCss(readFileSync(join(root, CSS_FILE), 'utf8')).map((o) => o.what);
   const eyebrows = sourceFiles(root).flatMap((file) =>
     offSizeEyebrows(readFileSync(file, 'utf8')).map(
       (o) => `${relative(root, file)}:${o.line} ${o.what}`
@@ -326,7 +347,7 @@ describe('no font size outside the scale in the stylesheet, one size for every e
   const key = (offence: string) => offence.split(' ')[0];
 
   it('declares no font size off the scale in globals.css, but the voice and the wordmark', () => {
-    expect(cssOffences.filter((o) => !(key(o) in CSS_ALLOWLIST))).toEqual([]);
+    expect(cssOffences.filter((o) => !(o in CSS_ALLOWLIST))).toEqual([]);
   });
 
   it('sets tier-2 prose at the body step, 13 px, on its 1.7 line and its measure', () => {
@@ -342,13 +363,13 @@ describe('no font size outside the scale in the stylesheet, one size for every e
   });
 
   it('keeps the stylesheet and eyebrow allowlists reasoned and current', () => {
-    for (const [allowlist, found] of [
+    for (const [allowlist, sites] of [
       [CSS_ALLOWLIST, cssOffences],
-      [EYEBROW_ALLOWLIST, eyebrows],
+      [EYEBROW_ALLOWLIST, eyebrows.map(key)],
     ] as const)
       for (const [site, reason] of Object.entries(allowlist)) {
         expect(reason.trim().length, site).toBeGreaterThan(10);
-        expect(found.map(key), site).toContain(site);
+        expect(sites, site).toContain(site);
       }
   });
 });

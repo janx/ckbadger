@@ -86,7 +86,7 @@ export function ErrorPageShell({
           <p className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-1">
             <span aria-hidden="true" className="section-mark self-center" />
             <span
-              className="eyebrow text-text-dim"
+              className="eyebrow text-text-dim text-meta"
               data-eyebrow
               onPointerEnter={eggOn}
               onPointerLeave={eggOff}

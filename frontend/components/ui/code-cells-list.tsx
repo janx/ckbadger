@@ -40,7 +40,7 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
 
   return (
     <div>
-      <div className="eyebrow border-base-border bg-base-surface/50 text-text-dim text-small flex items-center gap-x-4 border-b px-4 py-2 font-mono">
+      <div className="eyebrow border-base-border bg-base-surface/50 text-text-dim text-meta flex items-center gap-x-4 border-b px-4 py-2 font-mono">
         <div className="w-48">Outpoint</div>
         <div className="w-20">Status</div>
         <div className="w-28 text-right">Created At</div>

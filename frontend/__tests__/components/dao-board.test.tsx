@@ -340,7 +340,7 @@ describe('DaoBoard', () => {
     );
     expect(works).not.toHaveTextContent(/interest|earned/i);
     // R1 roles: the explanation and the protocol notes are prose. Material pass v2 leftovers: set
-    // in the shared tier-2 Prose piece (14 px on a 1.7 line, 64 characters, dim; .prose-tier2 in
+    // in the shared tier-2 Prose piece (13 px on a 1.7 line, 64 characters, dim; .prose-tier2 in
     // globals.css) instead of each paragraph's own body / dim classes.
     const [concept, notes] = Array.from(works.querySelectorAll('p'));
     expect(concept).toHaveTextContent(/^CKB locked in the Nervos DAO/);
