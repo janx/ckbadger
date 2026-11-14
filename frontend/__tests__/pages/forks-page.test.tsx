@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -428,5 +429,24 @@ describe('ForksPage', () => {
       /^seen 2025-08-01 06:13:20 UTC\+8, .+ ago · fork point #10, depth 1$/
     );
     expect(within(row).getByText('50 ms')).toHaveClass('text-small', 'tabular-nums');
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('ForksPage while its reads are paused', () => {
+  it('says both are loading, not "No completed fork days", then draws them once back online', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    const { resume } = renderPaused(<ForksPage />);
+    expect(await screen.findByText('Loading fork history…')).toHaveAttribute('role', 'status');
+    expect(screen.getByText('Loading branch switches…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('No completed fork days are indexed.')).toBeNull();
+    resume();
+    expect(await screen.findByText('250.00')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('table', { name: 'Branch switches on this node' })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Loading/)).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { onlineManager } from '@tanstack/react-query';
@@ -552,5 +553,23 @@ describe('BlockDetailPage', () => {
     } finally {
       quiet.mockRestore();
     }
+  });
+
+  // A1 review fix, round 2: the block has answered; its sections' reads paused offline, or in a
+  // hidden tab between retries, are still awaited: each says it is loading, never a blank, and a
+  // real empty answer still says so once back online.
+  it('says its activities and transactions are loading while their reads are paused', async () => {
+    const { resume } = renderPaused(<BlockDetailPage />, (client) =>
+      client.setQueryData(['block', BLOCK_ID], mockBlock)
+    );
+    expect(await screen.findByText('Loading activities…')).toHaveAttribute('role', 'status');
+    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
+    resume();
+    expect(
+      await screen.findByRole('table', { name: 'Transactions in this block' })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Activities/ }));
+    expect(await screen.findByText('No activities in this block.')).toBeInTheDocument();
   });
 });

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
+import { onlineManager } from '@tanstack/react-query';
+import { act } from '@testing-library/react';
+import { onTestFinished } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils';
 import { PeersTable } from '@/app/network/nodes-table';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
@@ -130,6 +134,31 @@ describe('PeersTable', () => {
     ).toBeInTheDocument();
     expect(within(evidence).getByText(/not used as crawler dial aliases/)).toBeInTheDocument();
     expect(within(evidence).getByText('No completed probe observation.')).toBeInTheDocument();
+  });
+
+  // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+  // awaited: the list says it is loading, never "No peers match", and a peer's evidence never
+  // "Failed to load"; both draw once back online.
+  it('says the list is loading while its read is paused, then lists the peers once back online', async () => {
+    const { resume } = renderPaused(<PeersTable />);
+    expect(await screen.findByText('Loading peer evidence…')).toBeInTheDocument();
+    expect(screen.queryByText('No peers match these evidence filters.')).toBeNull();
+    resume();
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+  });
+
+  it('says a peer’s evidence is loading while its read is paused, then shows it once back online', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    onlineManager.setOnline(false);
+    onTestFinished(() => onlineManager.setOnline(true));
+    fireEvent.click(
+      screen.getByRole('button', { name: `Show evidence for ${UNVERIFIED_PEER_ID}` })
+    );
+    expect(await screen.findByText('Loading evidence…')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load peer evidence.')).toBeNull();
+    act(() => onlineManager.setOnline(true));
+    expect(await screen.findByText('Last completed round #5')).toBeInTheDocument();
   });
 });
 

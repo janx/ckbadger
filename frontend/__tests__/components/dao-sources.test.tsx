@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoSources } from '@/components/dao/dao-sources';
@@ -151,5 +152,18 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     render(<DaoSources />);
     expect(await screen.findByRole('alert')).toHaveTextContent('canonical index missing');
     expect(screen.queryByRole('link', { name: '#123' })).not.toBeInTheDocument();
+  });
+
+  // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+  // awaited: the feed says it is loading, never "No DAO activities", and lists once back online.
+  it('says it is loading while its read is paused, then lists the activities once back online', async () => {
+    const { resume } = renderPaused(<DaoSources />);
+    expect(await screen.findByText('Loading DAO activities…')).toBeInTheDocument();
+    expect(screen.queryByText(/No DAO activities/)).toBeNull();
+    resume();
+    await waitFor(() =>
+      expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(3)
+    );
+    expect(screen.queryByText('Loading DAO activities…')).toBeNull();
   });
 });
