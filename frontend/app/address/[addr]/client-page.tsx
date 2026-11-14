@@ -353,7 +353,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <AddressLoadState
                 label="holdings and balance partition"
                 error={holdings.error}
-                loading={holdings.isLoading}
+                read={holdings}
               />
             )}
             {a.pendingSummary !== null && a.pendingSummary.txCount > 0 && (
@@ -372,7 +372,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             )}
             {holdings.data && <AddressHoldingsSection holdings={holdings.data} />}
             {names.error ? (
-              <AddressLoadState label=".cell named rights" error={names.error} loading={false} />
+              <AddressLoadState label=".cell named rights" error={names.error} read={names} />
             ) : (
               names.data &&
               names.data.data.length > 0 && (
@@ -414,7 +414,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               )
             )}
             {fiber.error ? (
-              <AddressLoadState label="Fiber channels" error={fiber.error} loading={false} />
+              <AddressLoadState label="Fiber channels" error={fiber.error} read={fiber} />
             ) : (
               fiber.data &&
               fiber.data.length > 0 && (
@@ -612,11 +612,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     />
                   </>
                 ) : (
-                  <AddressLoadState
-                    label="activities"
-                    error={activities.error}
-                    loading={activities.isLoading}
-                  />
+                  <AddressLoadState label="activities" error={activities.error} read={activities} />
                 ))}
               {tab === 'transactions' &&
                 (transactions.data ? (
@@ -638,7 +634,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <AddressLoadState
                     label="transactions"
                     error={transactions.error}
-                    loading={transactions.isLoading}
+                    read={transactions}
                   />
                 ))}
               {tab === 'cells' &&
@@ -660,11 +656,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     />
                   </>
                 ) : (
-                  <AddressLoadState
-                    label="live cells"
-                    error={cells.error}
-                    loading={cells.isLoading}
-                  />
+                  <AddressLoadState label="live cells" error={cells.error} read={cells} />
                 ))}
             </section>
           </DetailLayout>

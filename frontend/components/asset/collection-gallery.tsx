@@ -193,7 +193,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
           />
         </>
       ) : (
-        <AssetReadState label="collection items" error={query.error} loading={query.isLoading} />
+        <AssetReadState label="collection items" error={query.error} read={query} />
       )}
     </section>
   );

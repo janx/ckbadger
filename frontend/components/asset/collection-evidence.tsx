@@ -166,7 +166,7 @@ export function ClusterPatternReading({
       <AssetReadState
         label="an object to read"
         error={sample.error}
-        loading={sample.isLoading}
+        read={sample}
         retained={!!sample.data}
       />
     </div>

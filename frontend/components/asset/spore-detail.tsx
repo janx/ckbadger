@@ -335,11 +335,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   description={cluster.data?.description}
                 />
               ) : (
-                <AssetReadState
-                  label="DNA evidence"
-                  error={genetics.error}
-                  loading={genetics.isLoading}
-                />
+                <AssetReadState label="DNA evidence" error={genetics.error} read={genetics} />
               )}
             </div>
           )}
@@ -351,11 +347,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 <ItemEvidence protocol={data} />
               </>
             ) : (
-              <AssetReadState
-                label="raw object data"
-                error={protocol.error}
-                loading={protocol.isLoading}
-              />
+              <AssetReadState label="raw object data" error={protocol.error} read={protocol} />
             )}
           </div>
         </div>
@@ -368,7 +360,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             label="DOB execution"
             error={decoded.error}
             retained={!!decoded.data}
-            loading={decoded.isLoading}
+            read={decoded}
           />
           {genetics.data ? (
             <>
@@ -389,16 +381,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   label="collection variants"
                   error={collectionGenes.error}
                   retained={!!collectionGenes.data}
-                  loading={collectionGenes.isLoading}
+                  read={collectionGenes}
                 />
               )}
             </>
           ) : (
-            <AssetReadState
-              label="DNA evidence"
-              error={genetics.error}
-              loading={genetics.isLoading}
-            />
+            <AssetReadState label="DNA evidence" error={genetics.error} read={genetics} />
           )}
         </>
       )}
@@ -434,11 +422,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             />
           </>
         ) : (
-          <AssetReadState
-            label="cell versions"
-            error={versions.error}
-            loading={versions.isLoading}
-          />
+          <AssetReadState label="cell versions" error={versions.error} read={versions} />
         )}
         <CapacityPartition
           subject={`Object ${id}`}
@@ -539,11 +523,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               )}
             </>
           ) : (
-            <AssetReadState
-              label="collection"
-              error={collection.error}
-              loading={collection.isLoading}
-            />
+            <AssetReadState label="collection" error={collection.error} read={collection} />
           )}
         </section>
       )}
