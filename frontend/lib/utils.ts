@@ -126,7 +126,7 @@ export function formatCkbCompact(shannons: string | bigint): {
     ['T', BigInt('100000000000000000000')],
     ['B', BigInt('100000000000000000')],
     ['M', BigInt('100000000000000')],
-    ['K', BigInt('100000000000')],
+    ['k', BigInt('100000000000')],
   ] as const) {
     if (amount >= divisor)
       return { value: `${formatScaledInteger(amount, divisor, 2)}${suffix}`, full };
@@ -154,7 +154,7 @@ export function formatCompactCkbDelta(ckbDelta: string): {
   } else if (abs >= BigInt('100000000000000')) {
     compact = `${formatScaledInteger(abs, BigInt('100000000000000'), 2)}M`;
   } else if (abs >= BigInt('100000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}K`;
+    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}k`;
   } else if (abs >= BigInt(100000000)) {
     compact = formatScaledInteger(abs, BigInt(100000000), 2);
   } else {

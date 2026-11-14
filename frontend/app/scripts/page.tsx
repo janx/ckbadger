@@ -37,6 +37,7 @@ import { shortenHash } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import { withUnit } from '@/lib/format-unit';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -357,10 +358,10 @@ function occupiedPpm(script: KnownScript): number {
   return Number((occupied * scale + total - BigInt(1)) / total);
 }
 
-/** "0 · 50 · 100 %": the occupied-share scale's ticks. */
+/** "0 · 50 · 100%": the occupied-share scale's ticks, the sign on the last (CH-14). */
 function shareTick(ppm: number): string {
   const percent = (ppm / SHARE_SCALE) * 100;
-  return ppm === SHARE_SCALE ? `${percent} %` : String(percent);
+  return ppm === SHARE_SCALE ? withUnit(String(percent), '%') : String(percent);
 }
 
 /**

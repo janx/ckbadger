@@ -133,7 +133,7 @@ describe('Asset history', () => {
       ).toBeTruthy();
       expect(readout).toHaveClass('border-t');
       expect(readout).toHaveTextContent(
-        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50 % · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
+        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50% · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
       );
       expect(within(readout).getByText('occupied')).toHaveAttribute(
         'title',

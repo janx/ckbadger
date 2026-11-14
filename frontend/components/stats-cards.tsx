@@ -9,7 +9,7 @@ function formatRate(value: number | null | undefined): string | null {
     return null;
   }
   if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}K`;
+    return `${(value / 1000).toFixed(1)}k`;
   }
   return value.toFixed(0);
 }

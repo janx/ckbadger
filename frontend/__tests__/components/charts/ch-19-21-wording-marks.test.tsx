@@ -187,7 +187,7 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
 
   it('writes no "-0.00" and writes negatives with the minus sign', async () => {
     expect(formatChartReadout('-0.001', '%')).toBe('0.00');
-    expect(formatChartReadout('-1234.5', 'CKB')).toBe('−1.23K');
+    expect(formatChartReadout('-1234.5', 'CKB')).toBe('−1.23k');
     expect(formatChartExact('-30', 'CKB/day')).toBe('−30');
     vi.mocked(api.getHashRateChart).mockResolvedValue({
       title: 'Hash rate',

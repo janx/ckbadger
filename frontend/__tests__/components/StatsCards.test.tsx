@@ -112,10 +112,10 @@ describe('StatsCards', () => {
       expect(screen.getByText('BULK SYNCING…')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('1.2K')).toBeInTheDocument();
+    expect(screen.getByText('1.2k')).toBeInTheDocument();
     expect(screen.getByText('blocks/s')).toBeInTheDocument();
     expect(screen.getByText('Elapsed: 1h 10m')).toBeInTheDocument();
-    expect(screen.getByText('9.8K')).toBeInTheDocument();
+    expect(screen.getByText('9.8k')).toBeInTheDocument();
     expect(screen.getByText('txns/s')).toBeInTheDocument();
     expect(screen.getByText('ETA: 2h 30m')).toBeInTheDocument();
 

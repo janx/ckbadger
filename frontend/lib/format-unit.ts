@@ -8,6 +8,7 @@
  * spells.
  */
 import { MINUS, formatTick, stepDecimals } from '@/lib/chart-ticks';
+import { formatPercent } from '@/lib/ckb-decimal';
 
 /**
  * What follows a number to name its unit (CH-14): a percentage takes its sign with no space
@@ -22,6 +23,14 @@ export function unitAfter(unit: string, space = ' '): string {
 /** A value with its unit, in the one form: `24.79%`, `10.43 s`, `16,826 transactions` (CH-14). */
 export function withUnit(value: string, unit: string): string {
   return `${value}${unitAfter(unit)}`;
+}
+
+/**
+ * The one percentage of a part in a whole (CH-14): two decimals, the sign with no space, `24.79%`.
+ * More decimals stand only where a page says why in its own words.
+ */
+export function percentOf(part: bigint, total: bigint): string {
+  return withUnit(formatPercent(part, total, 2), '%');
 }
 
 /** A window between two dates: `2026-11-07 → 2026-11-13` (CH-03). */

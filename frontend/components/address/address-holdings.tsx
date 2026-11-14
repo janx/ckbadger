@@ -14,7 +14,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
@@ -29,6 +29,7 @@ import { META_CHAR_PX } from '@/lib/byte-map';
 import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
+import { percentOf } from '@/lib/format-unit';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -207,7 +208,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
       { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
-  const share = (v: bigint) => `${formatScaledInteger(v * BigInt(100), sum, 2)} %`;
+  const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const { integer, decimal } = formatCkbAmount(sum);
   const zero = sum === BigInt(0);
@@ -626,12 +627,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 </span>
                 {occupied > BigInt(0) && (
                   <span className="text-text-dim">
-                    {formatScaledInteger(
-                      BigInt(holdings.classes[c.key].occupiedCapacity) * BigInt(100),
-                      occupied,
-                      2
-                    )}
-                    %
+                    {percentOf(BigInt(holdings.classes[c.key].occupiedCapacity), occupied)}
                   </span>
                 )}
               </button>

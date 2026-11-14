@@ -88,12 +88,12 @@ describe('Address v3 components', () => {
       render(<AddressBalance holdings={board} />);
       const bar = screen.getByRole('img', { name: /^Balance partition:/ });
       expect(bar).toHaveAccessibleName(
-        'Balance partition: occupied 291,486.00000000 CKB (91.16 %), free 28,256.66879443 CKB (8.84 %), nothing in the Nervos DAO'
+        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.84%), nothing in the Nervos DAO'
       );
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16 %', 'free 8.84 %']);
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
       expect(screen.getByTestId('balance-parts')).toHaveTextContent(
         /^occupied 291,486\.00000000 pays for the bytes its cells keep · free 28,256\.66879443 · no CKB in the Nervos DAO$/
       );
@@ -106,7 +106,7 @@ describe('Address v3 components', () => {
         .getByRole('img', { name: /^Balance partition:/ })
         .querySelector('[data-part="free"]')!;
       expect(free).toHaveTextContent(/^$/);
-      expect(free).toHaveAttribute('title', 'free 8.84 % · 28,256.66879443 CKB');
+      expect(free).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
     });
 
     it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {

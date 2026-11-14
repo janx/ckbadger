@@ -10,11 +10,12 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { exactUnsignedInteger, formatExactDecimal, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
 const DAY = 86400000;
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
@@ -297,12 +298,7 @@ export function AssetHistory({
           {BigInt(point.capacity) > BigInt(0) && (
             <span className="text-text-dim">
               {' '}
-              {formatScaledInteger(
-                BigInt(point.occupiedCapacity) * BigInt(100),
-                BigInt(point.capacity),
-                2
-              )}{' '}
-              %
+              {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
             </span>
           )}
         </>,

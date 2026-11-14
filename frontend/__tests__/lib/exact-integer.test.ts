@@ -13,7 +13,8 @@ import {
 
 describe('exact integer display', () => {
   it('promotes the unit when rounding reaches the next compact boundary', () => {
-    const suffixes = ['K', 'M', 'B', 'T', 'P', 'E'];
+    // CH-14 (re-pinned): thousands are a lowercase k, as the ticks write them
+    const suffixes = ['k', 'M', 'B', 'T', 'P', 'E'];
     for (let index = 0; index < suffixes.length; index++) {
       const unit = BigInt(1000) ** BigInt(index + 1);
       const threshold = unit * BigInt(100000) - unit / BigInt(2);
