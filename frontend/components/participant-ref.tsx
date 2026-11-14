@@ -4,6 +4,7 @@ import { Address } from '@/components/ui/address';
 import Link from '@/components/ui/link';
 import type { ParticipantRef } from '@/lib/api';
 import { cn, truncateHash } from '@/lib/utils';
+import { NoBreak } from '@/components/ui/no-break';
 
 function compactLabel(value: string): string {
   if (value.startsWith('ckb1') || value.startsWith('ckt1')) {
@@ -62,7 +63,7 @@ export function ParticipantRefView({
             className="this-address text-text-dim text-small shrink-0 font-mono"
             title={address}
           >
-            {compactLabel(address)}
+            <NoBreak>{compactLabel(address)}</NoBreak>
           </span>
         ) : compact ? (
           <Link
@@ -78,7 +79,7 @@ export function ParticipantRefView({
             title={address}
             onClick={(e) => e.stopPropagation()}
           >
-            {compactLabel(address)}
+            <NoBreak>{compactLabel(address)}</NoBreak>
           </Link>
         ) : (
           <Address address={address} />
@@ -97,7 +98,7 @@ export function ParticipantRefView({
             className="this-address text-text-dim text-small shrink-0 font-mono"
             title={lockHash}
           >
-            {compactLabel(lockHash)}
+            <NoBreak>{compactLabel(lockHash)}</NoBreak>
           </span>
           {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
         </span>

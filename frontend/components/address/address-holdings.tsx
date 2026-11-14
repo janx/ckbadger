@@ -17,13 +17,15 @@ import { splitTokenAmount } from '@/lib/format-asset';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { META_CHAR_PX } from '@/lib/byte-map';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -229,8 +231,11 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           </div>
         </div>
         <span className="text-text-dim text-body tabular-nums">
-          in <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
-          live {holdings.liveCellsCount === 1 ? 'cell' : 'cells'}
+          in{' '}
+          <NoBreak>
+            <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
+            {countNoun(holdings.liveCellsCount, 'live cell')}
+          </NoBreak>
         </span>
       </div>
       {!zero && (
@@ -669,8 +674,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             ) : (
               <>
                 <p className="text-text-dim text-small pt-3">
-                  {holdings.depositCellsCount} deposits · {holdings.withdrawalRequestCellsCount}{' '}
-                  withdrawal requests
+                  {formatCount(holdings.depositCellsCount, 'deposit')} ·{' '}
+                  {formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')}
                 </p>
                 <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
                   <div>
@@ -747,7 +752,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                             <Link href={`/blocks/${eventBlock}`}>
                               {formatBlockNumber(eventBlock)}
                             </Link>{' '}
-                            · {formatUtc8Date(eventTimestamp)}
+                            · <Utc8Date timestamp={eventTimestamp} />
                           </span>
                           <ExactCkb
                             shannons={BigInt(cell.capacity)}

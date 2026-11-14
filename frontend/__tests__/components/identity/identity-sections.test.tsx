@@ -78,7 +78,7 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
   it('says plainly when no records are set', () => {
     render(<IdentityRecords subject="valar.bit" records={[]} />);
     expect(screen.getByRole('region', { name: 'What valar.bit points to' })).toHaveTextContent(
-      'No records are set.'
+      'No records.'
     );
     expect(screen.getByRole('heading', { name: 'Records valar.bit · 0' })).toBeInTheDocument();
   });

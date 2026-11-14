@@ -37,8 +37,10 @@ import { GEL_INK } from '@/lib/design-tokens';
 import { ALLELE_GEL } from '@/lib/allele-gel-layout';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
-import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { cn, formatUtc8DateTime } from '@/lib/utils';
 import { LockKind } from '@/components/ui/lock-kind';
+import { formatCount } from '@/lib/format-count';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 // Consistency round C11 (Main.dc.html): twenty objects a page.
 const NEWEST = 20;
@@ -260,8 +262,8 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               Newest first ·{' '}
               <span className="text-text tabular-nums">
                 {shown !== undefined && filtered
-                  ? `${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects`
-                  : `${(shown ?? total).toLocaleString('en-US')} objects`}
+                  ? `${shown.toLocaleString('en-US')} of ${formatCount(total, 'object')}`
+                  : formatCount(shown ?? total, 'object')}
               </span>
             </span>
             {filtered && (
@@ -435,14 +437,14 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           href={`/blocks/${item.createdAtBlock}`}
                           title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
                         >
-                          {formatUtc8Date(item.chainTime)}
+                          <Utc8Date timestamp={item.chainTime} />
                         </AppLink>
                       </span>
                     </div>
                   );
                 })}
               </div>
-              {items.length === 0 && <p className="text-text-dim">No matching objects.</p>}
+              {items.length === 0 && <p className="text-text-dim">No objects.</p>}
               <CursorPagination
                 total={gallery.data.total}
                 totalLabel="objects"

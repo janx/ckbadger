@@ -365,7 +365,10 @@ describe('Block board · first tier', () => {
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
     const hash = within(idLine).getByText(block.hash);
     expect(hash.parentElement).toBe(idLine);
-    expect(hash.className).toBe('font-mono hover-lit cursor-pointer transition-colors');
+    expect(hash.className).toBe(
+      // U-16 (re-pinned): a full value is one line in its own box
+      'font-mono hover-lit cursor-pointer transition-colors inline-block max-w-full overflow-x-auto whitespace-nowrap align-top'
+    );
     expect(hash).toHaveAttribute('title', 'Click to copy');
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);

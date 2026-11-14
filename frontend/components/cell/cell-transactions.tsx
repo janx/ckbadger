@@ -7,10 +7,12 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
 import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
-import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
+import { formatDurationMs, truncateHash } from '@/lib/utils';
 import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
-import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { NoBreak } from '@/components/ui/no-break';
+import { formatCount } from '@/lib/format-count';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** Links in a board ink; the global `a:hover` jade still wins over them. */
 const CELL_LINK = inkStyle(BOARD_INKS.cellLink);
@@ -110,25 +112,26 @@ export function TransactionEvidence({
       witness:
         typeof witness === 'string'
           ? witness
-          : `Witness #${witness!.index} · ${witness!.size} bytes`,
-      // Prose wraps between words; only the outpoints may break anywhere (SC-C8).
+          : `Witness #${witness!.index} · ${formatCount(witness!.size, 'byte')}`,
+      // Prose wraps between words. A code dep is a reference here, so it reads as the transaction
+      // page writes it (U-16): its kind, then its out point shortened and linked, one unit.
       dependency: (
         <span className="break-normal">
           {tx.isCellbase
             ? 'Cellbase group: no script execution'
             : group.ran
               ? deps.length
-                ? deps.map((dep, i) => (
-                    <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`}>
-                      {i > 0 && ', '}
+                ? deps.map((dep) => (
+                    <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`} className="block">
+                      {dep.depType === 'dep_group' ? 'dep group' : 'code'}{' '}
                       <Link
                         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
-                        className="hover:text-jade [overflow-wrap:anywhere]"
+                        className="hover:text-jade"
                       >
-                        {dep.outPointTxHash}
-                        <OutpointIndex index={dep.outPointIndex} />
-                      </Link>{' '}
-                      ({dep.depType})
+                        <NoBreak>
+                          {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
+                        </NoBreak>
+                      </Link>
                     </span>
                   ))
                 : group.kind === 'type' &&
@@ -152,9 +155,11 @@ export function TransactionEvidence({
           {hash}
         </Link>
         {tx.timestamp && (
-          <time dateTime={tx.timestamp} className="text-text-dim">
-            {formatUtc8DateTime(tx.timestamp)}
-          </time>
+          <Utc8DateTime
+            timestamp={tx.timestamp}
+            dateTime={tx.timestamp}
+            className="text-text-dim"
+          />
         )}
       </div>
       <TxStructure
@@ -249,7 +254,9 @@ function NotSpentYet({
                     style={LINK}
                     title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
                   >
-                    {short(candidate.txHash)}:{candidate.outputIndex}
+                    <NoBreak>
+                      {short(candidate.txHash)}:{candidate.outputIndex}
+                    </NoBreak>
                   </Link>
                 </span>
               ))}

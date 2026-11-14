@@ -28,6 +28,7 @@ import { RowTag } from '@/components/ui/row-tag';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatTick } from '@/lib/chart-ticks';
+import { formatCount, countNoun } from '@/lib/format-count';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -164,7 +165,7 @@ export function TokenDistributionView({
                     <span className="whitespace-nowrap">
                       <AssetCount value={b.holdersCount} />{' '}
                       <span className="text-text-dim">
-                        {b.holdersCount === 1 ? 'holder' : 'holders'}
+                        {countNoun(b.holdersCount, 'holder', 'holders')}
                       </span>
                     </span>
                   ),
@@ -406,7 +407,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         >
           {all
             ? 'Top 10 holders'
-            : `All ${distribution.data?.holdersCount.toLocaleString('en-US') ?? ''} holders →`}
+            : `All ${distribution.data ? formatCount(distribution.data.holdersCount, 'holder') : 'holders'} →`}
         </button>
       }
     >

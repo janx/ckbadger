@@ -239,8 +239,8 @@ it('opens Recent activity with five rows and two links that open the full feed i
   expectPrompt(heading, 'Activity', '--last 5');
   const note = promptNote(heading);
   expect(within(note).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
-  expect(within(note).getByRole('button', { name: '184 transactions →' })).toBeInTheDocument();
-  fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
+  expect(within(note).getByRole('button', { name: '184\u00a0transactions →' })).toBeInTheDocument();
+  fireEvent.click(within(recent).getByRole('button', { name: '184\u00a0transactions →' }));
   expect(await screen.findByRole('tab', { name: 'Transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
@@ -388,7 +388,7 @@ it('draws holder bars in the objects colour (OB-C7)', async () => {
 it('still shows an empty Newest list honestly', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
   render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
-  expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
+  expect(await screen.findByText('No objects.')).toBeInTheDocument();
 });
 
 // Visual pass on the live services (2026-10-30).

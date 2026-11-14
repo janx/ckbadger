@@ -104,7 +104,7 @@ describe('FiberNetworkGraph', () => {
 
   it('a pair shows open CKB with its unit, lifetime, and block range with separators (FF-F3, FF-F7)', () => {
     const { container } = render(<Graph network={network as FiberNetwork} />);
-    const edge = screen.getByRole('button', { name: /^Pair …aaaaaa and …bbbbbb, 2 channels/ });
+    const edge = screen.getByRole('button', { name: /^Pair …aaaaaa and …bbbbbb, 2\schannels/ });
     fireEvent.click(edge);
     const p = panel();
     expect(within(p).getByText('…aaaaaa ↔ …bbbbbb')).toBeInTheDocument();
@@ -112,7 +112,7 @@ describe('FiberNetworkGraph', () => {
       Array.from(p.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
     ).toContain('3,000.00000000 CKB');
     expect(within(p).getByText('0 settled · 0 not yet')).toBeInTheDocument();
-    expect(within(p).getByText('1 m 40 s')).toBeInTheDocument();
+    expect(within(p).getByText('1m 40s')).toBeInTheDocument();
     expect(within(p).getAllByRole('link', { name: '#10' })).toHaveLength(2);
     // R2b-b: first · last opening dates beside the blocks (FF-F3)
     expect(within(p).getByText('2023-11-15 · 2023-11-15')).toBeInTheDocument();

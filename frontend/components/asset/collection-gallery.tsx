@@ -173,7 +173,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
               </article>
             ))}
           </div>
-          {query.data.data.length === 0 && <p className="text-text-dim">No matching items.</p>}
+          {query.data.data.length === 0 && <p className="text-text-dim">No items.</p>}
           <CursorPagination
             total={query.data.total}
             totalLabel="items"

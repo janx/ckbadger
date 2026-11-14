@@ -6,6 +6,7 @@ import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -227,7 +228,9 @@ export function DeploymentEvidence({
           </p>
           <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-y-2">
             <dt className="text-text-dim">Header time</dt>
-            <dd className="break-words">{formatUtc8DateTime(selected.timestampMs)}</dd>
+            <dd className="break-words">
+              <Utc8DateTime timestamp={selected.timestampMs} />
+            </dd>
             <dt className="text-text-dim">Epoch</dt>
             <dd>{selected.epochNumber.toLocaleString()}</dd>
             <dt className="text-text-dim">Version</dt>

@@ -17,7 +17,7 @@ import { DaoGrows } from '@/components/dao/dao-grows';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { formatCapacity, formatDurationMs, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import {
@@ -35,6 +35,9 @@ import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -793,7 +796,7 @@ function Swatch({ color }: { color: string }) {
 }
 
 function plural(count: number, word: string): string {
-  return `${count.toLocaleString('en-US')} ${word}${count === 1 ? '' : 's'}`;
+  return formatCount(count, word);
 }
 
 /**
@@ -912,7 +915,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                   <span className="text-text-bright">
                     Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
                     {row.throughEpochOffset} · <Amount value={row.capacity} /> CKB in{' '}
-                    {row.count.toLocaleString()} deposits
+                    {formatCount(row.count, 'deposit')}
                   </span>
                 );
               })()}
@@ -1259,7 +1262,11 @@ function RawEvidence({
         <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
           {formatBlockNumber(anchor.blockNumber)}
         </Link>{' '}
-        (<span title={anchor.blockHash}>{truncateHash(anchor.blockHash)}</span>), S (
+        (
+        <span title={anchor.blockHash}>
+          <NoBreak>{truncateHash(anchor.blockHash)}</NoBreak>
+        </span>
+        ), S (
         <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
         <Amount value={owed.toString()} />) plus the burnt share (
         <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it does
@@ -1268,7 +1275,7 @@ function RawEvidence({
       {evidence.ar.year365 && (
         <div className="text-text-dim text-meta mt-2 font-mono">
           365-day anchor: block <BlockLink number={evidence.ar.year365.anchorBlockNumber} /> · chain
-          time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+          time <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
           {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
           {formatDurationMs(
             exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')

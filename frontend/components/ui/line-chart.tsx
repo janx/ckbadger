@@ -431,9 +431,7 @@ export function LineChart({
   }, []);
 
   if (!fullData.length) {
-    return (
-      <div className="text-text-dim flex h-64 items-center justify-center">No data available</div>
-    );
+    return <div className="text-text-dim flex h-64 items-center justify-center">No data.</div>;
   }
 
   const y2Ticks = values2.length

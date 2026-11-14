@@ -70,7 +70,7 @@ describe('VmLaneTimeline', () => {
       'data · pinned to VM0',
       'epoch 5,414',
       'epoch 12,293',
-      '1,830,780 · 59 versions',
+      '1,830,780 · 59\u00a0versions',
     ])
       expect(texts()).toContain(label);
     expect(texts()).not.toContain('epoch 5,414 · 2022-05-10');

@@ -284,11 +284,11 @@ describe('ChartsPage', () => {
     // command runs on the section's chart count (phase 5, D5). Re-pinned for CH-22: the DAO group
     // lists DAO / circulation too, 29 cards in all.
     for (const name of [
-      'Proof of work 4 charts',
-      'Nervos DAO & economics 7 charts',
-      'Blocks 4 charts',
-      'Activity 7 charts',
-      'Common knowledge 7 charts',
+      'Proof of work 4\u00a0charts',
+      'Nervos DAO & economics 7\u00a0charts',
+      'Blocks 4\u00a0charts',
+      'Activity 7\u00a0charts',
+      'Common knowledge 7\u00a0charts',
     ])
       expect(screen.getByRole('heading', { level: 2, name })).toBeInTheDocument();
     expect(screen.getAllByRole('article').length).toBe(29);

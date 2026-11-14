@@ -15,6 +15,8 @@ import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
+import { HexCode } from '@/components/ui/hex-code';
+import { Dotted } from '@/components/ui/phone-row';
 
 /** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
 export type BlockNeighbour = Pick<
@@ -218,8 +220,8 @@ export function BlockPosition({
             className="border-base-border-subtle text-small space-y-2 border-t pt-3"
           >
             <p className="text-gold">
-              {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +{arc.to - arc.from}{' '}
-              blocks
+              {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +
+              {formatCount(arc.to - arc.from, 'block')}
             </p>
             <p className="flex flex-wrap items-center gap-2">
               <Link href={`/blocks/${arc.from}`}>{formatBlockNumber(arc.from)}</Link>
@@ -230,7 +232,7 @@ export function BlockPosition({
             </p>
             {arc.uncles.size > 0 && (
               <p className="text-text-dim">
-                Includes proposals carried by {arc.uncles.size} uncle(s).
+                Includes proposals carried by {formatCount(arc.uncles.size, 'uncle')}.
               </p>
             )}
           </div>
@@ -241,11 +243,29 @@ export function BlockPosition({
             className="border-base-border-subtle text-small min-w-0 space-y-2 border-t border-dashed pt-3"
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
-            <Link href={`/blocks/${uncle.parentHash}`} className="block break-all">
-              Parent {uncle.parentHash}
+            {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
+            <Link href={`/blocks/${uncle.parentHash}`} className="block">
+              Parent{' '}
+              <HexCode
+                value={uncle.parentHash}
+                truncate={false}
+                copyable={false}
+                variant="inherit"
+              />
             </Link>
-            <Link href={getUncleDetailHref(block.number, index)} className="block break-all">
-              Uncle {formatBlockNumber(uncle.number)} · {uncle.hash}
+            <Link href={getUncleDetailHref(block.number, index)} className="block">
+              <Dotted
+                parts={[
+                  `Uncle ${formatBlockNumber(uncle.number)}`,
+                  <HexCode
+                    key="hash"
+                    value={uncle.hash}
+                    truncate={false}
+                    copyable={false}
+                    variant="inherit"
+                  />,
+                ]}
+              />
             </Link>
             <p className="text-text-dim">
               Included by{' '}
@@ -298,8 +318,8 @@ export function BlockPosition({
                 data-proposal-to={arc.to}
               >
                 <title>
-                  {arc.hashes.size} transactions proposed in {formatBlockNumber(arc.from)} and
-                  committed in {formatBlockNumber(arc.to)}
+                  {formatCount(arc.hashes.size, 'transaction')} proposed in{' '}
+                  {formatBlockNumber(arc.from)} and committed in {formatBlockNumber(arc.to)}
                   {arc.uncles.size
                     ? `; includes proposals carried by ${arc.uncles.size} uncle(s)`
                     : ''}

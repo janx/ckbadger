@@ -253,7 +253,7 @@ export function PackedContainer({
   items,
   totalCount,
   blockNumber,
-  emptyText = 'No transactions',
+  emptyText = 'No transactions.',
   globalMaxSize,
 }: PackedContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);

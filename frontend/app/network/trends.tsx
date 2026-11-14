@@ -274,7 +274,7 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
               tone: 'body',
               left: leader(row),
               right: row.buckets?.length ? (
-                <span className="text-text-dim">{row.buckets.length.toLocaleString()} labels</span>
+                <span className="text-text-dim">{formatCount(row.buckets.length, 'label')}</span>
               ) : undefined,
             },
             // A title is no hover on a touch screen: every label and count, quiet, last.

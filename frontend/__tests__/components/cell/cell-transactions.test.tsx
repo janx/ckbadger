@@ -236,7 +236,7 @@ describe('CellTransactions', () => {
     const short = `${DEP.slice(0, 10)}...${DEP.slice(-6)}:0`;
     const link = (await screen.findAllByRole('link', { name: short }))[0];
     expect(link).toHaveAttribute('href', `/mainnet/cell/${DEP}-0`);
-    expect(link.closest('[data-nobreak]')).not.toBeNull();
+    expect(link.firstElementChild).toHaveAttribute('data-nobreak');
     expect(link.parentElement).toHaveTextContent(
       new RegExp(`^dep group ${short.replace(/[.]/g, '\\.')}$`)
     );

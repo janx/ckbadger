@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/terminal-panel';
 import { ASSET_CATEGORY_COLORS } from '@/lib/chart-colors';
 import { formatDecimal } from '@/lib/exact-integer';
+import { formatCount } from '@/lib/format-count';
 
 const CATEGORY_LABELS: Record<string, string> = {
   dao: 'DAO',
@@ -63,7 +64,7 @@ export function AssetEcosystem() {
                     {token.name ?? token.symbol ?? token.typeScriptHash.slice(0, 10)}
                   </Link>
                   <span className="text-text-dim text-small font-mono tabular-nums">
-                    {token.holdersCount.toLocaleString()} holders
+                    {formatCount(token.holdersCount, 'holder')}
                   </span>
                 </div>
               ))}

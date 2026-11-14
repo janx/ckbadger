@@ -3,8 +3,10 @@ import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ownerRun, ownerRuns } from '@/lib/identity-term';
-import { formatUtc8Date, truncateHash } from '@/lib/utils';
+import { truncateHash } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { countNoun } from '@/lib/format-count';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 type DotcellProtocol = Extract<ItemProtocol, { kind: 'dotcell' }>;
 
@@ -58,7 +60,7 @@ export function DotcellRoles({
       label: 'Owner · holds the name',
       party: current.decoded.owner,
       since: owner.since.cell.timestamp,
-      note: `this address holds ${ownerNameCount.toLocaleString('en-US')} ${ownerNameCount === 1 ? 'cell' : 'cells'}`,
+      note: `this address holds ${ownerNameCount.toLocaleString('en-US')} ${countNoun(ownerNameCount, 'cell', 'cells')}`,
       accent: true,
     },
     {
@@ -92,7 +94,7 @@ export function DotcellRoles({
               <PartyLine party={c.party} size={14} />
             </span>
             <span className="text-text-dim text-small">
-              since {formatUtc8Date(c.since)} · {c.note}
+              since <Utc8Date timestamp={c.since} /> · {c.note}
             </span>
           </div>
         ))}
@@ -112,7 +114,7 @@ export function DotcellRoles({
               )}
             >
               <span className="text-text-dim text-meta">
-                {formatUtc8Date(run.since.cell.timestamp)}
+                <Utc8Date timestamp={run.since.cell.timestamp} />
                 {step ? ` · ${step}` : ''}
               </span>
               <span

@@ -37,17 +37,30 @@ interface Text {
   continues: boolean;
 }
 
-/** JSX text with more of its sentence after it: an expression or an element follows it. */
-function jsxContinues(node: ts.JsxText): boolean {
-  const siblings = (node.parent as ts.JsxElement | ts.JsxFragment).children;
-  const at = siblings.indexOf(node);
+/**
+ * Text with more of its sentence after it: JSX text, or a string chosen in a JSX expression
+ * (`{a ? 'No records are set' : …}`), followed by an expression or an element.
+ */
+function jsxContinues(node: ts.Node): boolean {
+  let child: ts.Node = node;
+  if (!ts.isJsxText(node)) {
+    // up through the choice that picks the string, to the JSX expression that holds it
+    let up = node.parent;
+    while (ts.isConditionalExpression(up) || ts.isParenthesizedExpression(up)) up = up.parent;
+    if (!ts.isJsxExpression(up)) return false;
+    child = up;
+  }
+  const parent = child.parent;
+  if (!ts.isJsxElement(parent) && !ts.isJsxFragment(parent)) return false;
+  const siblings: readonly ts.Node[] = parent.children;
+  const at = siblings.indexOf(child);
   return siblings
     .slice(at + 1)
-    .some((next) => !(ts.isJsxText(next) && next.text.trim() === '') && !isEmptyExpression(next));
-}
-
-function isEmptyExpression(node: ts.JsxChild): boolean {
-  return ts.isJsxExpression(node) && node.expression === undefined;
+    .some(
+      (next) =>
+        !(ts.isJsxText(next) && next.text.trim() === '') &&
+        !(ts.isJsxExpression(next) && next.expression === undefined)
+    );
 }
 
 function texts(file: string): Text[] {
@@ -83,7 +96,7 @@ function texts(file: string): Text[] {
         continues:
           ts.isTemplateHead(node) ||
           ts.isTemplateMiddle(node) ||
-          (ts.isJsxText(node) && jsxContinues(node)),
+          ((ts.isJsxText(node) || ts.isStringLiteral(node)) && jsxContinues(node)),
       });
     }
     ts.forEachChild(node, visit);
@@ -95,6 +108,56 @@ function texts(file: string): Text[] {
 /** Lane B4 edits the search bar now (its placeholders, its "Searching..." and its empty states). */
 const LANE_B4 = 'components/search-bar.tsx';
 const all = files.flatMap(texts).filter(({ file }) => file !== LANE_B4);
+
+/** Nouns counted on screen; a count written before one by hand takes no plural rule. */
+const COUNTED =
+  'cells|transactions|deposits|withdrawal requests|binaries|transfers|epochs|sources|holders|blocks|peers|versions|objects|items|addresses|txs|inputs|outputs|records|members|channels|uncles|proposals|scripts|tokens|actions|days|nodes|participants|calls|classes|clusters|identities|bytes|deployments|owners|mints|burns|rounds|observations|keys|genes|variants|renewals|entries|labels|fields|rows|weeks|years|groups|events|parties|steps|decimals';
+
+/**
+ * Where a count is written straight before its noun: `{n} cells` in JSX, `${n} cells` in a
+ * template. Attributes a page does not show (a title, an accessible name) and thrown errors aside.
+ */
+function handCounts(file: string): Text[] {
+  const code = readFileSync(file, 'utf8');
+  const source = ts.createSourceFile(
+    file,
+    code,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+  const noun = new RegExp(`^\\s(${COUNTED})\\b`);
+  const out: Text[] = [];
+  const name = relative(root, file);
+  const at = (node: ts.Node, text: string) =>
+    out.push({
+      file: name,
+      line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      text,
+      continues: false,
+    });
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) || ts.isLiteralTypeNode(node)) return;
+    if (ts.isNewExpression(node) && node.expression.getText(source) === 'Error') return;
+    if (
+      ts.isJsxAttribute(node) &&
+      /^(aria-label|title|alt|className|key|href|data-[\w-]+)$/.test(node.name.getText(source))
+    )
+      return;
+    if (ts.isTemplateSpan(node) && noun.test(node.literal.text))
+      at(node, `\${${node.expression.getText(source)}}${node.literal.text.slice(0, 24)}`);
+    if (ts.isJsxExpression(node) && node.expression && !ts.isJsxAttribute(node.parent)) {
+      const siblings: readonly ts.Node[] =
+        ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent) ? node.parent.children : [];
+      const next = siblings[siblings.indexOf(node) + 1];
+      if (next && ts.isJsxText(next) && noun.test(next.text.replace(/^\n\s*/, ' ')))
+        at(node, `{${node.expression.getText(source)}}${next.text.slice(0, 24)}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
 const where = ({ file, line, text }: Text) => `${file}:${line} ${text}`;
 
 describe('copy gates (U-15)', () => {
@@ -162,6 +225,49 @@ describe('copy gates (U-15)', () => {
       .filter(({ text, continues }) => /^No /.test(text) && !continues)
       .filter(({ text }) => !text.endsWith('.') && !LABELS.has(text))
       .map(where);
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * Counts whose words are not the noun's count ("${family.name} cells" names a script's cells);
+   * every other count goes through formatCount, so "1 deposit", never "1 deposits".
+   */
+  const NOT_COUNTS = new Set<string>([
+    // a name before its noun, not a count: "Open channels", "CKB in JoyID cells", "mainnet nodes"
+    '${chosen.label} channels',
+    '${chosen.label.toLowerCase()} channels observed.',
+    '{network} nodes',
+    '${label} objects',
+    '${definition.slug} holders at ',
+    '${family.name} cells · occupied and fr',
+    '${family.name} cells',
+    '{family.name} cells name their code b',
+    '{family.name} cells point at their co',
+    '${key} bytes',
+    // a count in words, its noun already chosen by it ("two genes vary", "four steps")
+    '${word} genes vary',
+    '${STEP_WORDS[steps.length]} steps',
+    '${listJoin(coins)} addresses.',
+    '${clipped} weeks cut',
+    "{clipped.length === 1 ? 's' : ''} bytes past its ",
+    // a sum written as its parts ("12 + 40 bytes"), a ratio ("1 / 3 blocks"), a decimal amount
+    '${fmt(dataBytes.length)} bytes',
+    '${denominator} blocks',
+    '${formatScaledInteger(years, per, 2)} years',
+    "${formatChartExact(leader.value, 'blocks')} blocks · ",
+    // a developer's message for a missing witness, and a row's hover title
+    '${witness.index} bytes',
+    '${countText(script.cellsCount)} cells ever',
+  ]);
+  /** Lane B4 edits the hardforks page now; its two "N days" are left to it (see the hand-back). */
+  const LANE_B4_HARDFORKS = 'app/hardforks/page.tsx';
+
+  it('writes every count with its noun through the one plural rule (formatCount)', () => {
+    const offenders = files
+      .filter((file) => ![LANE_B4, LANE_B4_HARDFORKS].includes(relative(root, file)))
+      .flatMap(handCounts)
+      .map(where)
+      .filter((line) => !NOT_COUNTS.has(line.replace(/^[^ ]+ /, '')));
     expect(offenders).toEqual([]);
   });
 

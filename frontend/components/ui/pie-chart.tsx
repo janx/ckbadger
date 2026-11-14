@@ -82,7 +82,7 @@ export function PieChart({
         className="text-text-dim flex items-center justify-center"
         style={{ width: size, height: size }}
       >
-        No data available
+        No data.
       </div>
     );
   }

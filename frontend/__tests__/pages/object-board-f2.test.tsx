@@ -180,7 +180,7 @@ it('keeps tier 1 within the prose budget: one lede and captions under the eviden
 it('draws the sequencing gel and the collection allele gel with "this one" (OB-4, OB-7)', async () => {
   const { container } = await page();
   // Phase 5 (A13): the size and the genes are the DNA command's args, and name its section.
-  const dna = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
+  const dna = screen.getByRole('region', { name: 'DNA 53\u00a0bytes · 6\u00a0genes' });
   // the hint is the readout line's "tap or hover" under the map (R6), not a header suffix
   expect(dna).not.toHaveTextContent('6 genes · hover a gene');
   expect(within(dna).getByRole('status', { name: 'Gene readout' })).toHaveTextContent(

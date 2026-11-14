@@ -2,6 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { cn, truncateHash } from '@/lib/utils';
+import { NoBreak } from '@/components/ui/no-break';
 
 /**
  * Round 3 (contracts R-A · R-2): an owner's lock kind as the API names it — the scripts registry's
@@ -43,7 +44,7 @@ export function LockKind({
             title={lockCodeHash}
             className="hover:text-jade transition-colors"
           >
-            {truncateHash(lockCodeHash, 8, 4)}
+            <NoBreak>{truncateHash(lockCodeHash, 8, 4)}</NoBreak>
           </Link>
         </>
       )}

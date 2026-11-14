@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CLASS_COLORS, EXPIRED_COLOR } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
 
 export interface TenurePeriod {
   label: string;
@@ -70,7 +71,7 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
   const expired = now >= end;
   // Expired terms are neutral grey: gold is DAO-only, rose is a live identity (FINAL_REVIEW).
   const ink = expired ? EXPIRED_COLOR : CLASS_COLORS.identities;
-  const days = Math.floor(Math.abs(end - now) / DAY).toLocaleString('en-US');
+  const days = formatCount(Math.floor(Math.abs(end - now) / DAY), 'day');
   const endDate = formatUtc8Date(end);
   // A label that does not fit its period keeps its first word, or is left out (narrow columns).
   const fit = (label: string, room: number) =>
@@ -82,7 +83,7 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
   // Lane P: the now mark is dated on the UTC+8 clock; how long ago the term ended (or how long
   // is left) is its hover — "ago" drifts while the page is read.
   const nowText = `now · ${formatUtc8Date(now)}`;
-  const nowAge = expired ? `expired ${days} days ago` : `${days} days left`;
+  const nowAge = expired ? `expired ${days} ago` : `${days} left`;
   const nowX = x(now),
     nowHalf = (nowText.length * CHAR_11) / 2;
   const nowAnchor = nowX + nowHalf > W - 2 ? 'end' : nowX - nowHalf < 2 ? 'start' : 'middle';
@@ -98,7 +99,7 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
       />
       <svg
         role="img"
-        aria-label={`${name} is held from ${formatUtc8Date(first)} to ${endDate}${graceEnd ? `, then a grace period to ${formatUtc8Date(graceEnd)}` : ''}; ${expired ? `expired ${days} days ago` : `${days} days remain`}`}
+        aria-label={`${name} is held from ${formatUtc8Date(first)} to ${endDate}${graceEnd ? `, then a grace period to ${formatUtc8Date(graceEnd)}` : ''}; ${expired ? `expired ${days} ago` : `${days} remain`}`}
         ref={svgRef}
         viewBox={`0 0 ${W} 92`}
         width="100%"
@@ -169,7 +170,7 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
               strokeDasharray="3 3"
             />
             <text x={x(graceEnd)} y="22" textAnchor="end" fontSize="11" className="fill-text">
-              grace · {Math.round((graceEnd - end) / DAY)} days
+              grace · {formatCount(Math.round((graceEnd - end) / DAY), 'day')}
             </text>
           </>
         )}

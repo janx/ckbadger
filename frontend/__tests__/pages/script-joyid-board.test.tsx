@@ -92,7 +92,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
-    expect(summary).toContain('it has been replaced 4 times, last on 2025-11-21');
+    expect(summary).toContain('it has been replaced 4\u00a0times, last on 2025-11-21');
     expect(summary).toContain('now sits under a multisig that has never signed');
     // The former facts rail: its figures are the hero's figure, companion and metric row.
     expect(screen.queryByRole('complementary', { name: 'Script facts' })).toBeNull();
@@ -203,7 +203,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     expect(segments[0].title.match(/0x[0-9a-f]{40}/g)).toHaveLength(6);
     expect(segments[1].title).toContain(
-      'kept 2 of 5 keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+      'kept 2 of 5\u00a0keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
     );
     expect(screen.getByRole('status', { name: 'Code cell holder reading' })).toHaveTextContent(
       '3 holders · 5 versions · 2 handovers'
@@ -560,7 +560,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     ]);
     for (const t of terms) {
       expect(t).toHaveClass('text-meta', 'text-text-dim');
-      expect(t.nextElementSibling).toHaveClass('text-section', 'text-text-bright');
+      // PA-25 (re-pinned): the value is the first item of the metric's separated list
+      expect(t.nextElementSibling!.querySelector('.text-section')).toHaveClass('text-text-bright');
       expect(t.parentElement!.children).toHaveLength(2);
     }
     expect(metrics).toHaveClass('grid-cols-2', 'lg:grid-cols-4');

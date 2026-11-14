@@ -16,6 +16,7 @@ import { usePinnedReadout, type PinnedTargetProps } from '@/hooks/usePinnedReado
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { cn } from '@/lib/utils';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
+import { formatCount } from '@/lib/format-count';
 
 /** The side-by-side map: lanes from LX, brackets at GX, the gene columns from TX. */
 const WIDE = { LX: 38, LANE: 15, TOP: 44, STEP: 3.3, LABEL_GAP: 15 } as const;
@@ -107,7 +108,7 @@ export function SequencingGel({ layout, subject, active, onActive, idle }: Seque
       )}
       <p className="text-text-dim text-meta">
         read top to bottom: each band is one hex digit in the lane of its value · {n} digits ={' '}
-        {bytes.length} bytes
+        {formatCount(bytes.length, 'byte')}
         {form === 'narrow' ? ' · dashed rules mark the gene boundaries' : ''}
       </p>
       <ReadoutRow

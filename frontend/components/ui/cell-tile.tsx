@@ -10,6 +10,7 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
 import { cn, truncateHash } from '@/lib/utils';
+import { NoBreak } from '@/components/ui/no-break';
 
 export interface CellTileData {
   id: string;
@@ -107,7 +108,9 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
                   title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
                   className="text-text-dim hover:text-jade whitespace-nowrap"
                 >
-                  {truncateHash(cell.outPoint.txHash, 6, 4)}:{cell.outPoint.index}
+                  <NoBreak>
+                    {truncateHash(cell.outPoint.txHash, 6, 4)}:{cell.outPoint.index}
+                  </NoBreak>
                 </Link>
               </>
             ) : (

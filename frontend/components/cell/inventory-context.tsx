@@ -5,7 +5,8 @@ import { api } from '@/lib/api';
 import type { Cell, Token } from '@/lib/api';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { formatNumber, truncateHash, formatUtc8Date } from '@/lib/utils';
+import { truncateHash, formatUtc8Date } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
 
 // ---------------------------------------------------------------------------
 // Detection
@@ -221,7 +222,7 @@ export function useInventoryLabel(cell: Cell | undefined | null): InventoryLabel
         const contentTypeSeg = det.segments?.find((s) => s.label === 'content_type');
         if (contentTypeSeg?.humanValue) parts.push(contentTypeSeg.humanValue);
         const sizeSeg = det.segments?.find((s) => s.label === 'content');
-        if (sizeSeg) parts.push(`${formatNumber(sizeSeg.end - sizeSeg.start)} bytes`);
+        if (sizeSeg) parts.push(formatCount(sizeSeg.end - sizeSeg.start, 'byte'));
         summary = parts.length > 0 ? parts.join(' · ') : null;
       }
       break;

@@ -1509,7 +1509,7 @@ export default function ScriptDetailPage({
                         )}
                       </div>
                     )}
-                    empty="No deployments observed for this code version"
+                    empty="No deployments observed for this code version."
                   />
                 </DetailSection>
               )}
@@ -1523,7 +1523,7 @@ export default function ScriptDetailPage({
                   }
                 >
                   {isVersionCellsLoading ? (
-                    <p className="text-text-dim text-small py-6">Loading cells...</p>
+                    <p className="text-text-dim text-small py-6">Loading cells…</p>
                   ) : (
                     <ListTable
                       label="Its cells"
@@ -1635,7 +1635,7 @@ export default function ScriptDetailPage({
                           <CellAnatomyBar cell={cell} />
                         </div>
                       )}
-                      empty="No live cells currently use this version"
+                      empty="No live cells currently use this version."
                     />
                   )}
                   {selectedVersionCellsData.data.length > 0 && (
@@ -1663,14 +1663,14 @@ export default function ScriptDetailPage({
             </p>
             <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
             {(isCodeHashMode ? isSelectedCapacityChartLoading : isFamilyCapacityChartLoading) ? (
-              <p className="text-text-dim text-small py-6">Loading capacity history...</p>
+              <p className="text-text-dim text-small py-6">Loading capacity history…</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
               <ScriptCapacityEvidenceChart
                 chart={(isCodeHashMode ? selectedCapacityChart : familyCapacityChart)!}
                 markers={namedScriptDetail?.history ?? []}
               />
             ) : (
-              <p className="text-text-dim text-small py-6">No capacity history yet</p>
+              <p className="text-text-dim text-small py-6">No capacity history.</p>
             )}
             {!isCodeHashMode && familyCapacityChartError && (
               <p role="alert" className="text-negative text-small">

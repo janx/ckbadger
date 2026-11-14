@@ -80,7 +80,7 @@ describe('AdvertisementGraph', () => {
     );
     // Hierarchy v3 (R5): five rows of two first, every observation one tap away.
     expect(screen.getAllByRole('listitem')).toHaveLength(10);
-    fireEvent.click(screen.getByRole('button', { name: 'Show all 25 observations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 25\u00a0observations' }));
     expect(screen.getAllByRole('listitem')).toHaveLength(25);
     expect(screen.getByText('alias-24')).toBeInTheDocument();
   });

@@ -15,6 +15,9 @@ import { shortHex } from '@/lib/script-lineage';
 import { NEWEST_CELLS_COUNT, type NewestCellsKind } from '@/lib/script-newest-cells';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 export interface NewestCellsState {
   /** The index the list reads (ruling 2); null when the family has no lock or type role. */
@@ -159,7 +162,11 @@ function createdDate(detail: Cell | undefined): ReactNode {
         date unavailable
       </span>
     );
-  return <span className="tabular-nums">{formatUtc8Date(detail.createdTimestamp)}</span>;
+  return (
+    <span className="tabular-nums">
+      <Utc8Date timestamp={detail.createdTimestamp} />
+    </span>
+  );
 }
 
 /** "tx 0x1234…abcd · #20,911,313 · 2026-11-02": where and when the cell was made. */
@@ -175,7 +182,7 @@ function Created({ cell, detail }: { cell: Cell; detail: Cell | undefined }) {
               title={cell.txHash}
               className="text-text-dim hover:text-jade"
             >
-              {shortHex(cell.txHash, 6, 4)}
+              <NoBreak>{shortHex(cell.txHash, 6, 4)}</NoBreak>
             </Link>
           </>,
           <BlockLink key="block" number={cell.createdAtBlock} />,
@@ -242,7 +249,9 @@ export function ScriptNewestCells({
       title={outpoint(cell)}
       className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
     >
-      {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+      <NoBreak>
+        {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+      </NoBreak>
     </Link>
   );
   const columns: ListColumn<Row>[] = [
@@ -339,7 +348,7 @@ export function ScriptNewestCells({
       )}
       <p data-role="newest-footer" className="text-small mt-1 flex flex-wrap gap-x-4 gap-y-1">
         <a href="#its-cells" className="text-text hover:text-jade">
-          All {family.liveCellsCount.toLocaleString('en-US')} cells ↓
+          All {formatCount(family.liveCellsCount, 'cell')} ↓
         </a>
         {activity && (
           <Link href={activity.href} className="text-text hover:text-jade">

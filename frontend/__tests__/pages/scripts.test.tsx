@@ -303,7 +303,7 @@ describe('ScriptsPage', () => {
         'Failed to load the script summary'
       )
     ).toBeInTheDocument();
-    expect(screen.queryByText('No scripts found')).toBeNull();
+    expect(screen.queryByText('No scripts.')).toBeNull();
   });
 
   it('shows warmup message and retries until scripts become available', async () => {

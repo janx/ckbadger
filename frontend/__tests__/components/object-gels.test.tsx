@@ -446,7 +446,7 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     expect(within(rows[0]).getAllByRole('cell')[0]).toHaveTextContent(/^gene5$/);
     expect(rows[0]).toHaveTextContent('2 of 6');
     const more = screen.getByRole('button', {
-      name: /^62 more genes: 61 with 2 variants and 1 with 1 variant/,
+      name: /^62\smore genes: 61 with 2\svariants and 1 with 1\svariant/,
     });
     fireEvent.click(more);
     expect(within(table).getAllByRole('row').slice(1)).toHaveLength(72);
@@ -472,7 +472,7 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
         selected={{ gene0: 'b' }}
       />
     );
-    fireEvent.click(screen.getByRole('button', { name: /^gene0, 2 variants/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^gene0, 2\svariants/ }));
     const variants = screen.getByRole('list', { name: 'gene0 variants' });
     expect(
       within(variants)

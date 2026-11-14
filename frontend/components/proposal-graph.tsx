@@ -7,13 +7,13 @@ const ProposalGraphRenderer = dynamic(() => import('@/components/proposal-graph-
   loading: (props: ProposalGraphProps) => (
     <div className="space-y-4">
       <div className="text-text-dim text-body flex flex-wrap items-center gap-4">
-        <span>Loading proposal graph...</span>
+        <span>Loading proposal graph…</span>
       </div>
       <div
         className="border-base-border bg-base-surface/50 flex items-center justify-center rounded-lg border"
         style={{ width: props.width ?? 800, height: props.height ?? 500 }}
       >
-        <p className="text-text-dim">Loading graph...</p>
+        <p className="text-text-dim">Loading graph…</p>
       </div>
     </div>
   ),

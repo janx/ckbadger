@@ -39,6 +39,7 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
 import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
+import { formatCount } from '@/lib/format-count';
 
 const activityFilters = [
   ['all', 'All'],
@@ -291,9 +292,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 {a.lockScriptInfo?.deprecated && <span className="text-negative">Deprecated</span>}
                 <span>
                   {holdings.data
-                    ? `${holdings.data.liveCellsCount.toLocaleString('en-US')} live cells · `
+                    ? `${formatCount(holdings.data.liveCellsCount, 'live cell')} · `
                     : ''}
-                  {a.transactionsCount.toLocaleString('en-US')} transactions
+                  {formatCount(a.transactionsCount, 'transaction')}
                 </span>
               </span>
             }

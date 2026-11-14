@@ -29,11 +29,11 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
         />
       </DetailTier2>
     );
-    const heading = screen.getByRole('heading', { name: 'Account cell data · 80 bytes' });
+    const heading = screen.getByRole('heading', { name: 'Account cell data · 80\u00a0bytes' });
     expect(heading).toHaveClass('text-body');
     expect(screen.queryByText(/dotbit cell data/)).not.toBeInTheDocument();
     expect(identityDataTitle('dotcell')(dotcellProtocolProducer.versions[0] as never)).toBe(
-      'Name cell data · layout v3 · 103 bytes'
+      'Name cell data · layout v3 · 103\u00a0bytes'
     );
   });
 

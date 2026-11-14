@@ -16,6 +16,7 @@ import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
 
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
@@ -194,9 +195,7 @@ export default function DaoDepositorsPage() {
                       </span>
                     }
                     share={`${d.sharePercent}%`}
-                    note={`${d.depositCount.toLocaleString('en-US')} deposit${
-                      d.depositCount === 1 ? '' : 's'
-                    }`}
+                    note={formatCount(d.depositCount, 'deposit')}
                     bar={{
                       value: percentHundredths(d.sharePercent),
                       scale: shareScale(page.data),

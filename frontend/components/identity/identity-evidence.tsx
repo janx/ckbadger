@@ -10,6 +10,9 @@ import { truncateRecordHex } from '@/components/asset/identity-document';
 import type { IdentityStandard } from '@/components/identity/identity-header';
 import { formatUtc8DateTime, cn } from '@/lib/utils';
 import { retryTransientOnly } from '@/lib/query-client';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 type Of<K extends ItemProtocol['kind']> = Extract<ItemProtocol, { kind: K }>;
 
@@ -24,12 +27,12 @@ export function identityDataTitle(standard: IdentityStandard) {
     const bytes = byteLength(version.dataHex, `${version.cell.txHash}:${version.cell.outputIndex}`);
     switch (standard) {
       case 'dotbit':
-        return `Account cell data · ${bytes} bytes`;
+        return `Account cell data · ${formatCount(bytes, 'byte')}`;
       case 'dotcell':
-        return `Name cell data · layout v${(version.decoded as { layoutVersion: number }).layoutVersion} · ${bytes} bytes`;
+        return `Name cell data · layout v${(version.decoded as { layoutVersion: number }).layoutVersion} · ${formatCount(bytes, 'byte')}`;
       case 'bit_cell':
       case 'did_ckb':
-        return `Cell data · ${bytes} bytes`;
+        return `Cell data · ${formatCount(bytes, 'byte')}`;
     }
   };
 }
@@ -144,7 +147,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       value: (
         <>
           <Field name="registered_at" label="registered">
-            {formatUtc8DateTime(Number(d.registeredAt) * 1000)}
+            <Utc8DateTime timestamp={Number(d.registeredAt) * 1000} />
           </Field>
           <Dim> → </Dim>
           <Field name="expired_at" label="expires">
@@ -189,7 +192,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
         <Items
           items={[
             <Field key="r" name="records">
-              {d.records.length} {d.records.length === 1 ? 'entry' : 'entries'}
+              {d.records.length} {countNoun(d.records.length, 'entry', 'entries')}
             </Field>,
             ...flags,
           ]}
@@ -398,7 +401,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
                 <span className="[overflow-wrap:anywhere]">{r.key || '(empty key)'}</span>
                 <span className="text-text-dim">ttl {r.ttl}</span>
                 <span className="text-text min-w-0 [overflow-wrap:anywhere]">
-                  {truncateRecordHex(r.valueHex)}
+                  <NoBreak>{truncateRecordHex(r.valueHex)}</NoBreak>
                 </span>
               </div>
             ))}

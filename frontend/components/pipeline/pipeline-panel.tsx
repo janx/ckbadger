@@ -72,6 +72,8 @@ import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/win
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
+import { formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
 
 const SVG_LABEL = {
   row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase',
@@ -773,7 +775,7 @@ function selectionText(
     if (tx) {
       return {
         tag: 'committed',
-        text: `committed in ${formatBlockNumber(b.number)} · its proposal is in ${formatBlockNumber(tx.proposedIn.block)}, ${b.number - tx.proposedIn.block} blocks earlier`,
+        text: `committed in ${formatBlockNumber(b.number)} · its proposal is in ${formatBlockNumber(tx.proposedIn.block)}, ${formatCount(b.number - tx.proposedIn.block, 'block')} earlier`,
       };
     }
   }
@@ -793,7 +795,9 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
       className={`${FOOTER_ROW} text-text text-meta gap-x-3`}
     >
       <span className="eyebrow text-text-dim text-meta">Selected</span>
-      <span className="text-text-bright">{shortHash(pinned)}</span>
+      <span className="text-text-bright">
+        <NoBreak>{shortHash(pinned)}</NoBreak>
+      </span>
       {sel ? (
         <>
           <span

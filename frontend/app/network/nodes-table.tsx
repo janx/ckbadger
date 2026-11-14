@@ -18,6 +18,8 @@ import {
   type NetworkSessionInitiator,
 } from '@/lib/api';
 import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { countNoun, formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
 
 interface PeerFilters {
   state?: NetworkPeerDisplayState;
@@ -139,7 +141,7 @@ function sessionInitiatorLabel(initiator: NetworkSessionInitiator): string {
 
 function ObservationList({ observations }: { observations: NetworkAddressProbeEvidence[] }) {
   if (observations.length === 0) {
-    return <p className="text-text-dim">No address observations recorded</p>;
+    return <p className="text-text-dim">No address observations recorded.</p>;
   }
   return (
     <ul className="space-y-1">
@@ -178,7 +180,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised aliases</h4>
         {detail.aliases.length === 0 ? (
-          <p className="text-text-dim">No aliases recorded</p>
+          <p className="text-text-dim">No aliases recorded.</p>
         ) : (
           <ul className="space-y-1">
             {detail.aliases.map((alias) => (
@@ -198,7 +200,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Direct CKB session evidence</h4>
         {detail.directSessions.length === 0 ? (
-          <p className="text-text-dim">No retained direct-session observation</p>
+          <p className="text-text-dim">No retained direct-session observation.</p>
         ) : (
           <ul className="space-y-1">
             {detail.directSessions.map((session) => (
@@ -206,10 +208,10 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 <span className="text-text">{sessionInitiatorLabel(session.initiator)}</span> ·
                 observer{' '}
                 <span className="text-aqua" title={session.observerPeerId}>
-                  {truncateHash(session.observerPeerId)}
+                  <NoBreak>{truncateHash(session.observerPeerId)}</NoBreak>
                 </span>{' '}
                 · {session.clientVersion || 'unknown client'} · observed {session.observationCount}{' '}
-                completed round{session.observationCount === 1 ? '' : 's'} · latest{' '}
+                completed {countNoun(session.observationCount, 'round')} · latest{' '}
                 {formatTimeAgo(session.lastObservedAt * 1000)} · session address metadata:{' '}
                 {session.sessionAddresses.length === 0
                   ? 'none reported'
@@ -244,7 +246,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <ObservationList observations={detail.lastCompleted.observations} />
         </div>
       ) : (
-        <p className="text-text-dim">No completed probe observation</p>
+        <p className="text-text-dim">No completed probe observation.</p>
       )}
 
       {detail.active && (
@@ -283,7 +285,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised by</h4>
         {detail.advertisers.length === 0 ? (
-          <p className="text-text-dim">No retained advertiser evidence</p>
+          <p className="text-text-dim">No retained advertiser evidence.</p>
         ) : (
           <ul className="space-y-1">
             {detail.advertisers.map((advertiser) => (
@@ -292,11 +294,10 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 className="text-text-dim"
               >
                 <span className="text-aqua" title={advertiser.advertiserPeerId}>
-                  {truncateHash(advertiser.advertiserPeerId)}
+                  <NoBreak>{truncateHash(advertiser.advertiserPeerId)}</NoBreak>
                 </span>{' '}
                 · <span className="break-all">{advertiser.alias}</span> · observed{' '}
-                {advertiser.observationCount} completed round
-                {advertiser.observationCount === 1 ? '' : 's'} · first round #
+                {formatCount(advertiser.observationCount, 'completed round')} · first round #
                 {advertiser.firstObservedRound} · latest round #{advertiser.lastObservedRound} ·{' '}
                 {formatTimeAgo(advertiser.lastObservedAt * 1000)}
               </li>
@@ -449,7 +450,7 @@ function PeerRow({
                 {expanded ? '▾' : '▸'}
               </span>
               <span className="text-aqua text-small whitespace-nowrap">
-                {truncateHash(peer.peerId)}
+                <NoBreak>{truncateHash(peer.peerId)}</NoBreak>
               </span>
               {/* As wide as its words (R16), at most the column, cut to fit. */}
               <span
@@ -472,7 +473,7 @@ function PeerRow({
               {/* The id keeps its width (already cut in the middle); the dial state takes what is
                   left of the line and wraps inside its tag only when it must. */}
               <span className="text-aqua text-small whitespace-nowrap">
-                {truncateHash(peer.peerId)}
+                <NoBreak>{truncateHash(peer.peerId)}</NoBreak>
               </span>
               <span className="min-w-0 justify-self-end">
                 <RowTag variant={state.variant} className="whitespace-normal">
@@ -518,7 +519,9 @@ function PeerRow({
             className="text-aqua text-small truncate text-left font-mono hover:underline"
           >
             {expanded ? '▾ ' : '▸ '}
-            <span>{truncateHash(peer.peerId)}</span>
+            <span>
+              <NoBreak>{truncateHash(peer.peerId)}</NoBreak>
+            </span>
           </button>
           {columns.slice(1).map((c) => (
             <span key={c.label} className={c.cell} title={c.title}>
@@ -696,7 +699,7 @@ export function PeersTable() {
               </div>
             ) : showEmpty ? (
               <div className="text-text-dim text-body py-12 text-center font-mono">
-                No peers match these evidence filters
+                No peers match these evidence filters.
               </div>
             ) : (
               rows.map((peer) => (

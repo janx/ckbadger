@@ -336,7 +336,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
   if (blocks.length === 0) {
     return (
       <div className="border-base-border/50 bg-base-surface/60 text-text-dim text-body rounded-lg border p-4">
-        No committed blocks yet
+        No committed blocks.
       </div>
     );
   }
@@ -377,7 +377,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
             <TxMetricScatter
               items={entry.items}
               stage="committed"
-              emptyText="No txns in this block"
+              emptyText="No transactions in this block."
               compact
             />
           </Link>
@@ -529,7 +529,7 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
             stage="mempool"
             items={pendingItems}
             totalCount={pendingItems.length}
-            emptyText="No pending transactions"
+            emptyText="No pending transactions."
           />
 
           <StageScatterCard
@@ -538,7 +538,7 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
             stage="proposed"
             items={proposalItems}
             totalCount={proposalItems.length}
-            emptyText="No proposed transactions"
+            emptyText="No proposed transactions."
           />
         </div>
 

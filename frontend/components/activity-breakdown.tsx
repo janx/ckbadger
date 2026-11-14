@@ -82,7 +82,7 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
           </div>
         ) : !summary ? (
           <div className="flex h-full items-center justify-center py-8">
-            <span className="text-text-dim text-small font-mono">No activity data yet</span>
+            <span className="text-text-dim text-small font-mono">No activity data.</span>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-4">

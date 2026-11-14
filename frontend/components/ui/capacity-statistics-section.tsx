@@ -103,7 +103,7 @@ export function CapacityStatisticsSection({
         />
 
         {isCapacityChartLoading ? (
-          <div className="text-text-dim py-6 text-center">Loading capacity history...</div>
+          <div className="text-text-dim py-6 text-center">Loading capacity history…</div>
         ) : capacityChart && capacityChart.data.length > 0 ? (
           <StackedAreaChart
             data={capacityChart.data}
@@ -112,7 +112,7 @@ export function CapacityStatisticsSection({
             valueUnit="shannon"
           />
         ) : (
-          <div className="text-text-dim py-6 text-center">No capacity history yet</div>
+          <div className="text-text-dim py-6 text-center">No capacity history.</div>
         )}
       </TerminalPanelContent>
     </TerminalPanel>

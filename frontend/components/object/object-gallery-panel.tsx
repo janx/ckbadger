@@ -388,7 +388,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           aria-label={props.searchLabel || 'Search'}
           className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim text-small w-44 rounded border px-2.5 py-1.5 font-mono transition-colors"
         />
-        {isFetching && <span className="text-text-dim text-small font-mono">Searching...</span>}
+        {isFetching && <span className="text-text-dim text-small font-mono">Searching…</span>}
       </>
     ) : null;
 

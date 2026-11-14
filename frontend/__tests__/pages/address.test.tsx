@@ -127,8 +127,9 @@ const namedRight = {
 };
 const tab = async (name: string) =>
   fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${name}`) }));
-// Phase 5 (A21): the holdings heading runs on the address's live cells.
-const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+ cells?$/ });
+// Phase 5 (A21): the holdings heading runs on the address's live cells (U-16, re-pinned: the count
+// and its noun are one unit, a no-break space between them).
+const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+\scells?$/ });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -259,7 +260,10 @@ describe('Address v3', () => {
     // (it was text-body in the text ink) takes it; the copy button keeps its own classes
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
     const full = within(idLine).getByText(addressText);
-    expect(full.className).toBe('font-mono min-w-0');
+    // U-16 (re-pinned): a full value is one line in its own box, scrolled when it must
+    expect(full.className).toBe(
+      'font-mono inline-block max-w-full overflow-x-auto whitespace-nowrap align-top min-w-0'
+    );
     expect(full).toHaveAttribute('title', addressText);
     expect(full.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     expect(screen.getByRole('button', { name: 'Copy address' })).toHaveClass(
@@ -348,14 +352,16 @@ describe('Address v3', () => {
       within(nav)
         .getAllByRole('link')
         .map((l) => l.textContent)
-    ).toEqual(['5 DAO cells', '9 tokens', '14 objects', '1 identity']);
+    ).toEqual(['5\u00a0DAO cells', '9\u00a0tokens', '14\u00a0objects', '1\u00a0identity']);
     // Phase 5 (A21): the holdings run on the live cells; the count nav stands beside the heading,
     // outside its name, and the section is named by the heading.
-    const heading = screen.getByRole('heading', { name: 'Holdings 40 cells' });
+    const heading = screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' });
     expectPrompt(heading, 'Holdings', '40 cells');
     expect(heading.parentElement).toContainElement(nav);
     expect(heading).not.toContainElement(nav);
-    expect(screen.getByRole('region', { name: 'Holdings 40 cells' })).toContainElement(heading);
+    expect(screen.getByRole('region', { name: 'Holdings 40\u00a0cells' })).toContainElement(
+      heading
+    );
     expect(screen.queryByText(/holdings, one mark each/)).toBeNull();
     expect(await screen.findByRole('link', { name: 'valar.bit' })).toHaveAttribute(
       'href',
@@ -1051,7 +1057,7 @@ describe('Address v3', () => {
     }));
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('1 deposits · 1 withdrawal requests')).toBeInTheDocument();
+    expect(await screen.findByText('1 deposit · 1 withdrawal request')).toBeInTheDocument();
     const request = addressProducerCells.data.find((c) => c.dao?.status === 'withdrawing')!;
     expect(request.dao!.lockScriptHash).not.toBe(request.lockScriptHash);
     expect(screen.getByRole('link', { name: 'withdraw requested' })).toHaveAttribute(
@@ -1391,7 +1397,9 @@ describe('Address · consistency round (C13, C14)', () => {
     vi.mocked(api.getAddressTokens).mockResolvedValue(pageFixture([]));
     render(<AddressDetailPage />);
     await loaded();
-    const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' }).closest('section')!;
+    const holdings = screen
+      .getByRole('heading', { name: 'Holdings 40\u00a0cells' })
+      .closest('section')!;
     expect(within(holdings).getByText('no tokens')).toBeInTheDocument();
     expect(within(holdings).queryByRole('heading', { name: /Tokens$/ })).toBeNull();
     expect(within(holdings).getByRole('heading', { name: /Objects$/ })).toBeInTheDocument();
@@ -1401,7 +1409,9 @@ describe('Address · consistency round (C13, C14)', () => {
   it('leads Holdings with the composition block, every tier counted', async () => {
     render(<AddressDetailPage />);
     await loaded();
-    const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' }).closest('section')!;
+    const holdings = screen
+      .getByRole('heading', { name: 'Holdings 40\u00a0cells' })
+      .closest('section')!;
     const comp = within(holdings).getByRole('group', { name: 'Object composition' });
     expect(comp).toHaveTextContent('11 of 14 fully on-chain');
     expect(
@@ -1484,7 +1494,7 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(tier1.querySelector('section')).toHaveAttribute('aria-label', 'Balance');
     const balance = screen.getByRole('region', { name: 'Balance' });
     const metrics = screen.getByRole('region', { name: 'Metrics' });
-    const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' });
+    const holdings = screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' });
     expect(
       balance.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();

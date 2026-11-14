@@ -10,6 +10,7 @@ import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-pa
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
 
 type Point = NetworkMap['points'][number];
 
@@ -277,7 +278,7 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
     ['where', `${point.country} · ${point.asn ?? '—'}`],
     [
       'in address books',
-      `of ${point.advertiserCount.toLocaleString()} peers in round #${roundId ?? '—'}`,
+      `of ${formatCount(point.advertiserCount, 'peer')} in round #${roundId ?? '—'}`,
     ],
     ['first seen', formatUtc8Date(point.firstSeen * 1000)],
   ];

@@ -55,7 +55,7 @@ describe('DotCellRecordsTable', () => {
   it('says so when a name has no records', () => {
     render(<DotCellRecordsTable records={[]} />);
 
-    expect(screen.getByText('No records set.')).toBeInTheDocument();
+    expect(screen.getByText('No records.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 });

@@ -490,7 +490,7 @@ describe('Tokens Inventory Page', () => {
     render(<TokensPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('No tokens found')).toBeInTheDocument();
+      expect(screen.getByText('No tokens.')).toBeInTheDocument();
     });
   });
 
@@ -709,7 +709,7 @@ describe('Objects Inventory Page', () => {
     render(<ObjectsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('No objects found')).toBeInTheDocument();
+      expect(screen.getByText('No objects.')).toBeInTheDocument();
     });
   });
 
@@ -775,7 +775,7 @@ describe('Identities Inventory Page', () => {
     render(<IdentitiesPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('No identities found')).toBeInTheDocument();
+      expect(screen.getByText('No identities.')).toBeInTheDocument();
     });
   });
 
@@ -858,7 +858,7 @@ describe('Inventory approved board regressions', () => {
     vi.mocked(api.getAssets).mockRejectedValue(new Error('pinned read failed'));
     render(<ObjectsPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('pinned read failed');
-    expect(screen.queryByText('No objects found')).not.toBeInTheDocument();
+    expect(screen.queryByText('No objects.')).not.toBeInTheDocument();
   });
 });
 

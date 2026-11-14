@@ -23,7 +23,7 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
   });
 
   if (isLoading) {
-    return <div className="text-text-dim text-small px-4 py-3">Loading code cells...</div>;
+    return <div className="text-text-dim text-small px-4 py-3">Loading code cells…</div>;
   }
 
   if (data?.ambiguity) {
@@ -35,7 +35,7 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
   }
 
   if (!data || data.codeCells.length === 0) {
-    return <div className="text-text-dim text-small px-4 py-3">No code cells found</div>;
+    return <div className="text-text-dim text-small px-4 py-3">No code cells.</div>;
   }
 
   return (

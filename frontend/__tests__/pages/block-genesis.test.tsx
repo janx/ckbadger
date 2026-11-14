@@ -156,7 +156,7 @@ describe('the genesis block page', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('No proposals in this block')).toBeInTheDocument();
+    expect(screen.getByText('No proposals in this block.')).toBeInTheDocument();
     expect(screen.getByText('No uncles in this block.')).toBeInTheDocument();
   });
 });

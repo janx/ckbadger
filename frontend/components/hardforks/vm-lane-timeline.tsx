@@ -10,7 +10,7 @@ import {
 } from '@/components/hardforks/script-deployment-timeline';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2, HardforkScriptDeployment } from '@/lib/api';
 
@@ -311,7 +311,7 @@ export function VmLaneTimeline({
             // data2's note sits between the editions, clear of the Mirana line.
             const noteFrom = hashType === 'data2' ? t1 : genesisMs;
             const live = formatExactDecimal(lane.liveReferences, `${hashType} live references`);
-            const versions = `${lane.knownVersions.toLocaleString()} known version${lane.knownVersions === 1 ? '' : 's'}`;
+            const versions = `${lane.knownVersions.toLocaleString()} known ${countNoun(lane.knownVersions, 'version')}`;
             const dots = byTime.filter((deployment) => deployment.hashTypes!.includes(hashType));
             const rows = laneDotRows(dots.map((deployment) => x(deployment.timestampMs)));
             return (

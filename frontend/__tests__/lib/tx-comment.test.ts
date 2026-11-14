@@ -16,33 +16,33 @@ const TRANSFER: TxCommentInput = {
 describe('txComment', () => {
   it('says how many cells became how many, the fee to the miner and how common knowledge grew', () => {
     expect(txComment(TRANSFER)).toEqual([
-      '3 cells became 2.',
+      '3\u00a0cells became 2.',
       '0.00001647 ckb to the miner.',
-      'common knowledge grew by 61 bytes.',
+      'common knowledge grew by 61\u00a0bytes.',
     ]);
   });
 
   it('agrees the noun with one cell and one byte, and groups thousands', () => {
     expect(txComment({ ...TRANSFER, inputs: 1, outputs: 2, knowledgeDeltaBytes: 1 })).toEqual([
-      '1 cell became 2.',
+      '1\u00a0cell became 2.',
       '0.00001647 ckb to the miner.',
-      'common knowledge grew by 1 byte.',
+      'common knowledge grew by 1\u00a0byte.',
     ]);
     expect(
       txComment({ ...TRANSFER, inputs: 1_204, outputs: 1_000, knowledgeDeltaBytes: 12_345 })
     ).toEqual([
-      '1,204 cells became 1,000.',
+      '1,204\u00a0cells became 1,000.',
       '0.00001647 ckb to the miner.',
-      'common knowledge grew by 12,345 bytes.',
+      'common knowledge grew by 12,345\u00a0bytes.',
     ]);
   });
 
   it('says common knowledge shrank, or did not change, by the sign of the delta', () => {
     expect(txComment({ ...TRANSFER, knowledgeDeltaBytes: BigInt(-1) })[2]).toBe(
-      'common knowledge shrank by 1 byte.'
+      'common knowledge shrank by 1\u00a0byte.'
     );
     expect(txComment({ ...TRANSFER, knowledgeDeltaBytes: -4_096 })[2]).toBe(
-      'common knowledge shrank by 4,096 bytes.'
+      'common knowledge shrank by 4,096\u00a0bytes.'
     );
     expect(txComment({ ...TRANSFER, knowledgeDeltaBytes: BigInt(0) })[2]).toBe(
       'common knowledge unchanged.'
@@ -71,14 +71,14 @@ describe('txComment', () => {
         knowledgeDeltaBytes: BigInt(122),
       })
     ).toEqual([
-      '2 cells from the block reward; none consumed.',
-      'common knowledge grew by 122 bytes.',
+      '2\u00a0cells from the block reward; none consumed.',
+      'common knowledge grew by 122\u00a0bytes.',
     ]);
     expect(
       txComment({ inputs: 0, outputs: 1, isCellbase: true, feeCkb: null, knowledgeDeltaBytes: 61 })
     ).toEqual([
-      '1 cell from the block reward; none consumed.',
-      'common knowledge grew by 61 bytes.',
+      '1\u00a0cell from the block reward; none consumed.',
+      'common knowledge grew by 61\u00a0bytes.',
     ]);
   });
 

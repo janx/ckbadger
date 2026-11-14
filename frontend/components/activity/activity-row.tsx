@@ -4,7 +4,6 @@ import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   ActivityReadError,
-  DotJoined,
   ExactCkb,
   ItemDeltaFact,
   activityClassMark,
@@ -16,6 +15,8 @@ import {
   type ProtocolNoteFact,
 } from '@/components/activity-event-row';
 import { ParticipantRefView } from '@/components/participant-ref';
+import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
 import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
@@ -40,6 +41,7 @@ import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { NoBreak } from '@/components/ui/no-break';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-base-elevated py-2 transition-colors';
@@ -65,7 +67,8 @@ function RowDate({ timestamp }: { timestamp: string }) {
  * evidence quiet on the right — block, tx hash, date — always there to verify it against.
  *
  * `layout="line"` (tables round 2026-11-02, T7 · option A) is the activity row's one 18 px line:
- * the title, then `details` inline (the tx-level facts, dim), the evidence on the right. With
+ * the title, then `details` inline (the tx-level facts, dim), the evidence on the right. The title
+ * and the details are one separated list (PA-25): a "·" never ends a line or opens one. With
  * `href` the title is the link to the transaction and the default evidence is block · date — the
  * hash is the row's hover (`title`), not text. The default `layout="wrap"` keeps the hash link
  * (TxRow). Consistency C3: both end with the absolute UTC+8 date, the age in its hover (was the age).
@@ -96,8 +99,8 @@ export function ActivityRowHead({
   layout?: 'wrap' | 'line';
   /** T7 (line layout): the title links here and the default evidence leaves the hash out. */
   href?: string;
-  /** T7 (line layout): the tx-level facts drawn inline after the title. */
-  details?: ReactNode;
+  /** T7 (line layout): the tx-level facts after the title, as parts of the head's one list. */
+  details?: readonly (ReactNode | DottedGroup)[];
 }) {
   const line = layout === 'line';
   const linked = line && href !== undefined;
@@ -112,20 +115,24 @@ export function ActivityRowHead({
     >
       {line ? (
         <span data-role="head-main" className="min-w-0">
-          {linked ? (
-            <Link
-              data-role="headline"
-              href={href}
-              className={cn(titleClass, 'hover:text-jade transition-colors')}
-            >
-              {title}
-            </Link>
-          ) : (
-            <span data-role="headline" className={titleClass}>
-              {title}
-            </span>
-          )}
-          {details}
+          <Dotted
+            parts={[
+              linked ? (
+                <Link
+                  data-role="headline"
+                  href={href}
+                  className={cn(titleClass, 'hover:text-jade transition-colors')}
+                >
+                  {title}
+                </Link>
+              ) : (
+                <span data-role="headline" className={titleClass}>
+                  {title}
+                </span>
+              ),
+              ...(details ?? []),
+            ]}
+          />
         </span>
       ) : (
         <span data-role="headline" className={titleClass}>
@@ -164,7 +171,7 @@ export function ActivityRowHead({
                 href={`/tx/${hash}`}
                 className="hover:text-jade text-text-dim transition-colors"
               >
-                {truncateHash(hash, 10, 6)}
+                <NoBreak>{truncateHash(hash, 10, 6)}</NoBreak>
               </Link>
               {' · '}
             </>
@@ -195,30 +202,36 @@ function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string
 }
 
 /**
- * A run of calls, dot-joined. Over PARTICIPANT_LIMIT, the first five and an explicit
- * "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390).
+ * A run of calls as parts of the head's list. Over PARTICIPANT_LIMIT, the first five and an
+ * explicit "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390),
+ * written after the last name shown, so it never stands alone after a separator.
  */
-function FoldedCalls({ parts, noun }: { parts: ReactNode[]; noun: 'types' | 'locks' }) {
-  const [open, setOpen] = useState(false);
+function foldedCalls(
+  parts: ReactNode[],
+  noun: 'types' | 'locks',
+  open: boolean,
+  onOpen: () => void
+): ReactNode[] {
   const folded = !open && parts.length > PARTICIPANT_LIMIT;
-  const shown = folded ? parts.slice(0, PARTICIPANT_LIMIT - 1) : parts;
-  return (
-    <>
-      <DotJoined parts={shown} />
-      {folded && (
-        <>
-          {' '}
-          <button
-            type="button"
-            aria-expanded={false}
-            onClick={() => setOpen(true)}
-            className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
-          >
-            +{parts.length - shown.length} more {noun}
-          </button>
-        </>
-      )}
-    </>
+  if (!folded) return parts;
+  const shown = parts.slice(0, PARTICIPANT_LIMIT - 1);
+  const last = shown.length - 1;
+  return shown.map((part, i) =>
+    i < last ? (
+      part
+    ) : (
+      <>
+        {part}{' '}
+        <button
+          type="button"
+          aria-expanded={false}
+          onClick={onOpen}
+          className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
+        >
+          +{parts.length - shown.length} more {noun}
+        </button>
+      </>
+    )
   );
 }
 
@@ -287,16 +300,28 @@ function callNames(refs: CallRef[]): ReactNode[] {
   ));
 }
 
-/** One inline group of tx-level facts after the headline, led by a dim middle dot. */
-function DetailRun({ children }: { children: ReactNode }) {
-  return (
+/** The voice of the tx-level facts after the headline: one run of them, named `detail`. */
+const DETAIL = 'text-text-dim text-small font-normal';
+
+function detailRun(parts: readonly ReactNode[]): DottedGroup {
+  return dottedGroup(parts, { role: 'detail', className: DETAIL });
+}
+
+/** A part with "×k" after it, when a line stands for k alike. */
+function times(part: ReactNode, count: number): ReactNode {
+  return count > 1 ? (
     <>
-      <span className="text-text-dim text-small">{' \u00B7 '}</span>
-      <span data-role="detail" className="text-text-dim text-small font-normal">
-        {children}
-      </span>
+      {part}
+      <span className="text-text-dim"> ×{count}</span>
     </>
+  ) : (
+    part
   );
+}
+
+/** The last part of a run with "×k" after it. */
+function withCount(parts: readonly ReactNode[], count: number): ReactNode[] {
+  return parts.map((part, i) => (i === parts.length - 1 ? times(part, count) : part));
 }
 
 /** One protocol action as a row reads it: its name, whether the headline names it, its facts. */
@@ -311,18 +336,15 @@ interface ProtocolActionView {
 }
 
 /** What a run of one action counts: a DAO action is one per deposit cell; any other, an action. */
-function actionNoun(action: string, count: number): string {
+function actionNoun(action: string): string {
   const [protocol, name] = action.split(':');
-  const noun =
-    protocol === 'dao' ? (name === 'withdraw_complete' ? 'withdrawal' : 'deposit') : 'action';
-  return count === 1 ? noun : `${noun}s`;
+  return protocol === 'dao' ? (name === 'withdraw_complete' ? 'withdrawal' : 'deposit') : 'action';
 }
 
 /** "51 deposits" for a run of one action, "7 actions" for a mixed one. */
-function runNoun(actions: ProtocolActionView[]): string {
+function runCount(actions: ProtocolActionView[]): string {
   const one = actions.every((a) => a.action === actions[0].action);
-  if (one) return actionNoun(actions[0].action, actions.length);
-  return actions.length === 1 ? 'action' : 'actions';
+  return formatCount(actions.length, one ? actionNoun(actions[0].action) : 'action');
 }
 
 /** The head's one line (T7): 18 px. */
@@ -371,21 +393,9 @@ function inlineParts(g: ProtocolLineGroup): ReactNode[] {
   return g.first.isPrimary ? facts : [g.first.label, ...facts];
 }
 
-function InlineProtocolRuns({ groups }: { groups: ProtocolLineGroup[] }) {
-  return (
-    <>
-      {groups.map((g) => {
-        const parts = inlineParts(g);
-        if (parts.length === 0) return null;
-        return (
-          <DetailRun key={g.key}>
-            <DotJoined parts={parts} />
-            {g.count > 1 && <span className="text-text-dim"> ×{g.count}</span>}
-          </DetailRun>
-        );
-      })}
-    </>
-  );
+/** Each line of the head's protocol facts as one run of its list. */
+function inlineProtocolRuns(groups: ProtocolLineGroup[]): DottedGroup[] {
+  return groups.map((g) => detailRun(withCount(inlineParts(g), g.count)));
 }
 
 /**
@@ -393,38 +403,30 @@ function InlineProtocolRuns({ groups }: { groups: ProtocolLineGroup[] }) {
  * — the headline names its own — with the count, and for a run of one action whose every member
  * carries an amount, the exact total (its title says what it sums). Nothing of the list inline.
  */
-function ProtocolRunSummary({
-  actions,
-  primaryAction,
-}: {
-  actions: ProtocolActionView[];
-  primaryAction: string | null;
-}) {
+function protocolRunSummary(
+  actions: ProtocolActionView[],
+  primaryAction: string | null
+): DottedGroup[] {
   const one = actions.every((a) => a.action === actions[0].action);
   const amounts = actions.map((a) => a.facts.find((f) => f.kind === 'capacity'));
   const total =
     one && amounts.every((f) => f !== undefined)
       ? amounts.reduce((sum, f) => sum + (f as { shannons: bigint }).shannons, BigInt(0))
       : null;
-  const noun = runNoun(actions);
-  return (
-    <>
-      <DetailRun>
-        {one && actions[0].action !== primaryAction ? `${actions[0].label} · ` : ''}
-        {actions.length} {noun}
-      </DetailRun>
-      {total !== null && (
-        <DetailRun>
-          <span
-            data-role="protocol-total"
-            title={`${formatCkbAmount(total).full} CKB, the sum of ${actions.length} ${noun}`}
-          >
-            <ExactCkb shannons={total} signed={false} tone="plain" />
-          </span>
-        </DetailRun>
-      )}
-    </>
-  );
+  const count = runCount(actions);
+  return [
+    detailRun([one && actions[0].action !== primaryAction && actions[0].label, count]),
+    detailRun([
+      total !== null && (
+        <span
+          data-role="protocol-total"
+          title={`${formatCkbAmount(total).full} CKB, the sum of ${count}`}
+        >
+          <ExactCkb shannons={total} signed={false} tone="plain" />
+        </span>
+      ),
+    ]),
+  ];
 }
 
 /** Characters an exact amount takes ("5,100.00000000 CKB"): the width of the amount column. */
@@ -476,8 +478,7 @@ function ProtocolActionLine({
   if (parts.length === 0) parts.push(action.label);
   return (
     <div data-role="protocol-line" className="text-text-dim text-small pl-[18px] leading-[18px]">
-      <DotJoined parts={parts} />
-      {group.count > 1 && <span className="text-text-dim"> ×{group.count}</span>}
+      <Dotted parts={withCount(parts, group.count)} />
     </div>
   );
 }
@@ -510,7 +511,7 @@ function ProtocolActionList({
         onClick={() => setOpen((o) => !o)}
         className="text-interactive hover:text-jade text-small self-start bg-transparent pl-[18px] leading-[18px] transition-colors"
       >
-        {open ? 'fewer ↑' : `${actions.length} ${runNoun(actions)} ↓`}
+        {open ? 'fewer ↑' : `${runCount(actions)} ↓`}
       </button>
       {open &&
         groups.map((g) => (
@@ -534,11 +535,12 @@ function ProtocolActionList({
  */
 function activityDetails(
   activity: ActivityBody & { txHash: string },
-  showScriptDetails: boolean
+  showScriptDetails: boolean,
+  folds: { types: boolean; locks: boolean; open: (run: 'types' | 'locks') => void }
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
-  calls: ReactNode;
+  calls: DottedGroup[];
   errors: ReactNode;
 } {
   const primary = classifyActivity(activity).primaryProtocolAction;
@@ -568,24 +570,37 @@ function activityDetails(
       facts,
     });
   });
-  const calls: ReactNode[] = [];
+  const calls: DottedGroup[] = [];
   if (showScriptDetails && types.length > 0)
     calls.push(
-      <DetailRun key="type">
-        <FoldedCalls noun="types" parts={callNames(types.map(typeCallRef))} />
-      </DetailRun>
+      detailRun(
+        foldedCalls(callNames(types.map(typeCallRef)), 'types', folds.types, () =>
+          folds.open('types')
+        )
+      )
     );
-  if (showScriptDetails && locks.length > 0)
+  if (showScriptDetails && locks.length > 0) {
+    // "lock" names the run once, before its first name
+    const [first, ...rest] = foldedCalls(
+      callNames(locks.map(lockCallRef)),
+      'locks',
+      folds.locks,
+      () => folds.open('locks')
+    );
     calls.push(
-      <DetailRun key="lock">
-        {'lock '}
-        <FoldedCalls noun="locks" parts={callNames(locks.map(lockCallRef))} />
-      </DetailRun>
+      detailRun([
+        <>
+          {'lock '}
+          {first}
+        </>,
+        ...rest,
+      ])
     );
+  }
   return {
     actions,
     primaryAction: primary ? `${primary.protocol}:${primary.action}` : null,
-    calls: <>{calls}</>,
+    calls,
     errors: <>{errors}</>,
   };
 }
@@ -691,7 +706,7 @@ function ItemsOnLine({
           onClick={() => setOpen(true)}
           className={cn(LINE_BUTTON, className)}
         >
-          +{objects.length - 1} more object{objects.length - 1 === 1 ? '' : 's'}
+          +{objects.length - 1} more {countNoun(objects.length - 1, 'object')}
         </button>
       )}
     </>
@@ -704,7 +719,7 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
   const arrived = objects.filter((o) => o.delta > 0).length;
   const departed = objects.length - arrived;
   const counts = [arrived > 0 && `+${arrived}`, departed > 0 && `−${departed}`].filter(Boolean);
-  return `${counts.join(' ')} object${objects.length === 1 ? '' : 's'}`;
+  return `${counts.join(' ')} ${countNoun(objects.length, 'object')}`;
 }
 
 /**
@@ -897,7 +912,7 @@ function Participants({
           onClick={() => setExpanded((e) => !e)}
           className="text-interactive hover:text-jade text-small self-start bg-transparent pl-[18px] leading-[18px] transition-colors"
         >
-          {expanded ? 'Show fewer participants' : `+${hidden} participants`}
+          {expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`}
         </button>
       )}
     </div>
@@ -972,7 +987,11 @@ export function ActivityRow({
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
   const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
-  const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails);
+  const [openRuns, setOpenRuns] = useState({ types: false, locks: false });
+  const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails, {
+    ...openRuns,
+    open: (run) => setOpenRuns((runs) => ({ ...runs, [run]: true })),
+  });
   // Lane F follow-up 2: over PARTICIPANT_LIMIT lines the run is a list under the head; two to six
   // stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
   // transaction, before paint), else the same list. One line is always inline. Lines are the
@@ -991,17 +1010,14 @@ export function ActivityRow({
       throw new Error(`transaction ${activity.txHash}: the activity row is not mounted`);
     setFit({ tx: activity.txHash, fits: headIsOneLine(article, activity.txHash) });
   }, [measured, fit, activity.txHash]);
-  const runs = (
-    <>
-      {actions.length > 0 &&
-        (listed ? (
-          <ProtocolRunSummary actions={actions} primaryAction={primaryAction} />
-        ) : (
-          <InlineProtocolRuns groups={groups} />
-        ))}
-      {calls}
-    </>
-  );
+  const runs: DottedGroup[] = [
+    ...(actions.length === 0
+      ? []
+      : listed
+        ? protocolRunSummary(actions, primaryAction)
+        : inlineProtocolRuns(groups)),
+    ...calls,
+  ];
   return (
     <article
       ref={articleRef}

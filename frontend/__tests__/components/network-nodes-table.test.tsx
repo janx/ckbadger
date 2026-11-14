@@ -127,7 +127,7 @@ describe('PeersTable', () => {
       within(evidence).getByText(/session address metadata: none reported/)
     ).toBeInTheDocument();
     expect(within(evidence).getByText(/not used as crawler dial aliases/)).toBeInTheDocument();
-    expect(within(evidence).getByText('No completed probe observation')).toBeInTheDocument();
+    expect(within(evidence).getByText('No completed probe observation.')).toBeInTheDocument();
   });
 });
 

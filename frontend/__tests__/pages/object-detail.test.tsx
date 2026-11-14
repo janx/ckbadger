@@ -67,8 +67,9 @@ it('renders exact raw protocol bytes and current gene mapping with separate VM p
   render(<SporeDetailPage sporeId={id} />);
   // F2 objects (OB-8): the number stays with the DNA; VM provenance is tier-2 DNA evidence.
   // Phase 5 (A13): the number is the last of the DNA command's args, which name the section.
+  // U-15 (re-pinned): one byte is "1 byte", the count and its noun one unit.
   expect(
-    await screen.findByRole('region', { name: /^DNA \d+ bytes · \d+ genes? · number \d+$/ })
+    await screen.findByRole('region', { name: /^DNA \d+\sbytes? · \d+\sgenes? · number \d+$/ })
   ).toHaveTextContent('18446744073709551614');
   expect(screen.getByLabelText('DNA evidence')).toHaveTextContent(
     'original decoder binary hash was not recorded'

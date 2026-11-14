@@ -20,18 +20,20 @@ import type {
   AddressCell,
   ParticipantInfo,
 } from '@/lib/api';
-import { formatUtc8Date } from '@/lib/utils';
+
 import type { AssetClass } from '@/lib/design-tokens';
 import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 interface AddressActivityProps {
   activity: Activity;
   address: Address;
 }
 
-const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+const plural = (n: number, noun: string) => formatCount(n, noun);
 
 /**
  * What this address's object changes were, as Address.dc.html → History heads them: "Received 9
@@ -114,7 +116,9 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
         <>
           <Link href={`/blocks/${tx.blockNumber}`}>{formatBlockNumber(tx.blockNumber)}</Link>
           {tx.timestamp !== null && (
-            <span className="text-text-dim">{formatUtc8Date(tx.timestamp)}</span>
+            <span className="text-text-dim">
+              <Utc8Date timestamp={tx.timestamp} />
+            </span>
           )}
         </>
       )}

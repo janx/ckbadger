@@ -27,6 +27,7 @@ import {
   type TxFlow,
 } from '@/lib/tx-flows';
 import { cn, truncateHash } from '@/lib/utils';
+import { NoBreak } from '@/components/ui/no-break';
 
 /** What the page lights in the cells diagram when a flow's party or asset is hovered. */
 export type WhatMovedHover =
@@ -257,7 +258,7 @@ function Plate({
           href={getObjectDetailHref(asset.item.objectId)}
           className="text-text-dim text-meta hover:text-jade"
         >
-          {truncateHash(asset.item.objectId, 10, 6)}
+          <NoBreak>{truncateHash(asset.item.objectId, 10, 6)}</NoBreak>
         </Link>
       )}
       {showTotal && (

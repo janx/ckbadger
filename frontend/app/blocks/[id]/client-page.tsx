@@ -30,16 +30,12 @@ import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
 import { formatCompactInteger } from '@/lib/exact-integer';
-import {
-  formatTimeAgo,
-  formatUtc8Date,
-  formatUtc8DateTime,
-  formatUtc8Time,
-  truncateHash,
-} from '@/lib/utils';
+import { formatTimeAgo, formatUtc8Time, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -286,7 +282,7 @@ export default function BlockDetailPage() {
                   />
                 </>
               )}{' '}
-              on {formatUtc8Date(block.timestamp)} at {formatUtc8Time(block.timestamp)}.
+              on <Utc8Date timestamp={block.timestamp} /> at {formatUtc8Time(block.timestamp)}.
               {block.miningReward !== null ? (
                 <>
                   {' '}
@@ -515,7 +511,7 @@ export default function BlockDetailPage() {
                           </p>
                         ) : (
                           <p className="text-text-dim">
-                            No indexed commitment in its proposal window
+                            No indexed commitment in its proposal window.
                           </p>
                         )}
                       </article>
@@ -524,12 +520,12 @@ export default function BlockDetailPage() {
                   {!proposalsError &&
                     (proposals?.length === 0 ||
                       (block.proposalsCount === 0 && block.unclesCount === 0)) && (
-                      <p className="text-text-dim text-small">No proposals in this block</p>
+                      <p className="text-text-dim text-small">No proposals in this block.</p>
                     )}
                   {!proposalsError &&
                     proposals === undefined &&
                     (block.proposalsCount > 0 || block.unclesCount > 0) && (
-                      <p className="text-text-dim text-small">Loading proposals...</p>
+                      <p className="text-text-dim text-small">Loading proposals…</p>
                     )}
                 </DetailSection>
               </div>
@@ -573,7 +569,7 @@ export default function BlockDetailPage() {
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Block bytes</dt>
                 {/* R2b-a 5: `size` is the molecule-serialized block. */}
-                <dd>{block.size.toLocaleString('en-US')} bytes, molecule-serialized</dd>
+                <dd>{formatCount(block.size, 'byte')}, molecule-serialized</dd>
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
@@ -657,7 +653,7 @@ export default function BlockDetailPage() {
                                 href={`/tx/${activity.txHash}`}
                                 className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
                               >
-                                {truncateHash(activity.txHash, 10, 6)}
+                                <NoBreak>{truncateHash(activity.txHash, 10, 6)}</NoBreak>
                               </Link>
                             </>
                           }
@@ -718,7 +714,9 @@ export default function BlockDetailPage() {
               <dl className="space-y-5">
                 <div>
                   <dt className="text-text-dim mb-1">Time</dt>
-                  <dd>{formatUtc8DateTime(block.timestamp)}</dd>
+                  <dd>
+                    <Utc8DateTime timestamp={block.timestamp} />
+                  </dd>
                   <dd className="text-text-dim mt-1">
                     {formatTimeAgo(block.timestamp)}
                     {parentElapsedMs !== null && (
@@ -892,7 +890,7 @@ function CommittedFrom({
     <span className="text-text-dim text-small">
       {origins.size === 1
         ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
-        : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${origins.size.toLocaleString('en-US')} blocks`}
+        : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${formatCount(origins.size, 'block')}`}
     </span>
   );
 }

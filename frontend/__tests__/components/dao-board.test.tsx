@@ -108,16 +108,16 @@ describe('DaoBoard', () => {
     const cycles = screen.getByRole('list', { name: 'Phase-0 cycle boundaries' });
     expect(within(cycles).getAllByRole('listitem')).toHaveLength(30);
     expect(
-      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1 deposits, 30000000000 shannons/)
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposits, 30000000000 shannons/)
     ).toBeInTheDocument();
     expect(
-      screen.getByTitle(/Nominal day 30, epochs \+174 to \+180: 1 deposits, 20000000000 shannons/)
+      screen.getByTitle(/Nominal day 30, epochs \+174 to \+180: 1\sdeposits, 20000000000 shannons/)
     ).toBeInTheDocument();
     fireEvent.focus(
-      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1 deposits, 30000000000 shannons/)
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposits, 30000000000 shannons/)
     );
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
+      'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposit'
     );
     // Board wording (DAO-14; hierarchy v3) for the same readiness partition.
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
@@ -256,7 +256,7 @@ describe('DaoBoard', () => {
     );
     const line = screen.getByText(/365-day anchor/);
     expect(line).toHaveTextContent(
-      '365-day anchor: block #3 · chain time 2025-10-29 18:32:50 UTC+8 · AR 1.0100000000000000 · observed span 365 d'
+      '365-day anchor: block #3 · chain time 2025-10-29 18:32:50 UTC+8 · AR 1.0100000000000000 · observed span 365d'
     );
     expect(line).not.toHaveTextContent(/ ms|10100000000000000/);
     // Lane L: the anchor block is a link.
@@ -1085,10 +1085,10 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     fireEvent.focus(
-      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1 deposits, 30000000000 shannons/)
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1\sdeposits, 30000000000 shannons/)
     );
     expect(within(windows()).getByRole('status', { name: 'Cycle reading' })).toHaveTextContent(
-      'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
+      'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposit'
     );
   });
 
@@ -1134,7 +1134,7 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     expect(windows().lastElementChild).toBe(caption);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     for (const moved of [
-      /A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made\./,
+      /A deposit runs in cycles of 180\sepochs, about 30\sdays, counted from the epoch it was made\./,
       /each bar is the CKB whose current cycle ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted calendar dates\./,
       /compensation stopped growing at the request/,
       /Epoch-lock readiness alone does not prove a complete withdraw transaction; the required input, headers, witnesses and script execution still apply\./,

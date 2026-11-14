@@ -264,7 +264,7 @@ describe('CellDetailPage', () => {
       expect(document.title).toMatch(/^Cell 0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · CKBadger$/)
     );
     expect(screen.getByText('Unspent for').parentElement).toHaveTextContent(
-      /^Unspent for1 mas of #125$/
+      /^Unspent for1mas of #125$/
     );
     expect(screen.queryByText(/ms/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
@@ -286,7 +286,7 @@ describe('CellDetailPage', () => {
     view();
     expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
     expect(screen.getByText(/input #2/)).toBeInTheDocument();
-    expect(screen.getByText(/30 s on chain/)).toBeInTheDocument();
+    expect(screen.getByText(/30s on chain/)).toBeInTheDocument();
     // Created / Spent times read as the site UTC+8 clock, never raw ISO (#16, SC-C1 row).
     expect(screen.getByText('2024-01-01 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();
@@ -337,12 +337,14 @@ describe('CellDetailPage', () => {
     const member = (index: number) => ({ txHash: `0x${'cd'.repeat(32)}`, outputIndex: index });
     getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0), member(1)] });
     const { unmount } = view();
-    const heading = await screen.findByRole('heading', { name: 'Dep group 2 items' });
+    const heading = await screen.findByRole('heading', { name: 'Dep group 2\u00a0items' });
     expect(heading.parentElement!.parentElement!.querySelectorAll('li')).toHaveLength(2);
     unmount();
     getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0)] });
     view();
-    expect(await screen.findByRole('heading', { name: 'Dep group 1 item' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'Dep group 1\u00a0item' })
+    ).toBeInTheDocument();
   });
   it('refuses a dep group without its members rather than drawing an empty list', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});

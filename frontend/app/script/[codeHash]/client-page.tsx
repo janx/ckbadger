@@ -101,7 +101,7 @@ export default function ScriptByCodeHashPage({
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
-          <div className="text-text-dim text-body">Resolving script page...</div>
+          <div className="text-text-dim text-body">Resolving script page…</div>
         </main>
       </div>
     );

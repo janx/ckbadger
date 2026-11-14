@@ -219,7 +219,7 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     // The picture is at least 280 px tall at every width (the map's own floor is 220 + its band).
     expect(Number(mapSvg.getAttribute('height'))).toBeGreaterThanOrEqual(220);
     expect(container.querySelector('[data-tier="1"] h2')).toHaveAccessibleName(
-      /^(Where they run|Which software they run) 66 nodes$/
+      /^(Where they run|Which software they run) 66\snodes$/
     );
   });
 
@@ -260,7 +260,7 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
       addressAttempts: 90,
       blockedReason: null,
     });
-    await within(tier1).findByRole('heading', { name: 'Which software they run 66 nodes' });
+    await within(tier1).findByRole('heading', { name: 'Which software they run 66\u00a0nodes' });
     const figure = hero.querySelector('[data-role="reachable"]')!;
     const coloured = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
       el
@@ -397,7 +397,10 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
   it('heads its own section and draws a 28 px bar with names and shares inside the segments', async () => {
     const section = await renderHosting(1200);
     // Phase 5 (B10): the section runs on the verified nodes its bar partitions.
-    const h2 = within(section).getByRole('heading', { level: 2, name: 'Where they run 66 nodes' });
+    const h2 = within(section).getByRole('heading', {
+      level: 2,
+      name: 'Where they run 66\u00a0nodes',
+    });
     expect(h2).toHaveClass('prompt', 'text-section', 'text-text-bright');
     expect(h2.lastElementChild).toHaveTextContent(/^66 nodes$/);
     expect(h2.lastElementChild).toHaveClass('text-text-dim');
@@ -442,7 +445,7 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     const { tier1, tier2 } = await renderPage();
     // Phase 5 (B11): the list runs on every verified node, reachable now or verified before.
     const h2 = await within(tier1).findByRole('heading', {
-      name: 'Which software they run 66 nodes',
+      name: 'Which software they run 66\u00a0nodes',
     });
     expect(h2).toHaveClass('prompt', 'text-section');
     expect(h2.lastElementChild).toHaveTextContent(/^66 nodes$/);
@@ -491,7 +494,7 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     });
     // Phase 5 (B12): the section runs on the days it plots.
     expect(within(section).getByRole('heading', { level: 2 })).toHaveAccessibleName(
-      'Over time 3 days'
+      'Over time 3\u00a0days'
     );
     expect(section.querySelector('figcaption')).toBeNull();
     expect(svg.querySelector('[data-role="chart-name"]')).toHaveTextContent(
@@ -639,9 +642,11 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     );
     render(wrap(<AdvertisementGraph roundId={5} />));
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(10));
-    fireEvent.click(screen.getByRole('button', { name: 'Show all 12 observations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 12\u00a0observations' }));
     expect(screen.getAllByRole('listitem')).toHaveLength(12);
-    expect(screen.getByRole('button', { name: 'Show first 10 observations' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Show first 10\u00a0observations' })
+    ).toBeInTheDocument();
   });
 });
 

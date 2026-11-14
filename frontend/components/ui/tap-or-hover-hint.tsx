@@ -112,6 +112,11 @@ function useIsFirstHint(place: RefObject<HTMLSpanElement | null>): boolean {
 export interface TapOrHoverHintProps extends TapOrHoverOptions {
   /** What the reader taps or hovers, e.g. "a day" or "for its name"; omitted, the bare words. */
   what?: string;
+  /**
+   * Led by " · " after the sentence it follows (PB-23): the dot belongs to the hint, drawn only
+   * when the hint is, and kept on its first word's line (a no-break space after it).
+   */
+  dotted?: boolean;
   className?: string;
 }
 
@@ -120,13 +125,14 @@ export interface TapOrHoverHintProps extends TapOrHoverOptions {
  * the page's first hint in the document says its words; the later ones keep an empty, hidden
  * element in their place.
  */
-export function TapOrHoverHint({ what, capital, className }: TapOrHoverHintProps) {
+export function TapOrHoverHint({ what, capital, dotted = false, className }: TapOrHoverHintProps) {
   const place = useRef<HTMLSpanElement>(null);
   const first = useIsFirstHint(place);
   // a later hint keeps only its place: an empty element that draws no box
   if (!first) return <span ref={place} data-hint-place="" hidden />;
   return (
     <span ref={place} data-hint="tap-or-hover" className={cn(className)}>
+      {dotted && ' ·\u00a0'}
       {tapOrHover(what, { capital })}
     </span>
   );

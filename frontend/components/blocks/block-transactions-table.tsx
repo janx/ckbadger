@@ -8,6 +8,7 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { Transaction } from '@/lib/api';
+import { formatCount } from '@/lib/format-count';
 
 const TRACK = 96;
 
@@ -43,7 +44,7 @@ function fee(tx: Transaction) {
 function cells(tx: Transaction) {
   return (
     <span className="whitespace-nowrap">
-      {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+      {tx.isCellbase ? 0 : tx.inputsCount} → {formatCount(tx.outputsCount, 'cell')}
     </span>
   );
 }

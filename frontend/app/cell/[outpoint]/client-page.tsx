@@ -16,7 +16,7 @@ import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
-import { formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { formatDurationMs, truncateHash } from '@/lib/utils';
 import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -24,6 +24,8 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** What `outpointParts` accepts, as the not-an-id page states it. */
 const OUTPOINT_RULE =
@@ -143,7 +145,9 @@ function ScriptFact({
         script.args !== '0x' || owner ? (
           <>
             {script.args !== '0x' && (
-              <span title={script.args}>args {short(script.args, 4, 4)}</span>
+              <span title={script.args}>
+                args <NoBreak>{short(script.args, 4, 4)}</NoBreak>
+              </span>
             )}
             {owner && (
               <Link
@@ -151,7 +155,7 @@ function ScriptFact({
                 title={owner}
                 className="hover:text-jade block [overflow-wrap:anywhere]"
               >
-                {truncateHash(owner, 10, 6)}
+                <NoBreak>{truncateHash(owner, 10, 6)}</NoBreak>
               </Link>
             )}
           </>
@@ -237,9 +241,7 @@ function CellFacts({
         sub={
           <>
             {cell.createdTimestamp && (
-              <time dateTime={cell.createdTimestamp}>
-                {formatUtc8DateTime(cell.createdTimestamp)}
-              </time>
+              <Utc8DateTime timestamp={cell.createdTimestamp} dateTime={cell.createdTimestamp} />
             )}
             {cell.createdEpoch ? (
               <span className="block">
@@ -263,9 +265,7 @@ function CellFacts({
           sub={
             <>
               {cell.spentTimestamp && (
-                <time dateTime={cell.spentTimestamp}>
-                  {formatUtc8DateTime(cell.spentTimestamp)}
-                </time>
+                <Utc8DateTime timestamp={cell.spentTimestamp} dateTime={cell.spentTimestamp} />
               )}
               {cell.consumingInputIndex != null && <> · input #{cell.consumingInputIndex}</>}
               {cell.lifetimeMs != null && <> · {formatDurationMs(cell.lifetimeMs)} on chain</>}
@@ -352,7 +352,7 @@ function CellOrigin({ cell }: { cell: Cell }) {
     <p data-testid="cell-origin">
       output {cell.outputIndex} of transaction{' '}
       <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        {short(cell.txHash)}
+        <NoBreak>{short(cell.txHash)}</NoBreak>
       </Link>{' '}
       ·{' '}
       {cell.status === 'dead' ? (

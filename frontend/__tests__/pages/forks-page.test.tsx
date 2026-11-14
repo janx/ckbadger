@@ -65,8 +65,8 @@ describe('ForksPage', () => {
         .getAllByRole('definition')
         .map((dd) => dd.textContent)
     ).toEqual([
-      '1 time · since 2025-08-01',
-      '1 uncle · 1 one block later',
+      '1\u00a0time · since 2025-08-01',
+      '1\u00a0uncle · 1 one block later',
       '1 of 1 · committed in a later block',
     ]);
     // R11: no coloured text in tier 1 (the glyphs and bars keep their colours)

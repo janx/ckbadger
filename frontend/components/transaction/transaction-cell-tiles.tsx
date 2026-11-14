@@ -11,6 +11,7 @@ import {
 } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { truncateHash } from '@/lib/utils';
+import { NoBreak } from '@/components/ui/no-break';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
   if (value === null || value === undefined)
     throw new Error(`Transaction ${hash} missing required field "${field}"`);
@@ -69,7 +70,7 @@ export function cellTiles(
     const a = required(address ?? undefined, tx.hash, `${context}.address`);
     return (
       <Link href={`/address/${a}`} className="text-text hover:text-jade">
-        {truncateHash(a, 10, 6)}
+        <NoBreak>{truncateHash(a, 10, 6)}</NoBreak>
       </Link>
     );
   };

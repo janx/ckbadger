@@ -12,7 +12,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import type { FiberNetwork, FiberParty } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { formatDurationMs, formatUtc8Date } from '@/lib/utils';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import {
@@ -26,6 +26,7 @@ import {
   type FiberGraphModel,
   type FiberGraphNode,
 } from '@/lib/fiber-network-model';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -145,7 +146,7 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
           [
             'first channel',
             <span key="first">
-              {formatUtc8Date(party.firstOpenTimestamp)} ·{' '}
+              <Utc8Date timestamp={party.firstOpenTimestamp} /> ·{' '}
               <Link href={`/blocks/${party.firstOpenBlock}`} className="hover:text-jade">
                 {formatBlockNumber(party.firstOpenBlock)}
               </Link>
@@ -560,7 +561,7 @@ export function FiberPartiesNote({ network }: { network: FiberNetwork }) {
       Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not
       which node ran it.
       {data.unpairedChannels > 0 &&
-        ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${data.unpairedChannels === 1 ? 'is' : 'are'} not drawn.`}
+        ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${countNoun(data.unpairedChannels, 'is', 'are')} not drawn.`}
     </p>
   );
 }

@@ -3,7 +3,7 @@ import { extendTailwindMerge } from 'tailwind-merge';
 import { formatScaledInteger } from '@/lib/exact-integer';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { TYPE_STEPS } from '@/lib/type-scale';
-import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
+import { formatAgeOneUnit, formatSpan } from '@/lib/format-age';
 
 // tailwind-merge reads an unknown `text-<word>` as a colour; the scale's steps are sizes, so
 // `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last.
@@ -25,16 +25,9 @@ export function formatUtc8Date(timestamp: string | number): string {
   return utc8Iso(timestampMs(timestamp, 'block timestamp')).slice(0, 10);
 }
 
-/** A feed row's relative age in one unit ("5m ago"), by the same rule as `formatAgeTwoUnits`. */
-export function formatTimeAgo(timestamp: string | number | Date): string {
-  const age = ageSeconds(timestamp);
-  if (age.kind === 'clock-behind') return CLOCK_BEHIND;
-  const { seconds } = age;
-
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+/** A feed row's relative age in one unit ("5m ago"): format-age's one form (U-15). */
+export function formatTimeAgo(timestamp: string | number | Date, now = Date.now()): string {
+  return formatAgeOneUnit(timestamp, now);
 }
 
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -81,21 +74,16 @@ export function formatUnixSecondsUtc8(seconds: string): string {
   return formatUtc8DateTime(Number(ms));
 }
 
-/** Human duration from an exact millisecond count (SC-C1: not raw "… ms"). */
+/**
+ * Human duration from an exact millisecond count (SC-C1: not raw "… ms"), in format-age's one
+ * form (U-15): "26m 14s", "52s"; under a second "450ms".
+ */
 export function formatDurationMs(ms: number): string {
   if (!Number.isSafeInteger(ms) || ms < 0) {
     throw new Error(`invalid duration ms ${ms}`);
   }
-  if (ms < 1000) return `${ms} ms`;
-  const totalSeconds = Math.floor(ms / 1000);
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (days > 0) return hours > 0 ? `${days} d ${hours} h` : `${days} d`;
-  if (hours > 0) return minutes > 0 ? `${hours} h ${minutes} m` : `${hours} h`;
-  if (minutes > 0) return seconds > 0 ? `${minutes} m ${seconds} s` : `${minutes} m`;
-  return `${seconds} s`;
+  if (ms < 1000) return `${ms}ms`;
+  return formatSpan(Math.floor(ms / 1000));
 }
 
 export function formatCkbAmount(shannons: string | bigint): {

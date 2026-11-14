@@ -152,7 +152,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(phoneLines(dropped).map((l) => l.key)).toEqual(['identity', 'miner', 'fate']);
     expect(phoneLines(dropped)[0].left).toMatch(/^#11′ 0x/);
     expect(phoneLines(dropped)[1].left).toMatch(/^miner /);
-    expect(phoneLines(dropped)[1].right).toMatch(/^\d+ txs?$/);
+    expect(phoneLines(dropped)[1].right).toMatch(/^\d+\u00a0txs?$/);
     const txs = screen.getAllByTestId('fork-tx-row-mobile');
     const orphanHash = unincludedFixture.orphanedTransactions[1].hash;
     const orphan = txs.find((row) => row.textContent!.includes(orphanHash))!;
@@ -184,9 +184,13 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       'href',
       '/mainnet/blocks/12'
     );
-    expect(
-      within(tier2).getByText(`${uncleFixture.orphanedBlocks[0].hash} · #11`)
-    ).toBeInTheDocument();
+    // U-16 (re-pinned): the uncle's hash and number are two items of one list, the hash one token
+    const uncleHash = within(tier2)
+      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
+      .find((e) => e.closest('[data-dotted]'));
+    expect(uncleHash!.closest('[data-dotted]')).toHaveTextContent(
+      `${uncleFixture.orphanedBlocks[0].hash} · #11`
+    );
   });
 
   // U-16, PB-05 (UI review 2026-11-14): tier 2's full hashes wrapped across two lines in the middle
@@ -205,15 +209,17 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       event.newTipHash,
       uncleFixture.orphanedBlocks[0].hash,
     ]) {
-      const full = within(tier2).getByText(hash);
-      expect(full).toHaveAttribute('data-full-value');
-      expect(full).toHaveClass('whitespace-nowrap', 'overflow-x-auto', 'max-w-full');
+      for (const full of within(tier2).getAllByText(hash)) {
+        expect(full).toHaveAttribute('data-full-value');
+        expect(full).toHaveClass('whitespace-nowrap', 'overflow-x-auto', 'max-w-full');
+        expect(full.closest('.break-all')).toBeNull();
+      }
     }
-    expect(tier2.querySelectorAll('.break-all')).toHaveLength(0);
     // the uncle's number follows its hash as the next item of one list, never a loose "·"
     const uncle = within(tier2)
-      .getByText(uncleFixture.orphanedBlocks[0].hash)
-      .closest('[data-dotted]');
+      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
+      .map((e) => e.closest('[data-dotted]'))
+      .find(Boolean);
     expect(uncle).toHaveTextContent(`${uncleFixture.orphanedBlocks[0].hash} · #11`);
     expect(within(tier2).getByText('not recorded')).toBeInTheDocument();
     expect(tier2).not.toHaveTextContent('miner witness unavailable');
