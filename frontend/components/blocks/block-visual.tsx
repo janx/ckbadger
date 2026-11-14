@@ -183,7 +183,8 @@ export function resourceScale(values: readonly number[]): number {
   if (values.some((n) => !Number.isSafeInteger(n) || n < 0))
     throw new Error('Resource scale requires nonnegative exact integers');
   const max = values.length ? Math.max(...values) : 0;
-  const ticks = niceTicks(0, max);
+  // A count's scale is a whole number (an AlignedBar refuses any other: 7 drew 7.5).
+  const ticks = niceTicks(0, max, 4, 0, { integer: true });
   return ticks.values[ticks.values.length - 1];
 }
 

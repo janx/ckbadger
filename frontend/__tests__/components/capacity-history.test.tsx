@@ -87,8 +87,10 @@ it.each([928, 358])(
       // would sit on the data). No value is written twice.
       expect(plot.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
       const ticks = yTickLabels(plot).map((t) => t.textContent);
-      expect(ticks).toContain('0.0000005 CKB');
-      expect(ticks).toContain('0 CKB');
+      // and, since the lane A5 follow-up, bare: the plot's name says CKB once
+      expect(ticks).toContain('0.0000005');
+      expect(ticks).toContain('0');
+      expect(plot.querySelector('[data-role="chart-name"]')).toHaveTextContent('CKB');
       expect(new Set(ticks).size).toBe(ticks.length);
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       expect(errors).not.toHaveBeenCalled();
