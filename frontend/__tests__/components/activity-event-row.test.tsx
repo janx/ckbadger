@@ -756,6 +756,35 @@ describe('ExactCkb', () => {
     expect(unit).toHaveClass('text-text-dim', 'text-meta');
   });
 
+  // UI review 2026-11-14 (DY-06, U-08, ruling R4): the fraction digits are a step quieter than
+  // the integer in a named ink of the amount's sign at 4.5:1 (palette.test), never the sign's ink
+  // at 78 % (cinnabar 3.7:1 by night, celadon about 3.2–3.7:1 and the neutral 3.5:1 by day).
+  it('sets the fraction digits in the quieter ink of the amount’s sign, never at an opacity', () => {
+    const { container } = render(
+      <>
+        <ExactCkb shannons={BigInt(-30000)} />
+        <ExactCkb shannons={BigInt('75000000123')} />
+        <ExactCkb shannons={BigInt('75000000123')} signed={false} tone="plain" />
+        <ExactCkb shannons={BigInt(-30000)} signed={false} tone="plain" />
+      </>
+    );
+    const amounts = [...container.querySelectorAll('[data-ckb-amount]')];
+    const fractions = amounts.map((a) => a.querySelector('[data-fraction]'));
+    expect(fractions.map((f) => f?.textContent)).toEqual([
+      '.0003',
+      '.00000123',
+      '.00000123',
+      '.0003',
+    ]);
+    expect(fractions[0]).toHaveClass('text-rouge-fraction');
+    expect(fractions[1]).toHaveClass('text-jade-dim');
+    expect(fractions[2]).toHaveClass('text-text-dim');
+    expect(fractions[3]).toHaveClass('text-text-dim');
+    for (const amount of amounts)
+      for (const el of [amount, ...amount.querySelectorAll('*')])
+        expect([...el.classList].filter((c) => c.startsWith('opacity-'))).toEqual([]);
+  });
+
   // UI review 2026-11-14 (U-08, ruling R4): a value that IS zero is a datum ("fee 0 CKB"), so it
   // is the dim ink; the ghost is only for the padding zeros of a non-zero amount.
   it('draws a datum zero in the dim ink and only the padding zeros of a non-zero amount ghost', () => {
