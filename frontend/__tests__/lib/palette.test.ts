@@ -536,6 +536,8 @@ describe('the ELF region hues on the evidence tier', () => {
     expect(PALETTE.light['elf-data']).toBe('#7c6126');
     expect(PALETTE.light['elf-meta']).toBe('#695c9a');
     expect(PALETTE.light['elf-header']).toBe('#416a7a');
+    // round 4: the header's hue and chroma at L 0.430 (the night pair's 0.0706 below the header)
+    expect(PALETTE.light['elf-program-headers']).toBe('#2d5665');
     expect([
       PALETTE.dark['elf-header'],
       PALETTE.dark['elf-program-headers'],

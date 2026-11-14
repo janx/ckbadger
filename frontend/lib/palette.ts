@@ -285,9 +285,10 @@ const light: Palette = {
   'code-unspendable-fill': '#bbb1a0',
   // An ELF region's hue paints its hex digits on the cell page: text grade on the four grounds and
   // the tier-2 ground, moved in OKLCH lightness only where short (lane E2 round 3). The program
-  // headers stay short: moved alone they would be the header's twin (awaiting a ruling).
+  // headers are the header's hue and chroma a step darker by day (a step lighter by night), as far
+  // from it as the night pair: a lighter step at 4.5:1 would land on the header (round 4).
   'elf-header': '#416a7a',
-  'elf-program-headers': '#588192',
+  'elf-program-headers': '#2d5665',
   'elf-rodata': '#3b7047',
   'elf-eh-frame': '#576a5a',
   'elf-data': '#7c6126',
