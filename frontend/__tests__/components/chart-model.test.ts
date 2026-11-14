@@ -114,11 +114,12 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   return simple;
 }
 
-describe('28 chart variants', () => {
-  it('keeps every existing route and exactly 28 approved previews', () => {
+describe('29 chart variants', () => {
+  // Re-pinned for CH-22 (UI review 2026-11-14): the index lists every chart, circulation ratio too.
+  it('keeps every existing route and a preview for each of the 29', () => {
     expect(CHARTS).toHaveLength(29);
-    expect(INDEX_CHARTS).toHaveLength(28);
-    expect(CHART_BY_SLUG.get('circulation-ratio')?.supplemental).toBe(true);
+    expect(INDEX_CHARTS).toHaveLength(29);
+    expect(INDEX_CHARTS.map((chart) => chart.slug)).toContain('circulation-ratio');
     expect(new Set(CHARTS.map((chart) => chart.slug)).size).toBe(29);
     for (const chart of CHARTS)
       expect(chart.related.every((slug) => CHART_BY_SLUG.has(slug))).toBe(true);

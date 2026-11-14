@@ -36,8 +36,6 @@ export interface ChartDefinition {
   evidenceLabel: string;
   queryKey: string;
   fetch: () => Promise<ChartPayload>;
-  /** Existing chart route outside the accepted 28-card overview. */
-  supplemental?: boolean;
   /** A dual-unit API series belongs on a separate axis/chart; never stack it with this one. */
   secondaryUnit?: string;
   secondaryLabel?: string;
@@ -295,7 +293,6 @@ export const CHARTS: readonly ChartDefinition[] = [
     queryKey: 'dao-chart-circulation-ratio',
     fetch: api.getDaoCirculationRatioChart,
     related: ['total-deposit', 'daily-deposit', 'total-supply', 'nominal-apc'],
-    supplemental: true,
   },
   {
     slug: 'knowledge-size',
@@ -582,7 +579,8 @@ export function chartSectionId(title: string): string {
     .replace(/^-|-$/g, '');
 }
 export const CHART_BY_SLUG = new Map(CHARTS.map((chart) => [chart.slug, chart]));
-export const INDEX_CHARTS = CHARTS.filter((chart) => !chart.supplemental);
+/** The index lists every chart page, each in its section (CH-22: none is left out). */
+export const INDEX_CHARTS = CHARTS;
 
 export function chartApiPath(definition: ChartDefinition): string {
   if (
