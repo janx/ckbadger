@@ -192,7 +192,11 @@ fill's own luminance over its ground in the theme in force — the well (`base-v
 ink (`text-bright`), whichever reads stronger — never an ink chosen by the segment's rank or by
 hand per node, and never the dim ink or an opacity on a fill: every word on one fill is in that
 one ink. `__tests__/lib/fill-ink.test.ts`, `segment-ink.test.tsx` and `icicle-ink.test.tsx` pin
-every labelled fill at 4.5:1 in both themes.
+every labelled fill at 4.5:1 in both themes. A gradient fill under one label (the allele gel's
+bands, the plate-wide ink at the band's strength over the plate the gel sits on) is read at every
+colour under the word, and the label takes the ink that reads best on the worst of them
+(`inkOnColours`); `allele-band-ink.test.tsx` pins it, and lists the bands where neither ink reaches
+4.5:1.
 
 A pipeline tile (elevated with 7 % jade) is a ground of its own, and its words are chosen for it:
 its labels ("+N") take the text ink, one step up from the dim, and a block number inside the drawn

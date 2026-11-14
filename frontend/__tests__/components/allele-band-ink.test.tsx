@@ -117,10 +117,15 @@ function labelledBands(container: HTMLElement, theme: ThemeName, ground: Palette
 
 /**
  * The gel's props for a plate: the fixture's lanes in `ink`, on `ground` (the colour the plate is,
- * which the gel needs to choose its labels' ink). Written as an assertion until the gel takes it.
+ * which the gel needs to choose its labels' ink).
  */
-const gelProps = (ink: AlleleGelProps['ink'], ground: PaletteKey) =>
-  ({ lanes, total: 90, subject: 'Nervape 3x', ink, ground }) as AlleleGelProps;
+const gelProps = (ink: AlleleGelProps['ink'], ground: PaletteKey): AlleleGelProps => ({
+  lanes,
+  total: 90,
+  subject: 'Nervape 3x',
+  ink,
+  ground,
+});
 
 // Where the gel is drawn: the object page's plate (the instrument frame on the surface, a BTC+CKB
 // or pure-CKB object's copper plate on its inner fill) and the collection page (the page ground).

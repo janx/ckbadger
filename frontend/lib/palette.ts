@@ -557,9 +557,21 @@ export function inkOnFill(
   a: number,
   ground: PaletteKey = 'base-bg'
 ): { ink: FillInk; contrast: number } {
-  const fill = overGround(theme, key, a, ground);
+  return inkOnColours(theme, [overGround(theme, key, a, ground)]);
+}
+
+/**
+ * The ink for words that stand on several colours at once (a gradient fill under one label, as
+ * the eye sees each over its ground): of `FILL_INKS`, the one whose lowest contrast over them is
+ * the highest. `inkOnFill` is the one-colour case.
+ */
+export function inkOnColours(
+  theme: ThemeName,
+  colours: readonly string[]
+): { ink: FillInk; contrast: number } {
+  if (colours.length === 0) throw new Error('palette: an ink on no colour');
   return FILL_INKS.map((ink) => ({
     ink,
-    contrast: contrastRatio(PALETTE[theme][ink], fill),
+    contrast: Math.min(...colours.map((c) => contrastRatio(PALETTE[theme][ink], c))),
   })).reduce((best, next) => (next.contrast > best.contrast ? next : best));
 }

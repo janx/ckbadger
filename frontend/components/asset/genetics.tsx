@@ -21,6 +21,7 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
 import { COMPOSITION_BADGES, GENE_COLORS } from '@/lib/design-tokens';
+import type { PaletteKey } from '@/lib/palette';
 import {
   alleleLanes,
   droppedGenesCaption,
@@ -72,6 +73,15 @@ function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefine
     backgroundOrigin: 'padding-box, border-box',
     border: '1px solid transparent',
   };
+}
+/**
+ * The colour a gel is drawn on inside its plate: the copper plate's inner fill, else the instrument
+ * frame's glass, which is the surface in both themes. A band's label is inked for it.
+ */
+function plateGround(tier: CompositionTier | undefined): PaletteKey {
+  if (tier === 'btc_ckb') return 'badge-inner-btc';
+  if (tier === 'pure_ckb') return 'badge-inner-pure';
+  return 'base-surface';
 }
 /**
  * The plate a gel sits on. A BTC+CKB or pure-CKB object keeps its copper plate (the object pages'
@@ -259,6 +269,7 @@ export function ObjectGeneticsView({
                   total={collection.genetics.eligibleItems}
                   subject={collectionName ?? subject}
                   ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
+                  ground={plateGround(tier)}
                   bandHeight={170}
                   overlays={[
                     { key: 'me', label: 'this one', points: own3.points, persistent: true },
