@@ -870,6 +870,18 @@ h1.text-index {
   border-bottom: 1px solid rgb(var(--rgb-jade) / 0.6);
 }
 
+/* Set back (UI review 2026-11-14, ruling R4): a row or a tile that is context, not the subject —
+   a cellbase row, the cells a transaction structure does not follow, a neighbour's row in an
+   identity's feed — is the quiet variant: every word in it (its key, its figures, its links) in
+   the dim ink, nothing faded. The padding zeros keep the ghost, and a seal keeps its own state's
+   ink at full strength: its SVG paints by attribute, outside the rule. `:where()` keeps the rule
+   at one class's weight, after the utilities, so it outranks a word's own ink while a link's hover
+   (`a:hover`, `hover:text-jade`) still lights. */
+.quiet,
+.quiet :where(:not(svg, svg *, .text-text-ghost)) {
+  color: var(--c-text-dim);
+}
+
 /* Reduced motion: no flare (the hook is a no-op too; the figure still updates). */
 @media (prefers-reduced-motion: reduce) {
   .phosphor-flare {

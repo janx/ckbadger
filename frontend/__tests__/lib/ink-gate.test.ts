@@ -61,8 +61,33 @@ const ALPHA_INK_ALLOWLIST: Record<string, string> = {
   'components/layout/network-switcher.tsx:126': LEFT_B4,
 };
 
+const LINKED =
+  'a linked highlight: while the reader points at (or pins) one part, the others fade back; their own focus, not a set-back state';
+const HOVER =
+  'hover feedback on a control or a copyable hash: the pointer’s state, gone when it leaves';
+const NO_WORDS = 'fades no word: the element is a mark, an icon or a bar';
+
 /** `opacity-*` below 1 the gate tolerates. */
-const OPACITY_ALLOWLIST: Record<string, string> = {};
+const OPACITY_ALLOWLIST: Record<string, string> = {
+  'app/tx/[hash]/client-page.tsx:436': LINKED,
+  'app/tx/[hash]/client-page.tsx:565': LINKED,
+  'components/address/address-holdings.tsx:413': LINKED,
+  'components/asset/cell-versions.tsx:118': LINKED,
+  'components/asset/object-media.tsx:34': HOVER,
+  'components/dao/dao-board.tsx:879': NO_WORDS,
+  'components/dao/dao-history.tsx:136':
+    'left: fraction digits in a history plot, a file the A5 follow-up is changing; listed in the B2 hand-back',
+  'components/home/ckbytes-section.tsx:313': LINKED,
+  'components/layout/nav-menu.tsx:147': NO_WORDS,
+  'components/transaction/script-group-matrix.tsx:162': LINKED,
+  'components/transaction/script-group-matrix.tsx:209': LINKED,
+  'components/transaction/script-group-matrix.tsx:355': LINKED,
+  'components/ui/capacity-utilization.tsx:108': LINKED,
+  'components/ui/capacity-utilization.tsx:117': LINKED,
+  'components/ui/composition-set.tsx:134': NO_WORDS,
+  'components/ui/hex-display.tsx:185': HOVER,
+  'components/ui/terminal-panel.tsx:85': NO_WORDS,
+};
 
 const SCAN_DIRS = ['app', 'components'];
 /** The type scale's steps: `text-body/6` would be a size with a line height, not an ink. */

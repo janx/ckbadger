@@ -40,7 +40,7 @@ describe('TxStructure page-owned linking (F2-tx, TX-14)', () => {
     expect(onCellHover).toHaveBeenLastCalledWith('in:0');
     // The page has not linked anything yet: nothing lights, nothing dims.
     expect(screen.getByTestId('out:0')).toHaveAttribute('data-highlighted', 'false');
-    expect(screen.getByTestId('in:1')).not.toHaveClass('opacity-30');
+    expect(screen.getByTestId('in:1')).not.toHaveClass('quiet');
     rerender(
       <TxStructure
         txHash="0xtx"
@@ -57,7 +57,8 @@ describe('TxStructure page-owned linking (F2-tx, TX-14)', () => {
     );
     expect(screen.getByTestId('in:0')).toHaveAttribute('data-highlighted', 'true');
     expect(screen.getByTestId('out:0')).toHaveAttribute('data-highlighted', 'false');
-    expect(screen.getByTestId('out:0')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(screen.getByTestId('out:0')).toHaveClass('quiet');
   });
 
   // UI review 2026-11-14 (DY-02, U-08, ruling R4): the cells the page does not follow are set back

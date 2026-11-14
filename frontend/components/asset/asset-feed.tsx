@@ -497,7 +497,8 @@ function FeedActivityRow({
     <ActivityRow
       activity={a}
       headline={headline && <FeedHeadlineText headline={headline} />}
-      className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
+      // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded
+      className={headline?.neighbour ? 'quiet' : undefined}
       // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
       mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
       showScriptDetails={!plain}

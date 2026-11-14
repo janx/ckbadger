@@ -564,7 +564,8 @@ describe('Transaction board, tier 2', () => {
     );
     expect(document.querySelector('#tx-dep-0')).toHaveAttribute('data-lit', 'true');
     expect(document.querySelector('#tx-dep-1')).toHaveClass('opacity-25');
-    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('quiet');
     fireEvent.mouseLeave(w0);
     expect(screen.getByTestId('tx-witness-item-1')).not.toHaveClass('opacity-25');
   });
@@ -1084,8 +1085,9 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
     const giver = object.querySelector('[data-flow-side="from"] [data-flow-end="party"]')!;
     fireEvent.mouseEnter(giver);
     expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
-    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('quiet');
     fireEvent.mouseLeave(giver);
-    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('opacity-30');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('quiet');
   });
 });

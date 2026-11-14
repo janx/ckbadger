@@ -223,7 +223,8 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   it('sets cellbase rows back and shows the reward they pay, grey, outside every total (D5)', () => {
     render(<TransactionListTable transactions={[cellbase]} />);
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
-    expect(row).toHaveClass('opacity-[.55]');
+    // R4 (re-pinned on purpose): set back is the quiet variant, not 55 % opacity
+    expect(row).toHaveClass('quiet');
     expect(row).toHaveTextContent('Cellbase');
     const value = row.querySelector('[data-reward]')!;
     expect(value).toHaveTextContent(/^reward 559\.61739927$/);
@@ -309,8 +310,8 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
       expect(hash).not.toHaveClass('text-small');
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/${tx.hash}`);
     }
-    expect(base).toHaveClass('opacity-[.55]');
-    expect(call).not.toHaveClass('opacity-[.55]');
+    expect(base).toHaveClass('quiet');
+    expect(call).not.toHaveClass('quiet');
   });
 });
 
@@ -341,8 +342,13 @@ describe('TransactionListTable row stones', () => {
       expect(seal).toHaveClass('-my-[3px]');
       expectBefore(seal, within(tr).getByTitle(txs[i].hash).closest('a')!);
     });
-    // a cellbase row is set back, its stone with it (still pressed: it is in a block)
-    expect(rows[2]).toHaveClass('opacity-[.55]');
+    // a cellbase row is set back in the dim ink; its stone keeps its own state, pressed at full
+    // strength: it is in a block (R4, re-pinned on purpose: the row was faded to 55 %)
+    expect(rows[2]).toHaveClass('quiet');
+    expect(rows[2].querySelector('[data-seal-state]')).toHaveAttribute(
+      'data-seal-state',
+      'pressed'
+    );
   });
 
   it('leads every phone row with its stone in its own column, not overhanging', () => {
@@ -514,7 +520,7 @@ describe('TransactionListTable phone row (board L2)', () => {
       ['what', 'Cellbase pays #20,829,764 · reward 559.61739927 CKB', null],
       ['figures', '0 → 1 cells · 360 B · fee 0 CKB', '0 cycles'],
     ]);
-    expect(base.closest('[role="listitem"]')).toHaveClass('opacity-[.55]');
+    expect(base.closest('[role="listitem"]')).toHaveClass('quiet');
   });
 
   it('is two lines at 608 px: value and fee join what it did, the figures take the right edge', () => {
