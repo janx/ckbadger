@@ -167,7 +167,8 @@ function SubChartHead({ sub }: { sub: SubChart }) {
     <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-x-6 gap-y-2">
       <p className="text-text-dim text-small min-w-0 max-w-[62ch]">{sub.note}</p>
       {sub.reading && (
-        <div role="group" aria-label={`${sub.title} reading`}>
+        // keeps the right edge when a narrow width puts it under the note
+        <div role="group" aria-label={`${sub.title} reading`} className="ml-auto">
           <Reading label={sub.reading.label} raw={sub.reading.point.values[key]} unit={sub.unit} />
         </div>
       )}
