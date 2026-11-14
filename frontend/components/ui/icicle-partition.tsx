@@ -43,6 +43,11 @@ export interface IciclePartitionProps {
   rows?: { heights: readonly number[]; gap: number };
 }
 
+/** A box's paint: its colour (the node's own, else its tone's class colour) and its strength. */
+export function icicleNodePaint(node: IcicleNode): { color: string; opacity: number } {
+  return { color: node.color ?? CLASS_COLORS[node.tone], opacity: node.opacity ?? 0.9 };
+}
+
 const W = 900;
 const BOX = 28;
 const ROW = 84;
@@ -88,10 +93,12 @@ function fittedLabel(
   pad: number
 ): { name: boolean; note: boolean } | 'share' | null {
   const fits = (text: string) => text.length * advance(px) + 2 * pad <= width;
-  const core = `${label.name} ${label.share}${label.unit ? ` ${label.unit}` : ''}`;
+  const share = `${label.share}${label.unit ? ` ${label.unit}` : ''}`;
+  const core = `${label.name} ${share}`;
   if (label.note && fits(`${core} · ${label.note}`)) return { name: true, note: true };
   if (fits(core)) return { name: true, note: false };
-  if (fits(label.share)) return 'share';
+  // A share alone keeps its unit (an amount is never a bare number).
+  if (fits(share)) return 'share';
   return null;
 }
 
@@ -160,8 +167,8 @@ export function IciclePartition({
               width={width}
               height={h}
               rx="3"
-              fill={node.color ?? CLASS_COLORS[node.tone]}
-              fillOpacity={node.opacity ?? 0.9}
+              fill={icicleNodePaint(node).color}
+              fillOpacity={icicleNodePaint(node).opacity}
             />
             {node.boxLabel && fitted !== null && (
               <text
@@ -172,7 +179,10 @@ export function IciclePartition({
                 className={ink}
               >
                 {fitted === 'share' ? (
-                  <tspan fontWeight={500}>{node.boxLabel.share}</tspan>
+                  <>
+                    <tspan fontWeight={500}>{node.boxLabel.share}</tspan>
+                    {node.boxLabel.unit && ` ${node.boxLabel.unit}`}
+                  </>
                 ) : (
                   <>
                     {node.boxLabel.name} <tspan fontWeight={500}>{node.boxLabel.share}</tspan>

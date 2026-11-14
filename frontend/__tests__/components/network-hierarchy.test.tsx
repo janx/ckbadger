@@ -8,6 +8,8 @@ import { NetworkClientPage } from '@/app/network/client-page';
 import { NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
 import { HostingBar } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
+import { yTickLabels } from '@/__tests__/utils/y-ticks';
+import { FILL_INKS } from '@/lib/palette';
 import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -477,7 +479,10 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     }
   });
 
-  it('draws Over time with its name and values inside the plot, one reading row and one caption', async () => {
+  // Re-pinned with U-19 / PB-01 (UI review 2026-11-14): the values sit in the dim gutter, the
+  // name inside the plot is shorter so it fits beside it, and a gap legend line may precede the
+  // caption.
+  it('draws Over time with its name inside the plot, its values in the gutter, one reading row and one caption', async () => {
     stubChartWidth(900);
     render(wrap(<NetworkTrends />));
     const section = await screen.findByRole('region', { name: 'Over time' });
@@ -490,9 +495,10 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     );
     expect(section.querySelector('figcaption')).toBeNull();
     expect(svg.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-      'verified and reachable peers per completed UTC+8 day'
+      'peers per completed UTC+8 day'
     );
-    expect(svg.querySelectorAll('[data-role="y-tick"]').length).toBeGreaterThan(0);
+    expect(svg.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+    expect(yTickLabels(svg).length).toBeGreaterThan(0);
     // R14: the first and the last day on the axis.
     expect([...svg.querySelectorAll('[data-x-tick]')].map((n) => n.textContent)).toEqual([
       '07-01',
@@ -534,9 +540,13 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     const figure = hero.querySelector('[data-role="reachable"]')!;
     expect(tier1.querySelector('figcaption')).toBeNull();
     // No inline ink outside the graphics either (a chart key's coloured series names): an inline
-    // `color` is a data hue; a background (a bar's segment) is not ink.
+    // `color` is a data hue; a background (a bar's segment) is not ink. Re-pinned with DY-03 (UI
+    // review 2026-11-14): a filled segment's words carry the fill ink chosen for its luminance
+    // (the well or the bright text) inline, which is a text ink, not a hue.
+    const fillInks = FILL_INKS.map((key) => `var(--c-${key})`);
     for (const el of Array.from(tier1.querySelectorAll<HTMLElement>('[style]')))
-      if (!el.closest('svg') && el.style.color) expect(figure.contains(el)).toBe(true);
+      if (!el.closest('svg') && el.style.color && !fillInks.includes(el.style.color))
+        expect(figure.contains(el)).toBe(true);
     for (const section of Array.from(tier1.querySelectorAll('section')))
       expect(section.querySelectorAll('[data-hint="tap-or-hover"]').length).toBeLessThanOrEqual(1);
     const prose = Array.from(tier1.querySelectorAll('[data-role="caption"], [data-role="lede"]'));

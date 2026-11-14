@@ -28,8 +28,8 @@ export interface CollectionHoldersProps {
   }) => Promise<CursorPaginatedResponse<CollectionHolder>>;
   queryKey: string;
   distribution?: readonly { range: string; holders: number; items: number }[];
-  /** F2 objects (OB-C7): draw the counts as bars in this class colour (Collection board). */
-  assetClass?: BarClass;
+  /** F2 objects (OB-C7), PB-12: the counts are bars in the collection's class colour. */
+  assetClass: BarClass;
 }
 
 /** The asset classes a row bar can be drawn in (`AlignedBar` tones). */
@@ -41,28 +41,16 @@ const COUNT_WIDTH = 44;
 
 /**
  * F2 objects (OB-C7) on the row rules: a count as an 8 px bar in the class colour on the column's
- * round scale, its exact number beside it; a page that gives no class colour prints the count.
+ * round scale, its exact number beside it.
  */
 function countColumn<T>(
   key: string,
   label: string,
   rows: readonly T[],
   value: (row: T) => number,
-  assetClass: BarClass | undefined
+  assetClass: BarClass
 ): ListColumn<T> {
   const scale = resourceScale(rows.map(value));
-  if (!assetClass)
-    return {
-      key,
-      label,
-      minWidth: 100,
-      numeric: true,
-      render: (row) => (
-        <span>
-          <AssetCount value={value(row)} />
-        </span>
-      ),
-    };
   return {
     key,
     label,
@@ -257,7 +245,8 @@ function ScopedCollectionHolders({
                 density="row"
                 rowTitle={holderTitle}
                 mobileRow={(holder, wide) => {
-                  const max = Math.max(...holders.data!.data.map((h) => h.itemCount));
+                  // R7: the table's scale for its Items bars — the page's rounded maximum.
+                  const scale = resourceScale(listed.map((h) => h.itemCount));
                   return (
                     <HolderPhoneRow
                       rank={rank(holder)}
@@ -273,10 +262,12 @@ function ScopedCollectionHolders({
                           </span>
                         </span>
                       }
-                      // The bar is the holder's count against the largest on the page, as the
-                      // table's Items column draws it.
-                      barWidth={`${max ? (holder.itemCount / max) * 100 : 0}%`}
-                      barColor={assetClass ? CLASS_COLORS[assetClass] : undefined}
+                      bar={{
+                        value: holder.itemCount,
+                        scale,
+                        color: CLASS_COLORS[assetClass],
+                      }}
+                      axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
                       wide={wide}
                     />
                   );

@@ -371,7 +371,10 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     // the genotype is marked on every lane and labelled on each row
     const overlay = container.querySelector('[data-overlay="me"]')!;
     expect(overlay.querySelectorAll('[data-tick]')).toHaveLength(6);
-    expect(overlay.querySelectorAll('polyline')).toHaveLength(2);
+    // Re-pinned with PB-04 (UI review 2026-11-14): the genotype is joined side to side between
+    // neighbouring lanes (two links in each row of three), not by a polyline through the bands.
+    expect(overlay.querySelectorAll('[data-link]')).toHaveLength(4);
+    expect(overlay.querySelectorAll('polyline')).toHaveLength(0);
     expect(Array.from(overlay.querySelectorAll('text')).map((t) => t.textContent)).toEqual([
       'this one',
       'this one',
@@ -504,11 +507,13 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     expect(row).toHaveTextContent('▸ this one: b · 2 of 6');
   });
 
+  // Re-pinned with PB-04: with no tag always shown there is no left margin, so the narrowest box
+  // that still holds a 12 px lane is 34 px (the 22 px right edge and one lane), not 96.
   it('throws on a box too narrow for one 12 px lane instead of drawing an empty gel', () => {
-    stubChartWidth(80);
+    stubChartWidth(30);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => render(<AlleleGel lanes={lanes} total={90} subject="Nervape 3x" />)).toThrow(
-      /Nervape 3x: a 80 px allele gel cannot hold a 12 px lane/
+      /Nervape 3x: a 30 px allele gel cannot hold a 12 px lane/
     );
   });
 });

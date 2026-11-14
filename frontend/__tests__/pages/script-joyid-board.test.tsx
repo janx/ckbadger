@@ -10,6 +10,7 @@ import { api, type Cell } from '@/lib/api';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -287,6 +288,22 @@ describe('JoyID script page · visual pass', () => {
     vi.restoreAllMocks();
   });
 
+  // U-19 (UI review 2026-11-14): the history's round values sat inside the plots in the ghost
+  // ink, crossed by a spike ("200M CKB"); both plots write them in one dim gutter, and the upgrade
+  // lines and labels sit on the plots' x, after it.
+  it('writes the history values in one dim gutter left of both plots (U-19)', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
+    expectTicksInGutter(main, 'CKB in JoyID cells');
+    expectTicksInGutter(occupied, 'occupied', 1);
+    const left = plotLeftOf(main);
+    expect(plotLeftOf(occupied)).toBe(left);
+    expect(left).toBeGreaterThan(0);
+    const lines = history.querySelector('[data-upgrade-line]')!.parentElement as HTMLElement;
+    expect(lines.style.left).toBe(`${left}px`);
+  });
+
   it('draws the upgrade days as dashed lines through every panel, not as a link list', async () => {
     await renderJoyid();
     const history = screen.getByTestId('script-history');
@@ -466,10 +483,12 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(Number(occupied.getAttribute('height'))).toBeLessThan(
       Number(main.getAttribute('height'))
     );
-    // Values inside the plot from its left edge, no axis column (R13).
-    const ticks = [...main.querySelectorAll('[data-role="y-tick"]')];
+    // Re-pinned with U-19 (UI review 2026-11-14): the values sit in a dim gutter left of the plot,
+    // anchored at their end, no longer inside it from its left edge.
+    expect(main.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+    const ticks = yTickLabels(main);
     expect(ticks.length).toBeGreaterThan(0);
-    for (const t of ticks) expect(t.getAttribute('text-anchor')).not.toBe('end');
+    for (const t of ticks) expect(t.getAttribute('text-anchor')).toBe('end');
   });
 
   // Table-rows L1-3 ruling: no code track between the picture and its reading any more.

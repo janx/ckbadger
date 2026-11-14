@@ -348,7 +348,7 @@ function usePeerHistories() {
   return { verifiedPeers, reachablePeers };
 }
 
-/** The board: reachable a jade area, verified a white line over it (CH-58). */
+/** The board: reachable an area in the data colour, verified a line in the bright ink over it (CH-58). */
 const PEER_SERIES: ChartSeries[] = [
   { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
   { key: 'verified', label: 'Verified (retained)', color: 'var(--c-text-bright)', lineOnly: true },
@@ -357,9 +357,10 @@ const PEER_UNIT = 'peers';
 const formatPeers = (value: string) => formatExactDecimal(value, 'peer count');
 
 /**
- * "Over time" (hierarchy v3): the chart named inside its plot with its values inside (no caption
- * block, no coloured key), the first and last day on the axis, one reading row that rests on the
- * latest day, and one caption. How to read it and its coverage are tier 2 (`NetworkTrendNotes`).
+ * "Over time" (hierarchy v3): the chart named inside its plot with its values in the gutter (no
+ * caption block, no coloured key), the first and last day on the axis, one reading row that rests
+ * on the latest day, a line saying what a shaded band is, and one caption. How to read it and its
+ * coverage are tier 2 (`NetworkTrendNotes`).
  */
 export function NetworkTrends() {
   const { verifiedPeers, reachablePeers } = usePeerHistories();
@@ -418,8 +419,9 @@ export function NetworkTrends() {
             formatValue={formatPeers}
             xTicks={xTicks}
             pointDots
-            plotName="verified and reachable peers per completed UTC+8 day"
-            insideYTicks
+            // U-19 / PB-01: the values in the dim gutter, where no gap band can cover them; the
+            // name fits beside it on a 360 px phone.
+            plotName="peers per completed UTC+8 day"
             pinnedReadout={{
               label: 'Peer reading',
               idle: `${last.label}${PEER_SERIES.map(
@@ -427,9 +429,23 @@ export function NetworkTrends() {
               ).join('')}`,
             }}
           />
+          {gaps.length > 0 && (
+            // PB-01: a band's own words fit only where it is wide; this line says it at any width.
+            <p
+              data-role="gap-legend"
+              className="text-text text-meta mt-2 flex items-center gap-1.5 font-mono"
+            >
+              <span
+                aria-hidden="true"
+                className="bg-base-surface border-base-border inline-block h-[9px] w-[9px] border"
+              />
+              no rounds: no retained crawl round that day
+            </p>
+          )}
+          {/* DY-04: the series by their form, which both themes share, not by a night colour. */}
           <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
-            The white line is every verified node the crawler retained that day; the jade area is
-            the part of them that was reachable.
+            The line is every verified node the crawler retained that day; the area under it is the
+            part of them that was reachable.
           </p>
         </>
       )}

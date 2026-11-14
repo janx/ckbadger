@@ -3,6 +3,7 @@ import { CapacityHistory } from '@/components/asset/capacity-history';
 import type { AssetCapacityHistory } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { clusterCapacityHistoryProducer } from '@/__tests__/msw/fixtures/item-producer';
+import { yTickLabels } from '@/__tests__/utils/y-ticks';
 const history: AssetCapacityHistory = {
   source: 'indexedChainTimeUtc8',
   completeThrough: '2023-11-14',
@@ -17,6 +18,7 @@ const history: AssetCapacityHistory = {
 it('preserves single shannons, complete-day cutoff and shared capacity/transfer range', () => {
   render(
     <CapacityHistory
+      assetClass="objects"
       subject="Collection"
       history={history}
       weekly={[
@@ -45,6 +47,7 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   expect(() =>
     render(
       <CapacityHistory
+        assetClass="objects"
         subject="Broken"
         history={{ ...history, completeThrough: '2023-11-13' }}
         weekly={[]}
@@ -54,6 +57,7 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   expect(() =>
     render(
       <CapacityHistory
+        assetClass="objects"
         subject="Broken"
         history={{ ...history, data: [{ date: '2023-11-01', values: { unused: '1' } }] }}
         weekly={[]}
@@ -71,17 +75,20 @@ it.each([928, 358])(
     try {
       render(
         <CapacityHistory
+          assetClass="objects"
           subject="Producer collection"
           history={clusterCapacityHistoryProducer}
           weekly={[]}
         />
       );
       const plot = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
-      // Lane P (R13): the round values are ghost labels inside the plot; the baseline and the
-      // top line under the plot's name are not written. No value is written twice.
-      const ticks = [...plot.querySelectorAll('[data-role="y-tick"]')].map((t) => t.textContent);
+      // Re-pinned with U-19 (UI review 2026-11-14): the round values are dim labels in the gutter
+      // left of the plot, the baseline's 0 among them (it was left out inside the plot, where it
+      // would sit on the data). No value is written twice.
+      expect(plot.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+      const ticks = yTickLabels(plot).map((t) => t.textContent);
       expect(ticks).toContain('0.0000005 CKB');
-      expect(ticks).not.toContain('0 CKB');
+      expect(ticks).toContain('0 CKB');
       expect(new Set(ticks).size).toBe(ticks.length);
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       expect(errors).not.toHaveBeenCalled();
@@ -98,6 +105,7 @@ it.each([928, 358])(
 it('says why a collection has no weekly transfers instead of drawing an empty chart (OB-K2)', () => {
   render(
     <CapacityHistory
+      assetClass="objects"
       subject="Identity collection"
       history={history}
       weekly={{ unavailable: 'Weekly transfer totals are not indexed for identity collections' }}

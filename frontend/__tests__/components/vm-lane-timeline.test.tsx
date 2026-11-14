@@ -74,10 +74,10 @@ describe('VmLaneTimeline', () => {
     ])
       expect(texts()).toContain(label);
     expect(texts()).not.toContain('epoch 5,414 · 2022-05-10');
-    const note = [...svg.querySelectorAll('text')].find(
-      (node) => node.textContent === 'no known script yet'
-    )!;
-    expect(note.getAttribute('text-anchor')).toBe('end');
+    // Re-pinned with PB-02 (UI review 2026-11-14): on a phone the empty lane says so on its own
+    // header line, after its count, instead of on its dotted lane line.
+    expect(texts()).toContain('0 · no known script yet');
+    expect(texts()).not.toContain('no known script yet');
     // Year labels never touch (visual pass at 390: "2020 2021 2022…" ran together).
     const years = [...svg.querySelectorAll('[data-year]')].map((n) => Number(n.getAttribute('x')));
     expect(years.length).toBeGreaterThan(2);

@@ -2,7 +2,7 @@
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
-import { Chart, type ChartValueAxisInput } from '@/components/ui/chart';
+import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -32,6 +32,8 @@ export interface AssetHistoryProps {
   footnote?: ReactNode;
   /** Paging controls for the supply events; replaces the "newest N are listed" note. */
   supplyPager?: ReactNode;
+  /** PB-12: the page's class, whose colour its weekly bars are drawn in. */
+  assetClass: 'tokens' | 'objects' | 'identities';
 }
 /** A small colour swatch for the readout (Token board), the same ink as its chart. */
 function Swatch({ color }: { color: string }) {
@@ -65,7 +67,10 @@ export function AssetHistory({
   supplyEvents,
   footnote,
   supplyPager,
+  assetClass,
 }: AssetHistoryProps) {
+  if (token && assetClass !== 'tokens')
+    throw new Error(`A token's history is drawn in the token class, not ${assetClass}`);
   const [range, setRange] = useState<'1W' | '1M' | '1Y' | 'All'>('All');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const end = time(completeThrough),
@@ -161,15 +166,19 @@ export function AssetHistory({
             {
               key: 'count',
               label: weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions',
-              assetClass: token ? 'tokens' : 'objects',
+              assetClass,
             },
           ],
           unit: weeklyNoun,
           kind: 'bars',
         }
       : null;
-  // Lane P (R13, Main.dc.html): every plot writes its round values inside itself from its left
-  // edge in ghost ink, so the three share the left edge 0 — no axis column, no shared gutter.
+  // U-19 / DY-05 (UI review 2026-11-14): the round values sit in one gutter left of the plots, in
+  // the dim ink — inside a plot the line crossed them, the bars stood in front of them and, by day,
+  // the filled area buried them — and the three plots share it, as they share the time axis.
+  const plotLeft = alignedPlotLeft(
+    [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
+  );
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
@@ -338,10 +347,9 @@ export function AssetHistory({
             subtitle="Occupied and free"
             // The page's picture (R13): at least 280 px, its name inside it.
             height={HISTORY_PLOT_HEIGHT}
-            // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
-            plotName="CKB held in its cells · occupied, free above it"
-            // written over the stacked area, which would bury a label drawn under it
-            insideYTicks="over"
+            // SVG text cannot wrap: the name fits beside the gutter on a 360 px phone (U-19).
+            plotName="CKB held · occupied, free"
+            plotLeft={plotLeft}
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
             xDomain={domain}
             activeIndex={active}
@@ -356,7 +364,7 @@ export function AssetHistory({
               subtitle="Exact total supply"
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
-              insideYTicks
+              plotLeft={plotLeft}
               xDomain={domain}
               activeIndex={active}
               onActiveIndexChange={onDaily}
@@ -371,7 +379,7 @@ export function AssetHistory({
               subtitle="Completed UTC+8 weeks"
               formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
-              insideYTicks="over"
+              plotLeft={plotLeft}
               xDomain={domain}
               activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
               onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}

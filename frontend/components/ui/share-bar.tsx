@@ -1,51 +1,86 @@
 import { cn } from '@/lib/utils';
 
-/** The share at which a share bar is full (board L5): the top holders stay distinguishable. */
-export const SHARE_BAR_FULL_PERCENT = 10;
+/**
+ * Ruling R7 (UI review 2026-11-14): a holder list draws its bars on one scale in both forms — the
+ * desktop column's rounded maximum (`resourceScale` of the page's values, the smallest round value
+ * at or above the largest), marked on its axis. A phone track has a fixed width, so every track of
+ * a list ends at one x: 120 px in the two-line row, 64 px in the one-line row of the 640 band.
+ */
+export const PHONE_SHARE_TRACK = 120;
+export const WIDE_SHARE_TRACK = 64;
 
 /**
- * A bar's width for `amount` of `total`, drawn to 10 % = full; a larger share is a full bar and
- * its exact number stands beside it. Exact to 0.01 % of the bar from integers.
+ * An API's exact percentage text ("1.25" = 1.25 %) as an integer of hundredths of a percent, the
+ * unit a share bar is drawn in; anything but a plain decimal with at most two places is refused.
  */
-export function shareBarWidth(amount: bigint, total: bigint): string {
-  if (amount < BigInt(0) || total < BigInt(0) || amount > total)
-    throw new Error(`Share bar: ${amount} of ${total} is not a share`);
-  if (total === BigInt(0)) return '0%';
-  const hundredths = (amount * BigInt(100 * 100 * 100)) / (total * BigInt(SHARE_BAR_FULL_PERCENT));
-  return hundredths >= BigInt(10000) ? '100%' : `${Number(hundredths) / 100}%`;
-}
-
-/**
- * The same width from an API's exact percentage text ("1.25" = 1.25 %), read as an integer of
- * hundredths; anything but a plain decimal with at most two places is refused.
- */
-export function shareBarWidthFromPercent(percent: string): string {
+export function percentHundredths(percent: string): number {
   const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(percent);
   if (!match) throw new Error(`Share bar: ${JSON.stringify(percent)} is not a percentage`);
-  const hundredths = BigInt(match[1]) * BigInt(100) + BigInt((match[2] ?? '').padEnd(2, '0'));
-  return shareBarWidth(hundredths, BigInt(10000));
+  const hundredths = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  if (hundredths > 10000) throw new Error(`Share bar: ${percent} % is not a share`);
+  return hundredths;
 }
 
-/** The thin share bar of the holder rows: a track that fills the free width. */
+/** A share scale's axis mark: hundredths of a percent as a percentage ("60%", "0.5%"). */
+export function formatShareTick(hundredths: number): string {
+  if (!Number.isSafeInteger(hundredths) || hundredths < 0)
+    throw new Error(`Share bar: invalid scale ${hundredths}`);
+  return `${hundredths / 100}%`;
+}
+
+/** The fill of `value` on `scale`, in % of the track, to 0.01. */
+export function shareBarWidth(value: number, scale: number): string {
+  if (!Number.isSafeInteger(scale) || scale <= 0)
+    throw new Error(`Share bar: invalid scale ${scale}`);
+  if (!Number.isSafeInteger(value) || value < 0 || value > scale)
+    throw new Error(`Share bar: ${value} is not on the scale ${scale}`);
+  return `${Math.round((value / scale) * 10000) / 100}%`;
+}
+
+/**
+ * The thin bar of a holder phone row: `value` on the list's `scale`, in the class colour, on the
+ * fixed track. A nonzero value is at least 2 px, so it is still a mark (as the table's bars).
+ */
 export function ShareBar({
-  width,
+  value,
+  scale,
   color,
+  track,
   className,
 }: {
-  width: string;
-  color?: string;
+  value: number;
+  scale: number;
+  /** The class colour of the list. */
+  color: string;
+  /** The track's fixed width in px. */
+  track: number;
   className?: string;
 }) {
+  const width = shareBarWidth(value, scale);
   return (
     <span
       aria-hidden="true"
-      data-share-bar={width}
-      className={cn('bg-base-elevated flex h-1 min-w-10 flex-1 rounded-sm', className)}
+      data-share-track
+      className={cn('bg-base-elevated flex h-1 flex-none rounded-sm', className)}
+      style={{ width: `${track}px` }}
     >
       <span
-        className={cn('block h-full rounded-sm', !color && 'bg-interactive')}
-        style={{ width, ...(color ? { backgroundColor: color } : {}) }}
+        data-share-bar={width}
+        className="block h-full rounded-sm"
+        style={{ width, minWidth: value > 0 ? 2 : 0, backgroundColor: color }}
       />
+    </span>
+  );
+}
+
+/** The list's axis mark, as wide as its track: 0 at the track's start, the scale at its end. */
+export function ShareAxis({ max, track }: { max: string; track: number }) {
+  return (
+    <span aria-hidden="true" data-share-axis className="flex flex-none">
+      <span data-share-axis-track className="flex justify-between" style={{ width: `${track}px` }}>
+        <span>0</span>
+        <span>{max}</span>
+      </span>
     </span>
   );
 }

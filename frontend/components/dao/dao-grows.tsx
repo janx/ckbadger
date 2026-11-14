@@ -88,8 +88,8 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
           kind="line"
           height={200}
           pin={pin}
-          plotName="AR, the accumulated rate · 1.0 at genesis"
-          insideYTicks
+          // U-19: the values in the dim gutter; the name fits beside it on a 360 px phone.
+          plotName="accumulated rate (AR) · 1.0 at genesis"
           endLabel={(value) => arAtFourPlaces(formatExactDecimal(value, 'DAO accumulated rate'))}
           formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
         />

@@ -485,3 +485,47 @@ export function contrastRatio(a: string, b: string): number {
   const [hi, lo] = la >= lb ? [la, lb] : [lb, la];
   return (hi + 0.05) / (lo + 0.05);
 }
+
+// ---- the ink of words inside a filled segment (DY-03, UI review 2026-11-14) ----
+
+/**
+ * The two inks a word inside a filled bar segment can take, in either theme: the darkest ground
+ * (the well) and the brightest text. By night the well is the dark one, by day the light one.
+ */
+export const FILL_INKS = ['base-void', 'text-bright'] as const satisfies readonly PaletteKey[];
+export type FillInk = (typeof FILL_INKS)[number];
+
+/** A palette colour at `alpha` laid over a ground key, as the eye sees it (sRGB "over"). */
+export function overGround(
+  theme: ThemeName,
+  key: PaletteKey,
+  a: number,
+  ground: PaletteKey = 'base-bg'
+): string {
+  if (!(a >= 0 && a <= 1)) throw new Error(`palette: alpha ${a} of ${key} is not in 0..1`);
+  const fill = hexToRgb(PALETTE[theme][key]);
+  const under = hexToRgb(PALETTE[theme][ground]);
+  const channel = (f: number, g: number) =>
+    Math.round(a * f + (1 - a) * g)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(fill.r, under.r)}${channel(fill.g, under.g)}${channel(fill.b, under.b)}`;
+}
+
+/**
+ * The ink for words on a fill of `key` at `alpha` over `ground` in `theme`: of `FILL_INKS`, the one
+ * with the higher contrast on that fill — chosen from the fill's own luminance, so a light fill
+ * takes the dark ink and a dark fill the light one, whatever the segment's rank.
+ */
+export function inkOnFill(
+  theme: ThemeName,
+  key: PaletteKey,
+  a: number,
+  ground: PaletteKey = 'base-bg'
+): { ink: FillInk; contrast: number } {
+  const fill = overGround(theme, key, a, ground);
+  return FILL_INKS.map((ink) => ({
+    ink,
+    contrast: contrastRatio(PALETTE[theme][ink], fill),
+  })).reduce((best, next) => (next.contrast > best.contrast ? next : best));
+}

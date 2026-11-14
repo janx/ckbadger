@@ -110,9 +110,8 @@ describe('NetworkTrends', () => {
     ).toBeInTheDocument();
     expect(container.querySelector('[data-chart-gap="no rounds 01-12"]')).not.toBeNull();
     // D2: the API's days are UTC+8 calendar days, and the page says so.
-    expect(
-      screen.getByText('verified and reachable peers per completed UTC+8 day')
-    ).toBeInTheDocument();
+    // Re-pinned with U-19 / PB-01: a shorter name, so it fits beside the value gutter at 360 px.
+    expect(screen.getByText('peers per completed UTC+8 day')).toBeInTheDocument();
     expect(screen.queryByText(/UTC day/)).toBeNull();
     expect(screen.getByText(/Coverage: 1970-01-11 through 1970-01-13\./)).toBeInTheDocument();
     expect(

@@ -20,9 +20,15 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
+import {
+  IciclePartition,
+  icicleNodePaint,
+  type IcicleNode,
+} from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
+import { CLASS_COLORS, CLASS_KEYS, DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
+import { color, fade, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Prose } from '@/components/ui/prose';
@@ -46,15 +52,24 @@ interface Props {
   historyError?: boolean;
 }
 
-function Amount({ value, signed = false }: { value: string; signed?: boolean }) {
+function Amount({
+  value,
+  signed = false,
+  plain = false,
+}: {
+  value: string;
+  signed?: boolean;
+  /** On a fill (DY-03): every digit in the fill's one ink, no dim fraction. */
+  plain?: boolean;
+}) {
   const amount = parseShannons(value, 'DAO amount');
   const parts = splitCkbAmount(amount);
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {signed ? parts.sign : null}
       {parts.integer}
-      <span className="text-text-dim">{parts.fraction}</span>
-      <span className="text-text-dim/50">{parts.ghost}</span>
+      <span className={plain ? undefined : 'text-text-dim'}>{parts.fraction}</span>
+      <span className={plain ? undefined : 'text-text-dim/50'}>{parts.ghost}</span>
     </span>
   );
 }
@@ -342,6 +357,8 @@ const ICICLE_ROWS = { heights: [48, 48, 32], gap: 3 } as const;
  * 13 px → 8); a browser that does not uses 0.6 em. Fit tests use whichever is wider.
  */
 const monoAdvance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
+/** The claimable part of the requested withdrawals: the DAO gold at this alpha (R12). */
+const CLAIMABLE_FILL = 0.45;
 /** The capacity-use bar's segments sit 3 px apart. */
 const BAR_GAP_PX = 3;
 
@@ -451,6 +468,15 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         ],
       };
   const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
+  /** PB-25: a legend row's swatch is its block's paint, so every row names one block. */
+  const swatchOf = (key: string) => {
+    const find = (node: IcicleNode): IcicleNode | undefined =>
+      node.key === key ? node : node.children?.map(find).find(Boolean);
+    const node = root && find(root);
+    if (!node) throw new Error(`DAO issuance: no icicle block ${key} for its legend row`);
+    const { color: paint, opacity } = icicleNodePaint(node);
+    return <Swatch color={fade(paint, opacity)} />;
+  };
   return (
     <Section
       title="Where secondary issuance goes"
@@ -474,7 +500,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
               formatValue={(v) => <SvgCkb shannons={v} />}
               width={width}
               rows={ICICLE_ROWS}
-              hideLabels={narrow}
             />
           )
         )}
@@ -485,6 +510,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           className="text-small text-text-dim mt-3 space-y-1.5"
         >
           <li>
+            {swatchOf('total')}
             secondary issuance since genesis{' '}
             <span className="text-text">
               <Amount value={total.toString()} />
@@ -492,26 +518,28 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             CKB
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.miners} />
+            {swatchOf('miners')}
             miners {share(mining)} ·{' '}
             <span className="text-text">
               <Amount value={mining.toString()} />
             </span>
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
+            {swatchOf('compensation')}
             depositors {share(compensation)} ·{' '}
             <span className="text-text">
               <Amount value={compensation.toString()} />
             </span>
             <ul className="mt-1 space-y-1 pl-5">
               <li>
+                {swatchOf('paid')}
                 paid out {ofCompensation(claimed)} ·{' '}
                 <span className="text-text">
                   <Amount value={claimed.toString()} />
                 </span>
               </li>
               <li>
+                {swatchOf('owed')}
                 still owed {ofCompensation(unclaimed)} ·{' '}
                 <span className="text-text">
                   <Amount value={unclaimed.toString()} />
@@ -521,7 +549,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             </ul>
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
+            {swatchOf('burnt')}
             burnt {share(burnt)} ·{' '}
             <span className="text-text">
               <Amount value={burnt.toString()} />
@@ -798,13 +826,17 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     throw new Error(
       `DAO phase-1 readiness does not partition the requests at ${formatBlockNumber(evidence.tipBlockNumber)}`
     );
-  const claimable = (
+  const { resolved: theme } = useTheme();
+  // DY-03: inside its gold segment the words take the one ink the fill's luminance calls for;
+  // under the bar, on the page ground, they keep the line's inks.
+  const claimableInk = color(inkOnFill(theme, CLASS_KEYS.dao, CLAIMABLE_FILL).ink);
+  const claimable = (onFill: boolean) => (
     <>
       claimable now{' '}
-      <span className="text-text-bright">
-        <Amount value={ready.capacity} /> CKB
+      <span className={onFill ? undefined : 'text-text-bright'}>
+        <Amount value={ready.capacity} plain={onFill} /> CKB
       </span>{' '}
-      <span className="text-text-dim">· {plural(ready.count, 'cell')}</span>
+      <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
     </>
   );
   // R12: the claimable words sit inside their segment where they fit (12 px, 12 px padding).
@@ -898,11 +930,15 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden"
             >
               <span
-                className="bg-gold/45 text-text flex items-center overflow-hidden whitespace-nowrap rounded px-3"
-                style={{ width: `${readyPercent}%` }}
+                className="flex items-center overflow-hidden whitespace-nowrap rounded px-3"
+                style={{
+                  width: `${readyPercent}%`,
+                  backgroundColor: fade(CLASS_COLORS.dao, CLAIMABLE_FILL),
+                  color: claimableInk,
+                }}
               >
                 {/* One flex item, so the spaces between its words stay. */}
-                {claimableInside ? <span>{claimable}</span> : null}
+                {claimableInside ? <span>{claimable(true)}</span> : null}
               </span>
               <span
                 className="bg-gold rounded"
@@ -912,7 +948,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
             <div
               className={`text-text-dim text-meta mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
             >
-              {!claimableInside && <span>{claimable}</span>}
+              {!claimableInside && <span>{claimable(false)}</span>}
               <span>
                 waiting for its window{' '}
                 <span className="text-text">

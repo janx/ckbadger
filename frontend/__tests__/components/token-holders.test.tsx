@@ -235,8 +235,13 @@ describe('Token holders (board L5)', () => {
         left: '1ckb1qrgqep...tllakf JoyID',
         right: '562,997.00000000',
       },
-      { key: 'share', tone: 'quiet', left: '', right: '2.32%' },
+      // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
+      // mark (41.23 % at most: 60 %, the table's), and the share's number sits right after its
+      // fixed track.
+      { key: 'axis', tone: 'quiet', left: '060%', right: null },
+      { key: 'share', tone: 'quiet', left: '2.32%', right: null },
     ]);
+    expect(first.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '3.87%');
     expect(first.querySelector('[data-role="rank"]')).toHaveClass('w-[22px]');
   });
 });
@@ -268,9 +273,12 @@ describe('Token holders where the table does not fit (L5)', () => {
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const [row] = await screen.findAllByTestId('holder-row-mobile');
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
+    // Re-pinned with ruling R7: 10.00 % is drawn on the page's rounded maximum (10 %), the axis
+    // mark over the bar, the number beside it — no longer full because 10 % was the clamp.
     expect(phoneLines(row)).toEqual([
       { key: 'holder', tone: 'head', left: '10x11111111...111111 JoyID', right: '100' },
-      { key: 'share', tone: 'quiet', left: '', right: '10.00%' },
+      { key: 'axis', tone: 'quiet', left: '010%', right: null },
+      { key: 'share', tone: 'quiet', left: '10.00%', right: null },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });

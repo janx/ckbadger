@@ -27,6 +27,8 @@ import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
 
 const GAP = 0.6;
+/** How far outside its band the "this one" outline is drawn (PB-04). */
+const OUTLINE_GAP = 1.5;
 const ROW_GAP = 18;
 const MIN_ROW_BAND = 120;
 /** The ranked list shows this many genes before its "more genes" control. */
@@ -95,7 +97,9 @@ export function AlleleGel(props: AlleleGelProps) {
           genes: lanes.map((lane) => (props.labelOf ? props.labelOf(lane.gene) : lane.gene)),
           width,
           subject,
-          overlayLabels: overlays.map((o) => o.label),
+          // PB-04: only a genotype always shown ("this one") is tagged in the margin; a hovered one
+          // (a cluster page's row) is named by its own lit row, so the lanes keep the width.
+          overlayLabels: overlays.filter((o) => o.persistent).map((o) => o.label),
         });
   return (
     <div ref={box} className="min-w-0">
@@ -159,9 +163,10 @@ function Gel({
       return p;
     });
   });
-  const centre = (lane: number, band: number) => {
+  /** A band's box, as its rect is drawn. */
+  const bandBox = (lane: number, band: number) => {
     const p = placed[lane][band];
-    return { x: laneX(lane) + lw / 2, y: p.y + p.h / 2 };
+    return { x: laneX(lane) + inset, y: p.y, w: lw - 2 * inset, h: Math.max(p.h, 0.35) };
   };
   const rowActive = activeOverlay !== null && overlays.some((o) => o.key === activeOverlay);
   const laneOpacity = (gene: string) =>
@@ -312,40 +317,56 @@ function Gel({
               {rows.map((row, ri) => {
                 const pts = o.points
                   .filter((p) => slot.get(p.lane)!.row === ri)
-                  .map((p) => centre(p.lane, p.band));
+                  .sort((a, b) => slot.get(a.lane)!.k - slot.get(b.lane)!.k);
                 if (pts.length === 0) return null;
+                const boxes = pts.map((p) => bandBox(p.lane, p.band));
                 return (
                   <g key={ri}>
-                    <polyline
-                      points={pts.map((p) => `${r(p.x)},${r(p.y)}`).join(' ')}
-                      fill="none"
-                      stroke={GEL_COLORS.overlay}
-                      strokeOpacity=".7"
-                      strokeWidth=".8"
-                    />
-                    {pts.map((p, k) => (
+                    {/* PB-04: the genotype joins its bands from side to side, between the lanes
+                        (never across a band, nor across a lane where it has no counted band). */}
+                    {pts.slice(1).map((p, k) => {
+                      if (slot.get(p.lane)!.k !== slot.get(pts[k].lane)!.k + 1) return null;
+                      const [a, b] = [boxes[k], boxes[k + 1]];
+                      return (
+                        <line
+                          key={`link:${k}`}
+                          data-link
+                          x1={r(a.x + a.w + OUTLINE_GAP)}
+                          y1={r(a.y + a.h / 2)}
+                          x2={r(b.x - OUTLINE_GAP)}
+                          y2={r(b.y + b.h / 2)}
+                          stroke={GEL_COLORS.overlay}
+                          strokeOpacity=".7"
+                          strokeWidth=".8"
+                        />
+                      );
+                    })}
+                    {/* PB-04: its own band is outlined just outside its edges, clear of its name. */}
+                    {boxes.map((box, k) => (
                       <rect
                         key={k}
                         data-tick
-                        x={r(p.x - lw / 2 + inset)}
-                        y={r(p.y - 1.6)}
-                        width={span(lw - 2 * inset, 'genotype tick')}
-                        height="3.2"
-                        rx="1.2"
+                        x={r(box.x - OUTLINE_GAP)}
+                        y={r(box.y - OUTLINE_GAP)}
+                        width={span(box.w + 2 * OUTLINE_GAP, 'genotype outline')}
+                        height={r(box.h + 2 * OUTLINE_GAP)}
+                        rx="1.5"
                         fill="none"
                         stroke={GEL_COLORS.overlay}
                         strokeWidth="1"
                       />
                     ))}
-                    <text
-                      x={LX + 2}
-                      y={r(pts[0].y + 3.5)}
-                      textAnchor="end"
-                      fontSize="10"
-                      fill={GEL_COLORS.overlay}
-                    >
-                      {o.label}
-                    </text>
+                    {o.persistent && (
+                      <text
+                        x={LX - 4}
+                        y={r(boxes[0].y + boxes[0].h / 2 + 3.5)}
+                        textAnchor="end"
+                        fontSize="10"
+                        fill={GEL_COLORS.overlay}
+                      >
+                        {o.label}
+                      </text>
+                    )}
                   </g>
                 );
               })}

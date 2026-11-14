@@ -6,7 +6,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatTick, niceCeil, niceTicks } from '@/lib/chart-ticks';
+import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
@@ -163,20 +163,24 @@ function timeTicks(days: readonly Day[], x: (i: number) => number) {
   return kept;
 }
 
-/** The pointer's day over a plot `el` whose first and last days sit at its left and right edges. */
-function dayAt(clientX: number, el: Element, last: number): number {
+/**
+ * The pointer's day over a plot `el` whose first day sits `left` px in (after its value gutter)
+ * and whose last day sits at its right edge.
+ */
+function dayAt(clientX: number, el: Element, last: number, left: number): number {
   const r = el.getBoundingClientRect();
-  const f = r.width > 0 ? (clientX - r.left) / r.width : 1;
+  const f = r.width > left ? (clientX - r.left - left) / (r.width - left) : 1;
   return Math.round(Math.min(1, Math.max(0, f)) * last);
 }
 
 /** Hover, tap (pin) and leave on one plot of the picture, shared by its three panels. */
-function plotHandlers(pin: PinnedReadout<number>, last: number) {
+function plotHandlers(pin: PinnedReadout<number>, last: number, left = 0) {
   return {
     onPointerMove: (e: PointerEvent<SVGSVGElement>) =>
-      pin.hover(dayAt(e.clientX, e.currentTarget, last)),
+      pin.hover(dayAt(e.clientX, e.currentTarget, last, left)),
     onPointerLeave: () => pin.hover(null),
-    onClick: (e: MouseEvent<SVGSVGElement>) => pin.toggle(dayAt(e.clientX, e.currentTarget, last)),
+    onClick: (e: MouseEvent<SVGSVGElement>) =>
+      pin.toggle(dayAt(e.clientX, e.currentTarget, last, left)),
   };
 }
 
@@ -252,15 +256,19 @@ function DepositedPlot({
   const { days } = series;
   const fillId = `dao-deposited-${useId().replace(/:/g, '')}`;
   const last = days.length - 1;
-  const x = (i: number) => (i / last) * width;
   const ckb = (v: bigint) => Number(v) / 1e8;
   const ticks = niceTicks(0, Math.max(...days.map((d) => ckb(d.shannons))), 4);
   const top = ticks.values[ticks.values.length - 1];
   const y = (v: number) => MAIN_PLOT_H - (v / top) * (MAIN_PLOT_H - MAIN_NAME_BAND);
+  // U-19: the round values sit in a gutter left of the plot, in the dim ink (as every chart's),
+  // never inside it, where the line and its fill cross them.
+  const shown = ticks.values.filter((v) => v > 0 && y(v) >= MAIN_NAME_BAND + 12);
+  const left = tickGutter(shown.map((v) => formatTick(v, ticks.step)));
+  const x = (i: number) => left + (i / last) * (width - left);
   const path = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(ckb(d.shannons))}`).join(' ');
   const name = `CKB deposited · every complete day since ${days[0].date}`;
   // The name wraps after "CKB deposited" when one line does not fit the plot (390 px).
-  const oneLine = textWidth(name.length, NAME_PX) + 16 <= width;
+  const oneLine = textWidth(name.length, NAME_PX) + 16 <= width - left;
   const active = pin.active !== null && pin.active <= last ? pin.active : null;
   return (
     <svg
@@ -271,25 +279,24 @@ function DepositedPlot({
       height={MAIN_PLOT_H + AXIS_H}
       viewBox={`0 0 ${width} ${MAIN_PLOT_H + AXIS_H}`}
       className="block cursor-crosshair overflow-visible font-mono"
-      {...plotHandlers(pin, last)}
+      {...plotHandlers(pin, last, left)}
     >
-      {ticks.values
-        .filter((v) => v > 0 && y(v) >= MAIN_NAME_BAND + 12)
-        .map((v) => (
-          <g key={v}>
-            {/* Visual finish V13: the grid is solid; a dash means a reference. */}
-            <line x1={0} x2={width} y1={y(v)} y2={y(v)} className="stroke-base-border-subtle" />
-            <text
-              data-role="y-tick"
-              x={8}
-              y={y(v) - 5}
-              fontSize={NAME_PX}
-              className="fill-text-ghost"
-            >
-              {formatTick(v, ticks.step)}
-            </text>
-          </g>
-        ))}
+      {shown.map((v) => (
+        <g key={v}>
+          {/* Visual finish V13: the grid is solid; a dash means a reference. */}
+          <line x1={left} x2={width} y1={y(v)} y2={y(v)} className="stroke-base-border-subtle" />
+          <text
+            data-role="y-tick"
+            x={left - 8}
+            y={y(v) + 3}
+            textAnchor="end"
+            fontSize="10"
+            className="fill-text-dim"
+          >
+            {formatTick(v, ticks.step)}
+          </text>
+        </g>
+      ))}
       {/* Visual finish V13: the gold is light, not paint — .28 at the top of the fill fading to 0
           at the baseline (the DAO gold the line's stroke-gold is). */}
       <defs>
@@ -303,14 +310,14 @@ function DepositedPlot({
         fill={`url(#${fillId})`}
       />
       <path d={path} fill="none" className="stroke-gold" strokeWidth={1.5} />
-      <line x1={0} x2={width} y1={MAIN_PLOT_H} y2={MAIN_PLOT_H} className="stroke-base-border" />
-      <text data-role="chart-name" x={8} y={16} fontSize={NAME_PX} className="fill-text-dim">
+      <line x1={left} x2={width} y1={MAIN_PLOT_H} y2={MAIN_PLOT_H} className="stroke-base-border" />
+      <text data-role="chart-name" x={left + 8} y={16} fontSize={NAME_PX} className="fill-text-dim">
         {oneLine ? (
           name
         ) : (
           <>
             CKB deposited
-            <tspan x={8} dy={14}>
+            <tspan x={left + 8} dy={14}>
               every complete day since {days[0].date}
             </tspan>
           </>

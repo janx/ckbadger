@@ -2,18 +2,22 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { api, LabelCount } from '@/lib/api';
-import { DATA_COLOR } from '@/lib/design-tokens';
-import { fade } from '@/lib/palette';
+import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
+import { color, fade, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount } from '@/lib/format-count';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { cn } from '@/lib/utils';
 import { TopicSection } from '@/app/network/topic-section';
 
 const TOP_N = 8;
-/** The hosting bar's segments: one hue, the largest strongest (Network board). */
-const PROVIDER_OPACITY = [0.9, 0.6, 0.5, 0.42, 0.34, 0.2] as const;
+/**
+ * The hosting bar's segments: one hue, the largest strongest (Network board). DY-03: each step
+ * keeps the jade where one of the two fill inks reads at 4.5:1 in both themes (0.6 and 0.5 sat in
+ * the mid-tone band where neither does by night: 4.24 and 4.36:1).
+ */
+export const PROVIDER_OPACITY = [0.9, 0.66, 0.46, 0.38, 0.3, 0.2] as const;
 /** The in-segment words (hierarchy v3 R15): 12 px monospace, 10 px padding each side. */
 const LABEL_ADVANCE = 7.2;
 const LABEL_PAD = 10;
@@ -165,6 +169,7 @@ function HostingSection({
   caption: string | undefined;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  const { resolved: theme } = useTheme();
   const spans = partitionSpans(
     segments.map(([, count]) => BigInt(count)),
     BigInt(total),
@@ -194,11 +199,13 @@ function HostingSection({
           <span
             key={org}
             data-provider={org}
-            className={cn(
-              'flex items-center overflow-hidden whitespace-nowrap rounded px-2.5',
-              PROVIDER_OPACITY[i] >= 0.6 ? 'text-base-bg' : 'text-text-bright'
-            )}
-            style={{ width: `${spans[i].width}%`, backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}
+            className="flex items-center overflow-hidden whitespace-nowrap rounded px-2.5"
+            style={{
+              width: `${spans[i].width}%`,
+              backgroundColor: dataHue(PROVIDER_OPACITY[i]),
+              // DY-03: the share takes the ink its fill's own luminance calls for, in this theme.
+              color: color(inkOnFill(theme, DATA_KEY, PROVIDER_OPACITY[i]).ink),
+            }}
           >
             {inside(org, count, i) && <span>{inside(org, count, i)}</span>}
           </span>

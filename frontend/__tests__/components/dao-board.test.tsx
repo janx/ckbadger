@@ -7,6 +7,7 @@ import { DaoBoard } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
+import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -813,7 +814,14 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     const svg = within(issuance()).getByRole('img', {
       name: /Secondary issuance since genesis, split three ways/,
     });
-    expect(svg.querySelectorAll('text')).toHaveLength(0);
+    // Re-pinned with PB-25 (UI review 2026-11-14): a block wide enough for its share writes it
+    // inside at phone width too (the whole, depositors, burnt, still owed here); the narrow ones
+    // stay blank and the list below names every part.
+    // (paid out is 49 px: "33.3%" at 11 px and 6 px padding needs 47; miners' 50 px cannot hold
+    // "14.29%" at 13 px and 12 px padding, 72)
+    expect(
+      Array.from(svg.querySelectorAll('[data-label]')).map((t) => t.getAttribute('data-label'))
+    ).toEqual(['total', 'compensation', 'paid', 'owed', 'burnt']);
     const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
     expect(legend).toHaveTextContent('secondary issuance since genesis 7.00000000 CKB');
     expect(legend).toHaveTextContent('miners 14.29% · 1.00000000');
@@ -825,6 +833,61 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     expect(
       within(issuance()).queryByText((_, el) => el?.getAttribute('data-role') === 'exact-amounts')
     ).toBeNull();
+  });
+});
+
+// PB-25 (UI review 2026-11-14): at 390 the icicle's blocks were blank and the legend's "paid out" /
+// "still owed" rows had no swatch, so the two sub-blocks could not be told apart.
+describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const issuance = () => screen.getByRole('region', { name: 'Where secondary issuance goes' });
+
+  it('gives every legend row the swatch of its block, the sub-blocks included', () => {
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const svg = within(issuance()).getByRole('img', {
+      name: /Secondary issuance since genesis, split three ways/,
+    });
+    const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
+    const rows = within(legend).getAllByRole('listitem');
+    const keys = ['total', 'miners', 'compensation', 'paid', 'owed', 'burnt'];
+    expect(rows).toHaveLength(keys.length);
+    // The two sub-blocks first: they are the rows the phone could not tell apart.
+    for (const i of [3, 4, 0, 1, 2, 5]) {
+      const key = keys[i];
+      const swatch = rows[i].querySelector(':scope > span[aria-hidden="true"]') as HTMLElement;
+      expect(swatch, `the ${key} row has a swatch`).not.toBeNull();
+      // The swatch is its block's paint: the same colour at the same strength.
+      const block = svg.querySelector(`[data-node="${key}"]`)!;
+      const [, colour, percent] = /^color-mix\(in srgb, (.+) ([\d.]+)%, transparent\)$/.exec(
+        swatch.style.background
+      )!;
+      expect(colour).toBe(block.getAttribute('fill'));
+      expect(Number(percent) / 100).toBe(Number(block.getAttribute('fill-opacity')));
+    }
+    // paid out and still owed are told apart by their swatches
+    const paid = rows[3].querySelector(':scope > span[aria-hidden="true"]') as HTMLElement;
+    const owed = rows[4].querySelector(':scope > span[aria-hidden="true"]') as HTMLElement;
+    expect(paid.style.background).not.toBe(owed.style.background);
+  });
+
+  it('writes a share inside every block wide enough for it at 358 px', () => {
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const svg = within(issuance()).getByRole('img', {
+      name: /Secondary issuance since genesis, split three ways/,
+    });
+    const label = (key: string) => svg.querySelector(`[data-label="${key}"]`)?.textContent ?? null;
+    // 7 CKB in all: miners 14.29 % (50 px, too narrow for "14.29%"), depositors and burnt
+    // 42.86 % each (151 px), paid out and still owed a third and two thirds of the depositors'.
+    expect(label('total')).toBe('secondary issuance since genesis 7 CKB');
+    expect(label('miners')).toBeNull();
+    expect(label('compensation')).toBe('42.86%');
+    expect(label('burnt')).toBe('burnt 42.86%');
+    expect(label('owed')).toBe('66.7%');
   });
 });
 
@@ -908,7 +971,8 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
     expect(chart).toHaveAttribute('height', '200');
     expect(chart.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-      'AR, the accumulated rate · 1.0 at genesis'
+      // Re-pinned with U-19: shorter, so it fits beside the value gutter at 360 px.
+      'accumulated rate (AR) · 1.0 at genesis'
     );
     // the tip AR cut (not rounded) to four places
     expect(chart.querySelector('[data-role="end-label"]')).toHaveTextContent(/^1\.0150$/);
@@ -1318,13 +1382,30 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     const chart = await within(
       screen.getByRole('region', { name: 'How a deposit grows' })
     ).findByRole('img', { name: /^AR by date/ });
-    // Round values inside the plot (hierarchy v3), not in a gutter.
-    const ticks = Array.from(chart.querySelectorAll('[data-role="y-tick"]')).map((t) =>
-      t.textContent!.trim()
-    );
+    // Re-pinned with U-19 (UI review 2026-11-14): the round values sit in the dim gutter, no
+    // longer inside the plot.
+    expect(chart.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+    const ticks = yTickLabels(chart).map((t) => t.textContent!.trim());
     expect(ticks[0]).not.toBe('0');
     // the daily series spans 1.000 … 1.015
     expect(ticks).toContain('1.010');
+  });
+});
+
+// U-19 (UI review 2026-11-14): AR's round values sat inside its plot in the ghost ink.
+describe('DaoBoard AR values (U-19)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it.each([358, 600])('writes AR’s values in a dim gutter left of its plot at %i px', async (w) => {
+    stubChartWidth(w);
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = await within(
+      screen.getByRole('region', { name: 'How a deposit grows' })
+    ).findByRole('img', { name: /^AR by date/ });
+    expect(expectTicksInGutter(chart, 'AR').map((t) => t.trim())).toContain('1.010');
   });
 });
 

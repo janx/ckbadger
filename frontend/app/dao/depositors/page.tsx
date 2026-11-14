@@ -7,7 +7,9 @@ import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { usePageSize } from '@/hooks/usePageSize';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
-import { shareBarWidthFromPercent } from '@/components/ui/share-bar';
+import { formatShareTick, percentHundredths } from '@/components/ui/share-bar';
+import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
@@ -46,7 +48,15 @@ function Depositor({ row, className }: { row: DaoDepositorRow; className?: strin
   );
 }
 
-const COLUMNS: ListColumn<DaoDepositorRow>[] = [
+/** The share column's bar track and the width of its number (as the token holders' table). */
+const SHARE_TRACK = 48;
+const SHARE_TEXT = 48;
+
+/** R7: the one scale of the page's share bars — its rounded maximum — in both forms. */
+const shareScale = (rows: readonly DaoDepositorRow[]) =>
+  resourceScale(rows.map((d) => percentHundredths(d.sharePercent)));
+
+const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[] => [
   {
     key: 'rank',
     label: '#',
@@ -76,9 +86,28 @@ const COLUMNS: ListColumn<DaoDepositorRow>[] = [
   {
     key: 'share',
     label: 'Share',
-    minWidth: 70,
-    numeric: true,
-    render: (d) => <span className="text-text-dim">{d.sharePercent}%</span>,
+    minWidth: SHARE_TRACK + 10 + SHARE_TEXT + 16,
+    header: (
+      <ScaleHeader
+        label="Share"
+        scale={shareScale(rows)}
+        trackWidth={SHARE_TRACK}
+        format={formatShareTick}
+      />
+    ),
+    render: (d) => (
+      <AlignedBar
+        label="Share of deposits"
+        scale={shareScale(rows)}
+        trackWidth={SHARE_TRACK}
+        minFill={2}
+        segments={[
+          { key: 'share', label: 'share', value: percentHundredths(d.sharePercent), tone: 'dao' },
+        ]}
+        display={<span className="text-text-dim">{d.sharePercent}%</span>}
+        displayWidth={SHARE_TEXT}
+      />
+    ),
   },
 ];
 
@@ -149,11 +178,12 @@ export default function DaoDepositorsPage() {
               <ListTable
                 label="DAO depositors"
                 rows={page.data}
-                columns={COLUMNS}
+                columns={columns(page.data)}
                 rowKey={(d) => d.lockScriptHash}
                 empty="No live deposits at this tip."
                 // Board L5: the holder row — rank, depositor and CKB deposited on one line, the
-                // share as a bar (10 % = full) with its number and the deposit count on the second.
+                // share as a bar on the table's scale (R7) with its number and the deposit count
+                // on the second.
                 mobileRow={(d, wide) => (
                   <HolderPhoneRow
                     rank={d.rank}
@@ -163,11 +193,16 @@ export default function DaoDepositorsPage() {
                         <Ckb shannons={d.capacity} /> <span className="text-text-dim">CKB</span>
                       </span>
                     }
-                    share={`${d.sharePercent}% · ${d.depositCount.toLocaleString('en-US')} deposit${
+                    share={`${d.sharePercent}%`}
+                    note={`${d.depositCount.toLocaleString('en-US')} deposit${
                       d.depositCount === 1 ? '' : 's'
                     }`}
-                    barWidth={shareBarWidthFromPercent(d.sharePercent)}
-                    barColor={CLASS_COLORS.dao}
+                    bar={{
+                      value: percentHundredths(d.sharePercent),
+                      scale: shareScale(page.data),
+                      color: CLASS_COLORS.dao,
+                    }}
+                    axis={page.data[0] === d ? formatShareTick(shareScale(page.data)) : undefined}
                     wide={wide}
                   />
                 )}
