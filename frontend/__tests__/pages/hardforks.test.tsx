@@ -16,8 +16,6 @@ vi.mock('@/lib/api', () => ({
     getHardforks: getHardforksMock,
     getBlock: getBlockMock,
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

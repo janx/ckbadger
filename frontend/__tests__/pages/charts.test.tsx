@@ -39,8 +39,6 @@ vi.mock('@/lib/api', () => ({
     getCkbVolumeChart: vi.fn(),
     getHardforks: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

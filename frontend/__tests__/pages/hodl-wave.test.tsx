@@ -10,8 +10,6 @@ vi.mock('@/lib/api', () => ({
     getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
     getHardforks: vi.fn().mockResolvedValue({ events: [] }),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/ui/chart', () => ({ Chart: (props: never) => chartMock(props) }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));

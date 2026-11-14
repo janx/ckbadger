@@ -18,8 +18,6 @@ vi.mock('@/lib/api', () => ({
     getHardforks: vi.fn(),
     getBlocksByDay: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 vi.mock('@/components/charts/chart-small-multiple', () => ({

@@ -11,8 +11,6 @@ import { api, type GlobalActivity } from '@/lib/api';
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
   api: { getGlobalActivities: vi.fn() },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 const page = (data: GlobalActivity[]) => ({

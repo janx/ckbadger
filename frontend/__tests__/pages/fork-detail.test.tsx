@@ -21,8 +21,6 @@ vi.mock('@/lib/api', () => ({
   api: { getForkAt: vi.fn() },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
