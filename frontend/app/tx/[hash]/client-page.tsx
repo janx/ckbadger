@@ -83,7 +83,7 @@ import type { SealState } from '@/lib/seal/stones';
 import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
-import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
@@ -1317,7 +1317,11 @@ export default function TransactionDetailPage() {
                       {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
                     </NoBreak>
                     <span className="text-text-dim text-small block">
-                      {formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'))}
+                      <ClockText
+                        text={(now) =>
+                          formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'), now)
+                        }
+                      />
                     </span>
                   </time>
                 )}
@@ -1365,7 +1369,11 @@ export default function TransactionDetailPage() {
                 <dd>
                   <Utc8DateTime timestamp={tx.pendingSince} />
                   <span className="text-text-dim text-small block">
-                    {formatAgeTwoUnits(tx.pendingSince)}
+                    <ClockText
+                      text={(now) =>
+                        formatAgeTwoUnits(required(tx.pendingSince, hash, 'pendingSince'), now)
+                      }
+                    />
                   </span>
                 </dd>
               </div>

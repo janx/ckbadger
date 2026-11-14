@@ -19,6 +19,7 @@ import {
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { ClockText } from '@/components/ui/utc8-date';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const PAGE_TITLE = 'Where the nodes are';
@@ -227,7 +228,7 @@ function Hero({
       `crawler round #${lastRound.roundId}: ${lastRound.reachablePeers} reachable exceed the ${lastRound.verifiedRetainedPeers} verified`
     );
   const map = useNetworkMap(lastRound.peerOutcomes.exhausted.withoutRetainedVerification);
-  const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
+  const updatedAgo = <ClockText text={(now) => formatTimeAgo(lastRound.finishedAt * 1000, now)} />;
   return (
     <div className="min-w-0">
       <section aria-label={PAGE_TITLE} className="min-w-0">

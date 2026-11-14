@@ -25,8 +25,7 @@ import {
   ObjectTraits,
   cellLifeSentence,
   ckbText,
-  itemLifeSentence,
-  itemLifeAges,
+  ItemLife,
   lockFootnote,
 } from '@/components/asset/object-hero';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
@@ -57,7 +56,6 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   const client = useQueryClient();
   // F2 objects (OB-5): one gene lit across the trait list, the sequencing gel and the allele gel.
   const [activeGene, setActiveGene] = useState<string | null>(null);
-  const [now] = useState(() => Date.now());
   const versions = useQuery({
     queryKey: ['item-versions', 'spore', id],
     queryFn: () => api.getItemCellVersions('spore', id),
@@ -233,9 +231,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       <Prose>
         {(history || coll) && (
           <p>
-            {history && history.length > 0 && (
-              <span title={itemLifeAges(history, now)}>{itemLifeSentence(history, now)}</span>
-            )}
+            {history && history.length > 0 && <ItemLife versions={history} />}
             {coll && collectionName && (
               <span>
                 {' '}

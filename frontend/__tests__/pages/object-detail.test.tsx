@@ -11,6 +11,7 @@ import {
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import {
   sporeDetailProducer,
   sporeCellVersionsProducer,
@@ -120,6 +121,27 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
     '0.00000000'
   );
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
+});
+// Lane E4: how long ago the object was minted, the life sentence's hover, reads the page's one
+// clock, so it moves with no data change; it was written once, from the time the page mounted.
+// The clock stops with the page.
+it('moves the life sentence’s minted age with no data change (E4)', async () => {
+  vi.useFakeTimers({ now: T0 });
+  const history: ItemCellVersions = structuredClone(sporeCellVersionsProducer);
+  history.data = [{ ...history.data[0], timestamp: String(T0 - 20_000), isLive: true }];
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(history);
+  const { unmount } = render(<SporeDetailPage sporeId={id} />);
+  const ages = () => screen.getByText(/^Minted to /).getAttribute('title');
+  await loadUnderStillClock(() => screen.queryByText(/^Minted to /) !== null);
+  expect(ages()).toBe('minted 20\u00a0seconds ago');
+  tick(1000);
+  expect(ages()).toBe('minted 21\u00a0seconds ago');
+  tick(38_000);
+  expect(ages()).toBe('minted 59\u00a0seconds ago');
+  tick(1000);
+  expect(ages()).toBe('minted 1\u00a0minute ago');
+  unmount();
+  expect(vi.getTimerCount()).toBe(0);
 });
 it('fails with item context when capacity violates the occupied invariant', async () => {
   vi.mocked(api.getSporeObject).mockResolvedValue({ ...sporeDetailProducer, ownedCapacity: '1' });

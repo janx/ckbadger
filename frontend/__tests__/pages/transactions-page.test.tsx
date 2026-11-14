@@ -8,6 +8,7 @@ import { ROW_SEAL } from '@/components/ui/row-seal';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
@@ -281,7 +282,7 @@ describe('Transactions pool view', () => {
     expect(word).toBe('Confirming'.length);
     const now = Date.now();
     const waits = [59.5, 59 * 60 + 30, 23 * 3600 + 1800, 99 * 86400 + 43200].map((s) =>
-      formatTimeAgo(new Date(now - s * 1000))
+      formatTimeAgo(new Date(now - s * 1000), now)
     );
     expect(waits).toEqual(['59s ago', '59m ago', '23h ago', '99d ago']);
     const wait = Math.max(...waits.map((w) => `· ${w}`.length));
@@ -448,6 +449,41 @@ describe('Transactions pool view', () => {
     });
     expect(cards[1]).toHaveTextContent('0 → 1 cell');
   });
+  // Lane E4: the pool banner's "newest seen" age, its time's hover, reads the page's one clock, so
+  // it moves with no data change; it was written once at render. The clock stops with the page.
+  it('moves the age in the newest-seen time’s title with no data change (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      summary: { ...emptyPool.summary, newestSeenAt: String(T0 - 20_000) },
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+    });
+    const { unmount } = render(<TransactionsPage />);
+    const seen = () =>
+      within(screen.getByTestId('pool-banner'))
+        .getByText(formatUtc8DateTime(T0 - 20_000))
+        .getAttribute('title');
+    await loadUnderStillClock(() => screen.queryByTestId('pool-banner') !== null);
+    expect(seen()).toBe('20s ago');
+    tick(1000);
+    expect(seen()).toBe('21s ago');
+    tick(38_000);
+    expect(seen()).toBe('59s ago');
+    tick(1000);
+    expect(seen()).toBe('1m ago');
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],

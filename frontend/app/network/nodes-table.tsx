@@ -21,6 +21,7 @@ import {
 import { cn, formatTimeAgo } from '@/lib/utils';
 import { countNoun, formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
+import { ClockText } from '@/components/ui/utc8-date';
 
 interface PeerFilters {
   state?: NetworkPeerDisplayState;
@@ -75,8 +76,13 @@ function orDash(value: string | null | undefined): string {
   return value != null && value.trim().length > 0 ? value : '—';
 }
 
-function optionalAge(timestamp: number | null): string {
-  return timestamp == null ? '—' : formatTimeAgo(timestamp * 1000);
+/** A crawler time (seconds) as its age, read from the page's one clock (lane E4). */
+function ago(seconds: number): ReactNode {
+  return <ClockText text={(now) => formatTimeAgo(seconds * 1000, now)} />;
+}
+
+function optionalAge(timestamp: number | null): ReactNode {
+  return timestamp == null ? '—' : ago(timestamp);
 }
 
 /**
@@ -152,7 +158,7 @@ function ObservationList({ observations }: { observations: NetworkAddressProbeEv
           <span className="text-text-dim">
             {' '}
             · <span>{observationLabel(observation.result)}</span> · {observation.elapsedMs} ms ·
-            observed {formatTimeAgo(observation.observedAt * 1000)}
+            observed {ago(observation.observedAt)}
           </span>
         </li>
       ))}
@@ -174,7 +180,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
         </span>
         <span className="text-text-dim">
           Latest positive evidence:{' '}
-          <span className="text-text">{formatTimeAgo(detail.latestPositiveObservedAt * 1000)}</span>
+          <span className="text-text">{ago(detail.latestPositiveObservedAt)}</span>
         </span>
       </div>
 
@@ -188,9 +194,8 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
               <li key={alias.address} className="text-text break-all">
                 {alias.address}{' '}
                 <span className="text-text-dim">
-                  · first advertised {formatTimeAgo(alias.firstAdvertisedAt * 1000)} · last
-                  advertised {formatTimeAgo(alias.lastAdvertisedAt * 1000)} · last verified{' '}
-                  {optionalAge(alias.lastVerifiedAt)}
+                  · first advertised {ago(alias.firstAdvertisedAt)} · last advertised{' '}
+                  {ago(alias.lastAdvertisedAt)} · last verified {optionalAge(alias.lastVerifiedAt)}
                 </span>
               </li>
             ))}
@@ -214,7 +219,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 · {session.clientVersion || 'unknown client'} · observed{' '}
                 {session.observationCount.toLocaleString('en-US')} completed{' '}
                 {countNoun(session.observationCount, 'round')} · latest{' '}
-                {formatTimeAgo(session.lastObservedAt * 1000)} · session address metadata:{' '}
+                {ago(session.lastObservedAt)} · session address metadata:{' '}
                 {session.sessionAddresses.length === 0
                   ? 'none reported'
                   : session.sessionAddresses.join(', ')}
@@ -264,7 +269,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <h4 className="text-text-bright mb-1 font-bold">Retained verification</h4>
           <p className="text-text-dim">
             {detail.verified.clientVersion} · last same-network Identify{' '}
-            {formatTimeAgo(detail.verified.lastReachableAt * 1000)} · protocols{' '}
+            {ago(detail.verified.lastReachableAt)} · protocols{' '}
             {detail.verified.protocols.join(', ') || '—'}
           </p>
           <h5 className="text-text-bright mb-1 mt-2 font-bold">Discovery</h5>
@@ -301,7 +306,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 · <span className="break-all">{advertiser.alias}</span> · observed{' '}
                 {formatCount(advertiser.observationCount, 'completed round')} · first round #
                 {advertiser.firstObservedRound} · latest round #{advertiser.lastObservedRound} ·{' '}
-                {formatTimeAgo(advertiser.lastObservedAt * 1000)}
+                {ago(advertiser.lastObservedAt)}
               </li>
             ))}
           </ul>
@@ -370,7 +375,7 @@ function peerColumns(peer: NetworkPeerSummary): Array<{
     },
     {
       label: 'Latest evidence',
-      value: formatTimeAgo(peer.latestPositiveObservedAt * 1000),
+      value: ago(peer.latestPositiveObservedAt),
       cell: 'text-text-dim text-small',
     },
     {

@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { ActivityRow, ActivityRowHead, activityRowTitle } from '@/components/activity/activity-row';
+import { ActivityRow, ActivityRowHead, RowArticle } from '@/components/activity/activity-row';
 import { ACTIVITY_HEAD_CLASS, SectionHeading } from '@/components/home/section';
 export { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { useFreshKeys } from '@/hooks/useFreshKeys';
@@ -170,12 +170,13 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
   const highlighted = hoverTx === tx.hash || pinned === tx.hash;
   const count = 'inline-block min-w-[3ch] text-right tabular-nums';
   return (
-    <article
+    <RowArticle
       data-feed-row={tx.hash}
       data-tx-row={tx.hash}
       // The activity row's hover, the hash and the age (consistency C3); this feed is live, so
       // the row shows the age too (PA-22).
-      title={activityRowTitle(tx.hash, tx.timestamp)}
+      hash={tx.hash}
+      timestamp={tx.timestamp}
       data-highlighted={highlighted}
       // A committed tx anchors the proposal window on the block that committed it.
       onPointerEnter={() =>
@@ -198,6 +199,6 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
         timestamp={tx.timestamp}
         age
       />
-    </article>
+    </RowArticle>
   );
 }

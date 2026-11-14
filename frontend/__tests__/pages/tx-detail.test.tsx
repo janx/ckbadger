@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { onlineManager } from '@tanstack/react-query';
 import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -537,6 +538,44 @@ describe('TransactionDetailPage', () => {
     expect(row).toHaveTextContent('2026-03-12 20:00:00 UTC+8');
     expect(row).toHaveTextContent(/0s ago$/);
   });
+
+  // Lane E4: the facts' ages (the commit time's, a pool transaction's pending-since) read the
+  // page's one clock, so they move with no data change; they were written once at render. The
+  // clock stops with the page.
+  it.each([
+    ['the commit time', 'Time', { timestamp: new Date(T0 - 20_000).toISOString() }],
+    [
+      'the pending-since time',
+      'Pending since',
+      { ...createPendingTransactionDetail(), pendingSince: new Date(T0 - 20_000).toISOString() },
+    ],
+  ])(
+    'moves %s’s age with no data change, and leaves no timer behind (E4)',
+    async (_, label, patch) => {
+      vi.useFakeTimers({ now: T0 });
+      try {
+        vi.mocked(api.getTransactionDetail).mockResolvedValue({
+          ...createCommittedTransactionDetail(),
+          ...patch,
+        } as Awaited<ReturnType<typeof api.getTransactionDetail>>);
+        const { unmount } = render(<TransactionDetailPage />);
+        const fact = () => screen.queryByText(label, { selector: 'dt' })?.parentElement;
+        await loadUnderStillClock(() => fact() != null);
+        const age = () => within(fact()!).getByText(/ ago$/).textContent;
+        expect(age()).toBe('20s ago');
+        tick(1000);
+        expect(age()).toBe('21s ago');
+        tick(38_000);
+        expect(age()).toBe('59s ago');
+        tick(1000);
+        expect(age()).toBe('1m ago');
+        unmount();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it.each([null, 1000])('shows deep-fork replay pause with scalar cycles %s', async (cycles) => {
     vi.mocked(useCyclesCalculation).mockReturnValue({

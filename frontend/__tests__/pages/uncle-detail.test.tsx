@@ -6,6 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import UncleDetailPage from '@/app/blocks/[id]/uncles/[index]/client-page';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 
 const params = vi.hoisted(() => ({ current: { id: '8775638', index: '0' } }));
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -157,6 +158,34 @@ describe('Uncle detail page', () => {
     expect(screen.getByText('0x7080001001526').parentElement).toHaveTextContent(
       '0x7080001001526 = 5,414 · 1 / 1,800'
     );
+  });
+
+  // Lane E4: the Time fact's age reads the page's one clock, so it moves with no data change; it
+  // was written once at render and stood still. The clock stops with the page.
+  it('moves the Time fact’s age with no data change, and leaves no timer behind (E4)', async () => {
+    params.current = { id: '8775638', index: '0' };
+    vi.useFakeTimers({ now: T0 });
+    try {
+      server.use(
+        http.get('*/blocks/:id/uncles/:index', () =>
+          HttpResponse.json({ ...blockUncle, timestamp: new Date(T0 - 20_000).toISOString() })
+        )
+      );
+      const { unmount } = render(<UncleDetailPage />);
+      const age = () => screen.queryByText(/^\d+[smh] ago$/)?.textContent;
+      await loadUnderStillClock(() => age() !== undefined);
+      expect(age()).toBe('20s ago');
+      tick(1000);
+      expect(age()).toBe('21s ago');
+      tick(38_000);
+      expect(age()).toBe('59s ago');
+      tick(1000);
+      expect(age()).toBe('1m ago');
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending

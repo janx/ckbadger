@@ -18,6 +18,14 @@ import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { color } from '@/lib/palette';
 import { percentOf } from '@/lib/format-unit';
+import { ClockText } from '@/components/ui/utc8-date';
+
+/**
+ * A row's value: a text, or what the page's one clock writes while the tooltip is up (a pending
+ * transaction's wait, lane E4) — the panel keeps one content per hovered transaction, so a text
+ * computed at the hover would stand still.
+ */
+export type TipValue = string | ((now: number) => string);
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
 export interface TipContent {
@@ -25,7 +33,7 @@ export interface TipContent {
   tone: string;
   title: string;
   tag: string | null;
-  rows: [string, string][];
+  rows: [string, TipValue][];
   foot: string | null;
 }
 
@@ -62,10 +70,10 @@ export function commitNote(p: number, tooEarly: boolean, s: PipelineSnapshot): s
 
 const feeRate = (rate: string) => `${fmtInt(BigInt(rate))} sh/kB`;
 
-export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipContent {
+export function txTip(info: TxInfo, s: PipelineSnapshot): TipContent {
   if (info.kind === 'cellbase') return cellbaseTip(info.block, s);
   const t = info.tx;
-  const rows: [string, string][] = [
+  const rows: [string, TipValue][] = [
     ['size · area', `${fmtBytes(t.size)} · ${pct(t.size, s.consensus.maxBlockBytes)}`],
   ];
   if (info.kind === 'committed') {
@@ -87,7 +95,8 @@ export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipConten
   rows.push(['fee rate', feeRate(t.feeRate)], ['fee', `${fmtInt(BigInt(t.fee))} sh`]);
   let foot = 'Click to pin it and follow it from the pool to the block that commits it.';
   if (info.kind === 'pending') {
-    rows.push(['waiting', `${((now - info.tx.arrivedAt) / 1000).toFixed(1)} s`]);
+    const { arrivedAt } = info.tx;
+    rows.push(['waiting', (now) => `${((now - arrivedAt) / 1000).toFixed(1)} s`]);
   } else if (info.kind === 'proposed') {
     const p = info.tx.proposedIn as NonNullable<PipelinePoolTx['proposedIn']>;
     rows.push(['proposal in', `${num(p.block)}${p.uncleIndex !== null ? ' · via uncle' : ''}`]);
@@ -352,7 +361,7 @@ export const PipelineTooltip = forwardRef<HTMLDivElement, PipelineTooltipProps>(
             <div key={k} className="contents">
               <dt className="text-text-dim">{k}</dt>
               <dd className="text-text-bright m-0 whitespace-nowrap text-right tabular-nums">
-                {v}
+                {typeof v === 'string' ? v : <ClockText text={v} />}
               </dd>
             </div>
           ))}
