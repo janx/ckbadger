@@ -7,7 +7,7 @@ import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
-import { DATA_COLOR } from '@/lib/design-tokens';
+import { CELL_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
 
@@ -547,6 +547,24 @@ describe('cell microscope inks (V11)', () => {
       'border-base-border-subtle'
     );
     expect(document.body.innerHTML).not.toMatch(/(text|bg|border)-\[#/);
+  });
+
+  // Lane E2 follow-up (ruling R4 covers the quiet ink): a framing byte's hex digits and its raw
+  // value in the field detail are figures, in the dim ink (4.57:1 or more), never the quiet slate
+  // (2.31–3.27:1); a field's bytes keep their group's tone, so the two stay apart, both readable.
+  it('writes a framing byte’s hex and its raw value in the dim ink, never the quiet slate', () => {
+    stubChartWidth(1200);
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    const hex = (i: number) => box.querySelector(`[data-byte="output:${i}"]`) as HTMLElement;
+    for (const i of [0, 1, 2, 3]) expect(hex(i).style.color).toBe('var(--c-text-dim)');
+    expect(hex(4).style.color).toBe(CELL_COLORS.lock);
+    fireEvent.mouseOver(hex(0));
+    fireEvent.click(hex(0));
+    const detail = screen.getByRole('complementary', { name: 'Field detail' });
+    const raw = within(detail).getByText('raw').nextElementSibling as HTMLElement;
+    expect(raw).toHaveTextContent('04000000');
+    expect(raw.style.color).toBe('var(--c-text-dim)');
   });
 
   // Lane E2 (ruling R4): the ASCII of a byte the cell does not occupy (molecule framing) is a datum,

@@ -4,7 +4,8 @@ import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import daoDeposit from '@/__tests__/fixtures/cell-inventory/dao.json';
 import daoWithdraw from '@/__tests__/fixtures/cell-inventory/dao-withdraw.json';
 import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
-import { CELL_COLORS } from '@/lib/design-tokens';
+import { CELL_COLORS, ELF_REGION_COLORS } from '@/lib/design-tokens';
+import { contrastRatio, PALETTE, THEMES, type PaletteKey } from '@/lib/palette';
 
 const cell = sporeCell as unknown as Cell;
 
@@ -74,4 +75,29 @@ describe('cell parts (Cell board: every byte named once)', () => {
     } as unknown as Cell);
     expect(parts.map((p) => [p.label, p.start, p.end])).toEqual([['unclassified bytes', 0, 64]]);
   });
+
+  // Lane E2 follow-up (ruling R4 covers the quiet ink): a part's tone paints its hex digits on the
+  // cell page, so the tone of a framing byte (a field the cell does not occupy) and of an ELF's
+  // padding is a text-grade ink, 4.5:1 or more on every ground in both themes, never the quiet
+  // slate (2.31–3.27:1). Framing and fields stay apart by two text-grade inks: the dim ink against
+  // the group's tone.
+  it('tones a framing byte and an ELF padding byte in a text-grade ink', () => {
+    const framing = cellOutputParts(cell).filter((p) => !p.occupied);
+    expect(framing.length).toBeGreaterThan(0);
+    const tones = new Set([...framing.map((p) => p.tone), ELF_REGION_COLORS.padding]);
+    const short: string[] = [];
+    for (const tone of tones) {
+      const key = /^var\(--c-([a-z0-9-]+)\)$/.exec(tone)?.[1] as PaletteKey | undefined;
+      if (!key || !(key in PALETTE.dark)) throw new Error(`part tone ${tone} is not a palette key`);
+      for (const theme of THEMES)
+        for (const ground of GROUNDS) {
+          const ratio = contrastRatio(PALETTE[theme][key], PALETTE[theme][ground]);
+          if (ratio < 4.5) short.push(`${theme} ${key} on ${ground}: ${ratio.toFixed(2)}`);
+        }
+    }
+    expect(short).toEqual([]);
+    expect(framing.every((p) => p.tone !== CELL_COLORS[p.group])).toBe(true);
+  });
 });
+
+const GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'base-elevated'];

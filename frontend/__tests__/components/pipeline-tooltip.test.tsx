@@ -12,6 +12,7 @@ import {
   PipelineTooltip,
   cellbaseTip,
   txTip,
+  uncleTip,
   windowTip,
   type TipContent,
 } from '@/components/pipeline/pipeline-tooltip';
@@ -165,5 +166,19 @@ describe('cellbase tooltip', () => {
       ).toBe(BigInt(r.total));
       expect(r.paid).toBe(true);
     }
+  });
+});
+
+// Lane E2 follow-up (ruling R4 covers the muted ink): an uncle's tag, "not on the chain", is words,
+// so it takes the dim ink (4.57:1 or more on every ground) as its colour and its frame, never the
+// pipeline's muted ink (--pipeline-ink-dim, 3.17–3.76:1 by night, 3.84–4.70:1 by day).
+describe('the uncle tooltip', () => {
+  it('writes its tag in the dim ink, never the muted', () => {
+    const block = snapshot.blocks.find((b) => b.number === T - 1) as PipelineBlock;
+    const tip = uncleTip(block, 0);
+    expect(tip.tag).toBe('not on the chain');
+    expect(tip.tone).toBe('var(--c-text-dim)');
+    const tag = within(renderTip(tip)).getByText('not on the chain');
+    expect(tag.style.color).toBe('var(--c-text-dim)');
   });
 });
