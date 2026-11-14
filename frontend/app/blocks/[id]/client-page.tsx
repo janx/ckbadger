@@ -53,7 +53,7 @@ export default function BlockDetailPage() {
   const pageSize = usePageSize(100);
   const {
     data: block,
-    isLoading,
+    status: readStatus,
     error,
   } = useQuery({
     queryKey: ['block', id],
@@ -135,7 +135,9 @@ export default function BlockDetailPage() {
     return () => window.removeEventListener('keydown', navigate);
   }, [block, router]);
 
-  if (isLoading)
+  // Pending is loading, fetching or paused (offline, or a hidden tab between retries): isLoading
+  // is pending AND fetching, so a paused read would fall through as if it had completed.
+  if (readStatus === 'pending')
     return (
       <div>
         <main className="container mx-auto py-8">
@@ -164,6 +166,7 @@ export default function BlockDetailPage() {
         </main>
       </div>
     );
+  // past pending, no error means the read succeeded: with no block, an API invariant broke
   if (!block) throw new Error(`Block ${id}: request completed without block evidence`);
   const activation = block.hardforkActivation;
   const resources = activation?.resources?.length

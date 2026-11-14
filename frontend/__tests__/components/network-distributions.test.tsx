@@ -1,6 +1,7 @@
 import { describe, it, expect, onTestFinished, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { render, screen, waitFor, within } from '../utils/test-utils';
+import { act, render, screen, waitFor, within } from '../utils/test-utils';
+import { onlineManager } from '@tanstack/react-query';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -56,6 +57,43 @@ describe('NetworkDistributions', () => {
       screen.getByText('2 of the 7 verified nodes run on Hetzner, across 2 countries.')
     ).toBeInTheDocument();
     expect(screen.getByText('/ckb/2')).toBeInTheDocument();
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the three parts said "Failed to load …" while they
+  // waited.
+  it('waits while its read is paused offline, then draws the distributions once back online', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 5,
+          sameNetworkReachable: 5,
+          verifiedUnavailable: 0,
+          versions: [{ label: '0.114.0', count: 5 }],
+          countries: [{ label: 'Germany', count: 5 }],
+          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+          protocols: [{ label: '/ckb/2', count: 5 }],
+        })
+      )
+    );
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <>
+          <NetworkDistributions />
+          <HostingBar />
+          <NetworkProtocols />
+        </>
+      );
+      // let the paused read settle into its state before looking
+      await act(async () => {});
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByText('/ckb/2')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('renders an empty-state note when a distribution has no data', async () => {

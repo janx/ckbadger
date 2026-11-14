@@ -309,7 +309,8 @@ export interface NetworkMapState {
   ref: RefObject<HTMLDivElement | null>;
   width: number;
   height: number;
-  isLoading: boolean;
+  /** Awaiting the read: fetching, or paused (offline, a hidden tab between retries). */
+  isPending: boolean;
   error: unknown;
   ready: NetworkMap | null;
   placed: ReturnType<typeof layoutCountryClusters> | null;
@@ -325,7 +326,8 @@ export function useNetworkMap(neverVerified: number): NetworkMapState {
   // A named node stays named until the pointer leaves the map (sticky), as before R6.
   const readout = usePinnedReadout<string>(String, { sticky: true });
   const [ref, measured] = useElementWidth<HTMLDivElement>();
-  const { data, isLoading, error } = useQuery({
+  // isPending, not isLoading: a read paused offline or between retries is still awaited
+  const { data, isPending, error } = useQuery({
     queryKey: ['network', 'map'],
     queryFn: api.getNetworkMap,
     refetchInterval: 30000,
@@ -336,13 +338,13 @@ export function useNetworkMap(neverVerified: number): NetworkMapState {
   // The board's map is about twice as wide as it is tall (880 × 430).
   // On a phone the clusters need more room than the board's ratio leaves (390 shot).
   const height = Math.max(MIN_MAP_HEIGHT, Math.round(width * 0.49));
-  const ready = !isLoading && !error && data ? data : null;
+  const ready = !isPending && !error && data ? data : null;
   const placed = ready ? layoutCountryClusters(ready.points, width, height) : null;
   const selectedId = readout.active;
   if (selectedId !== null && ready && !ready.points.some((point) => point.peerId === selectedId))
     readout.clear();
   const selected = ready?.points.find((point) => point.peerId === selectedId) ?? null;
-  return { neverVerified, readout, ref, width, height, isLoading, error, ready, placed, selected };
+  return { neverVerified, readout, ref, width, height, isPending, error, ready, placed, selected };
 }
 
 /**
@@ -352,7 +354,7 @@ export function useNetworkMap(neverVerified: number): NetworkMapState {
  * or focused node; a tap pins it there until a second tap on it or Escape (R6).
  */
 export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
-  const { readout, ref, width, height, isLoading, error, ready, placed, selected } = map;
+  const { readout, ref, width, height, isPending, error, ready, placed, selected } = map;
   const selectedId = readout.active;
   const layout = placed?.dots ?? [];
   const countryLabels = placed?.labels ?? [];
@@ -365,7 +367,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
         <TerminalPanel aria-label="Map of verified peers" className="min-w-0 self-start">
           <TerminalPanelContent padding="sm">
             <div ref={ref} className="flex min-w-0 flex-col gap-3">
-              {isLoading ? (
+              {isPending ? (
                 <p className="text-text-dim text-small">Loading crawler locations…</p>
               ) : !ready ? (
                 <p role="alert" className="text-negative text-small">
@@ -571,12 +573,13 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
  * place, why close dots move, and why no link is drawn. Shares the map's query (one fetch).
  */
 export function NetworkMapNotes() {
-  const { data, isLoading, error } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['network', 'map'],
     queryFn: api.getNetworkMap,
     refetchInterval: 30000,
   });
-  if (isLoading) return null;
+  // pending, not isLoading: a read paused offline or between retries is still awaited
+  if (isPending) return null;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">

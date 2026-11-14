@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { act, render, screen, within } from '@/__tests__/utils/test-utils';
+import { onlineManager } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
@@ -144,5 +145,21 @@ describe('Uncle detail page', () => {
     expect(screen.getByText('0x7080001001526').parentElement).toHaveTextContent(
       '0x7080001001526 = 5,414 · 1 / 1,800'
     );
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the page drew nothing at all while it waited.
+  it('says it is loading while its read is paused offline, then shows the uncle once back online', async () => {
+    params.current = { id: '8775638', index: '0' };
+    onlineManager.setOnline(false);
+    try {
+      render(<UncleDetailPage />);
+      expect(await screen.findByText('Loading uncle…')).toHaveAttribute('role', 'status');
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toBeInTheDocument();
+      expect(screen.queryByText('Loading uncle…')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

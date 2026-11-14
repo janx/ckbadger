@@ -110,7 +110,8 @@ export default function ForkDetailPage() {
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
         <DocumentTitle parts={[formatBlockNumber(route.height), route.orphan, 'fork']} />
-        {query.isLoading && <p role="status">Loading fork evidence…</p>}
+        {/* pending, not isLoading: a read paused offline or between retries is still awaited */}
+        {query.isPending && <p role="status">Loading fork evidence…</p>}
         {query.error && <ReadFailure what="fork" error={query.error} />}
         {mismatch && (
           <p role="alert" className="text-rouge text-body break-all">

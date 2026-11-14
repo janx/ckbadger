@@ -284,7 +284,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         {detail.error ? (
           <ReadFailure what="collection" error={detail.error} />
         ) : (
-          <AssetReadState label="collection" error={null} loading={detail.isLoading} />
+          // pending, not isLoading: a read paused offline or between retries is still awaited
+          <AssetReadState label="collection" error={null} loading={detail.isPending} />
         )}
       </AssetDetailShell>
     );
