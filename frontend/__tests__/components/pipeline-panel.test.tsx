@@ -243,10 +243,24 @@ const WORD_INK: Readonly<Record<string, PaletteKey>> = {
   'fill-text': 'text',
   'fill-text-bright': 'text-bright',
   'fill-gold': 'gold',
-  'fill-warning-bright': 'gold-bright',
   'fill-aqua': 'aqua',
 };
 const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'base-elevated'];
+/** The age fade's two ends: the tip, and tip − 7 on (pinned in pipeline-encoding.test.ts). */
+const AGES = [ageOpacity(0), ageOpacity(7)];
+/** A word's ink: its fill class, a named ink or a pipeline token (`fill-[var(--pipeline-…)]`). */
+function wordInk(word: Element, svg: Element): PaletteKey {
+  for (let a: Element | null = word; a && a !== svg; a = a.parentElement) {
+    const cls = [...a.classList].find((c) => c.startsWith('fill-'));
+    if (!cls) continue;
+    const token = /^fill-\[var\(--([a-z0-9-]+)\)\]$/.exec(cls);
+    if (token) return paletteKeyOfVar(token[1]);
+    const key = WORD_INK[cls];
+    if (!key) throw new Error(`pipeline word "${word.textContent}" in unknown ink ${cls}`);
+    return key;
+  }
+  throw new Error(`pipeline word "${word.textContent}" has no fill class`);
+}
 
 /**
  * Every word the canvas writes, its ink (its fill class), and the composite it stands on, over
@@ -258,8 +272,6 @@ const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'bas
 function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
   const styleFill = (el: Element) => (el as SVGElement).style.getPropertyValue('fill');
   const alphaOf = (el: Element) => Number(el.getAttribute('fill-opacity') ?? '1');
-  /** The age fade's two ends: the tip, and tip − 7 on (pinned in pipeline-encoding.test.ts). */
-  const AGES = [ageOpacity(0), ageOpacity(7)];
   const groundOf = (
     word: Element
   ): { kind: string; hexes: (theme: ThemeName, page: PaletteKey) => string[] } => {
@@ -295,24 +307,13 @@ function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
     }
     return { kind: 'the page', hexes: (t, p) => [PALETTE[t][p]] };
   };
-  const inkOf = (word: Element): PaletteKey => {
-    for (let a: Element | null = word; a && a !== svg; a = a.parentElement) {
-      const cls = [...a.classList].find((c) => c.startsWith('fill-'));
-      if (cls) {
-        const key = WORD_INK[cls];
-        if (!key) throw new Error(`pipeline word "${word.textContent}" in unknown ink ${cls}`);
-        return key;
-      }
-    }
-    throw new Error(`pipeline word "${word.textContent}" has no fill class`);
-  };
   const words = [...svg.querySelectorAll('text, tspan')].filter((el) =>
     [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim() !== '')
   );
   expect(words.length).toBeGreaterThan(4);
   const worst = new Map<string, { ratio: number; example: string }>();
   for (const word of words) {
-    const ink = inkOf(word);
+    const ink = wordInk(word, svg);
     const ground = groundOf(word);
     for (const theme of THEMES)
       for (const page of PAGE_GROUNDS) {
@@ -543,6 +544,33 @@ describe('PipelinePanel static render', () => {
     expect(failures).toEqual([]);
   });
 
+  // Lane E2 round 3 (the lead's correction): the in-window number keeps the plain gold by night,
+  // the home page's approved look (6.11:1 on the tile, already fine); only by day, where the plain
+  // gold is 4.15:1 on the tile, it takes the gold's bright step, so it reads at 4.5:1 there.
+  it('keeps an in-window number the plain gold by night, and at 4.5:1 on its tile by day', async () => {
+    const svg = await renderPanel();
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    const consensus = buildPipelineSnapshot().consensus;
+    const inside = [...svg.querySelectorAll('[data-card]')].filter((c) =>
+      inWindow(Number(c.getAttribute('data-number')), T, consensus)
+    );
+    expect(inside.length).toBeGreaterThan(0);
+    const short: string[] = [];
+    for (const c of inside) {
+      const number = c.querySelector('[data-block-number]') as Element;
+      const ink = wordInk(number, svg);
+      expect(PALETTE.dark[ink], `night ink of ${number.textContent}`).toBe(PALETTE.dark.gold);
+      const tile = fillHex('light', (c.querySelector('[data-box]') as SVGElement).style.fill);
+      for (const page of PAGE_GROUNDS)
+        for (const a of AGES) {
+          const ratio = contrastRatio(PALETTE.light[ink], mixHex(PALETTE.light[page], tile, a));
+          if (ratio < 4.5) short.push(`${number.textContent} at ${a} on ${page}: ${ratio}`);
+        }
+    }
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(short).toEqual([]);
+  });
+
   it('writes the well’s and NEXT’s "unavailable" at 4.5:1 when the pool tip differs', async () => {
     const svg = await renderPanel({
       ...buildPipelineSnapshot(),
@@ -668,9 +696,9 @@ describe('PipelinePanel static render', () => {
     expect(win.getAttribute('d')?.match(/M/g)).toHaveLength(8);
     expect(win.style.getPropertyValue('stroke')).toBe(tok('gold'));
     expect(win).toHaveAttribute('stroke-width', '1.5');
-    // re-pinned with lane E2's follow-up: an in-window number is the gold's bright step on its tile
+    // re-pinned with lane E2 round 3: an in-window number is the pipeline's word gold on its tile
     for (const el of svg.querySelectorAll('[data-block-number]')) {
-      expect(el).not.toHaveClass('fill-warning-bright');
+      expect(el).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
     }
   });
 
@@ -1414,9 +1442,9 @@ describe('PipelinePanel interactions', () => {
       const n = c.block.number;
       const number = card(svg, n).querySelector('[data-block-number]');
       const inside = inWindow(n, T + 1, snapshot.consensus);
-      // re-pinned with lane E2's follow-up: the gold's bright step, 4.5:1 on the tile by day
-      if (inside) expect(number).toHaveClass('fill-warning-bright');
-      else expect(number).not.toHaveClass('fill-warning-bright');
+      // re-pinned with lane E2 round 3: the word gold (gold by night, its bright step by day)
+      if (inside) expect(number).toHaveClass('fill-[var(--pipeline-word-gold)]');
+      else expect(number).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
       expect(dimOfCard(svg, n)).toBe(inside ? 'false' : 'true');
     }
     expect(svg.querySelector('[data-next] > [data-dim]')).toHaveAttribute('data-dim', 'false');
@@ -1431,12 +1459,12 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
       windowLabel(T + 1, T, snapshot.consensus)
     );
-    // re-pinned with lane E2's follow-up: the gold's bright step on the tile
+    // re-pinned with lane E2 round 3: the pipeline's word gold on the tile
     expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass(
-      'fill-warning-bright'
+      'fill-[var(--pipeline-word-gold)]'
     );
     expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass(
-      'fill-warning-bright'
+      'fill-[var(--pipeline-word-gold)]'
     );
   });
 
@@ -2151,9 +2179,11 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       columnWindowMarksPath(ruler)
     );
     expect(svg.querySelector('[data-window-label]')).toBeNull();
-    // re-pinned with lane E2's follow-up: the gold's bright step on the tile
+    // re-pinned with lane E2 round 3: the pipeline's word gold on the tile
     const gold = (n: number) =>
-      card(svg, n).querySelector('[data-block-number]')?.classList.contains('fill-warning-bright');
+      card(svg, n)
+        .querySelector('[data-block-number]')
+        ?.classList.contains('fill-[var(--pipeline-word-gold)]');
     expect([T, T - 1, T - 2, T - 3].map(gold)).toEqual([false, true, true, true]);
   });
 
