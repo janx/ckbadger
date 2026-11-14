@@ -11,7 +11,7 @@ export const NAVBAR_LINK_DEFAULT_CLASS = 'text-text hover:text-jade';
 export const NAVBAR_LINK_ACTIVE_CLASS = 'text-text-bright';
 
 export const NAVBAR_DROPDOWN_TRIGGER_CLASS =
-  'eyebrow flex items-center gap-1 rounded border px-2 py-1.5 font-mono text-small transition';
+  'eyebrow flex items-center gap-1 rounded border px-2 py-1.5 font-mono text-meta transition';
 
 /**
  * Lane U (U4): a nav entry's menu (Inventory), in the network switcher's panel materials and the
