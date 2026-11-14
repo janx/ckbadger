@@ -505,7 +505,7 @@ export function ScriptHistoryReading({
       aria-live="polite"
       aria-label="History reading"
       data-testid="script-history-reading"
-      className="border-base-border-subtle text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
+      className="border-row-rule text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
     >
       {point && used !== null && unused !== null ? (
         <>

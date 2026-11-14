@@ -403,7 +403,7 @@ export function AssetHistory({
           <div
             aria-live="polite"
             aria-label="History readout"
-            className="border-base-border-subtle text-small mt-2 flex flex-wrap gap-y-1 border-t pt-2"
+            className="border-row-rule text-small mt-2 flex flex-wrap gap-y-1 border-t pt-2"
           >
             {readoutItems.map((item, i) => (
               <span key={i}>

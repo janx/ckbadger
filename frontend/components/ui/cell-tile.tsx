@@ -77,7 +77,8 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',
-        dimmed && 'opacity-30'
+        // set back (R4): every word dim, the stones at full strength in their own state's ink
+        dimmed && 'quiet'
       )}
     >
       {/* One mark column, one text edge (seals by kind, C11): a 30 px column of marks and the
@@ -146,7 +147,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
           ) : (
-            <div aria-hidden="true" className="bg-base-elevated h-1 w-14 shrink-0">
+            <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
               <div
                 className="bg-jade h-full"
                 style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}

@@ -14,6 +14,7 @@ import {
 } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
+import { CHART_GRID_COLOR } from '@/lib/chart-colors';
 import { unitAfter, withUnit } from '@/components/charts/chart-format';
 
 export interface ChartPoint {
@@ -535,8 +536,16 @@ export function Chart({
               {selected &&
                 series.map((s, i) => (
                   <span key={s.key}>
+                    {/* A legend's label is text, in the text ink; the series colour is on its
+                        swatch only (U-08: "Other scripts" in its slate read 1.4:1). */}
                     {series.length > 1 && (
-                      <span className="text-meta mr-2" style={{ color: color(i) }}>
+                      <span className="text-text text-meta mr-2">
+                        <span
+                          aria-hidden="true"
+                          data-swatch
+                          className="mr-1.5 inline-block h-2 w-2 rounded-sm align-middle"
+                          style={{ backgroundColor: color(i) }}
+                        />
                         {s.label}
                       </span>
                     )}
@@ -617,7 +626,7 @@ export function Chart({
                         x2={right}
                         y1={yTick(v)}
                         y2={yTick(v)}
-                        stroke="var(--c-base-border-subtle)"
+                        stroke={CHART_GRID_COLOR}
                       />
                       {insideYTicks !== 'over' && insideTickLabel(v)}
                     </g>
@@ -629,7 +638,7 @@ export function Chart({
                       x2={right}
                       y1={yTick(v)}
                       y2={yTick(v)}
-                      stroke="var(--c-base-border-subtle)"
+                      stroke={CHART_GRID_COLOR}
                     />
                     <text
                       x={left - 8}

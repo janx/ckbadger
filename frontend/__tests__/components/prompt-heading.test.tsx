@@ -32,8 +32,25 @@ describe('PromptHeading', () => {
     const note = row.lastElementChild as HTMLElement;
     expect(note).not.toBe(h2);
     expect(note).toHaveTextContent('hover a point for the day');
-    expect(note).toHaveClass('text-text-ghost', 'text-meta', 'ml-auto');
+    // R4 (re-pinned on purpose): the note is information, in the dim ink
+    expect(note).toHaveClass('text-text-dim', 'text-meta', 'ml-auto');
     expect(h2).not.toContainElement(note);
+  });
+
+  // UI review 2026-11-14 (U-04, U-08, ruling R4): the note carries information ("at #21,009,130",
+  // "newest first", "Open the collection →"), so it is the dim ink, not the ghost (1.9:1 by night);
+  // a link in it keeps the note's ink and takes the page's link hover (`a:hover`, globals.css).
+  it('writes the note in the dim ink; a link in it keeps that ink and the page’s link hover', () => {
+    render(
+      <PromptHeading command="cluster" note={<a href="/clusters/0xab">Open the collection →</a>} />
+    );
+    const link = screen.getByRole('link', { name: 'Open the collection →' });
+    const note = link.closest('[data-prompt-note]') as HTMLElement;
+    expect(note).toHaveClass('text-text-dim', 'text-meta', 'ml-auto');
+    expect(note).not.toHaveClass('text-text-ghost');
+    // the link names no ink of its own: it is the note's dim, and jade under the pointer
+    expect([...link.classList].filter((c) => /^text-/.test(c))).toEqual([]);
+    expect(css).toMatch(/\ba:hover\s*\{\s*color: var\(--c-jade\);/);
   });
 
   it('renders the bare heading when there is no args or note', () => {

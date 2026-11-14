@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 
 // Consistency round C8 (Main.dc.html, Address.dc.html): what a set of objects is made of, on the
 // permanence scale, is first-class information — "N of M fully on-chain", one 8 px set bar and the
-// five-tier legend with every tier's count (a zero tier stays, in the ghost ink). One drawing for
+// five-tier legend with every tier's count (a zero tier stays, its 0 a datum in the dim ink). One drawing for
 // the inventory, a collection's Objects head and an address's Holdings head; the per-row chips
 // stay as they are.
 
@@ -133,7 +133,7 @@ export function CompositionSet({
       <>
         <CompositionMark tier={tier} size={16} className={cn(!onchain(tier) && 'opacity-50')} />
         <span
-          className={cn(zero ? 'text-text-ghost' : onchain(tier) ? 'font-medium' : 'text-text')}
+          className={cn(zero ? 'text-text-dim' : onchain(tier) ? 'font-medium' : 'text-text')}
           style={
             !zero && onchain(tier)
               ? {
@@ -149,7 +149,7 @@ export function CompositionSet({
         </span>{' '}
         <span
           data-count
-          className={cn('tabular-nums', zero ? 'text-text-ghost' : 'text-text-bright')}
+          className={cn('tabular-nums', zero ? 'text-text-dim' : 'text-text-bright')}
         >
           {n(v)}
         </span>

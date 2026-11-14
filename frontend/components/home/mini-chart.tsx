@@ -23,6 +23,7 @@ import {
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
+import { CHART_GRID_COLOR } from '@/lib/chart-colors';
 
 /**
  * The homepage small multiples: one figure frame (caption + headline + chart) and four SVG chart
@@ -45,8 +46,8 @@ const PLOT_H = BOTTOM - TOP;
 const DIMMED = 0.35;
 
 const C = {
-  // the row-rule ink: every chart's grid is 1 px solid #1a1f30 (visual finish V13 b)
-  grid: 'var(--c-base-border-subtle)',
+  // the row-rule ink: every chart's grid is 1 px solid (visual finish V13 b; R5, ruling 4c)
+  grid: CHART_GRID_COLOR,
   base: 'var(--c-text-ghost)',
   tick: 'var(--c-text-dim)',
   reference: 'var(--c-text)',

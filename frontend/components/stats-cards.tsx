@@ -97,7 +97,7 @@ export function StatsCards() {
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => (
           <div key={card.label} data-testid="stats-card" className="well p-4">
-            <div className="eyebrow text-text-dim text-small font-mono">{card.label}</div>
+            <div className="eyebrow text-text-dim text-meta font-mono">{card.label}</div>
             <div className="text-hero mt-1 font-semibold">
               <TerminalNumber value={card.value} glowIntensity={card.glow} animate={!isLoading} />
             </div>

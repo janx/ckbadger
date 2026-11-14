@@ -99,7 +99,7 @@ export function ClusterDescription({
         <div className="text-body flex flex-wrap gap-x-6 gap-y-1 font-mono">
           {entries.map((entry) => (
             <div key={entry.key} className="flex items-baseline gap-2">
-              <span className="eyebrow text-text-dim text-small">{entry.label}</span>
+              <span className="eyebrow text-text-dim text-meta">{entry.label}</span>
               <span className="text-text-bright text-small tabular-nums">{entry.value}</span>
             </div>
           ))}
@@ -108,7 +108,7 @@ export function ClusterDescription({
 
       {showRawJson && (
         <details className="border-base-border bg-base-bg/40 w-full overflow-hidden rounded border">
-          <summary className="eyebrow text-text-dim text-small cursor-pointer px-3 py-2 text-left font-mono">
+          <summary className="eyebrow text-text-dim text-meta cursor-pointer px-3 py-2 text-left font-mono">
             View Raw Cluster Metadata JSON
           </summary>
           <pre className="well text-text-bright text-small m-2 max-h-64 overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-left font-mono">

@@ -27,6 +27,22 @@ describe('the tap-or-hover hint (R6: one wording for every hover target)', () =>
     );
   });
 
+  // UI review 2026-11-14 (U-08, ruling R4): a hint is information, so it is the dim ink wherever
+  // it stands; the ghost (1.9:1 by night) is only for padding zeros and decoration.
+  it('draws the hint in the dim ink, wherever it stands', () => {
+    render(
+      <>
+        <TapOrHoverHint what="a party or an asset" className="text-meta" />
+        <TapOrHoverHint what="a day" />
+      </>
+    );
+    for (const words of ['tap or hover a party or an asset', 'tap or hover a day']) {
+      const hint = screen.getByText(words);
+      expect(hint, words).toHaveClass('text-text-dim');
+      expect(hint, words).not.toHaveClass('text-text-ghost');
+    }
+  });
+
   it('is the hint the readout line under a figure offers', () => {
     render(
       <ReadoutRow label="Day readout" pinned={false}>

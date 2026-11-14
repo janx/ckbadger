@@ -488,7 +488,7 @@ function FeedActivityRow({
   } catch (error) {
     // A row that breaks the feed contract is reported in place; the page stays up.
     return (
-      <div className="border-base-elevated border-b py-3">
+      <div className="border-row-rule border-b py-3">
         <ActivityReadError txHash={a.txHash} error={error} />
       </div>
     );
@@ -497,7 +497,8 @@ function FeedActivityRow({
     <ActivityRow
       activity={a}
       headline={headline && <FeedHeadlineText headline={headline} />}
-      className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
+      // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded
+      className={headline?.neighbour ? 'quiet' : undefined}
       // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
       mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
       showScriptDetails={!plain}

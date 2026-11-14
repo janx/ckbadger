@@ -62,7 +62,7 @@ export function RankedBars({
               >
                 {row.label}
               </span>
-              <span className="bg-base-border-subtle flex h-1.5">
+              <span className="bg-bar-track flex h-1.5">
                 <span
                   data-role="share-fill"
                   className="bg-jade h-1.5 min-w-[2px]"

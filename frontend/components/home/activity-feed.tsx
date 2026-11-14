@@ -59,7 +59,7 @@ export function ActivityFeed() {
           }
         />
       </div>
-      <div className="border-base-border-subtle flex items-center border-b">
+      <div className="border-row-rule flex items-center border-b">
         <div role="group" aria-label="Feed" className="flex gap-4 sm:gap-6">
           {TABS.map((t) => (
             <button
@@ -103,7 +103,7 @@ export function ActivityFeed() {
   );
 }
 
-const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 transition-colors';
+const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-row-rule py-3 transition-colors';
 
 function FeedList<T>({
   query,

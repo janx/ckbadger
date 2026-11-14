@@ -85,7 +85,8 @@ describe('shared Chart encodings for the charts boards', () => {
     // The plot starts below the key: every grid line and the marker's name are under it.
     const keyY = Number(key.querySelector('text')!.getAttribute('y'));
     const gridYs = [
-      ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
+      // the grid is the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
+      ...container.querySelectorAll('svg line[stroke="var(--c-row-rule)"]'),
     ].map((n) => Number(n.getAttribute('y1')));
     expect(Math.min(...gridYs) - keyY).toBeGreaterThanOrEqual(10);
     const marker = [...container.querySelectorAll('svg text')].find(
@@ -632,9 +633,7 @@ describe('chart material (visual finish V13)', () => {
           formatValue={(v) => v}
         />
       );
-      const grid = [
-        ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
-      ];
+      const grid = [...container.querySelectorAll('svg line[stroke="var(--c-row-rule)"]')];
       expect(grid.length).toBeGreaterThan(1);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
       // A target keeps its own dash (re-pinned for CH-21: 4 3, was 3 3 like a hardfork's).

@@ -233,7 +233,8 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
 /**
  * The committed list of the Transactions board (TX-25 / TX-26): general columns first (tx,
  * block · age, what it did, value, fee), then the quieter cells / size / cycles on one shared
- * scale per column. A cellbase row is set back and shows the reward it pays, grey (D5): Value
+ * scale per column. A cellbase row is set back (the quiet variant: every word dim, its stone
+ * pressed; R4) and shows the reward it pays, grey (D5): Value
  * itself excludes cellbase issuance, so the reward is never added to a total.
  */
 export function TransactionListTable({
@@ -438,7 +439,7 @@ export function TransactionListTable({
       rows={transactions}
       columns={columns}
       rowKey={(tx) => tx.hash}
-      rowClassName={(tx) => (tx.isCellbase ? 'opacity-[.55]' : '')}
+      rowClassName={(tx) => (tx.isCellbase ? 'quiet' : '')}
       empty="No transactions."
       mobileRow={(tx, wide) => <TransactionPhoneRow tx={tx} wide={wide} />}
     />

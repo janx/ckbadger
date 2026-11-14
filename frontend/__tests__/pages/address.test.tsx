@@ -1536,7 +1536,12 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(chips).not.toHaveTextContent('2+');
     for (const chip of within(chips).getAllByRole('button'))
       if (chip !== ckb) expect(chip).toHaveTextContent(/\d$/);
-    expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveClass('text-text-ghost');
+    // R4 (UI review 2026-11-14, re-pinned on purpose): an empty filter's "0" is a datum, so the
+    // chip is the dim ink of every other chip, never the ghost.
+    const dao = within(chips).getByRole('button', { name: /^DAO/ });
+    expect(dao).toHaveTextContent(/^DAO 0$/);
+    expect(dao).toHaveClass('text-text-dim');
+    expect(dao).not.toHaveClass('text-text-ghost');
     expect(api.getAddressActivities).toHaveBeenCalledWith(addressHash, {
       limit: 1,
       cursor: undefined,

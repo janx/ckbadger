@@ -169,10 +169,10 @@ function StageFlowPill({
 }) {
   return (
     <div className={`rounded-lg border px-3 py-2 ${stagePillClass(stage)}`}>
-      <div className="eyebrow text-text/70 text-meta">{title}</div>
+      <div className="eyebrow text-text-dim text-meta">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
         <div className="text-text-bright text-hero font-semibold">{value.toLocaleString()}</div>
-        <div className="text-text/70 text-meta">{subtitle}</div>
+        <div className="text-text-dim text-meta">{subtitle}</div>
       </div>
     </div>
   );
@@ -390,7 +390,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
 function TriMetricLegend() {
   return (
     <div className="border-base-border/60 bg-base-bg/40 mt-4 rounded-lg border p-3">
-      <div className="eyebrow text-text-dim text-small">Tri-metric encoding</div>
+      <div className="eyebrow text-text-dim text-meta">Tri-metric encoding</div>
       <div className="text-text text-small mt-2 grid gap-2 sm:grid-cols-3">
         <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
           Bubble size = txn size (bytes)

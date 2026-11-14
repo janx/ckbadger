@@ -173,7 +173,7 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
     return (
       <div className={cn('flex items-center gap-3 py-2', className)}>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
+        <span className="eyebrow text-text-dim text-meta font-mono">{label}</span>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
       </div>
     );
@@ -201,7 +201,7 @@ export function TerminalRow({ children, className, hoverable = true, ...props }:
       {...props}
       className={cn(
         // a row rule is the subtle ink, #1a1f30 (material pass v2, move 6)
-        'border-base-border-subtle border-b px-3 py-2 last:border-b-0',
+        'border-row-rule border-b px-3 py-2 last:border-b-0',
         hoverable && 'row-scan hover:bg-base-elevated/50 transition-colors',
         className
       )}

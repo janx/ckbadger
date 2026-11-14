@@ -73,7 +73,7 @@ export function CapacityUtilization({
   return (
     <div className={className}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="eyebrow text-text-dim text-small font-mono">{totalLabel}</span>
+        <span className="eyebrow text-text-dim text-meta font-mono">{totalLabel}</span>
         <span
           className="text-text-bright text-small font-mono tabular-nums"
           title={formatCkbAmount(total.toString()).full + ' CKB'}
@@ -81,7 +81,7 @@ export function CapacityUtilization({
           {formatCkbCompact(total.toString()).value} CKB
         </span>
       </div>
-      <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
+      <div className="bg-bar-track flex h-3 w-full overflow-hidden rounded-sm">
         <div
           data-testid="capacity-used-bar"
           className="transition-[background-color,box-shadow] duration-200"

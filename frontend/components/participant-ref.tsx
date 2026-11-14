@@ -72,7 +72,7 @@ export function ParticipantRefView({
               quiet
                 ? 'text-text hover:text-jade'
                 : isCkbAddr
-                  ? 'text-jade/80 hover:text-jade'
+                  ? 'text-jade-dim hover:text-jade'
                   : 'text-text-dim hover:text-jade'
             )}
             title={address}
@@ -136,7 +136,7 @@ export function ParticipantRefView({
       </span>
       <span
         className={cn(
-          'eyebrow text-text-dim/70 text-meta font-mono',
+          'eyebrow text-text-dim text-meta font-mono',
           !compact && 'border-border rounded border px-1'
         )}
       >

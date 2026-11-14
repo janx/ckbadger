@@ -233,7 +233,7 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
             <span className="truncate" title={spore.contentType}>
               {spore.contentType || 'unknown'}
             </span>
-            <span className="text-text-dim/60">{'\u00B7'}</span>
+            <span className="text-text-dim">{'\u00B7'}</span>
             <span className="shrink-0">
               {spore.contentSize == null ? '—' : `${formatNumber(spore.contentSize)} B`}
             </span>

@@ -78,7 +78,7 @@ export function ProgressBar({
 
   return (
     <div className={cn('', className)}>
-      <div className={cn('bg-base-elevated relative w-full overflow-hidden', sizeClasses[size])}>
+      <div className={cn('bg-bar-track relative w-full overflow-hidden', sizeClasses[size])}>
         <div
           className={cn(
             'absolute inset-y-0 left-0 transition-all duration-500',

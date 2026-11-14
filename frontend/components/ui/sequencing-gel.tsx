@@ -488,7 +488,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
       <ul
         aria-label="Genes"
         data-rows={oneLine ? 'one-line' : 'two-line'}
-        className="border-base-border-subtle text-small border-t"
+        className="border-row-rule text-small border-t"
       >
         {genes.map((g) => {
           const on = g.name === lit;
@@ -509,7 +509,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
             <li
               key={g.key}
               data-gene-row={g.name}
-              className="border-base-elevated border-b last:border-b-0"
+              className="border-row-rule border-b last:border-b-0"
             >
               <div
                 data-active={on ? 'true' : undefined}

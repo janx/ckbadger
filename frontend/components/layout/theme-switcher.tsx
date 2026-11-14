@@ -183,7 +183,7 @@ export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
             onKeyDown={onMenuKeyDown}
             className={NAVBAR_MENU_PANEL_CLASS}
           >
-            <div className="eyebrow border-base-border/70 text-text-ghost text-meta mb-1 border-b px-2.5 pb-2 pt-1 font-mono">
+            <div className="eyebrow border-base-border/70 text-text-dim text-meta mb-1 border-b px-2.5 pb-2 pt-1 font-mono">
               Theme
             </div>
             {THEME_PREFERENCES.map((option, i) => {
@@ -242,7 +242,7 @@ export function ThemeSegments({ className, onChoose }: ThemeSegmentsProps) {
   const { preference, system, setPreference } = useTheme();
   return (
     <div className={cn('px-3 py-2.5', className)} data-testid="theme-segments">
-      <div className="eyebrow text-text-ghost text-meta mb-2 font-mono">Theme</div>
+      <div className="eyebrow text-text-dim text-meta mb-2 font-mono">Theme</div>
       <div role="radiogroup" aria-label="Theme" className="flex gap-1.5">
         {THEME_PREFERENCES.map((option) => {
           const checked = option === preference;
@@ -265,7 +265,7 @@ export function ThemeSegments({ className, onChoose }: ThemeSegmentsProps) {
               )}
             >
               {THEME_LABELS[option]}
-              {hint && <span className="text-text-ghost text-meta ml-1">({hint})</span>}
+              {hint && <span className="text-text-dim text-meta ml-1">({hint})</span>}
             </button>
           );
         })}
