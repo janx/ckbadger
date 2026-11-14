@@ -7,8 +7,59 @@ import { api } from '@/lib/api';
 
 /** U-01 / R2 (the boards' header, lib.js `header()`): lowercase, no dots. */
 const SHARED_PLACEHOLDER = 'search block / tx / address / cell';
-/** The placeholder below md: 6 characters at 13 px, 46.8 px, in the 140 px of text at 360 (PA-04). */
+/** The placeholder of a field whose text box cannot hold the long one: 6 characters, 46.8 px. */
 const PHONE_PLACEHOLDER = 'search';
+
+/**
+ * Lays the field out as a browser would (jsdom lays nothing out): every input `width` px wide
+ * (its border box) with the compact field's insets, 1 px borders, 28 px of left padding (the prompt
+ * square's) and `right` px of right padding (36 with the `/` key's room, from md; 12 without), so
+ * its text box is width − 30 − right. The field reads it before paint; `resize` sets a new width
+ * and has the ResizeObserver report it, as a browser does on a resize.
+ */
+function layOutField(width: number, right = 36) {
+  let border = width;
+  let report: () => void = () => {
+    throw new Error('layOutField: no ResizeObserver was made');
+  };
+  class ResizeObserverStub {
+    constructor(cb: ResizeObserverCallback) {
+      report = () => cb([], this as unknown as ResizeObserver);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return this instanceof HTMLInputElement ? ({ width: border } as DOMRect) : rect.call(this);
+  });
+  const style = window.getComputedStyle.bind(window);
+  vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
+    el instanceof HTMLInputElement
+      ? ({
+          display: 'block',
+          visibility: 'visible',
+          borderLeftWidth: '1px',
+          borderRightWidth: '1px',
+          paddingLeft: '28px',
+          paddingRight: `${right}px`,
+        } as unknown as CSSStyleDeclaration)
+      : style(el, pseudo)
+  );
+  return {
+    resize(next: number) {
+      border = next;
+      act(() => report());
+    },
+  };
+}
+
+/** A desktop header's field: 460.8 px at 1280 (36vw), a 394.8 px text box. */
+const DESKTOP_FIELD_PX = 460.8;
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -37,11 +88,16 @@ vi.mock('@/lib/api', () => ({
 import { SearchBar } from '@/components/search-bar';
 
 describe('SearchBar', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
     pushMock.mockReset();
+    // the placeholder follows the measured field: unless a test says otherwise, a desktop one
+    layOutField(DESKTOP_FIELD_PX);
     vi.mocked(api.search).mockResolvedValue({
       query: '12',
       results: [
@@ -73,10 +129,12 @@ describe('SearchBar', () => {
   // PA-04 (UI review 2026-11-14): below md the header's field is what the row leaves, 180 px at
   // 360 (326 px of content less the 90 px wordmark, the 40 px menu button and two 8 px gaps), and
   // the full placeholder (38 characters at 13 px, 296.4 px) was cut mid-word at a different place
-  // on every page. Below md the field carries the short placeholder, and no "/" key is drawn: a
-  // touch layout has no keyboard to hint at, so the text keeps the room the key took.
-  it('gives the field a short placeholder and no "/" key below md (PA-04)', () => {
-    stubViewportFromMd(false);
+  // on every page. The phone's 180 px field (a 138 px text box) carries the short placeholder,
+  // and no "/" key is drawn: a touch layout has no keyboard to hint at, so the text keeps the room
+  // the key took.
+  it('gives the phone field a short placeholder and no "/" key below md (PA-04)', () => {
+    vi.restoreAllMocks();
+    layOutField(180, 12);
     const { unmount } = render(<SearchBar variant="compact" />);
     const input = screen.getByPlaceholderText(PHONE_PLACEHOLDER);
     expect(screen.queryByPlaceholderText(SHARED_PLACEHOLDER)).toBeNull();
@@ -138,11 +196,66 @@ describe('SearchBar', () => {
     }
   });
 
-  it('keeps the full placeholder and the "/" key from md up (PA-04)', () => {
-    stubViewportFromMd(true);
+  it('keeps the full placeholder in a desktop field, and the "/" key from md up (PA-04)', () => {
     render(<SearchBar variant="compact" />);
     expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
     expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
+    expect(screen.getByTestId('search-shortcut-hints')).toHaveClass('hidden', 'md:flex');
+  });
+
+  // Follow-up to PA-04 (RESPONSIVE_LAYOUT principle 4, "the measured width decides, not the
+  // breakpoint"): from md the long placeholder was drawn at every width, and the header's field
+  // holds about 105 px of text at 768–1023 (and less than the placeholder at 1024 beside the
+  // network switcher), so it was cut mid-word there. The field measures its text box (the input's
+  // content box, inside its borders and paddings) before paint and keeps it current, and draws the
+  // long placeholder only when the box holds all of it: 34 characters at 13 px, 0.6 em each, 265.2
+  // px; in the header's field from md (1 + 28 + 36 + 1 px of insets) that is 331.2 px wide.
+  describe('chooses its placeholder by the measured text box, not a breakpoint', () => {
+    it('draws the short one just under 265.2 px of text box and the long one just over', () => {
+      vi.restoreAllMocks();
+      layOutField(330.5); // a 264.5 px text box
+      const { unmount } = render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+      unmount();
+      vi.restoreAllMocks();
+      layOutField(332); // 266 px
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it('draws the short one in a narrow field at an md-wide viewport', () => {
+      vi.restoreAllMocks();
+      stubViewportFromMd(true);
+      layOutField(169); // the field at 768–1023: 736 px of row less 567 px of the rest
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(SHARED_PLACEHOLDER)).toBeNull();
+    });
+
+    it('draws the long one in a wide field below md', () => {
+      vi.restoreAllMocks();
+      stubViewportFromMd(false);
+      layOutField(400, 12);
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it('draws the short one until the field is laid out, so a narrow field never shows the long one', () => {
+      vi.restoreAllMocks();
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it('follows the field when it is resized', () => {
+      vi.restoreAllMocks();
+      const field = layOutField(DESKTOP_FIELD_PX);
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+      field.resize(281); // 1024 beside the network switcher: a 215 px text box
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+      field.resize(368.6); // 1024 with one network: 302.6 px
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    });
   });
 
   it('renders shortcut hints in home variant', () => {

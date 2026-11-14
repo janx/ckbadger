@@ -47,6 +47,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 ## Rules for the shared pieces
 
+- **Header search field**: the long placeholder `search block / tx / address / cell` (265.2 px at
+  13 px) only when the field's measured text box holds it whole, `search` otherwise, chosen
+  before paint (principle 4; a field 331.2 px wide from `md`: the header gives about 169 px at
+  768–1023, 368.6 px at 1024 with one network but less beside the network switcher, 460.8 px at
+  1280). The `/` key is drawn from `md`.
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
   every page. Below `md` the home page keeps the whole strip in three groups on their own lines —
   block number with the live mark, the epoch with its bar, `index / length` and the time left, the
@@ -64,12 +69,15 @@ The 640–767 band has one content width to design for. Below 640 the container 
   clock — and it must fit at 768 px (measured: 753 of 753 px with 26 px to spare, so a release
   string five or more characters longer than `0.8.2` would clip the clock). Below `md` it is one
   row of the mode, the network, the tip and the clock; the release and the hints are the wide
-  form's only (a touch screen has no keys; the release is in the `?` help, which the `?` key and,
-  from `md`, the footer's "keyboard shortcuts" open). Never two rows, never a sideways scroller,
-  never over the page's last prompt.
+  form's only (a touch screen has no keys). From `md` the release is in the status line and the
+  clock's zone in the `?` help; below `md` the footer's last row says both — designed, not
+  dropped. Never two rows, never a sideways scroller, never over the page's last prompt.
 - **Page end** (every page, the not-found and error pages too): the footer is the page's last
   quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
-  status line. The footer's "keyboard shortcuts" is drawn from `md` only.
+  status line. The footer's "keyboard shortcuts" is drawn from `md` only; below `md` the footer
+  ends instead on a line of its own with the release and the clock's zone, as in
+  `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 360
+  the links take two lines, 256.0 and 263.2 of 326 px, and this one 216.0).
 - **Transaction pipeline** (homepage): one row down to a 589 px canvas (two whole blocks); below
   that a vertical timeline (mempool, proposed, NEXT, the tip, older blocks as rows; one vertical
   chain line in the gaps). Never scaled, never folded, cards never smaller than 89 px.

@@ -391,7 +391,8 @@ export function CommandPalette() {
               </ul>
             </div>
             {/* What the status line shows only from md up: the release, and which time its
-                clock tells (opened by the `?` key or, from md, the footer's button). */}
+                clock tells (opened by the `?` key or, from md, the footer's button; below md the
+                footer's last row says both). */}
             <p
               data-testid="shortcuts-about"
               className="border-base-border text-text-dim text-small border-t px-4 py-3 font-mono"
