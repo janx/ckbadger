@@ -115,6 +115,31 @@ export function formatCapacity(capacity: string | bigint): string {
   return `${full} CKB`;
 }
 
+/** The compact CKB units in shannons, largest first (CH-14). */
+const CKB_COMPACT_UNITS = [
+  ['T', BigInt('100000000000000000000')],
+  ['B', BigInt('100000000000000000')],
+  ['M', BigInt('100000000000000')],
+  ['k', BigInt('100000000000')],
+] as const;
+const ONE_CKB = BigInt(100000000);
+
+/**
+ * A non-negative shannon amount in the largest compact unit it REACHES once rounded at two
+ * decimals of the unit below (the review's item J, as formatCompactInteger chooses): an amount from
+ * 999.995 of the unit below is 1.00 of this one, so 999,995 CKB is 1.00M, never 1000.00k. The
+ * threshold is the divisor less 1/200,000 of it. `top` leaves out the larger units; no unit
+ * reached, null.
+ */
+function compactCkbUnits(abs: bigint, top: 'T' | 'B'): string | null {
+  for (const [suffix, divisor] of CKB_COMPACT_UNITS) {
+    if (top === 'B' && suffix === 'T') continue;
+    if (abs >= divisor - divisor / BigInt(200000))
+      return `${formatScaledInteger(abs, divisor, 2)}${suffix}`;
+  }
+  return null;
+}
+
 export function formatCkbCompact(shannons: string | bigint): {
   value: string;
   full: string;
@@ -122,16 +147,7 @@ export function formatCkbCompact(shannons: string | bigint): {
   const amount = BigInt(shannons);
   if (amount < BigInt(0)) throw new Error(`negative capacity ${amount} shannons`);
   const full = formatCkbAmount(shannons).full;
-  for (const [suffix, divisor] of [
-    ['T', BigInt('100000000000000000000')],
-    ['B', BigInt('100000000000000000')],
-    ['M', BigInt('100000000000000')],
-    ['k', BigInt('100000000000')],
-  ] as const) {
-    if (amount >= divisor)
-      return { value: `${formatScaledInteger(amount, divisor, 2)}${suffix}`, full };
-  }
-  return { value: formatScaledInteger(amount, BigInt(100000000), 2), full };
+  return { value: compactCkbUnits(amount, 'T') ?? formatScaledInteger(amount, ONE_CKB, 2), full };
 }
 
 export function formatNumber(num: number | bigint): string {
@@ -148,18 +164,13 @@ export function formatCompactCkbDelta(ckbDelta: string): {
   const direction = shannons > BigInt(0) ? 'up' : 'down';
   const abs = shannons < BigInt(0) ? -shannons : shannons;
 
-  let compact: string;
-  if (abs >= BigInt('100000000000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000000000'), 2)}B`;
-  } else if (abs >= BigInt('100000000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000000'), 2)}M`;
-  } else if (abs >= BigInt('100000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}k`;
-  } else if (abs >= BigInt(100000000)) {
-    compact = formatScaledInteger(abs, BigInt(100000000), 2);
-  } else {
-    compact = formatScaledInteger(abs, BigInt(100000000), 4);
-  }
+  // Below one CKB a delta keeps four decimals; from 0.99995 CKB, which rounds to 1.0000 there, it
+  // is one CKB at two (the same rule as the units: the form is chosen for the rounded value).
+  const compact =
+    compactCkbUnits(abs, 'B') ??
+    (abs >= ONE_CKB - ONE_CKB / BigInt(20000)
+      ? formatScaledInteger(abs, ONE_CKB, 2)
+      : formatScaledInteger(abs, ONE_CKB, 4));
 
   return { compact, direction };
 }
