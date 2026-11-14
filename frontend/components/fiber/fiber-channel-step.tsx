@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { TxStructure, type TxContinuity } from '@/components/transaction/tx-structure';
 import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
@@ -95,7 +96,7 @@ export function FiberChannelStep({
     </h3>
   );
   let body: ReactNode;
-  if (transaction.isPending || (codeHashes.length > 0 && lookup.isPending)) {
+  if (isAwaited(transaction) || isAwaited(lookup)) {
     body = (
       <p className="text-text-dim text-small">Loading the {title.toLowerCase()} transaction…</p>
     );

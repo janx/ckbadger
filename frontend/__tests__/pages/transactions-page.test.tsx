@@ -1,4 +1,5 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -876,5 +877,25 @@ describe('Transactions kind in the URL (D11)', () => {
         activityType: 'object',
       })
     );
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('TransactionsPage while its read is paused', () => {
+  it('says it is loading, not nothing; a real empty answer still says so once back online', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { resume } = renderPaused(<TransactionsPage />);
+    expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('No transactions.')).toBeNull();
+    resume();
+    expect(await screen.findByText('No transactions.')).toBeInTheDocument();
+    expect(screen.queryByText('Loading transactions…')).toBeNull();
   });
 });

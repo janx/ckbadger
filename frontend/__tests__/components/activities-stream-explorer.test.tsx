@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
@@ -757,6 +758,26 @@ describe('ActivitiesStreamExplorer', () => {
 
     expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
     expect(await screen.findByText('Could not refresh: refresh failed')).toBeInTheDocument();
+  });
+
+  // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+  // awaited: the stream says it is reading, never "Nothing of this kind", and a real empty answer
+  // still says so once back online.
+  it('says it is reading while its read is paused, then the true empty state once back online', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      hasMore: false,
+      nextCursor: null,
+      total: 0,
+      limit: 20,
+    });
+    const { resume } = renderPaused(<ActivitiesStreamExplorer />);
+    expect(await screen.findByText('Reading activities…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('Nothing of this kind in the latest activities.')).toBeNull();
+    resume();
+    expect(
+      await screen.findByText('Nothing of this kind in the latest activities.')
+    ).toBeInTheDocument();
   });
 });
 

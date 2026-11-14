@@ -304,11 +304,7 @@ export function CanonicalIdentityDetail({
             </div>
           </>
         ) : (
-          <AssetReadState
-            label="raw identity evidence"
-            error={protocol.error}
-            loading={protocol.isLoading}
-          />
+          <AssetReadState label="raw identity evidence" error={protocol.error} read={protocol} />
         )
       }
     >
@@ -316,11 +312,7 @@ export function CanonicalIdentityDetail({
       {p ? (
         <AssetReadState label="identity document" error={protocol.error} retained />
       ) : (
-        <AssetReadState
-          label="identity document"
-          error={protocol.error}
-          loading={protocol.isLoading}
-        />
+        <AssetReadState label="identity document" error={protocol.error} read={protocol} />
       )}
       {p?.kind === 'did_ckb' && (
         <>
@@ -332,7 +324,7 @@ export function CanonicalIdentityDetail({
               collectionHref={collectionHref}
             />
           ) : (
-            <AssetReadState label="did:ckb servers" error={pds.error} loading={pds.isLoading} />
+            <AssetReadState label="did:ckb servers" error={pds.error} read={pds} />
           )}
         </>
       )}
@@ -395,11 +387,7 @@ export function CanonicalIdentityDetail({
             />
           </>
         ) : (
-          <AssetReadState
-            label="cell history"
-            error={versions.error}
-            loading={versions.isLoading}
-          />
+          <AssetReadState label="cell history" error={versions.error} read={versions} />
         )}
       </section>
     </AssetDetailShell>

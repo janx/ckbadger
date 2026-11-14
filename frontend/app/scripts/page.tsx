@@ -3,6 +3,7 @@
 import { TopicCharts } from '@/components/charts/topic-charts';
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { AppLink } from '@/components/ui/app-link';
@@ -459,7 +460,7 @@ export default function ScriptsPage() {
   // table's minimum width draw no bar, so the switch is drawn with the form the list chose.
   const [listForm, setListForm] = useState<ListTableForm | null>(null);
   // The table's page (declared first: its request goes first).
-  const { data, isLoading, isError, error } = useQuery({
+  const read = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
     queryFn: () =>
       api.getScripts({
@@ -473,6 +474,7 @@ export default function ScriptsPage() {
       }),
     placeholderData: keepPreviousData,
   });
+  const { data, isError, error } = read;
   // The hero's figure and bar (hierarchy v3): every script the search matches, never the role tab
   // under it (the API's class summary follows the role filter), so one row is enough.
   const summary = useQuery({
@@ -723,7 +725,7 @@ export default function ScriptsPage() {
                   <span className="ml-auto">{formatCount(data.total, 'script')}</span>
                 )}
               </div>
-              {isLoading ? (
+              {isAwaited(read) ? (
                 <div className="text-text-dim text-small py-8">Loading scripts…</div>
               ) : isError ? (
                 <div role="alert" className="text-negative text-small py-8">

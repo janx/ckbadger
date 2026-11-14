@@ -297,11 +297,7 @@ function ScopedCollectionHolders({
               )}
             </>
           ) : (
-            <AssetReadState
-              error={holders.error}
-              loading={holders.isLoading}
-              label="collection holders"
-            />
+            <AssetReadState error={holders.error} read={holders} label="collection holders" />
           )}
         </div>
         {distribution && (

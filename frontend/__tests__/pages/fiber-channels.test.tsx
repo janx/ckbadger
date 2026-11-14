@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -310,5 +311,21 @@ describe('Fiber channel phone row (board L8)', () => {
       ],
       ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],
     ]);
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('FiberChannelsPage while its read is paused', () => {
+  it('says it is loading, not nothing, then lists the channels once back online', async () => {
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
+    );
+    const { resume } = renderPaused(<FiberChannelsPage />);
+    expect(await screen.findByText('Loading channels…')).toBeInTheDocument();
+    resume();
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    expect(screen.queryByText('Loading channels…')).toBeNull();
   });
 });

@@ -30,6 +30,7 @@ import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import { percentOf } from '@/lib/format-unit';
+import { isAwaited, type ReadState } from '@/lib/query-state';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -39,22 +40,31 @@ export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: Asse
   { key: 'script', label: 'Other scripts', mark: 'other' },
   { key: 'plain', label: 'Plain CKB', mark: 'ckb' },
 ];
+/**
+ * An address section's read as the section states it: its failure once it has failed, "Loading
+ * …" while it is awaited (`isAwaited`: fetching, or paused offline or between retries), and
+ * "… unavailable." only once it has answered with nothing; a disabled read says nothing.
+ */
 export function AddressLoadState({
   error,
-  loading,
+  read,
   label,
 }: {
   error: Error | null;
-  loading: boolean;
+  read: ReadState;
   label: string;
 }) {
+  const sentence = error
+    ? `Could not load ${label}: ${error.message}`
+    : isAwaited(read)
+      ? `Loading ${label}…`
+      : read.status === 'success'
+        ? `${label} unavailable.`
+        : null;
+  if (sentence === null) return null;
   return (
     <p className="text-text-dim text-small py-3" role={error ? 'alert' : 'status'}>
-      {error
-        ? `Could not load ${label}: ${error.message}`
-        : loading
-          ? `Loading ${label}…`
-          : `${label} unavailable.`}
+      {sentence}
     </p>
   );
 }
@@ -777,11 +787,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     />
                   </>
                 ) : (
-                  <AddressLoadState
-                    label="DAO deposits"
-                    error={deposits.error}
-                    loading={deposits.isLoading}
-                  />
+                  <AddressLoadState label="DAO deposits" error={deposits.error} read={deposits} />
                 )}
               </>
             )}
@@ -853,7 +859,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 />
               </>
             ) : (
-              <AddressLoadState label="tokens" error={tokens.error} loading={tokens.isLoading} />
+              <AddressLoadState label="tokens" error={tokens.error} read={tokens} />
             )}
           </HoldingSection>
         )}
@@ -917,11 +923,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 />
               </>
             ) : (
-              <AddressLoadState
-                label="identities"
-                error={identities.error}
-                loading={identities.isLoading}
-              />
+              <AddressLoadState label="identities" error={identities.error} read={identities} />
             )}
           </HoldingSection>
         )}
@@ -1173,11 +1175,7 @@ function AddressCollectionObjects({
           </div>
         </>
       ) : (
-        <AddressLoadState
-          label={`${label} objects`}
-          error={objects.error}
-          loading={objects.isLoading}
-        />
+        <AddressLoadState label={`${label} objects`} error={objects.error} read={objects} />
       )}
     </div>
   );

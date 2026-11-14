@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, NetworkStats } from '@/lib/api';
 import { TerminalNumber } from '@/components/ui/terminal-number';
 
@@ -72,11 +73,12 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
 }
 
 export function StatsCards() {
-  const { data: stats, isLoading } = useQuery({
+  const read = useQuery({
     queryKey: ['network-stats'],
     queryFn: () => api.getNetworkStats(),
     refetchInterval: 10000,
   });
+  const stats = read.data;
 
   const cards = [
     {
@@ -99,7 +101,11 @@ export function StatsCards() {
           <div key={card.label} data-testid="stats-card" className="well p-4">
             <div className="eyebrow text-text-dim text-meta font-mono">{card.label}</div>
             <div className="text-hero mt-1 font-semibold">
-              <TerminalNumber value={card.value} glowIntensity={card.glow} animate={!isLoading} />
+              <TerminalNumber
+                value={card.value}
+                glowIntensity={card.glow}
+                animate={!isAwaited(read)}
+              />
             </div>
           </div>
         ))}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount } from '@/lib/api';
 import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
@@ -28,7 +29,7 @@ function dataHue(alpha: number): string {
 }
 
 /**
- * The three parts wait while the read is pending — fetching, or paused (offline, or a hidden tab
+ * The three parts wait while the read is awaited — fetching, or paused (offline, or a hidden tab
  * between retries), which isLoading leaves out — and only then read its error or data.
  */
 function useDistributions() {
@@ -80,8 +81,10 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
 
 /** "Which software they run": the client versions of the verified peers (CH-54). */
 export function NetworkDistributions() {
-  const { data, isPending, error } = useDistributions();
-  if (isPending) return <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />;
+  const read = useDistributions();
+  const { data, error } = read;
+  if (isAwaited(read))
+    return <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -98,8 +101,9 @@ export function NetworkDistributions() {
 
 /** The protocols the verified peers speak: developer evidence (tier 2, CH-54). */
 export function NetworkProtocols() {
-  const { data, isPending, error } = useDistributions();
-  if (isPending) return null;
+  const read = useDistributions();
+  const { data, error } = read;
+  if (isAwaited(read)) return null;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -124,8 +128,9 @@ function asnOrganisation(label: string): string {
  * share alone, else nothing), the exact counts in one quiet line under it, then one caption.
  */
 export function HostingBar() {
-  const { data, isPending, error } = useDistributions();
-  if (isPending) return null;
+  const read = useDistributions();
+  const { data, error } = read;
+  if (isAwaited(read)) return null;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">

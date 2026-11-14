@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
@@ -648,7 +649,7 @@ export default function TransactionsPage() {
                 : 'not yet in a block · newest first'}
             </span>
           </div>
-          {active.isLoading && (
+          {isAwaited(active) && (
             <p role="status" className="text-text-dim">
               Loading transactions…
             </p>

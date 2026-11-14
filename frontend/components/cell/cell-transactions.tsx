@@ -1,6 +1,7 @@
 'use client';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -58,7 +59,7 @@ export function TransactionEvidence({
     queryKey: ['cell-transaction-deps', hash],
     queryFn: () => api.getTransactionCellDeps(hash),
   });
-  if (transaction.isPending || dependencies.isPending)
+  if (isAwaited(transaction) || isAwaited(dependencies))
     return (
       <p className="text-text-dim text-small">
         Loading {label.toLowerCase()} transaction evidence…
@@ -70,6 +71,9 @@ export function TransactionEvidence({
         {label} transaction evidence unavailable: {String(transaction.error ?? dependencies.error)}
       </p>
     );
+  // awaited and failed are answered above: an answered read without its evidence broke an invariant
+  if (!transaction.data || !dependencies.data)
+    throw new Error(`${label} transaction ${hash}: its read answered without its evidence`);
   const tx: TransactionDetail = transaction.data;
   if (
     tx.status !== 'committed' ||

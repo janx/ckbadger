@@ -175,11 +175,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
   // The m-NFT's index in its class (not a block height), as the h1 writes it.
   const tokenNumber = item.tokenIndex.toLocaleString('en-US');
   const evidenceState = (
-    <AssetReadState
-      error={protocol.error}
-      loading={protocol.isLoading}
-      label="item cell evidence"
-    />
+    <AssetReadState error={protocol.error} read={protocol} label="item cell evidence" />
   );
   return (
     <AssetDetailShell
@@ -426,7 +422,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             error={protocol.error}
             label="item cell evidence"
             retained={!!evidence}
-            loading={protocol.isLoading}
+            read={protocol}
           />
           {evidence && <ItemEvidence protocol={evidence} />}
         </>
@@ -437,7 +433,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         error={protocol.error}
         label="item cell evidence"
         retained={!!evidence}
-        loading={protocol.isLoading}
+        read={protocol}
       />
       {history && (
         <div role="region" aria-label="CKB held in its cell" className="space-y-3">
@@ -529,11 +525,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             </div>
           </>
         ) : (
-          <AssetReadState
-            error={collection.error}
-            loading={collection.isLoading}
-            label="class totals"
-          />
+          <AssetReadState error={collection.error} read={collection} label="class totals" />
         )}
       </section>
     </AssetDetailShell>

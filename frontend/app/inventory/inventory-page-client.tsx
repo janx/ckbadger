@@ -293,11 +293,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
           {summary.data ? (
             <InventorySummaryNotice summary={summary.data} assetType={assetType} />
           ) : (
-            <AddressLoadState
-              error={summary.error}
-              loading={summary.isLoading}
-              label="inventory totals"
-            />
+            <AddressLoadState error={summary.error} read={summary} label="inventory totals" />
           )}
           {assets.data ? (
             <>
@@ -316,7 +312,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               />
             </>
           ) : (
-            <AddressLoadState error={assets.error} loading={assets.isLoading} label="inventory" />
+            <AddressLoadState error={assets.error} read={assets} label="inventory" />
           )}
         </DetailLayout>
         <TopicCharts topic="/inventory" />
