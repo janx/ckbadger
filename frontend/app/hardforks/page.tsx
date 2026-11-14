@@ -15,6 +15,7 @@ import { cn, formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { formatCount } from '@/lib/format-count';
+import { isAwaited } from '@/lib/query-state';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -289,11 +290,12 @@ const HARDFORKS_TITLE = ['Hardforks'] as const;
 export default function HardforksPage() {
   useDocumentTitle(HARDFORKS_TITLE);
   const network = useActiveNetwork();
-  const { data, isLoading, error } = useQuery({
+  const read = useQuery({
     queryKey: ['hardforks', network],
     queryFn: () => api.getHardforks({ network }),
     staleTime: 60_000,
   });
+  const { data, error } = read;
   const span = data ? chainSpan(data) : null;
   const events = data?.events ?? [];
   const mirana = events.find((event) => event.id === 'mirana-2021');
@@ -328,7 +330,8 @@ export default function HardforksPage() {
                 }
               />
               <Lede />
-              {isLoading && <p className="text-text-dim mt-8">Loading hardfork timeline…</p>}
+              {/* isAwaited: the read is waited for while paused offline too (A1 round 2) */}
+              {isAwaited(read) && <p className="text-text-dim mt-8">Loading hardfork timeline…</p>}
               {error && (
                 <p role="alert" className="text-negative mt-8">
                   Failed to load hardfork timeline: {String(error)}
