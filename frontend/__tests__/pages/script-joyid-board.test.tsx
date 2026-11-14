@@ -291,6 +291,19 @@ describe('JoyID script page · visual pass', () => {
   // U-19 (UI review 2026-11-14): the history's round values sat inside the plots in the ghost
   // ink, crossed by a spike ("200M CKB"); both plots write them in one dim gutter, and the upgrade
   // lines and labels sit on the plots' x, after it.
+  // Lane A5 follow-up: a tick is the bare value ("200M"), the unit said once in each plot's name,
+  // so the shared gutter is at most 56 px.
+  it('writes bare values in a gutter of at most 56 px, each plot naming CKB once (U-19)', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    const plots = [...history.querySelectorAll('svg[role="img"]')];
+    for (const plot of plots) {
+      for (const t of yTickLabels(plot)) expect(t.textContent).toMatch(/^[\d.,]+[kMB]?$/);
+      expect(plot.querySelector('[data-role="chart-name"]')?.textContent).toContain('CKB');
+      expect(plotLeftOf(plot)).toBeLessThanOrEqual(56);
+    }
+  });
+
   it('writes the history values in one dim gutter left of both plots (U-19)', async () => {
     await renderJoyid();
     const history = screen.getByTestId('script-history');
