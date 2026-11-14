@@ -106,15 +106,22 @@ export function formatAgeTwoUnits(timestamp: string | number | Date, now = Date.
 }
 
 /**
- * A feed row's relative age in its largest unit ("5m ago", "3h ago"), the same notation; from a
- * year on in years and days ("6y 363d ago"), as the two-unit form.
+ * A time's age in its largest unit, "5m", "3h" (from a year on, years and days: "6y 363d"), the
+ * notation of the one form; null when the time is further ahead than consensus allows, as this
+ * device's clock is behind the chain's. A pool entry's wait reads it ("in pool for 5m").
  */
-export function formatAgeOneUnit(timestamp: string | number | Date, now = Date.now()): string {
+export function ageInOneUnit(timestamp: string | number | Date, now = Date.now()): string | null {
   const age = ageSeconds(timestamp, now);
-  if (age.kind === 'clock-behind') return CLOCK_BEHIND;
+  if (age.kind === 'clock-behind') return null;
   const years = calendarYears(timeMs(timestamp), now);
-  if (years !== null) return `${years} ago`;
+  if (years !== null) return years;
   const unit =
     SPAN_UNITS.find(([size]) => age.seconds >= size) ?? SPAN_UNITS[SPAN_UNITS.length - 1];
-  return `${Math.floor(age.seconds / unit[0])}${unit[1]} ago`;
+  return `${Math.floor(age.seconds / unit[0])}${unit[1]}`;
+}
+
+/** A feed row's relative age in its largest unit ("5m ago"); from a year on, "6y 363d ago". */
+export function formatAgeOneUnit(timestamp: string | number | Date, now = Date.now()): string {
+  const age = ageInOneUnit(timestamp, now);
+  return age === null ? CLOCK_BEHIND : `${age} ago`;
 }
