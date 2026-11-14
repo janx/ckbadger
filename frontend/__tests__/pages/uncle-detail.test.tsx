@@ -28,7 +28,11 @@ describe('Uncle detail page', () => {
   it('reads the uncle through its including block, with header and DAO evidence', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
-    expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toBeInTheDocument();
+    // PB-06 / PA-32: an entity h1 without a seal takes the phone step too (30 → 26 px below md).
+    expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
     const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
     expect(sentence).toHaveTextContent('on the canonical chain is');
     expect(within(sentence).getByRole('link', { name: '#8,775,638' })).toHaveAttribute(

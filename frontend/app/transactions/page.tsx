@@ -629,7 +629,7 @@ export default function TransactionsPage() {
             <div
               role="group"
               aria-label="Transaction views"
-              className="hidden flex-wrap gap-6 sm:flex"
+              className="hidden flex-wrap gap-6 max-md:gap-x-4 sm:flex"
             >
               {(['committed', 'pool'] as const).map((value) => (
                 <button
@@ -638,7 +638,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === value}
                   onClick={() => setTab(value)}
                   className={cn(
-                    'text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium',
+                    'text-section max-md:text-body -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5',
                     tab === value
                       ? 'border-jade text-text-bright'
                       : 'text-text-dim border-transparent'
@@ -646,7 +646,7 @@ export default function TransactionsPage() {
                 >
                   {value === 'committed' ? 'Committed' : 'In the pool'}
                   {value === 'pool' && poolHead.data && (
-                    <span className="text-text-dim text-small font-normal">
+                    <span className="text-text-dim text-small max-md:text-meta font-normal">
                       {(
                         poolHead.data.totals.pending + poolHead.data.totals.proposed
                       ).toLocaleString('en-US')}

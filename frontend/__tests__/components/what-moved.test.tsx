@@ -245,6 +245,28 @@ describe('WhatMoved, the ribbon form', () => {
 });
 
 describe('WhatMoved, the list form', () => {
+  // PA-11 (UI review 2026-11-14): the list form kept the ribbon form's header row, "FROM · tap or
+  // hover a party or an asset · TO", above the stacked flow, so FROM was printed twice (the header,
+  // then the flow's first group) and the header's TO stood over nothing. In the stacked form the
+  // header keeps the hint alone; FROM and TO label each flow's two groups, once each.
+  it('keeps only the hint in the frame’s header: from and to once each per flow (PA-11)', () => {
+    const transfer = activity([party('aaaaaa', '-100008888'), party('bbbbbb', '100000000')]);
+    renderAt(358, transfer);
+    const frame = screen.getByTestId('tx-what-moved');
+    expect(frame).toHaveAttribute('data-form', 'list');
+    const header = screen.getByText('tap or hover a party or an asset').parentElement!;
+    expect(header).toHaveTextContent(/^tap or hover a party or an asset$/);
+    const [flow] = within(frame).getAllByRole('group');
+    expect(within(frame).getAllByRole('group')).toHaveLength(1);
+    expect(header.contains(flow)).toBe(false);
+    expect(Array.from(frame.querySelectorAll('.eyebrow')).map((e) => e.textContent)).toEqual([
+      'from',
+      'to',
+    ]);
+    for (const eyebrow of frame.querySelectorAll<HTMLElement>('.eyebrow'))
+      expect(flow).toContainElement(eyebrow);
+  });
+
   it('lists each flow as from, a step down through the plate, to — and nothing scrolls sideways', () => {
     renderAt(358);
     const frame = screen.getByTestId('tx-what-moved');

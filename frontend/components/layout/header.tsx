@@ -177,8 +177,14 @@ export function Header() {
                 </svg>
               )}
             </button>
+            {/* PA-04, PB-26: the section word from 640 only. Below it the row cannot spare a slot
+                for it — the longest, "Transactions" (93.6 px and its 8 px gap), would leave the
+                field 78 px at 360 — so the field is what the row leaves, 180 px, on every page.
+                From 640 the field is its 288 px cap whatever the word (360 px are free). */}
             {activeLabel && (
-              <span className="text-jade text-body truncate font-mono">{activeLabel}</span>
+              <span className="text-jade text-body hidden truncate font-mono sm:inline">
+                {activeLabel}
+              </span>
             )}
           </div>
 

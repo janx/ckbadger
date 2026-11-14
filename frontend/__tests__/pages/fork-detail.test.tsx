@@ -47,9 +47,11 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
   it('asks the API for the fork at that height and orphan and titles it "Fork at #N" (FF-D3)', async () => {
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     render(<ForkDetailPage />);
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })
-    ).toBeInTheDocument();
+    // PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px), as every entity's.
+    expect(await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
     expect(api.getForkAt).toHaveBeenCalledWith(10, '17404795');
     // Consistency plan C1: the tab names the page.
     await waitFor(() => expect(document.title).toBe('#10 · 17404795 · fork · CKBadger'));

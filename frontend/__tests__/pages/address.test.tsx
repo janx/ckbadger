@@ -629,6 +629,33 @@ describe('Address v3', () => {
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
   });
+  // PA-17 (UI review 2026-11-14): "Activities 3  Transactions 3  Live cells 3" wrapped at 390,
+  // leaving "Live cells 3" alone on a second line like a heading. The labels alone are 32
+  // characters: 326.4 px at 17 px and the two 24 px gaps, 374.4, more than the 326 px at 360. One
+  // type step down below md (13 px labels, 11 px counts, a 6 px label–count gap, 16 px between
+  // tabs) they take 249.6 + 18 + 32 = 299.6 px, and three one-digit counts 19.8: 319.4 at 360.
+  it('sets the three history tabs one type step smaller below md, one row at 360 (PA-17)', async () => {
+    // the activity total the Activities tab counts (the shared fixture's page declares none)
+    vi.mocked(api.getAddressActivities).mockResolvedValue(pageFixture(addressActivitiesFixture, 3));
+    render(<AddressDetailPage />);
+    await loaded();
+    const views = screen.getByRole('group', { name: 'History views' });
+    expect(views).toHaveClass('gap-x-6', 'max-md:gap-x-4');
+    const tabs = within(views).getAllByRole('button');
+    expect(tabs.map((t) => t.firstChild?.textContent)).toEqual([
+      'Activities',
+      'Transactions',
+      'Live cells',
+    ]);
+    for (const t of tabs) {
+      expect(t).toHaveClass('text-section', 'max-md:text-body', 'gap-2', 'max-md:gap-1.5');
+      const count = t.querySelector('span');
+      if (count) expect(count).toHaveClass('text-small', 'max-md:text-meta');
+    }
+    await waitFor(() =>
+      expect(tabs.filter((t) => t.querySelector('span') !== null)).toHaveLength(3)
+    );
+  });
   // F2 blocks (BA-35, R2b-a filter=script): one "Script" chip, as the Address board.
   it('uses one script-call filter and resets the activity cursor', async () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>

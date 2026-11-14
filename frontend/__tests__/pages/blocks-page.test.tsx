@@ -769,5 +769,32 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(first).toHaveTextContent('3,917 B6,831,940');
       expect(screen.queryByTestId('block-row-mobile')).toBeNull();
     });
+
+    // PA-02 (UI review 2026-11-14): the legend under the h1 explains the wide table's Contents
+    // glyphs (◆ cellbase, ■ a transaction by its bytes, ● a proposal) and its two-part size bar.
+    // The 608 px table and the phone rows write the same facts in figures and draw neither. The
+    // glyphs cannot join the phone row's head line: at 360 the text column beside the stone is
+    // 292 px, and the height (11 characters at 13 px, 85.8 px), the 112 px glyph and "999 txs ·
+    // 59m ago" (17 at 12 px, 122.4 px) with two 12 px gaps make 344.2. So the legend goes with the
+    // form that draws what it explains: the wide table, chosen by the list's measured width.
+    it('draws the legend only with the wide table, whose glyphs and bars it explains (PA-02)', async () => {
+      atContainerWidth(358);
+      const phone = render(<BlocksPage />);
+      await screen.findAllByTestId('block-row-mobile');
+      expect(screen.queryByLabelText('Legend')).toBeNull();
+      phone.unmount();
+      atContainerWidth(608);
+      const narrow = render(<BlocksPage />);
+      await screen.findByRole('table', { name: 'Latest blocks' });
+      expect(screen.queryByLabelText('Legend')).toBeNull();
+      narrow.unmount();
+      atContainerWidth(1232);
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      expect(table.closest('[data-list-form]')).toHaveAttribute('data-list-form', 'table');
+      expect(await screen.findByLabelText('Legend')).toHaveTextContent(
+        'cellbase' + 'transaction, area ∝ bytes' + 'proposal' + 'block overhead · user transactions'
+      );
+    });
   });
 });

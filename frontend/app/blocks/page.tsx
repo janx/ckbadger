@@ -5,7 +5,7 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api, type Block } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { ListTable, type ListColumn, type ListTableForm } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
@@ -29,10 +29,14 @@ import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { useState } from 'react';
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  // PA-02: the legend explains the wide table's Contents glyphs and size bar, which the 608 px
+  // table and the phone rows write in figures; it is drawn with the form the list chose.
+  const [form, setForm] = useState<ListTableForm | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ['blocks', cursor, limit],
     queryFn: () => api.getBlocks({ cursor, limit }),
@@ -170,7 +174,11 @@ export default function BlocksPage() {
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
-        <DetailLayout title="Blocks" kind="index" actions={<BlocksLegend />}>
+        <DetailLayout
+          title="Blocks"
+          kind="index"
+          actions={form === 'table' ? <BlocksLegend /> : undefined}
+        >
           {isLoading && (
             <p role="status" className="text-text-dim">
               Loading blocks…
@@ -191,6 +199,7 @@ export default function BlocksPage() {
                 empty="No blocks indexed."
                 narrowColumns={NARROW_COLUMNS}
                 mobileRow={(block) => <BlockPhoneRow block={block} />}
+                onForm={setForm}
               />
               <BlocksLimitsFootnote blocks={data.data} />
               <CursorPagination

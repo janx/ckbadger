@@ -101,11 +101,12 @@ export function DetailLayout({
       className={cn(
         'text-text-bright break-words',
         kind === 'entity' ? 'text-entity' : 'text-index',
-        // The name plate's name is one type step smaller below md (seals by kind, C10;
-        // RESPONSIVE_LAYOUT principle 5): under the stone it has the full width, but at 30 px a
-        // short out point (19 characters, 330.6 px) or a short address (21, 365.4 px) is wider than
-        // the 328 px line at 360; at 26 px they are 286.5 and 316.7 px.
-        seal && kind === 'entity' && 'max-md:text-index'
+        // An entity's name is one type step smaller below md (seals by kind, C10; RESPONSIVE_LAYOUT
+        // principle 5): under the stone it has the full width, but at 30 px a short out point (19
+        // characters, 330.6 px) or a short address (21, 365.4 px) is wider than the 328 px line at
+        // 360; at 26 px they are 286.5 and 316.7 px. PB-06 / PA-32: every entity head takes it,
+        // with a seal or without (the uncle page, a script by its code hash).
+        kind === 'entity' && 'max-md:text-index'
       )}
     >
       {title}

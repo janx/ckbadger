@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { api } from '@/lib/api';
 
 const SHARED_PLACEHOLDER = 'Search block / tx / address / cell ...';
+/** The placeholder below md: 10 characters at 13 px, 78 px, in the 140 px of text at 360 (PA-04). */
+const PHONE_PLACEHOLDER = 'Search ...';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -31,6 +34,8 @@ vi.mock('@/lib/api', () => ({
 import { SearchBar } from '@/components/search-bar';
 
 describe('SearchBar', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   beforeEach(() => {
     vi.clearAllMocks();
     pushMock.mockReset();
@@ -60,6 +65,40 @@ describe('SearchBar', () => {
 
     rerender(<SearchBar variant="home" />);
     expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+  });
+
+  // PA-04 (UI review 2026-11-14): below md the header's field is what the row leaves, 180 px at
+  // 360 (326 px of content less the 90 px wordmark, the 40 px menu button and two 8 px gaps), and
+  // the full placeholder (38 characters at 13 px, 296.4 px) was cut mid-word at a different place
+  // on every page. Below md the field carries the short placeholder, and no "/" key is drawn: a
+  // touch layout has no keyboard to hint at, so the text keeps the room the key took.
+  it('gives the field a short placeholder and no "/" key below md (PA-04)', () => {
+    stubViewportFromMd(false);
+    const { unmount } = render(<SearchBar variant="compact" />);
+    const input = screen.getByPlaceholderText(PHONE_PLACEHOLDER);
+    expect(screen.queryByPlaceholderText(SHARED_PLACEHOLDER)).toBeNull();
+    // the key's 36 px of right padding only where the key is drawn
+    expect(input).toHaveClass('pr-3', 'md:pr-9');
+    expect(input).not.toHaveClass('pr-9');
+    const hints = screen.getByTestId('search-shortcut-hints');
+    expect(hints).toHaveClass('hidden', 'md:flex');
+    expect(hints).not.toHaveClass('flex');
+    // the block cursor's track ends where the text does
+    fireEvent.focus(input);
+    expect(screen.getByTestId('search-cursor-track')).toHaveClass('right-3', 'md:right-9');
+    unmount();
+    // the home field's keys follow the same breakpoint
+    render(<SearchBar variant="home" />);
+    expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-hints')).toHaveClass('hidden', 'md:flex');
+    expect(screen.getByTestId('search-shortcut-hints')).not.toHaveClass('sm:flex');
+  });
+
+  it('keeps the full placeholder and the "/" key from md up (PA-04)', () => {
+    stubViewportFromMd(true);
+    render(<SearchBar variant="compact" />);
+    expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
   });
 
   it('renders shortcut hints in home variant', () => {

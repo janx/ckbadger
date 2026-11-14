@@ -450,7 +450,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
       <div data-tier="1" className="min-w-0">
         <section aria-labelledby={titleId} className="min-w-0">
           <div className="flex flex-wrap items-baseline gap-3">
-            <h1 id={titleId} className="text-text-bright text-entity font-medium">
+            {/* PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px). */}
+            <h1 id={titleId} className="text-text-bright text-entity max-md:text-index font-medium">
               Fiber channel
             </h1>
             <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.state]}</span>

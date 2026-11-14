@@ -151,6 +151,37 @@ describe('ListTable measures its container (R1, R7)', () => {
     expect(screen.getAllByTestId('phone-row')).toHaveLength(2);
   });
 
+  // PA-02, PA-03: a part of the page that belongs to one form (the blocks legend, the scripts bar
+  // switch) follows the form this list chose, from the same measurement.
+  it('tells onForm the form it chose, and again when a resize changes it', () => {
+    let report: ((width: number) => void) | null = null;
+    class ResizeObserverStub {
+      constructor(private readonly cb: ResizeObserverCallback) {
+        report = (width) =>
+          this.cb(
+            [{ contentRect: { width } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver
+          );
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 608,
+    } as DOMRect);
+    const onForm = vi.fn();
+    render(table({ narrowColumns: NARROW, onForm }));
+    expect(onForm).toHaveBeenLastCalledWith('table');
+    act(() => report!(300));
+    expect(onForm).toHaveBeenLastCalledWith('narrow-table');
+    act(() => report!(200));
+    expect(onForm).toHaveBeenLastCalledWith('rows');
+    // once per form, not once per render
+    expect(onForm.mock.calls.map(([form]) => form)).toEqual(['table', 'narrow-table', 'rows']);
+  });
+
   it('keeps measuring when rows arrive after an empty first page', () => {
     stubChartWidth(358);
     const { rerender } = render(table({ rows: [] }));

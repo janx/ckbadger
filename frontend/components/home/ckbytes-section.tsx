@@ -322,13 +322,19 @@ function AllocationReady({ view }: { view: AllocationView }) {
         data-testid="ckbytes-circulating"
         // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's
         className={cn(
-          'text-text-bright text-index sm:text-display tabular-nums tracking-[-0.01em] [overflow-wrap:anywhere]',
+          'text-text-bright text-index sm:text-display tabular-nums tracking-[-0.01em]',
           flare
         )}
       >
-        {total.integer}
-        <span className="text-text-dim">.{total.decimal}</span>
-        <span className="text-text-dim text-[0.5em]"> CKB</span>
+        {/* The figure and its unit, one unbreakable unit (PA-19; the scripts pages' rule): below
+            640 the decimals are body, so the integer (14 characters at 26 px, 214.8 px with the
+            tracking), the decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at
+            360; at the integer's size they took 355.2 px and the unit went to the next line. */}
+        <span className="whitespace-nowrap">
+          {total.integer}
+          <span className="text-text-dim max-sm:text-body">.{total.decimal}</span>
+          <span className="text-text-dim text-[0.5em]"> CKB</span>
+        </span>
         {/* what the figure is, now the heading says `supply` (the board's label); the block it
             is read at is the heading's note, said once. One unit, so it moves under the figure
             whole rather than break ('in' / 'circulation' at 1024), at its own tracking, not the

@@ -52,6 +52,7 @@ import {
   versionNumbers,
 } from '@/lib/script-lineage';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import { useFromMd } from '@/hooks/useFromMd';
 
 /** One code cell of a version, as its own `/cells` request resolved (or failed). */
 export interface CodeCellState {
@@ -462,6 +463,20 @@ export function ScriptFamilyPage({
   useDocumentTitle([family.name, 'script']);
   // One hover state for the whole history: the picture and its reading.
   const [active, setActive] = useState<number | null>(null);
+  // PA-18: one range control, drawn at the end of the title row from md (R13) and in the chart's
+  // caption row, right over the picture it redraws, below md.
+  const fromMd = useFromMd();
+  const range = (
+    <CapacityRangeSelector
+      value={capacityRange}
+      onChange={(next) => {
+        // Another range draws other days: a hovered day of the old one lets go.
+        setActive(null);
+        onCapacityRange(next);
+      }}
+      quiet
+    />
+  );
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
   const history = family.history;
@@ -906,7 +921,8 @@ export function ScriptFamilyPage({
             <section aria-label={family.name} className="min-w-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
                 <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <h1 className="text-text-bright text-entity break-words font-medium">
+                  {/* PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26). */}
+                  <h1 className="text-text-bright text-entity max-md:text-index break-words font-medium">
                     {family.name}
                   </h1>
                   <ScriptHeading family={family} />
@@ -917,15 +933,7 @@ export function ScriptFamilyPage({
                     </RowTag>
                   )}
                 </div>
-                <CapacityRangeSelector
-                  value={capacityRange}
-                  onChange={(range) => {
-                    // Another range draws other days: a hovered day of the old one lets go.
-                    setActive(null);
-                    onCapacityRange(range);
-                  }}
-                  quiet
-                />
+                {fromMd && range}
               </div>
               {(family.description || family.website) && (
                 <p
@@ -947,6 +955,11 @@ export function ScriptFamilyPage({
                 </p>
               )}
               <ScriptHeroFigure family={family} />
+              {!fromMd && (
+                <div data-role="chart-controls" className="mt-[18px] flex justify-end">
+                  {range}
+                </div>
+              )}
               {chartLoading ? (
                 <p className="text-text-dim text-small mt-[18px] py-6">Loading capacity history…</p>
               ) : chartError ? (

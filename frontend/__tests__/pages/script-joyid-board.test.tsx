@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
@@ -387,7 +388,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(tier1()).toContainElement(nav);
     expect(follows(nav, hero())).toBe(true);
     const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
-    expect(h1).toHaveClass('text-entity', 'text-text-bright');
+    // PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px).
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index', 'text-text-bright');
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
@@ -405,6 +407,32 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(within(lede).getByRole('link', { name: 'joy.id ↗' })).toHaveAttribute(
       'href',
       'https://joy.id'
+    );
+  });
+
+  // PA-18 (UI review 2026-11-14): on a phone "30D 90D 1Y ALL" sat between the kind line and the
+  // description, about 250 px above the chart it controls. Below md the one range group stands in
+  // the chart's caption row, right over the picture, after the figure; from md it keeps its place
+  // at the end of the title row (R13), as the test above pins.
+  it('puts the range buttons in the chart’s caption row below md, not in the title row (PA-18)', async () => {
+    stubViewportFromMd(false);
+    await renderJoyid();
+    const groups = within(hero()).getAllByRole('group', { name: 'Range' });
+    expect(groups).toHaveLength(1);
+    const [range] = groups;
+    const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
+    expect(h1.parentElement!.parentElement!).not.toContainElement(range);
+    const history = within(hero()).getByTestId('script-history');
+    const caption = range.parentElement!;
+    expect(caption.nextElementSibling).toBe(history);
+    expect(caption).toHaveClass('flex', 'justify-end');
+    expect(caption.children).toHaveLength(1);
+    expect(follows(hero().querySelector('[data-role="figure"]')!, caption)).toBe(true);
+    // still the page's range: it draws the picture again
+    fireEvent.click(within(range).getByRole('button', { name: '90D' }));
+    expect(within(range).getByRole('button', { name: '90D' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
     );
   });
 

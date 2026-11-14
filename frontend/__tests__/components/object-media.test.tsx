@@ -1,5 +1,5 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { ObjectMedia } from '@/components/asset/object-media';
 import type { SporeDetail } from '@/lib/api';
 import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
@@ -188,6 +188,62 @@ it('shows a malformed minted BTCFS reference as plain text, never a link or a cr
   expect(
     screen.getByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i1 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);
+});
+// PB-15 (UI review 2026-11-14): with many content references the box printed every raw btcfs://
+// URI, centred, before "View image ↗", and a phone's first screen ended inside the hex. The box
+// shows the first reference and then the action, right under the title; the further references
+// move into the "Media dependencies" disclosure that follows the box, each with its inscription
+// reading (link or note), so nothing is dropped.
+it('shows the first reference and the action under the title, the rest in the disclosure (PB-15)', () => {
+  const later = `btcfs://${'ab'.repeat(32)}i3`;
+  const malformed = 'btcfs://abc123i0';
+  render(
+    <ObjectMedia
+      object={{
+        ...object,
+        mediaProfile: {
+          tier: 'btc_ckb',
+          sources: [
+            ...object.mediaProfile!.sources,
+            { uri: later, scheme: 'btcfs', sourceLocation: 'DNA', dependencyTier: 'btc_ckb' },
+            { uri: malformed, scheme: 'btcfs', sourceLocation: 'DNA', dependencyTier: 'btc_ckb' },
+          ],
+          issues: [],
+        },
+      }}
+      contentHex={null}
+    />
+  );
+  const title = screen.getByText('Its image lives on Bitcoin');
+  const box = title.closest('figure')!;
+  const follows = (a: Node, b: Node) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  // title → the first reference (its URI, then its inscription) → the action
+  const uri = within(box).getByText(`btcfs://${txid}i0`);
+  const inscription = within(box).getByRole('link', {
+    name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗',
+  });
+  const view = within(box).getByRole('link', { name: 'View image ↗' });
+  expect(follows(title, uri)).toBe(true);
+  expect(follows(uri, inscription)).toBe(true);
+  expect(follows(inscription, view)).toBe(true);
+  // the further references are not in the box
+  expect(box).not.toHaveTextContent(later);
+  expect(box).not.toHaveTextContent(malformed);
+  expect(within(box).queryByText('Not a recognisable btcfs inscription reference.')).toBeNull();
+  // they are in the disclosure that follows it, whole: URI and reading
+  const details = screen.getByText('Media dependencies · 3 sources').closest('details')!;
+  expect(follows(box, details)).toBe(true);
+  expect(within(details).getByText(later)).toBeInTheDocument();
+  expect(
+    within(details).getByRole('link', { name: 'Bitcoin tx abab…abab · inscription i3 ↗' })
+  ).toHaveAttribute('href', `https://mempool.space/tx/${'ab'.repeat(32)}`);
+  expect(within(details).getByText(malformed)).toBeInTheDocument();
+  expect(
+    within(details).getByText('Not a recognisable btcfs inscription reference.')
+  ).toBeInTheDocument();
+  // the first is read once, in the box
+  expect(screen.getAllByRole('link', { name: /inscription i0/ })).toHaveLength(1);
 });
 it('reads the btcfs scheme case-insensitively, as the indexer classifies it (#8)', () => {
   expect(parseBtcfsUri(`BTCFS://${txid.toUpperCase()}I3`)).toEqual({ txid, index: 3 });

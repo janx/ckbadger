@@ -86,16 +86,23 @@ export function AssetDetailShell({
   if (hero && !lede) throw new Error('AssetDetailShell: a hero figure needs the lede it follows');
   useDocumentTitle(documentTitleParts(title, documentTitle));
   const titleId = useId();
+  // PB-06 / PA-32: the name is an entity h1, one step smaller below md (30 → 26 px). The class mark
+  // leads a row that never wraps, its foot on the name's first baseline (an SVG's baseline is its
+  // bottom edge); the name and its state wrap beside it. When the three shared one wrapping line,
+  // a name longer than the line took a line of its own, leaving the mark alone above it and the
+  // state alone below it.
   const titleRow = (
-    <div className="flex min-w-0 flex-wrap items-center gap-3">
+    <div className="flex min-w-0 items-baseline gap-3">
       <ClassMark kind={kind} size={24} />
-      <h1
-        id={lede ? titleId : undefined}
-        className="text-text-bright text-entity min-w-0 break-words font-medium"
-      >
-        {title}
-      </h1>
-      {status}
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <h1
+          id={lede ? titleId : undefined}
+          className="text-text-bright text-entity max-md:text-index min-w-0 break-words font-medium"
+        >
+          {title}
+        </h1>
+        {status}
+      </div>
     </div>
   );
   const named = (

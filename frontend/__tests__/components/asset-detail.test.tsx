@@ -70,6 +70,38 @@ describe('Asset domain layout', () => {
     expect(hero.compareDocumentPosition(traits) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('banner')).toContainElement(traits);
   });
+  // PB-06 / PA-32 (UI review 2026-11-14): an asset page's h1 stayed 30 px on a phone (block, tx,
+  // cell and address take 26 below md), and the title row was one wrapping flex line of the class
+  // mark, the h1 and the state: a name longer than the line put the h1 on a line of its own, so the
+  // mark stood alone above it and the state chip alone below it. The h1 takes the phone step; the
+  // mark leads a row that never wraps, its foot on the name's first baseline, and the name and its
+  // state wrap together beside it.
+  it('sets the name one step smaller below md, the class mark on its first line (PB-06, PA-32)', () => {
+    render(
+      <AssetDetailShell
+        title="Non-Fungible Santa Claus #0"
+        kind="objects"
+        breadcrumb={[]}
+        status={<span>Live</span>}
+        lede={<p>Lede</p>}
+      >
+        <p>Body</p>
+      </AssetDetailShell>
+    );
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Non-Fungible Santa Claus #0' });
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index', 'min-w-0', 'break-words');
+    const mark = document.querySelector('[data-class="objects"]')!;
+    const row = mark.parentElement!;
+    expect(row.firstElementChild).toBe(mark);
+    expect(row).toHaveClass('flex', 'items-baseline');
+    expect(row).not.toHaveClass('flex-wrap');
+    // the name and its state: the one part of the row that wraps, beside the mark
+    const name = h1.parentElement!;
+    expect(name.parentElement).toBe(row);
+    expect(row.children).toHaveLength(2);
+    expect(name).toHaveClass('flex', 'flex-wrap', 'min-w-0');
+    expect(name).toHaveTextContent(/^Non-Fungible Santa Claus #0Live$/);
+  });
   it('keeps the title block without a hero section when no lede is given (old default)', () => {
     const { container } = render(
       <AssetDetailShell title="Token" kind="tokens" breadcrumb={[]} intro={<p>Intro</p>}>

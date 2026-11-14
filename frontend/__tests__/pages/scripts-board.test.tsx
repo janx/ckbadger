@@ -530,6 +530,28 @@ describe('Scripts list phone row (board L6)', () => {
     expect(within(rows[2]).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
   });
 
+  // PA-03 (UI review 2026-11-14): "bar: CKB | occupied" switches what the table's bar column
+  // draws; the rows the list takes below the table's 1,034 px minimum (a phone, 640, and the 976
+  // px of a 1024 window) draw no bar, so the switch goes with the table, chosen by the list's
+  // measured width like the table itself.
+  it('shows the bar switch only with the table that draws the bar (PA-03)', async () => {
+    for (const width of [358, 608, 976]) {
+      atContainerWidth(width);
+      const view = render(<ScriptsPage />);
+      await screen.findAllByTestId('script-row-mobile');
+      expect(screen.queryByRole('group', { name: 'Bar shows' }), `${width} px`).toBeNull();
+      view.unmount();
+      vi.restoreAllMocks();
+      vi.mocked(api.getScripts).mockResolvedValue(response);
+    }
+    atContainerWidth(1232);
+    render(<ScriptsPage />);
+    await screen.findByRole('table', { name: 'Scripts' });
+    expect(await screen.findByRole('group', { name: 'Bar shows' })).toHaveTextContent(
+      'bar:CKBoccupied'
+    );
+  });
+
   it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {
     atContainerWidth(608);
     render(<ScriptsPage />);

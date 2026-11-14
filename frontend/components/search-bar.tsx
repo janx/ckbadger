@@ -8,6 +8,7 @@ import { normalizeHash32 } from '@/lib/search-intent';
 import { resolveSearchRoute } from '@/lib/search-routing';
 import { cn } from '@/lib/utils';
 import { cssVars, SEARCH_RESULT_COLORS } from '@/lib/design-tokens';
+import { useFromMd } from '@/hooks/useFromMd';
 
 interface SearchBarProps {
   className?: string;
@@ -15,6 +16,13 @@ interface SearchBarProps {
 }
 
 const SEARCH_PLACEHOLDER = 'Search block / tx / address / cell ...';
+/**
+ * Below md (PA-04): the header's field is what its row leaves, 180 px at 360 (326 px of content
+ * less the 90 px wordmark, the 40 px menu button and two 8 px gaps), 140 px of it text after the
+ * 28 px prompt and the 12 px right padding. The full placeholder (38 characters at 13 px, 296.4
+ * px) was cut mid-word there; this one is 10 (78 px).
+ */
+const SEARCH_PLACEHOLDER_PHONE = 'Search ...';
 
 /**
  * Where the field's block cursor sits (Midnight, continued, move 4): the caret's index in the
@@ -36,6 +44,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
   const router = useRouter();
+  const fromMd = useFromMd();
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -150,11 +159,12 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
   const showShortcutHints = isHome || isCompact;
-  // The typed text starts after the ">" prompt; the cursor track spans the same text box.
+  // The typed text starts after the ">" prompt; the cursor track spans the same text box. The
+  // keys' room on the right is kept only where they are drawn, from md (PA-04).
   const textInset = isHome
-    ? 'left-8 right-20 sm:right-28'
+    ? 'left-8 right-20 md:right-28'
     : isCompact
-      ? 'left-7 right-9'
+      ? 'left-7 right-3 md:right-9'
       : 'left-7 right-3 sm:left-8 sm:right-4';
 
   return (
@@ -187,7 +197,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             }}
             onBlur={() => setIsInputFocused(false)}
             onKeyDown={handleKeyDown}
-            placeholder={SEARCH_PLACEHOLDER}
+            placeholder={fromMd ? SEARCH_PLACEHOLDER : SEARCH_PLACEHOLDER_PHONE}
             className={cn(
               // Midnight, continued (move 4): the field is a prompt — a jade ">" before the text,
               // a block cursor after it while focused (the native caret is hidden under it), and
@@ -199,10 +209,11 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               'text-text-bright w-full font-mono transition-colors focus-visible:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
-                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-lg border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 sm:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-lg border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 md:pr-28'
                 : isCompact
-                  ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
-                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-9 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]'
+                  ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key
+                    // from md; below it no key and no room for one (PA-04).
+                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9'
                   : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
             )}
           />
@@ -323,7 +334,7 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       data-testid="search-shortcut-hints"
       className={cn(
         'pointer-events-none absolute inset-y-0 z-10 items-center gap-1',
-        isCompact ? 'right-2.5 flex' : 'right-3 hidden sm:flex'
+        isCompact ? 'right-2.5 hidden md:flex' : 'right-3 hidden md:flex'
       )}
     >
       <span
