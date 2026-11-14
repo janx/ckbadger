@@ -17,7 +17,10 @@ import { TYPE_SCALE } from '@/lib/type-scale';
  *   A disabled control (`disabled:opacity-*`) is the one variant allowed by rule. `opacity-0`
  *   hides; it does not fade.
  *
- * Each site the gate tolerates is a `path:line` → one-line reason, as in radius-scale.test.ts.
+ * The sites the gate tolerates are listed per file, in the ORDER they occur in it: the n-th site
+ * of a kind in a file has the n-th reason. A line number would break on every lane that moves a
+ * line; an order survives that, and an added or a removed site still fails (a site with no reason,
+ * or a reason with no site), the message naming the path, the line and the class.
  */
 
 const PADDING = 'padding zeros: the trailing zeros of an amount’s fraction';
@@ -26,45 +29,39 @@ const ARROW = 'decoration: the aria-hidden arrow between two tiles of a mechanis
 const LEFT_B4 =
   'left for lane B4, which owns components/layout/**: a menu eyebrow or hint, listed in the B2 hand-back';
 
+/** Per file, in order: the reasons of its sites of one kind. */
+type Allowlist = Readonly<Record<string, readonly string[]>>;
+
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
-const GHOST_ALLOWLIST: Record<string, string> = {
-  'app/dao/depositors/page.tsx:29': PADDING,
-  'app/fiber/channels/[id]/client-page.tsx:58': SEPARATOR,
-  'components/activity-event-row.tsx:946': PADDING,
-  'components/address/address-holdings.tsx:120': PADDING,
-  'components/asset/asset-feed.tsx:417': SEPARATOR,
-  'components/asset/detail-shell.tsx:152': SEPARATOR,
-  'components/asset/genetics.tsx:762': ARROW,
-  'components/asset/inventory-table.tsx:49': PADDING,
-  'components/dao/dao-board.tsx:78': PADDING,
-  'components/dao/dao-board.tsx:152': PADDING,
-  'components/dao/dao-board.tsx:174': PADDING,
-  'components/dao/dao-board.tsx:607': ARROW,
-  'components/dao/dao-grows.tsx:233': PADDING,
-  'components/dao/dao-history.tsx:137': PADDING,
-  'components/fiber/fiber-channel-board.tsx:191': PADDING,
-  'components/layout/network-switcher.tsx:91': LEFT_B4,
-  'components/layout/theme-switcher.tsx:186': LEFT_B4,
-  'components/layout/theme-switcher.tsx:245': LEFT_B4,
-  'components/layout/theme-switcher.tsx:268': LEFT_B4,
-  'components/scripts/script-family-page.tsx:917': SEPARATOR,
-  'components/scripts/script-hero.tsx:24': PADDING,
-  'components/transaction/script-group-matrix.tsx:178': ARROW,
-  'components/ui/script-byte-map.tsx:157': ARROW,
+const GHOST_ALLOWLIST: Allowlist = {
+  'app/dao/depositors/page.tsx': [PADDING],
+  'app/fiber/channels/[id]/client-page.tsx': [SEPARATOR],
+  'components/activity-event-row.tsx': [PADDING],
+  'components/address/address-holdings.tsx': [PADDING],
+  'components/asset/asset-feed.tsx': [SEPARATOR],
+  'components/asset/detail-shell.tsx': [SEPARATOR],
+  'components/asset/genetics.tsx': [ARROW],
+  'components/asset/inventory-table.tsx': [PADDING],
+  // Amount's zeros, the deposited figure's, the 24 h change's; the mechanism chain's arrow
+  'components/dao/dao-board.tsx': [PADDING, PADDING, PADDING, ARROW],
+  'components/dao/dao-grows.tsx': [PADDING],
+  'components/dao/dao-history.tsx': [PADDING],
+  'components/fiber/fiber-channel-board.tsx': [PADDING],
+  'components/layout/network-switcher.tsx': [LEFT_B4],
+  'components/layout/theme-switcher.tsx': [LEFT_B4, LEFT_B4, LEFT_B4],
+  'components/scripts/script-family-page.tsx': [SEPARATOR],
+  'components/scripts/script-hero.tsx': [PADDING],
+  'components/transaction/script-group-matrix.tsx': [ARROW],
+  'components/ui/script-byte-map.tsx': [ARROW],
 };
 
 const FORK_ALERT =
   'the deep-fork banner’s words on its cinnabar fill: their ink is the fill-ink rule’s (inkOnFill), listed in the B2 hand-back';
 
 /** `text-<ink>/<n>` sites the gate tolerates. */
-const ALPHA_INK_ALLOWLIST: Record<string, string> = {
-  'components/deep-fork-alert.tsx:33': FORK_ALERT,
-  'components/deep-fork-alert.tsx:42': FORK_ALERT,
-  'components/deep-fork-alert.tsx:46': FORK_ALERT,
-  'components/deep-fork-alert.tsx:50': FORK_ALERT,
-  'components/deep-fork-alert.tsx:56': FORK_ALERT,
-  'components/layout/network-switcher.tsx:76': LEFT_B4,
-  'components/layout/network-switcher.tsx:126': LEFT_B4,
+const ALPHA_INK_ALLOWLIST: Allowlist = {
+  'components/deep-fork-alert.tsx': [FORK_ALERT, FORK_ALERT, FORK_ALERT, FORK_ALERT, FORK_ALERT],
+  'components/layout/network-switcher.tsx': [LEFT_B4, LEFT_B4],
 };
 
 const LINKED =
@@ -74,26 +71,63 @@ const HOVER =
 const NO_WORDS = 'fades no word: the element is a mark, an icon or a bar';
 
 /** `opacity-*` below 1 the gate tolerates. */
-const OPACITY_ALLOWLIST: Record<string, string> = {
-  'app/tx/[hash]/client-page.tsx:436': LINKED,
-  'app/tx/[hash]/client-page.tsx:565': LINKED,
-  'components/address/address-holdings.tsx:415': LINKED,
-  'components/asset/cell-versions.tsx:118': LINKED,
-  'components/asset/object-media.tsx:34': HOVER,
-  'components/dao/dao-board.tsx:874': NO_WORDS,
-  'components/dao/dao-history.tsx:136':
+const OPACITY_ALLOWLIST: Allowlist = {
+  // the witness rows, the dependency rows
+  'app/tx/[hash]/client-page.tsx': [LINKED, LINKED],
+  'components/address/address-holdings.tsx': [LINKED],
+  'components/asset/cell-versions.tsx': [LINKED],
+  'components/asset/object-media.tsx': [HOVER],
+  // the deposit-window bars: the first day at 90 %, the others at 50 %
+  'components/dao/dao-board.tsx': [NO_WORDS, NO_WORDS],
+  'components/dao/dao-history.tsx': [
     'left: fraction digits in a history plot, a file the A5 follow-up is changing; listed in the B2 hand-back',
-  'components/home/ckbytes-section.tsx:313': LINKED,
-  'components/layout/nav-menu.tsx:147': NO_WORDS,
-  'components/transaction/script-group-matrix.tsx:162': LINKED,
-  'components/transaction/script-group-matrix.tsx:209': LINKED,
-  'components/transaction/script-group-matrix.tsx:354': LINKED,
-  'components/ui/capacity-utilization.tsx:108': LINKED,
-  'components/ui/capacity-utilization.tsx:117': LINKED,
-  'components/ui/composition-set.tsx:134': NO_WORDS,
-  'components/ui/hex-display.tsx:185': HOVER,
-  'components/ui/terminal-panel.tsx:85': NO_WORDS,
+  ],
+  'components/home/ckbytes-section.tsx': [LINKED],
+  'components/layout/nav-menu.tsx': [NO_WORDS],
+  // the cell headers, the group columns, the group cards
+  'components/transaction/script-group-matrix.tsx': [LINKED, LINKED, LINKED],
+  'components/ui/capacity-utilization.tsx': [LINKED, LINKED],
+  'components/ui/composition-set.tsx': [NO_WORDS],
+  'components/ui/hex-display.tsx': [HOVER],
+  'components/ui/terminal-panel.tsx': [NO_WORDS],
 };
+
+interface Site {
+  path: string;
+  line: number;
+  what: string;
+}
+
+/**
+ * What the sites of one kind break in its allowlist: a site with no reason (a file not listed, or
+ * one more site than reasons), a file with fewer sites than reasons, a reason too short to say why.
+ * Each names the path, the line (for the message only) and the class.
+ */
+function allowlistFailures(sites: readonly Site[], allowlist: Allowlist): string[] {
+  const byPath = new Map<string, Site[]>();
+  for (const site of sites) byPath.set(site.path, [...(byPath.get(site.path) ?? []), site]);
+  const out: string[] = [];
+  for (const [path, list] of byPath) {
+    const reasons = allowlist[path] ?? [];
+    list.forEach((site, i) => {
+      if (i >= reasons.length)
+        out.push(
+          `${path}:${site.line} ${site.what}: no reason for site ${i + 1} of ${list.length} (${reasons.length} listed)`
+        );
+    });
+  }
+  for (const [path, reasons] of Object.entries(allowlist)) {
+    const list = byPath.get(path) ?? [];
+    if (list.length < reasons.length)
+      out.push(
+        `${path}: ${reasons.length} reasons for ${list.length} sites (${list.map((s) => `${s.line} ${s.what}`).join(', ') || 'none'}): drop the reason of each site that went`
+      );
+    for (const reason of reasons)
+      if (reason.trim().length <= 10)
+        out.push(`${path}: a reason too short to say why: "${reason}"`);
+  }
+  return out;
+}
 
 const SCAN_DIRS = ['app', 'components'];
 /** The type scale's steps: `text-body/6` would be a size with a line height, not an ink. */
@@ -193,17 +227,55 @@ describe('the ink gate finds what it must, and only that', () => {
   });
 });
 
+describe('the allowlists key a site by its file and its order, not its line', () => {
+  const reason = 'decoration: a separator between two parts of a line';
+  const list: Allowlist = { 'components/a.tsx': [reason, reason] };
+  const site = (line: number): Site => ({
+    path: 'components/a.tsx',
+    line,
+    what: 'text-text-ghost',
+  });
+
+  it('passes the same sites moved to other lines', () => {
+    expect(allowlistFailures([site(10), site(20)], list)).toEqual([]);
+    expect(allowlistFailures([site(14), site(31)], list)).toEqual([]);
+  });
+
+  it('fails an added site, naming its path, line and class', () => {
+    expect(allowlistFailures([site(10), site(20), site(25)], list)).toEqual([
+      'components/a.tsx:25 text-text-ghost: no reason for site 3 of 3 (2 listed)',
+    ]);
+    expect(
+      allowlistFailures([{ path: 'components/b.tsx', line: 7, what: 'text-text-ghost' }], list)
+    ).toEqual([
+      'components/b.tsx:7 text-text-ghost: no reason for site 1 of 1 (0 listed)',
+      'components/a.tsx: 2 reasons for 0 sites (none): drop the reason of each site that went',
+    ]);
+  });
+
+  it('fails a removed site, naming the file and the sites left', () => {
+    expect(allowlistFailures([site(20)], list)).toEqual([
+      'components/a.tsx: 2 reasons for 1 sites (20 text-text-ghost): drop the reason of each site that went',
+    ]);
+  });
+
+  it('fails a reason too short to say why', () => {
+    expect(allowlistFailures([site(1)], { 'components/a.tsx': ['zeros'] })).toEqual([
+      'components/a.tsx: a reason too short to say why: "zeros"',
+    ]);
+  });
+});
+
 describe('inks that carry words (R4)', () => {
   const root = join(__dirname, '..', '..');
   const files = sourceFiles(root);
-  const found = { ghost: [] as string[], alpha: [] as string[], opacity: [] as string[] };
+  const found = { ghost: [] as Site[], alpha: [] as Site[], opacity: [] as Site[] };
   for (const file of files) {
     const path = relative(root, file);
     const offences = inkOffences(readFileSync(file, 'utf8'));
     for (const kind of ['ghost', 'alpha', 'opacity'] as const)
-      for (const o of offences[kind]) found[kind].push(`${path}:${o.line} ${o.what}`);
+      for (const o of offences[kind]) found[kind].push({ path, ...o });
   }
-  const key = (offence: string) => offence.split(' ')[0];
   const rules = [
     ['ghost', GHOST_ALLOWLIST, 'the ghost ink on a word or a figure'],
     ['alpha', ALPHA_INK_ALLOWLIST, 'an ink thinned by an opacity modifier'],
@@ -214,16 +286,8 @@ describe('inks that carry words (R4)', () => {
     expect(files.length).toBeGreaterThan(300);
   });
 
-  for (const [kind, allowlist, what] of rules) {
-    it(`draws no ${what} outside the ${kind} allowlist`, () => {
-      expect(found[kind].filter((o) => !(key(o) in allowlist))).toEqual([]);
+  for (const [kind, allowlist, what] of rules)
+    it(`draws no ${what} but the ${kind} allowlist's, each with its reason`, () => {
+      expect(allowlistFailures(found[kind], allowlist)).toEqual([]);
     });
-
-    it(`keeps the ${kind} allowlist reasoned and current`, () => {
-      for (const [site, reason] of Object.entries(allowlist)) {
-        expect(reason.trim().length, site).toBeGreaterThan(10);
-        expect(found[kind].map(key), site).toContain(site);
-      }
-    });
-  }
 });

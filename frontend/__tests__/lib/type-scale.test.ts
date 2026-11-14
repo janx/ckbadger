@@ -64,8 +64,6 @@ const CSS_ALLOWLIST: Record<string, string> = {
 const EYEBROW_ALLOWLIST: Record<string, string> = {
   'components/layout/navbar-dropdown-styles.ts:14':
     'left for lane B4, which owns components/layout/**; listed in the B2 hand-back',
-  'components/ui/stat-block.tsx:123':
-    'dead code with no importer (the cleanup lane deletes it); its size comes from a config',
 };
 
 const CSS_FILE = 'app/globals.css';

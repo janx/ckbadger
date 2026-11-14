@@ -28,9 +28,9 @@ interface StatBlockProps {
 }
 
 const sizeClasses = {
-  sm: { label: 'text-small', value: 'text-hero', trend: 'text-small', gap: 'gap-1' },
-  md: { label: 'text-body', value: 'text-index', trend: 'text-body', gap: 'gap-2' },
-  lg: { label: 'text-body', value: 'text-entity', trend: 'text-body', gap: 'gap-3' },
+  sm: { value: 'text-hero', trend: 'text-small', gap: 'gap-1' },
+  md: { value: 'text-index', trend: 'text-body', gap: 'gap-2' },
+  lg: { value: 'text-entity', trend: 'text-body', gap: 'gap-3' },
 };
 
 const colorClasses: Record<AccentColor, string> = {
@@ -120,9 +120,8 @@ export function StatBlock({
 
   return (
     <div className={cn('flex min-w-0 flex-col', config.gap, className)}>
-      <div className={cn('eyebrow text-text-dim font-mono', config.label, labelClassName)}>
-        {label}
-      </div>
+      {/* an eyebrow is one size at every block size (R12) */}
+      <div className={cn('eyebrow text-text-dim text-meta font-mono', labelClassName)}>{label}</div>
 
       <div className="flex min-w-0 items-baseline gap-2">
         <span
