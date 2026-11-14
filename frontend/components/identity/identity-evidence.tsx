@@ -236,7 +236,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </div>
         ))}
       </div>
-      <p className="text-text-ghost text-meta">
+      <p className="text-text-dim text-meta">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
           <Hash hash={v.cell.txHash} copyable={false} className="text-meta" />

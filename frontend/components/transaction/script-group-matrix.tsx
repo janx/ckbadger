@@ -162,7 +162,7 @@ export function ScriptGroupMatrix({
                     dim(lit?.cells.has(c.id) ?? false) && 'opacity-25'
                   )}
                 >
-                  <span title={c.top} className="text-text-ghost text-meta max-w-[68px] truncate">
+                  <span title={c.top} className="text-text-dim text-meta max-w-[68px] truncate">
                     {c.top}
                   </span>
                   {c.href ? (

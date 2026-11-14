@@ -75,13 +75,14 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       expect(Number(text.getAttribute('y'))).toBeLessThanOrEqual(20);
     }
     expect(name.querySelectorAll('rect')).toHaveLength(2);
-    // ticks: ghost ink, written inside the plot's own gridlines (no axis column); the top value
+    // ticks: dim ink, written inside the plot's own gridlines (no axis column); the top value
     // would sit in the name's band, so it is not written (as the DAO page's charts)
     const ticks = Array.from(svg.querySelectorAll('[data-role="y-tick"]'));
     expect(ticks.map((t) => t.textContent)).toEqual(['100', '200']);
     for (const t of ticks) expect(Number(t.getAttribute('y')) - 11).toBeGreaterThanOrEqual(28);
     for (const t of ticks) {
-      expect(t).toHaveAttribute('fill', 'var(--c-text-ghost)');
+      // R4 (re-pinned on purpose): a tick is a value, in the dim ink, never the ghost
+      expect(t).toHaveAttribute('fill', 'var(--c-text-dim)');
       expect(Number(t.getAttribute('x'))).toBe(0);
     }
     // the bars start right of the ticks, and the data clears the name's band

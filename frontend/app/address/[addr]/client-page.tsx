@@ -511,7 +511,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       // Exact or none: "All" is the address's total, a filter 0 or 1, else no number.
                       const count: number | 'many' | undefined =
                         value === 'all' ? activitiesCount.data : page && chipCount(page);
-                      const empty = count === 0;
+                      // An empty filter says so with its "0", in the dim ink of every other chip:
+                      // a count of nothing is a datum, never the ghost (R4).
                       return (
                         <button
                           key={value}
@@ -525,9 +526,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             'text-small rounded border px-2.5 py-1.5',
                             filter === value
                               ? 'border-base-border bg-base-elevated text-text-bright'
-                              : empty
-                                ? 'border-base-border-subtle text-text-ghost'
-                                : 'border-base-border-subtle text-text-dim'
+                              : 'border-base-border-subtle text-text-dim'
                           )}
                         >
                           {label}

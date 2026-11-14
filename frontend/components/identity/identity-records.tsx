@@ -100,7 +100,7 @@ export function IdentityRecords({
                 >
                   <dt className="text-text-dim">
                     <span>{a.coin}</span>
-                    <span className="text-text-ghost text-meta block">
+                    <span className="text-text-dim text-meta block">
                       {a.key} · coin type {a.coinType}
                     </span>
                   </dt>

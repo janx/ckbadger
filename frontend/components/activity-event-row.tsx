@@ -122,7 +122,7 @@ function CallExpr({
         href={href}
         className={cn(
           'transition-colors',
-          quiet ? 'text-text hover:text-jade' : 'text-gold hover:text-gold/80'
+          quiet ? 'text-text hover:text-jade' : 'text-gold hover:text-gold-dim'
         )}
         onClick={(e) => e.stopPropagation()}
       >
@@ -131,7 +131,7 @@ function CallExpr({
       {args !== null && (
         <>
           <span className="text-text-dim">(</span>
-          <span className={quiet ? 'text-text-dim' : 'text-aqua/70'}>{args}</span>
+          <span className={quiet ? 'text-text-dim' : 'text-aqua-dim'}>{args}</span>
           <span className="text-text-dim">)</span>
         </>
       )}
@@ -238,7 +238,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
         value: (
           <Link
             href={getObjectDetailHref(item.objectId)}
-            className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
+            className="text-lavender-dim hover:text-lavender text-small font-mono transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {truncateHash(item.objectId, 8, 6)}
@@ -716,7 +716,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       return (
         <Link
           href={getObjectDetailHref(item.objectId)}
-          className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
+          className="text-lavender-dim hover:text-lavender text-small font-mono transition-colors"
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
@@ -873,8 +873,9 @@ export function activityHeadline(activity: ActivityBody): string {
 /**
  * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
  * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign. Zero is
- * "0 CKB" with the 0 ghosted and no fraction, for every caller (consistency plan C4): nothing
- * moved, so there are no decimals to read.
+ * "0 CKB" with no fraction, for every caller (consistency plan C4): nothing moved, so there are no
+ * decimals to read. That 0 is a datum, in the dim ink; the ghost is only for the padding zeros of
+ * a non-zero amount (R4).
  */
 export function ExactCkb({
   shannons,
@@ -895,7 +896,7 @@ export function ExactCkb({
   if (shannons === BigInt(0))
     return (
       <span data-ckb-amount className="whitespace-nowrap tabular-nums">
-        <span data-ghost className="text-text-ghost">
+        <span data-zero className="text-text-dim">
           0
         </span>
         {unitEl}

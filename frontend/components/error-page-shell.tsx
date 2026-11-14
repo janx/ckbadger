@@ -160,7 +160,7 @@ function TipSeal() {
           />
         </Suspense>
       </div>
-      <p data-seal-caption="" className="text-text-ghost text-meta m-0 mt-8 min-w-0">
+      <p data-seal-caption="" className="text-text-dim text-meta m-0 mt-8 min-w-0">
         behind: the seal of the newest block, <BlockLink number={block.number} /> ·{' '}
         <span className="break-all">{truncateHash(block.hash)}</span>
       </p>

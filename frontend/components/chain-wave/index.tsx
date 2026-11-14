@@ -169,10 +169,10 @@ function StageFlowPill({
 }) {
   return (
     <div className={`rounded-lg border px-3 py-2 ${stagePillClass(stage)}`}>
-      <div className="eyebrow text-text/70 text-meta">{title}</div>
+      <div className="eyebrow text-text-dim text-meta">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
         <div className="text-text-bright text-hero font-semibold">{value.toLocaleString()}</div>
-        <div className="text-text/70 text-meta">{subtitle}</div>
+        <div className="text-text-dim text-meta">{subtitle}</div>
       </div>
     </div>
   );

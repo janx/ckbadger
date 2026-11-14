@@ -300,9 +300,9 @@ describe('option A: every participant, one line each (D1)', () => {
         'text-meta'
       );
     }
-    // Occupied last, 11 px, in the board's ghost tone (≈ #4a5268), readable — not the 1.7:1 token.
+    // Occupied last, 11 px, in the dim ink (R4, re-pinned on purpose: the dim at 60 % read 2.7:1).
     const occupied = container.querySelector('[data-role="occupied"]');
-    expect(occupied).toHaveClass('text-meta', 'text-text-dim/60', 'whitespace-nowrap');
+    expect(occupied).toHaveClass('text-meta', 'text-text-dim', 'whitespace-nowrap');
     expect(occupied).not.toHaveClass('text-text-ghost');
     // The three/four/five-track participant grid is gone.
     const box = container.querySelector('[data-role="participants"]') as HTMLElement;

@@ -20,7 +20,7 @@ function Row({
     <div className="border-base-border-subtle grid min-w-0 gap-1 border-t py-3 sm:grid-cols-[210px_minmax(0,1fr)] sm:gap-4">
       <dt className="text-text-dim">
         {term}
-        <span className="text-text-ghost text-meta block">{field}</span>
+        <span className="text-text-dim text-meta block">{field}</span>
       </dt>
       <dd className="flex min-w-0 flex-col gap-1">{children}</dd>
     </div>

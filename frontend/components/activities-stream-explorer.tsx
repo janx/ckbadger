@@ -599,7 +599,7 @@ export function ActivitiesStreamExplorer({
                 <p className="text-text text-small">Could not read older activities</p>
                 <button
                   type="button"
-                  className="text-jade hover:text-jade/80 text-small mt-1 cursor-pointer underline transition-colors"
+                  className="text-jade hover:text-jade-dim text-small mt-1 cursor-pointer underline transition-colors"
                   onClick={() => void fetchNextPage()}
                 >
                   Retry

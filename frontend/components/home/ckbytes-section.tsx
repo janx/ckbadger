@@ -209,7 +209,7 @@ export function supplyFormula(view: AllocationView): string {
 }
 
 /**
- * The supply's note (the Main board's aside): the comment, then the formula line in the ghost ink,
+ * The supply's note (the Main board's aside): the comment, then the formula line in the dim ink,
  * set in under the comment's words. Rendered only for a ready allocation.
  */
 function SupplyNote({ view }: { view: AllocationView }) {
@@ -222,7 +222,7 @@ function SupplyNote({ view }: { view: AllocationView }) {
       <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-ghost text-meta m-0 mt-3 pl-[18px] font-mono"
+        className="text-text-dim text-meta m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>

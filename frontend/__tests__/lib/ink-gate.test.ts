@@ -20,11 +20,46 @@ import { TYPE_SCALE } from '@/lib/type-scale';
  * Each site the gate tolerates is a `path:line` → one-line reason, as in radius-scale.test.ts.
  */
 
+const PADDING = 'padding zeros: the trailing zeros of an amount’s fraction';
+const SEPARATOR = 'decoration: the separator between the crumbs or the parts of a line';
+const ARROW = 'decoration: the aria-hidden arrow between two tiles of a mechanism chain';
+const LEFT_B4 =
+  'left for lane B4, which owns components/layout/**: a menu eyebrow or hint, listed in the B2 hand-back';
+
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
-const GHOST_ALLOWLIST: Record<string, string> = {};
+const GHOST_ALLOWLIST: Record<string, string> = {
+  'app/dao/depositors/page.tsx:29': PADDING,
+  'app/fiber/channels/[id]/client-page.tsx:58': SEPARATOR,
+  'components/activity-event-row.tsx:930': PADDING,
+  'components/address/address-holdings.tsx:118': PADDING,
+  'components/asset/asset-feed.tsx:417': SEPARATOR,
+  'components/asset/detail-shell.tsx:152': SEPARATOR,
+  'components/asset/genetics.tsx:762': ARROW,
+  'components/asset/inventory-table.tsx:47': PADDING,
+  'components/dao/dao-board.tsx:612': ARROW,
+  'components/dao/dao-history.tsx:137': PADDING,
+  'components/layout/network-switcher.tsx:91': LEFT_B4,
+  'components/layout/theme-switcher.tsx:186': LEFT_B4,
+  'components/layout/theme-switcher.tsx:245': LEFT_B4,
+  'components/layout/theme-switcher.tsx:268': LEFT_B4,
+  'components/scripts/script-family-page.tsx:917': SEPARATOR,
+  'components/transaction/script-group-matrix.tsx:178': ARROW,
+  'components/ui/script-byte-map.tsx:157': ARROW,
+};
+
+const FORK_ALERT =
+  'the deep-fork banner’s words on its cinnabar fill: their ink is the fill-ink rule’s (inkOnFill), listed in the B2 hand-back';
 
 /** `text-<ink>/<n>` sites the gate tolerates. */
-const ALPHA_INK_ALLOWLIST: Record<string, string> = {};
+const ALPHA_INK_ALLOWLIST: Record<string, string> = {
+  'components/deep-fork-alert.tsx:33': FORK_ALERT,
+  'components/deep-fork-alert.tsx:42': FORK_ALERT,
+  'components/deep-fork-alert.tsx:46': FORK_ALERT,
+  'components/deep-fork-alert.tsx:50': FORK_ALERT,
+  'components/deep-fork-alert.tsx:56': FORK_ALERT,
+  'components/layout/network-switcher.tsx:76': LEFT_B4,
+  'components/layout/network-switcher.tsx:126': LEFT_B4,
+};
 
 /** `opacity-*` below 1 the gate tolerates. */
 const OPACITY_ALLOWLIST: Record<string, string> = {};

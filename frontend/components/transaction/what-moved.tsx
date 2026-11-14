@@ -524,7 +524,7 @@ export function WhatMoved({
           two groups itself, so its header keeps the hint alone (PA-11). */}
       <div className="border-base-border flex items-center justify-between gap-3 border-b px-3 py-1.5">
         {form === 'ribbons' && <span className="eyebrow text-text-dim text-small">from</span>}
-        <TapOrHoverHint what="a party or an asset" className="text-text-ghost text-meta" />
+        <TapOrHoverHint what="a party or an asset" className="text-meta" />
         {form === 'ribbons' && <span className="eyebrow text-text-dim text-small">to</span>}
       </div>
       <div ref={ref} className="divide-base-border-subtle flex min-w-0 flex-col divide-y px-3">

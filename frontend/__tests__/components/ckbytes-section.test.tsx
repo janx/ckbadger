@@ -166,7 +166,8 @@ describe('CkbytesSection', () => {
     expect(formula.textContent).toBe(
       `C ${MINUS} burnt ${MINUS} S · from the DAO header of #20,820,045`
     );
-    expect(formula).toHaveClass('text-text-ghost', 'text-meta', 'font-mono');
+    // R4 (re-pinned on purpose): the formula is information, in the dim ink
+    expect(formula).toHaveClass('text-text-dim', 'text-meta', 'font-mono');
     expect(within(formula).queryByRole('link')).toBeNull();
   });
 

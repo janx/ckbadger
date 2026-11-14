@@ -32,7 +32,8 @@ describe('PromptHeading', () => {
     const note = row.lastElementChild as HTMLElement;
     expect(note).not.toBe(h2);
     expect(note).toHaveTextContent('hover a point for the day');
-    expect(note).toHaveClass('text-text-ghost', 'text-meta', 'ml-auto');
+    // R4 (re-pinned on purpose): the note is information, in the dim ink
+    expect(note).toHaveClass('text-text-dim', 'text-meta', 'ml-auto');
     expect(h2).not.toContainElement(note);
   });
 

@@ -213,7 +213,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           <span className="eyebrow text-text-dim text-meta block w-fit">balance</span>
           <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
             {zero ? (
-              <span data-ghost className="text-text-ghost text-entity sm:text-display">
+              <span data-zero className="text-text-dim text-entity sm:text-display">
                 0
               </span>
             ) : (
@@ -546,7 +546,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
         {/* The right-prompt note, drawn as PromptHeading draws one: the count nav stands between
             the heading and it, and PromptHeading's own row has no place for that. */}
         {missing.length > 0 && (
-          <span data-prompt-note="" className="text-text-ghost text-meta ml-auto">
+          <span data-prompt-note="" className="text-text-dim text-meta ml-auto">
             {missing.map((c) => c.none).join(' · ')}
           </span>
         )}
@@ -964,7 +964,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
       <div className={cn(COLLECTION_GRID, 'text-text-dim text-meta h-7')}>
         <span>Collection</span>
         <span className="hidden sm:block">
-          Items <span className="text-text-ghost">0 — {max.toLocaleString('en-US')}</span>
+          Items <span className="text-text-dim">0 — {max.toLocaleString('en-US')}</span>
         </span>
         <span className="text-right">Items</span>
         <span className="hidden sm:block">Made of</span>

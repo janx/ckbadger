@@ -391,7 +391,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                 {band && (
                                   <span
                                     data-role="gene-share"
-                                    className="text-text-ghost shrink-0 whitespace-nowrap"
+                                    className="text-text-dim shrink-0 whitespace-nowrap"
                                   >
                                     {geneShare(band.count)}
                                   </span>

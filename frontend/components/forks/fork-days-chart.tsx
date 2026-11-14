@@ -22,8 +22,6 @@ const NAME_LINE = 28;
 const NAME_LINE_2 = 16;
 /** Under the bars: the first and last day's labels. */
 const AXIS = 22;
-/** Ghost ink for the values written inside the plot (as the DAO page's charts, v3). */
-const GHOST = 'var(--c-text-ghost)';
 /** About 6.6 px a character at 11 px in the app's mono face. */
 const CHAR = 6.6;
 const UNCLES_KEY = 'uncles on chain, per day';
@@ -134,7 +132,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
             {/* The scale's lines are grid: solid (visual finish V13 b). */}
             <line data-role="grid" x1="0" x2={W} y1={y(v)} y2={y(v)} stroke={FORK_COLORS.grid} />
             {written(v) && (
-              <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={GHOST}>
+              <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={FORK_COLORS.tick}>
                 {v.toLocaleString('en-US')}
               </text>
             )}
