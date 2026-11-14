@@ -44,6 +44,70 @@ const RATIO_EXCEPTIONS: Record<string, string> = {
 /** Off-scale sites the gate tolerates, as `path:line` → one-line reason. Empty by ruling R3. */
 const ALLOWLIST: Record<string, string> = {};
 
+/**
+ * UI review 2026-11-14, ruling R12 (U-05): the stylesheet is read too — a `font-size` in
+ * app/globals.css is a step of the scale or one of these, each a voice or a mark, never running
+ * text (tier-2 prose was 14 px there, outside the scale and larger than tier 1's 13 px body).
+ */
+const CSS_ALLOWLIST: Record<string, string> = {
+  'app/globals.css:941': 'the voice (Courier Prime): a comment line at 14 px',
+  'app/globals.css:962': 'the voice: the 404 verse at 18 px on a phone',
+  'app/globals.css:967': 'the voice: the 404 verse at 21 px from 640 px',
+  'app/globals.css:971': 'the 404 verse’s # at 16 px, sized with the verse it leads',
+  'app/globals.css:991': 'the wordmark’s name at 15 px: a mark, not a step running text may take',
+};
+
+/**
+ * R12: every eyebrow (an uppercase label: a tier boundary's, a frame's, a hero figure's) is one
+ * size, `text-meta` (ten were `text-small`), as `path:line` → reason for a site that is not.
+ */
+const EYEBROW_ALLOWLIST: Record<string, string> = {
+  'components/layout/navbar-dropdown-styles.ts:10':
+    'left for lane B4, which owns components/layout/**; listed in the B2 hand-back',
+  'components/ui/stat-block.tsx:123':
+    'dead code with no importer (the cleanup lane deletes it); its size comes from a config',
+};
+
+const CSS_FILE = 'app/globals.css';
+const CSS_DECLARED_SIZE = /font-size\s*:\s*([^;]+);/g;
+const STEP_SIZES = new Set<string>(R1.map(([, size]) => size));
+/** A string literal holding the class `eyebrow`. */
+const EYEBROW_LITERAL = /(['"`])((?:(?!\1).)*?(?<![\w-])eyebrow(?![\w-])(?:(?!\1).)*)\1/g;
+const STEP_CLASS =
+  /(?<![\w-])(?:[\w-]+:)*text-(meta|small|body|section|hero|index|entity|display)(?![\w-])/g;
+
+/** Every font size declared in a stylesheet that is not a step of the scale. */
+function offScaleCss(css: string): Offence[] {
+  const out: Offence[] = [];
+  css.split('\n').forEach((text, i) => {
+    for (const m of text.matchAll(CSS_DECLARED_SIZE))
+      if (!STEP_SIZES.has(m[1].trim())) out.push({ line: i + 1, what: m[0] });
+  });
+  return out;
+}
+
+/** The code with its comments blanked, line for line (a comment may name an eyebrow in words). */
+function blankComments(code: string): string {
+  return code
+    .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+}
+
+/** Every eyebrow whose class list is not `text-meta` alone among the steps. */
+function offSizeEyebrows(code: string): Offence[] {
+  const out: Offence[] = [];
+  blankComments(code)
+    .split('\n')
+    .forEach((text, i) => {
+      for (const m of text.matchAll(EYEBROW_LITERAL)) {
+        const steps = [...m[2].matchAll(STEP_CLASS)].map((s) => s[0]);
+        if (steps.length !== 1 || steps[0] !== 'text-meta')
+          out.push({ line: i + 1, what: `eyebrow with ${steps.join(' ') || 'no size'}` });
+      }
+    });
+  return out;
+}
+
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib', 'src'];
 const SVG_TEXT_TAGS = new Set(['svg', 'g', 'text', 'tspan', 'textPath']);
 /** An arbitrary px/rem size (`text-[13px]`) or a Tailwind default size (`text-xs` … `text-9xl`). */
@@ -212,6 +276,80 @@ describe('the scale gate finds what it must, and only that', () => {
       'const css = { fontSize };',
     ].join('\n');
     expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 3, 9, 10, 13]);
+  });
+});
+
+describe('the stylesheet and eyebrow gates find what they must, and only that (R12)', () => {
+  it('flags a declared font size off the scale, never a step', () => {
+    const css = [
+      '.prose-tier2 p {',
+      '  font-size: 14px;',
+      '  line-height: 1.7;',
+      '}',
+      'body { font-size: 13px; }',
+      '.x { font-size: 0.85em; } .y { font-size:40px; }',
+    ].join('\n');
+    expect(offScaleCss(css)).toEqual([
+      { line: 2, what: 'font-size: 14px;' },
+      { line: 6, what: 'font-size: 0.85em;' },
+    ]);
+  });
+
+  it('flags an eyebrow that is not text-meta, in any quote, never a look-alike', () => {
+    const code = [
+      '<span className="eyebrow text-text-dim text-small font-mono">x</span>',
+      "const a = 'eyebrow text-text-dim text-meta mb-1.5'; const b = `eyebrow ${c}`;",
+      '<i className="eyebrows text-small" /><b className="eyebrow sm:text-meta text-meta" />',
+      '<h2 className="eyebrow text-text-bright text-body font-mono">K</h2>',
+      ' * the "Evidence · for developers" eyebrow — and `className` (a comment, in words)',
+      '// an eyebrow "is uppercase" `meta`',
+    ].join('\n');
+    expect(offSizeEyebrows(code)).toEqual([
+      { line: 1, what: 'eyebrow with text-small' },
+      { line: 2, what: 'eyebrow with no size' },
+      { line: 3, what: 'eyebrow with sm:text-meta text-meta' },
+      { line: 4, what: 'eyebrow with text-body' },
+    ]);
+  });
+});
+
+describe('no font size outside the scale in the stylesheet, one size for every eyebrow (R12)', () => {
+  const root = join(__dirname, '..', '..');
+  const cssOffences = offScaleCss(readFileSync(join(root, CSS_FILE), 'utf8')).map(
+    (o) => `${CSS_FILE}:${o.line} ${o.what}`
+  );
+  const eyebrows = sourceFiles(root).flatMap((file) =>
+    offSizeEyebrows(readFileSync(file, 'utf8')).map(
+      (o) => `${relative(root, file)}:${o.line} ${o.what}`
+    )
+  );
+  const key = (offence: string) => offence.split(' ')[0];
+
+  it('declares no font size off the scale in globals.css, but the voice and the wordmark', () => {
+    expect(cssOffences.filter((o) => !(key(o) in CSS_ALLOWLIST))).toEqual([]);
+  });
+
+  it('sets tier-2 prose at the body step, 13 px, on its 1.7 line and its measure', () => {
+    const css = readFileSync(join(root, CSS_FILE), 'utf8');
+    const p = css.match(/\.prose-tier2 p\s*\{([^}]*)\}/)![1];
+    expect(p).toContain('font-size: 13px;');
+    expect(p).toContain('line-height: 1.7;');
+    expect(p).toContain('max-width: 64ch;');
+  });
+
+  it('sets every eyebrow at text-meta', () => {
+    expect(eyebrows.filter((o) => !(key(o) in EYEBROW_ALLOWLIST))).toEqual([]);
+  });
+
+  it('keeps the stylesheet and eyebrow allowlists reasoned and current', () => {
+    for (const [allowlist, found] of [
+      [CSS_ALLOWLIST, cssOffences],
+      [EYEBROW_ALLOWLIST, eyebrows],
+    ] as const)
+      for (const [site, reason] of Object.entries(allowlist)) {
+        expect(reason.trim().length, site).toBeGreaterThan(10);
+        expect(found.map(key), site).toContain(site);
+      }
   });
 });
 
