@@ -147,7 +147,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                 id="inventory-search"
                 type="search"
                 className="border-base-border bg-base-surface text-small min-w-0 rounded border px-3 py-2"
-                placeholder="Search by name..."
+                placeholder="search by name"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
               />

@@ -1,11 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { api } from '@/lib/api';
 
-const SHARED_PLACEHOLDER = 'Search block / tx / address / cell ...';
-/** The placeholder below md: 10 characters at 13 px, 78 px, in the 140 px of text at 360 (PA-04). */
-const PHONE_PLACEHOLDER = 'Search ...';
+/** U-01 / R2 (the boards' header, lib.js `header()`): lowercase, no dots. */
+const SHARED_PLACEHOLDER = 'search block / tx / address / cell';
+/** The placeholder below md: 6 characters at 13 px, 46.8 px, in the 140 px of text at 360 (PA-04). */
+const PHONE_PLACEHOLDER = 'search';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -94,6 +97,47 @@ describe('SearchBar', () => {
     expect(screen.getByTestId('search-shortcut-hints')).not.toHaveClass('sm:flex');
   });
 
+  // U-01 (UI review 2026-11-14), R2: the boards' field (lib.js `.search .sq`) prompts with a 7 px
+  // square in the cinnabar mark, the wordmark's and the headings' square one pixel smaller; the
+  // build drew a celadon ">". The square is decoration (aria-hidden, no text), centred on the
+  // field's height, and the typed text starts after it at the board's 9 px gap: the square's left
+  // (12 px, 16 px in the home field) + 7 + 9 = 28 px (pl-7), 32 px (pl-8), the cursor track too.
+  it('prompts with the 7 px cinnabar square, the typed text 9 px after it (U-01)', () => {
+    const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+    const rule = css.match(/\.search-square\s*\{([^}]*)\}/);
+    expect(rule, '.search-square in globals.css').not.toBeNull();
+    expect(rule![1]).toContain('width: 7px;');
+    expect(rule![1]).toContain('height: 7px;');
+    expect(rule![1]).toContain('background: var(--c-mark);');
+    expect(rule![1]).not.toMatch(/border-radius|box-shadow/);
+    for (const [variant, left, inset] of [
+      ['compact', 'left-3', 'pl-7'],
+      ['default', 'left-3', 'pl-7'],
+      ['home', 'left-4', 'pl-8'],
+    ] as const) {
+      const { unmount } = render(<SearchBar variant={variant} />);
+      const prompt = screen.getByTestId('search-prompt');
+      expect(prompt, variant).toHaveAttribute('aria-hidden', 'true');
+      expect(prompt, variant).toBeEmptyDOMElement();
+      expect(prompt, variant).not.toHaveTextContent('>');
+      expect(prompt, variant).not.toHaveClass('text-jade');
+      expect(prompt, variant).toHaveClass(
+        'search-square',
+        'absolute',
+        left,
+        'top-1/2',
+        '-translate-y-1/2'
+      );
+      const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+      expect(input, variant).toHaveClass(inset);
+      fireEvent.focus(input);
+      expect(screen.getByTestId('search-cursor-track'), variant).toHaveClass(
+        inset.replace('pl-', 'left-')
+      );
+      unmount();
+    }
+  });
+
   it('keeps the full placeholder and the "/" key from md up (PA-04)', () => {
     stubViewportFromMd(true);
     render(<SearchBar variant="compact" />);
@@ -151,11 +195,12 @@ describe('SearchBar', () => {
       'focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]'
     );
     expect(input).not.toHaveClass('text-transparent');
-    // the prompt glyph is decoration, before the text (the field's padding makes room for it)
+    // the prompt is decoration, before the text (the field's padding makes room for it); since
+    // U-01 it is the cinnabar square, not a celadon ">"
     const prompt = screen.getByTestId('search-prompt');
-    expect(prompt).toHaveTextContent('>');
+    expect(prompt).toBeEmptyDOMElement();
     expect(prompt).toHaveAttribute('aria-hidden', 'true');
-    expect(prompt).toHaveClass('text-jade', 'pointer-events-none');
+    expect(prompt).toHaveClass('search-square', 'pointer-events-none');
     expect(input).toHaveClass('pl-7');
     // no cursor while the field is idle, and the native caret is the browser's
     expect(screen.queryByTestId('search-cursor')).toBeNull();
@@ -187,13 +232,13 @@ describe('SearchBar', () => {
 
   it('gives the default and home fields the same prompt and cursor (move 4)', () => {
     const { rerender } = render(<SearchBar />);
-    expect(screen.getByTestId('search-prompt')).toHaveTextContent('>');
+    expect(screen.getByTestId('search-prompt')).toHaveClass('search-square');
     let input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     expect(input).toHaveClass('pl-7', 'focus:border-jade/50');
     fireEvent.focus(input);
     expect(screen.getByTestId('search-cursor')).toHaveClass('cursor');
     rerender(<SearchBar variant="home" />);
-    expect(screen.getByTestId('search-prompt')).toHaveTextContent('>');
+    expect(screen.getByTestId('search-prompt')).toHaveClass('search-square');
     input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     expect(input).toHaveClass('pl-8');
     fireEvent.focus(input);

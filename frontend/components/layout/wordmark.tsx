@@ -2,8 +2,12 @@
 
 import Link from '@/components/ui/link';
 
-/** The wordmark's look: the square, a 10 px gap, the name in the moon ink at 600. */
-const WORDMARK_CLASS = 'flex shrink-0 items-center gap-2.5 font-semibold text-text-bright';
+/**
+ * The wordmark's look: the square, a 10 px gap, the name in the moon ink at 600. The link is at
+ * least 32 px high (U-20; its 15 px line was the whole hit area), the mark centred in it, so the
+ * mark stays where the row centres it.
+ */
+const WORDMARK_CLASS = 'flex min-h-8 shrink-0 items-center gap-2.5 font-semibold text-text-bright';
 
 /** The square and the name; the link around them is the caller's. */
 function Mark() {

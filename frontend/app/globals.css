@@ -481,6 +481,15 @@ h2.text-section::before {
   content: '';
   margin-right: 10px;
 }
+/* The search field's prompt (the boards' `.search .sq`, UI review 2026-11-14, U-01): the same
+   cinnabar square, one pixel smaller, 7 px. Placed by the field (components/search-bar.tsx). */
+.search-square {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--c-mark);
+}
 h2.text-section {
   text-transform: lowercase;
 }

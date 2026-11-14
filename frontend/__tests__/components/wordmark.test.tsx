@@ -34,6 +34,17 @@ describe('Wordmark', () => {
     expect(name).toHaveTextContent('ckbadger');
   });
 
+  // U-20 (UI review 2026-11-14): the link was as tall as its 15 px line. Its hit area is at least
+  // 32 px high; the mark stays where it was, centred in the taller box as the row centres the box.
+  it('gives the home link a hit area at least 32 px high, the mark centred in it (U-20)', () => {
+    render(<Wordmark />);
+    const link = screen.getByRole('link', { name: 'CKBadger home' });
+    expect(link).toHaveClass('min-h-8', 'items-center');
+    bareRender(<Wordmark plain />);
+    const plain = screen.getAllByRole('link', { name: 'CKBadger home' })[1];
+    expect(plain).toHaveClass('min-h-8', 'items-center');
+  });
+
   it('draws a bare home link without the router, for the error page that has none', () => {
     bareRender(<Wordmark plain />);
     const link = screen.getByRole('link', { name: 'CKBadger home' });

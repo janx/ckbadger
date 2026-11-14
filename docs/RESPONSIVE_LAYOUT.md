@@ -47,9 +47,16 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 ## Rules for the shared pieces
 
-- **Vitals strip** (every page, under the header): one wrapping row from `md` up; below `md` three
-  groups on their own lines — block number with the live mark, the epoch with a bar that takes the
-  free width, the three mining figures.
+- **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
+  every page. Below `md` the home page keeps the whole strip in three groups on their own lines —
+  block number with the live mark, the epoch with its bar, `index / length` and the time left, the
+  three mining figures. Every other page has one line below `md`: the block number, the epoch with
+  its bar, and the live mark at the end (its dot alone below 640; the word stays for a screen
+  reader, and the status line's mode block says it). The mining figures and the epoch's position
+  and time left are the home page's below `md` — a ruled exception to principle 2 (UI review
+  2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
+  an 844 px first screen on every page. At 360 the line is 280.6 of 326 px; page content starts at
+  about y = 111 at 390 (53 px header, 42 px strip, its 16 px margin).
 - **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
   row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
   keeps 26 px of bottom padding so no page ends under it. From `md` up it is one row — the mode
@@ -57,8 +64,12 @@ The 640–767 band has one content width to design for. Below 640 the container 
   clock — and it must fit at 768 px (measured: 753 of 753 px with 26 px to spare, so a release
   string five or more characters longer than `0.8.2` would clip the clock). Below `md` it is one
   row of the mode, the network, the tip and the clock; the release and the hints are the wide
-  form's only (a touch screen has no keys; the release is in the `?` help) — designed, not
-  dropped. Never two rows, never a sideways scroller, never over the page's last prompt.
+  form's only (a touch screen has no keys; the release is in the `?` help, which the `?` key and,
+  from `md`, the footer's "keyboard shortcuts" open). Never two rows, never a sideways scroller,
+  never over the page's last prompt.
+- **Page end** (every page, the not-found and error pages too): the footer is the page's last
+  quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
+  status line. The footer's "keyboard shortcuts" is drawn from `md` only.
 - **Transaction pipeline** (homepage): one row down to a 589 px canvas (two whole blocks); below
   that a vertical timeline (mempool, proposed, NEXT, the tip, older blocks as rows; one vertical
   chain line in the gaps). Never scaled, never folded, cards never smaller than 89 px.
