@@ -115,6 +115,30 @@ describe('Header', () => {
     expect(screen.queryByTestId('vitals-logo-notch')).toBeNull();
   });
 
+  // PA-04 / PB-26 (UI review 2026-11-14): the celadon section word stood between the menu button
+  // and the search field on the pages the nav links to only, and its length set the field's
+  // width. Kept at a fixed slot for every route, the longest word ("Transactions", 12 characters
+  // at 13 px, 93.6 px, and its 8 px gap) would leave the field 78 px at 360 — 38 px of text, under
+  // five characters. So the word is drawn from 640 only; below it the field is what the row
+  // leaves on every page, 326 − 90 (wordmark) − 8 − 40 (menu) − 8 = 180 px at 360. From 640 the
+  // field is its 288 px cap on every page (608 − 248 px of the row = 360 px free).
+  it('draws the section word from 640 only, so the phone field is one width on every page (PA-04, PB-26)', () => {
+    for (const [path, word] of [
+      ['/', 'Home'],
+      ['/blocks', 'Blocks'],
+      ['/transactions', 'Transactions'],
+      ['/inventory/identities', 'Identities'],
+      ['/dao', 'DAO'],
+    ] as const) {
+      usePathnameMock.mockReturnValue(path);
+      const { unmount } = render(<Header />);
+      const span = screen.getByText(word, { selector: 'span' });
+      expect(span, path).toHaveClass('hidden', 'sm:inline', 'text-jade');
+      expect(span.parentElement, path).toHaveClass('md:hidden');
+      unmount();
+    }
+  });
+
   it('keeps only the header row sticky on phones and the row plus the vitals strip from md up', () => {
     usePathnameMock.mockReturnValue('/');
     render(<Header />);
