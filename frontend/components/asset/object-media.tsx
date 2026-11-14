@@ -39,11 +39,42 @@ function ViewImage({ href }: { href: string }) {
     </div>
   );
 }
+/**
+ * What a btcfs reference points at, read from its URI: the Bitcoin transaction and inscription,
+ * linked to an explorer where the network has one, else said in words; a URI that is not an
+ * inscription reference is said to be so (anyone can mint spore content).
+ */
+function BtcfsReading({ uri, network }: { uri: string; network: string }) {
+  const inscription = parseBtcfsUri(uri);
+  if (inscription === null)
+    return (
+      <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
+    );
+  const href = bitcoinTxHref(inscription.txid, network);
+  const label = `Bitcoin tx ${inscription.txid.slice(0, 4)}…${inscription.txid.slice(-4)} · inscription i${inscription.index}`;
+  return href ? (
+    <a href={href} className="text-copper break-all" target="_blank" rel="noopener noreferrer">
+      {label} ↗
+    </a>
+  ) : (
+    <p className="space-y-1">
+      <span className="text-copper block break-all">{label}</span>
+      <span className="text-text-dim text-meta block">
+        The Bitcoin network of testnet inscriptions is not established, so no explorer link is
+        given.
+      </span>
+    </p>
+  );
+}
+
 export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: ObjectMediaProps) {
   const network = useActiveNetwork();
   const omiga = omigaDobHref(object.typeScriptHash, network);
   const profile = object.mediaProfile;
   const bitcoin = profile?.sources.filter((s) => s.scheme === 'btcfs') ?? [];
+  // PB-15: the box reads the first reference only, so its action stays under its title; the
+  // further ones are read in the disclosure that follows the box.
+  const [firstReference] = bitcoin;
   const bytes =
     contentHex === null
       ? undefined
@@ -52,43 +83,13 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
   return (
     <section aria-label="Object media" className="min-w-0 space-y-4">
       {/* F2 objects (OB-6): the composition badge and its sentence now open the page hero. */}
-      {bitcoin.length ? (
+      {firstReference ? (
         <figure className="border-copper/40 space-y-3 border p-6 text-center">
           <div className="text-copper text-hero">Its image lives on Bitcoin</div>
-          {bitcoin.map((s) => {
-            const inscription = parseBtcfsUri(s.uri);
-            const href = inscription && bitcoinTxHref(inscription.txid, network);
-            const label =
-              inscription &&
-              `Bitcoin tx ${inscription.txid.slice(0, 4)}…${inscription.txid.slice(-4)} · inscription i${inscription.index}`;
-            return (
-              <div key={s.uri} className="min-w-0 space-y-2">
-                <div className="text-text-dim text-meta break-all">{s.uri}</div>
-                {inscription === null ? (
-                  <p className="text-text-dim text-meta">
-                    Not a recognisable btcfs inscription reference.
-                  </p>
-                ) : href ? (
-                  <a
-                    href={href}
-                    className="text-copper break-all"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {label} ↗
-                  </a>
-                ) : (
-                  <p className="space-y-1">
-                    <span className="text-copper block break-all">{label}</span>
-                    <span className="text-text-dim text-meta block">
-                      The Bitcoin network of testnet inscriptions is not established, so no explorer
-                      link is given.
-                    </span>
-                  </p>
-                )}
-              </div>
-            );
-          })}
+          <div className="min-w-0 space-y-2">
+            <div className="text-text-dim text-meta break-all">{firstReference.uri}</div>
+            <BtcfsReading uri={firstReference.uri} network={network} />
+          </div>
           {omigaLink && omiga && <ViewImage href={omiga} />}
           <figcaption className="text-text-dim text-meta">
             CKBadger reads CKB only. This object points to Bitcoin; its inscription is not fetched
@@ -133,6 +134,12 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
                   {s.scheme} · {s.sourceLocation} · {s.dependencyTier}
                 </span>
                 <div>{s.uri}</div>
+                {/* A further Bitcoin reference is read here, where the box no longer does. */}
+                {s.scheme === 'btcfs' && s !== firstReference && (
+                  <div className="mt-1">
+                    <BtcfsReading uri={s.uri} network={network} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
