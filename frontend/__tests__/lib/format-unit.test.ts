@@ -25,6 +25,29 @@ describe('compact numbers: one form (CH-14)', () => {
     expect(formatCkbCompact(BigInt('3360000000000000000')).value).toBe('33.60B');
     expect(formatCkbCompact(BigInt('120000000000000000000')).value).toBe('1.20T');
   });
+
+  // The review's item J: the unit is chosen for the ROUNDED value, as formatCompactInteger does;
+  // 999,995 CKB rounds to 1,000.00k at two decimals of k, which is 1.00M (it printed '1000.00k')
+  it('chooses the unit for the rounded amount at every boundary', () => {
+    const ckb = (n: string) => BigInt(n) * BigInt(100000000);
+    expect(formatCkbCompact(ckb('999994')).value).toBe('999.99k');
+    expect(formatCkbCompact(ckb('999995')).value).toBe('1.00M');
+    expect(formatCkbCompact(ckb('999999995')).value).toBe('1.00B');
+    expect(formatCkbCompact(ckb('999999999995')).value).toBe('1.00T');
+    expect(formatCkbCompact(BigInt('99999500000')).value).toBe('1.00k'); // 999.995 CKB
+    expect(formatCkbCompact(BigInt('99999400000')).value).toBe('999.99'); // 999.994 CKB
+    for (const [delta, compact] of [
+      ['-999994', '999.99k'],
+      ['-999995', '1.00M'],
+      ['-999999995', '1.00B'],
+      ['999995', '1.00M'],
+      ['-999.995', '1.00k'],
+      ['-0.99995', '1.00'], // the 4-decimal form below 1 CKB rounds to 1.0000: one CKB at two
+      ['-0.99994', '0.9999'],
+    ] as const)
+      expect(formatCompactCkbDelta(delta).compact).toBe(compact);
+    expect(formatCompactCkbDelta('-999995').direction).toBe('down');
+  });
 });
 
 describe('percent: one form (CH-14)', () => {
