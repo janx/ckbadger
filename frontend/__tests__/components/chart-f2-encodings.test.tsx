@@ -472,7 +472,7 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
   });
 });
 
-// Lane P (additive): `insideYTicks="over"` writes the ghost values over the plotted series, so a
+// Lane P (additive): `insideYTicks="over"` writes the in-plot values over the plotted series, so a
 // stacked area (60 % opaque) cannot bury them; `true` keeps them under it (the DAO page's charts).
 describe('in-plot values over a filled chart', () => {
   beforeEach(() => stubChartWidth(600));
