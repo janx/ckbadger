@@ -874,11 +874,11 @@ export function activityHeadline(activity: ActivityBody): string {
  * The ink of an amount by its sign: the integer in the sign's own ink, the fraction digits a step
  * quieter in a named ink of that sign (UI review 2026-11-14, R4, DY-06) — each at 4.5:1 on every
  * ground in both themes (`__tests__/lib/palette.test.ts`), never the sign's ink at an opacity.
- * The one table every amount renderer reads; `rouge-fraction` is the palette key added for it.
+ * The one table every amount renderer reads.
  */
 export const AMOUNT_INK = {
   positive: { integer: 'text-positive', fraction: 'text-jade-dim' },
-  negative: { integer: 'text-negative', fraction: 'text-rouge-fraction' },
+  negative: { integer: 'text-negative', fraction: 'text-rouge-dim' },
   neutral: { integer: 'text-text', fraction: 'text-text-dim' },
 } as const;
 export type AmountSign = keyof typeof AMOUNT_INK;

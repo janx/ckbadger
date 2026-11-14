@@ -99,11 +99,11 @@ the amount's sign at body contrast — never the sign's ink at an opacity (78 % 
 3.7:1 by night and the celadon and the neutral at about 3.2–3.7:1 by day). `AMOUNT_INK` (beside
 `ExactCkb` in `components/activity-event-row.tsx`) is the one table every amount renderer reads:
 
-| Sign     | Integer         | Fraction digits                                 |
-| -------- | --------------- | ----------------------------------------------- |
-| positive | `text-positive` | `text-jade-dim`                                 |
-| negative | `text-negative` | `text-rouge-fraction` (rouge-dim at text grade) |
-| neutral  | `text-text`     | `text-text-dim`                                 |
+| Sign     | Integer         | Fraction digits  |
+| -------- | --------------- | ---------------- |
+| positive | `text-positive` | `text-jade-dim`  |
+| negative | `text-negative` | `text-rouge-dim` |
+| neutral  | `text-text`     | `text-text-dim`  |
 
 A display figure's decimals (the DAO deposit, a Fiber channel's capacity, a script's CKB) take
 their own dim step at the hero size; their padding zeros are the ghost.
@@ -189,9 +189,9 @@ lightness only (lighter by night, darker by day) until it clears that ratio on a
 | `neon-white`                                            | celadon                                 | 12 % celadon in white / celadon L −0.15, C ×0.75 (the deep celadon ink)                                                                                                                                  |
 | `jade`, `jade-dim`, `jade-bright`                       | celadon, celadonDim, celadonBright      | board values by night; day dim `#5a948a` (2.70) ≥ 4.5 → `#346e65` (4.57); day bright = jade L −0.07 `#185750` (6.47)\*                                                                                   |
 | `aqua` `gold` `rouge` `lavender` `amber`                | indigo, gold, cinnabarText, lotus, moss | board values, ≥ 4.5: day gold `#8a6a1e` (3.92) → `#80600f` (4.53), day moss `#4f7a2a` (3.93) → `#46701f` (4.53)                                                                                          |
-| `*-dim`                                                 | the accent                              | L −0.10, C ×0.8 / L +0.05, C ×0.7; then ≥ 4.5 (text grade) or ≥ 3 (`rouge-dim`, `amber-dim`)                                                                                                             |
+| `*-dim`                                                 | the accent                              | L −0.10, C ×0.8 / L +0.05, C ×0.7; then ≥ 4.5 (text grade) or ≥ 3 (`amber-dim`)                                                                                                                          |
 | `*-bright`                                              | the accent                              | L +0.08 (lighter by night) / L −0.07 (more ink by day; gold C ×0.85)                                                                                                                                     |
-| `rouge-fraction`                                        | rouge-dim                               | ≥ 4.5 (the negative fraction ink): `#aa503c` L +0.094 → `#ca6c57` (4.51) / `#a6594c` L −0.033 → `#9b4f43` (4.53)                                                                                         |
+| `rouge-dim`                                             | the dim step                            | ≥ 4.5, text grade like every other `*-dim` (it is the negative fraction ink): `#aa503c` L +0.094 → `#ca6c57` (4.51) / `#a6594c` L −0.033 → `#9b4f43` (4.53)                                              |
 | `mark`                                                  | cinnabar                                | the board value (3.25 / 4.71, UI grade)                                                                                                                                                                  |
 | `token`, `token-bright`                                 | azurite 石青 `#6f9ad6` / `#2a5a9e`      | ≥ 4.5; bright L +0.08 / −0.07                                                                                                                                                                            |
 | `object`                                                | a lotus violet `#a58ad6` / `#5e45a8`    | ≥ 4.5                                                                                                                                                                                                    |

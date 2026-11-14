@@ -115,8 +115,6 @@ export default {
         rouge: {
           DEFAULT: twColor('rouge'),
           dim: twColor('rouge-dim'),
-          // the fraction digits of a negative amount, at body contrast (R4)
-          fraction: twColor('rouge-fraction'),
         },
         aqua: {
           DEFAULT: twColor('aqua'),

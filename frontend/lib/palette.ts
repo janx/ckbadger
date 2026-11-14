@@ -61,13 +61,13 @@ const dark = {
   'gold-dim': '#a38750',
   'gold-bright': '#e3bd75',
   rouge: '#d9634a',
-  'rouge-dim': '#aa503c',
-  'rouge-bright': '#f57c62',
   /**
-   * The fraction digits of a negative amount (R4): rouge-dim moved in lightness until it reads at
-   * 4.5:1. A positive amount's fraction is jade-dim, a neutral one's text-dim.
+   * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
+   * the board's dim moved in lightness until it reads at 4.5:1. It is also the fraction digits of
+   * a negative amount (R4), as jade-dim is a positive one's and text-dim a neutral one's.
    */
-  'rouge-fraction': '#ca6c57',
+  'rouge-dim': '#ca6c57',
+  'rouge-bright': '#f57c62',
   lavender: '#a797c4',
   'lavender-dim': '#8e82a5',
   amber: '#a3bf7a',
@@ -222,9 +222,8 @@ const light: Palette = {
   'gold-dim': '#786234',
   'gold-bright': '#684e0d',
   rouge: '#a8392a',
-  'rouge-dim': '#a6594c',
+  'rouge-dim': '#9b4f43',
   'rouge-bright': '#902214',
-  'rouge-fraction': '#9b4f43',
   lavender: '#5e4d9a',
   'lavender-dim': '#675d93',
   amber: '#46701f',
