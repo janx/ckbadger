@@ -7,6 +7,7 @@ import { DaoBoard } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
+import { expectTicksInGutter } from '@/__tests__/utils/y-ticks';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -1387,6 +1388,23 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     expect(ticks[0]).not.toBe('0');
     // the daily series spans 1.000 … 1.015
     expect(ticks).toContain('1.010');
+  });
+});
+
+// U-19 (UI review 2026-11-14): AR's round values sat inside its plot in the ghost ink.
+describe('DaoBoard AR values (U-19)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it.each([358, 600])('writes AR’s values in a dim gutter left of its plot at %i px', async (w) => {
+    stubChartWidth(w);
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = await within(
+      screen.getByRole('region', { name: 'How a deposit grows' })
+    ).findByRole('img', { name: /^AR by date/ });
+    expect(expectTicksInGutter(chart, 'AR').map((t) => t.trim())).toContain('1.010');
   });
 });
 

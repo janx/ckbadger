@@ -14,6 +14,7 @@ import {
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import type { ChartResponse } from '@/lib/api';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { expectTicksInGutter } from '@/__tests__/utils/y-ticks';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -371,5 +372,27 @@ describe('cutShare', () => {
     expect(cutShare('1,234.5')).toBe('1,234.5');
     expect(cutShare('7')).toBe('7');
     expect(() => cutShare('7%')).toThrow('is not a decimal');
+  });
+});
+
+// U-19 (UI review 2026-11-14): the deposited plot wrote its round values inside itself in the ghost
+// ink, where a spike crossed them; like every history plot they sit in a dim gutter left of it.
+describe('DaoHistory deposited values (U-19)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([358, 1200])('writes them in a dim gutter left of the plot at %i px', (width) => {
+    stubChartWidth(width);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const svg = container.querySelector('[data-panel="deposited"]')!;
+    expect(expectTicksInGutter(svg, 'deposited')).toEqual(expect.arrayContaining(['50k', '100k']));
+    // the name starts inside the plot, after the gutter
+    const name = svg.querySelector('[data-role="chart-name"]')!;
+    expect(Number(name.getAttribute('x'))).toBeGreaterThan(
+      Number(svg.querySelector('[data-role="y-tick"]')!.getAttribute('x'))
+    );
   });
 });

@@ -9,6 +9,7 @@ import { api, type Cell } from '@/lib/api';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { expectTicksInGutter, plotLeftOf } from '@/__tests__/utils/y-ticks';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -284,6 +285,22 @@ describe('JoyID script page · visual pass', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  // U-19 (UI review 2026-11-14): the history's round values sat inside the plots in the ghost
+  // ink, crossed by a spike ("200M CKB"); both plots write them in one dim gutter, and the upgrade
+  // lines and labels sit on the plots' x, after it.
+  it('writes the history values in one dim gutter left of both plots (U-19)', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
+    expectTicksInGutter(main, 'CKB in JoyID cells');
+    expectTicksInGutter(occupied, 'occupied', 1);
+    const left = plotLeftOf(main);
+    expect(plotLeftOf(occupied)).toBe(left);
+    expect(left).toBeGreaterThan(0);
+    const lines = history.querySelector('[data-upgrade-line]')!.parentElement as HTMLElement;
+    expect(lines.style.left).toBe(`${left}px`);
   });
 
   it('draws the upgrade days as dashed lines through every panel, not as a link list', async () => {
