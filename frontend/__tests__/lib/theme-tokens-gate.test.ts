@@ -43,7 +43,8 @@ export function stripComments(code: string): string {
  * but a colour stands: the whole of a string, or after `:` `(` `,` or a CSS length or border
  * style (`1px solid #000`).
  */
-const HEX = /#[0-9a-fA-F]{6}\b/g;
+const HEX =
+  /(?<![\w&/#])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![\w-]|[,.]\d)/g;
 const COLOUR_PLACE = /(?:[(,:]|\b(?:px|em|rem|solid|dashed|dotted|double|inset))\s*$/;
 
 /** The hex colours in one line of code. */
