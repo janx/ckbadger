@@ -10,6 +10,7 @@ import {
   material,
   MATERIAL_KEYS,
   MATERIALS,
+  overGround,
   PALETTE,
   PALETTE_KEYS,
   relativeLuminance,
@@ -279,6 +280,111 @@ describe('the rubbing / Song print finish', () => {
     for (const theme of THEMES) {
       expect(MATERIALS[theme]['header-strip'], theme).toBe(PALETTE[theme]['base-surface']);
       expect(MATERIALS[theme]['header-strip'], theme).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+});
+
+/** A key's hex in a theme, by name (a key a test names before the palette declares it reads undefined). */
+function ink(theme: (typeof THEMES)[number], key: string): string {
+  return (PALETTE[theme] as Readonly<Record<string, string>>)[key];
+}
+
+// UI review 2026-11-14, ruling R4 (DY-06, U-08): the digits after an amount's decimal point are a
+// step quieter than its sign's ink, in a named ink of that sign at body contrast on every ground —
+// never the sign's ink at an opacity (78 % put the cinnabar at 3.7:1 by night, the celadon at
+// about 3.2–3.7:1 and the neutral at 3.5:1 by day).
+const FRACTION_INKS = [
+  { sign: 'positive', ink: 'jade', fraction: 'jade-dim' },
+  { sign: 'negative', ink: 'rouge', fraction: 'rouge-fraction' },
+  { sign: 'neutral', ink: 'text', fraction: 'text-dim' },
+] as const;
+
+describe('the fraction inks (R4, DY-06)', () => {
+  it('reads every sign’s fraction ink at body contrast on every ground, in both themes', () => {
+    const short: string[] = [];
+    for (const theme of THEMES)
+      for (const { fraction } of FRACTION_INKS)
+        for (const ground of GROUNDS) {
+          const hex = ink(theme, fraction);
+          expect(hex, `${theme} ${fraction}`).toMatch(HEX);
+          const ratio = contrastRatio(hex, PALETTE[theme][ground]);
+          if (ratio < 4.5) short.push(`${theme} ${fraction} on ${ground}: ${ratio.toFixed(2)}`);
+        }
+    expect(short).toEqual([]);
+  });
+
+  it('sets each fraction a step quieter than its sign’s ink on the page ground', () => {
+    for (const theme of THEMES)
+      for (const { ink: whole, fraction } of FRACTION_INKS) {
+        const ground = PALETTE[theme]['base-bg'];
+        expect(
+          contrastRatio(ink(theme, fraction), ground),
+          `${theme} ${fraction} under ${whole}`
+        ).toBeLessThan(contrastRatio(ink(theme, whole), ground));
+      }
+  });
+
+  it('adds the negative one: rouge-dim moved in OKLCH lightness only until it reads at 4.5:1', () => {
+    // rouge-dim is a secondary ink at 3:1 (#aa503c / #a6594c, 3.05 / 3.92 at worst); lightened by
+    // night (L +0.094) and darkened by day (L −0.033), hue and chroma kept.
+    expect(ink('dark', 'rouge-fraction')).toBe('#ca6c57');
+    expect(ink('light', 'rouge-fraction')).toBe('#9b4f43');
+    expect(PALETTE.dark['rouge-dim']).toBe('#aa503c');
+    expect(PALETTE.light['rouge-dim']).toBe('#a6594c');
+  });
+});
+
+// UI review 2026-11-14, ruling R5 (DY-01, DY-08): by day the page is ruled paper — the ink at the
+// scanline alpha in 1 px of every 3, over the sky — and the hair (`base-border-subtle`, #e3dbcc)
+// and the elevated tint (`base-elevated`, #e9e2d4) are 1.09:1 and 1.03:1 on a ruled line, so a row
+// rule is one more ruled line and a bar's empty track is not there. A row rule and a bar track are
+// keys of their own, each clearing the paper and a ruled line by 1.25:1; by night they stay the
+// boards' hair and elevated tint, lighter than the ground as they were.
+describe('the row rule and the bar track (R5, DY-01)', () => {
+  const day = PALETTE.light;
+  const ruledLine = overGround(
+    'light',
+    'text-bright',
+    rgbaAlpha(MATERIALS.light['scanline-ink']),
+    'base-bg'
+  );
+
+  it('computes the ruled line from the palette: the day ink at 4.5 % over the paper', () => {
+    expect(MATERIALS.light['scanline-ink']).toBe(hexAlpha(day['text-bright'], 0.045));
+    expect(ruledLine).toBe('#e9e5db');
+    // the old keys are what the review measured: a rule and a track that are not there
+    expect(contrastRatio(day['base-border-subtle'], ruledLine)).toBeLessThan(1.1);
+    expect(contrastRatio(day['base-elevated'], ruledLine)).toBeLessThan(1.05);
+  });
+
+  it.each(['row-rule', 'bar-track'])(
+    'clears the paper and a ruled line by 1.25:1 by day: %s',
+    (key) => {
+      const hex = ink('light', key);
+      expect(hex, key).toMatch(HEX);
+      expect(contrastRatio(hex, day['base-bg']), `${key} on the paper`).toBeGreaterThanOrEqual(
+        1.25
+      );
+      expect(contrastRatio(hex, ruledLine), `${key} on a ruled line`).toBeGreaterThanOrEqual(1.25);
+      // darker than both: a rule is ink on paper, never a lighter line
+      expect(relativeLuminance(hex)).toBeLessThan(relativeLuminance(ruledLine));
+    }
+  );
+
+  it('derives them from the hair and the elevated tint, darker in OKLCH lightness only', () => {
+    expect(ink('light', 'row-rule')).toBe('#d5cdbf');
+    expect(ink('light', 'bar-track')).toBe('#d4cdc0');
+  });
+
+  it('keeps them the boards’ hair and elevated tint by night, lighter than the ground', () => {
+    expect(ink('dark', 'row-rule')).toBe(PALETTE.dark['base-border-subtle']);
+    expect(ink('dark', 'bar-track')).toBe(PALETTE.dark['base-elevated']);
+    for (const key of ['row-rule', 'bar-track']) {
+      const hex = ink('dark', key);
+      expect(relativeLuminance(hex), key).toBeGreaterThan(
+        relativeLuminance(PALETTE.dark['base-bg'])
+      );
+      expect(contrastRatio(hex, PALETTE.dark['base-bg']), key).toBeGreaterThanOrEqual(1.1);
     }
   });
 });
