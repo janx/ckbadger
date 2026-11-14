@@ -1,6 +1,7 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useCopy } from '@/hooks/useCopy';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -300,15 +301,14 @@ function CellFacts({
 }
 
 function CopyOutpoint({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
+  // the one copy path (hooks/useCopy): "copied" for a moment after a copy that worked, nothing
+  // after one that cannot (no clipboard over plain HTTP on a LAN address)
+  const { copied, copy } = useCopy(value);
   return (
     <button
       type="button"
       aria-label="Copy out point"
-      onClick={async () => {
-        await navigator.clipboard.writeText(value);
-        setCopied(true);
-      }}
+      onClick={copy}
       className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] rounded border px-2"
     >
       {copied ? 'copied' : 'copy'}

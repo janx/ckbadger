@@ -34,6 +34,7 @@ import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+import { useCopy } from '@/hooks/useCopy';
 import { ReadFailure } from '@/components/read-failure';
 import {
   api,
@@ -142,16 +143,15 @@ function daoCompensation(activity: GlobalActivity): bigint | null {
 }
 
 function CopyHash({ hash }: { hash: string }) {
-  const [copied, setCopied] = useState(false);
+  // the one copy path (hooks/useCopy): "Copied" for a moment after a copy that worked, nothing
+  // after one that cannot (no clipboard over plain HTTP on a LAN address)
+  const { copied, copy } = useCopy(hash);
   return (
     <button
       type="button"
       aria-label="Copy transaction hash"
       title={copied ? 'Copied' : 'Copy transaction hash'}
-      onClick={async () => {
-        await navigator.clipboard.writeText(hash);
-        setCopied(true);
-      }}
+      onClick={copy}
       className="text-text-dim hover:text-jade -my-3 flex h-11 w-11 shrink-0 items-center justify-center"
     >
       <svg

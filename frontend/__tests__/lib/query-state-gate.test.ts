@@ -10,10 +10,7 @@ import { describe, expect, it } from 'vitest';
  * either flag — no `.isLoading` / `.isPending` access, no `{ isLoading }` / `{ isPending }`
  * destructuring. The sites tolerated are listed per file with their reason.
  */
-const ALLOWLIST: Readonly<Record<string, string>> = {
-  'app/hardforks/page.tsx':
-    'lane A4 owns the page and changes its predicate line; drop this entry when it lands',
-};
+const ALLOWLIST: Readonly<Record<string, string>> = {};
 
 const ROOT = join(__dirname, '..', '..');
 const DIRS = ['app', 'components', 'hooks', 'lib'];

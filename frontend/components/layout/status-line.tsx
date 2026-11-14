@@ -6,7 +6,7 @@ import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import type { NetworkStats } from '@/lib/api';
 import { chainMode, type ChainMode } from '@/lib/chain-mode';
-import { clockText, localZone } from '@/lib/clock';
+import { clockText, zoned } from '@/lib/clock';
 import { formatBlockNumber } from '@/lib/format-block';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
@@ -154,7 +154,7 @@ export function StatusClock() {
       aria-live="off"
       data-testid="status-clock"
       dateTime={now.toISOString()}
-      title={`Local time, ${localZone()}`}
+      title={zoned('Local time')}
       className="tabular-nums"
     >
       {clockText(now)}

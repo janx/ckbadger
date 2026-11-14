@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, screen, fireEvent, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { HexCode } from '@/components/ui/hex-code';
 
@@ -34,6 +34,30 @@ describe('HexCode', () => {
     fireEvent.click(hash);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(HASH);
     await waitFor(() => expect(screen.getByText('✓')).toBeInTheDocument());
+  });
+
+  // A4 review 3: HexCode copies through the one copy path (hooks/useCopy): its tick's timer goes
+  // with it, and a copy without a clipboard shows no tick.
+  it('leaves no timer when it goes while its tick shows, and shows none without a clipboard', async () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = render(<HexCode value={HASH} truncate={false} />);
+      await act(async () => {
+        fireEvent.click(screen.getByText(HASH));
+      });
+      expect(screen.getByText('✓')).toBeInTheDocument();
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      Object.assign(navigator, { clipboard: undefined });
+      render(<HexCode value={HASH} truncate={false} />);
+      await act(async () => {
+        fireEvent.click(screen.getByText(HASH));
+      });
+      expect(screen.queryByText('✓')).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the full value as its title under `inherit` when it does not copy', () => {

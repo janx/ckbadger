@@ -214,6 +214,21 @@ describe('StatusLine', () => {
 describe('StatusClock', () => {
   afterEach(() => vi.useRealTimers());
 
+  // A4 review 5: where Intl gives no time zone the title names none ("Local time, undefined").
+  it('says only "Local time" where Intl gives no time zone', () => {
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      ...resolved,
+      timeZone: undefined as unknown as string,
+    });
+    try {
+      render(<StatusClock />);
+      expect(screen.getByTestId('status-clock')).toHaveAttribute('title', 'Local time');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('tells local time and ticks once a second, on the second', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 10, 11, 14, 2, 31, 400));
