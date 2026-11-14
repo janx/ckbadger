@@ -32,7 +32,7 @@ export function Tooltip({
         type="button"
         className={
           buttonClassName ||
-          'text-text-dim hover:text-text border-base-border hover:border-text-dim text-meta ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono leading-none transition-colors'
+          'text-text-dim hover:text-text border-base-border hover:border-text-dim text-meta ml-1 inline-flex h-3.5 w-3.5 items-center justify-center border font-mono leading-none transition-colors'
         }
         onMouseEnter={show}
         onMouseLeave={hide}

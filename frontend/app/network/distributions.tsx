@@ -57,10 +57,9 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
           >
             {it.label}
           </span>
-          <span aria-hidden="true" className="bg-base-elevated flex h-1.5 rounded-full">
+          <span aria-hidden="true" className="bg-base-elevated flex h-1.5">
             <span
               {...{ [attr]: '' }}
-              className="rounded-full"
               style={{
                 width: `${(100 * it.count) / max}%`,
                 backgroundColor: DATA_COLOR,

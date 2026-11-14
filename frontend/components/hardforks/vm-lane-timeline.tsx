@@ -404,7 +404,6 @@ export function VmLaneTimeline({
                       y={y + bar.y}
                       width={Math.max(0, x(to) - x(from) - 2)}
                       height={bar.h}
-                      rx="3"
                       fill={DATA_COLOR}
                       fillOpacity={VM_OPACITY[vm]}
                     />

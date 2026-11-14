@@ -166,7 +166,6 @@ export function IciclePartition({
               y={rowY[d]}
               width={width}
               height={h}
-              rx="3"
               fill={icicleNodePaint(node).color}
               fillOpacity={icicleNodePaint(node).opacity}
             />
@@ -267,7 +266,6 @@ export function IciclePartition({
                   y={rowY[d + 1]}
                   width={Math.max(width - 2, 0)}
                   height={boxH(d + 1)}
-                  rx="3"
                   fill="none"
                   className="stroke-base-border"
                   strokeDasharray="2 3"

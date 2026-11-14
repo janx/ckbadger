@@ -100,7 +100,7 @@ function PhysicalPreview({
     <div className="flex items-center justify-center rounded p-8" style={FRAME_STYLE}>
       {/* Ambient glow — breathes behind the artwork */}
       <div
-        className="preview-ambient-glow absolute rounded-full"
+        className="preview-ambient-glow absolute"
         style={{
           width: '60%',
           height: '60%',

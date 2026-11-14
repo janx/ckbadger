@@ -139,7 +139,8 @@ describe('the rules in globals.css', () => {
     const well = css.match(/\.well\s*\{([^}]*)\}/)!;
     expect(well[1]).toContain('background: var(--c-well-bg)');
     expect(well[1]).toContain('border: 1px solid var(--c-base-border-subtle)');
-    expect(well[1]).toContain('border-radius: var(--well-radius, 3px)');
+    // re-pinned with ruling R1 (UI review 2026-11-14): the well is square, whatever --well-radius says
+    expect(well[1]).not.toMatch(/radius/);
     // visual finish V4: the well keeps its inset and gains a 4 % lower lip (both materials of
     // the theme: lib/palette.ts well-inset, well-lip)
     expect(well[1]).toMatch(

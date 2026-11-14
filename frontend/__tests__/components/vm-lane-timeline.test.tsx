@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import { VmLaneTimeline } from '@/components/hardforks/vm-lane-timeline';
 import producer from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
@@ -287,6 +288,26 @@ describe('VmLaneTimeline', () => {
     const genesis = [...svg.querySelectorAll('text')].find((t) => t.textContent === 'genesis')!;
     expect(Number(genesis.getAttribute('y')) - 12.5).toBeGreaterThanOrEqual(lastY + 8);
   });
+
+  it.each([358, 1200])(
+    'draws each lane’s VM bars with square ends at %i px (U-02, R1)',
+    (width) => {
+      stubChartWidth(width);
+      render(
+        <VmLaneTimeline
+          editions={editions}
+          lanes={lanes}
+          deployments={laned}
+          genesisMs={genesisMs}
+          tipMs={tipMs}
+          tipEpoch={15203}
+        />
+      );
+      const svg = screen.getByRole('img');
+      expect(rects(svg).length).toBeGreaterThanOrEqual(4);
+      expect(roundedRects(svg)).toEqual([]);
+    }
+  );
 
   it('refuses lanes out of VM order and hardforks outside the chain span', () => {
     stubChartWidth(1200);

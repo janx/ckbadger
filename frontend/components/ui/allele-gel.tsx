@@ -231,7 +231,6 @@ function Gel({
                     y={rowTop(ri) + head + 2}
                     width={span(lw - 2 * (inset - 1), 'well')}
                     height="5"
-                    rx="1.2"
                     fill="none"
                     stroke={GEL_COLORS.well}
                     strokeOpacity=".35"
@@ -254,7 +253,6 @@ function Gel({
                           y={r(p.y)}
                           width={span(lw - 2 * inset, 'band')}
                           height={r(bh)}
-                          rx={r(Math.min(1.2, bh / 2))}
                           fill={b.colour ?? `url(#${inkId})`}
                           fillOpacity={r(opacity)}
                           stroke={chosen ? GEL_COLORS.overlay : undefined}
@@ -350,7 +348,6 @@ function Gel({
                         y={r(box.y - OUTLINE_GAP)}
                         width={span(box.w + 2 * OUTLINE_GAP, 'genotype outline')}
                         height={r(box.h + 2 * OUTLINE_GAP)}
-                        rx="1.5"
                         fill="none"
                         stroke={GEL_COLORS.overlay}
                         strokeWidth="1"

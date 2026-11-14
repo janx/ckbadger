@@ -16,7 +16,7 @@ const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
 };
 
 const TOOLTIP_BTN_BASE =
-  'ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-meta leading-none transition-colors';
+  'ml-1 inline-flex h-3.5 w-3.5 items-center justify-center border font-mono text-meta leading-none transition-colors';
 /** A tiered tooltip button's inks: CSS variables its classes read, so the hover states still apply. */
 const TOOLTIP_BTN_TIER =
   'text-[color:var(--tier-ink)] border-[color:var(--tier-edge)] hover:text-[color:var(--tier-ink-lit)] hover:border-[color:var(--tier-edge-lit)]';

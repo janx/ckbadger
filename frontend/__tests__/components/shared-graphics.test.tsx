@@ -8,6 +8,7 @@ import { TenureBar } from '@/components/ui/tenure-bar';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { SharedGraphicsDemo } from '@/__tests__/fixtures/shared-graphics-demo';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -127,6 +128,14 @@ describe('IciclePartition (DAO-7)', () => {
       'No cell can ever claim it.'
     );
     expect(screen.getByRole('img', { name: 'Where secondary issuance goes' })).toBeInTheDocument();
+  });
+  it('draws its boxes and the dashed placeholders under them square-cornered (U-02, R1)', () => {
+    const { container } = render(
+      <IciclePartition root={root} label="Where secondary issuance goes" formatValue={String} />
+    );
+    expect(container.querySelectorAll('rect[data-node]')).toHaveLength(6);
+    expect(container.querySelectorAll('[data-placeholder] rect')).toHaveLength(2);
+    expect(roundedRects(container)).toEqual([]);
   });
   it('refuses children that do not partition their parent', () => {
     const bad = { ...root, children: [{ ...root.children[0], value: BigInt(11) }] };
@@ -553,6 +562,29 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
     const lapsed = container.querySelector('[data-lapsed]')!;
     expect(lapsed).toHaveAttribute('stroke-dasharray', '3 3');
     expect(screen.getByText('lapsed · not renewed')).toBeInTheDocument();
+  });
+  it('draws the paid, grace and lapsed spans with square ends (U-02, R1)', () => {
+    const graced = render(
+      <TenureBar
+        name="apt.cell"
+        periods={[{ label: 'registered, one year', start: reg, end: reg + 365 * day }]}
+        graceEnd={reg + 395 * day}
+        now={reg + 100 * day}
+      />
+    );
+    expect(graced.container.querySelector('[data-grace]')).not.toBeNull();
+    expect(roundedRects(graced.container)).toEqual([]);
+    const lapsed = render(
+      <TenureBar
+        name="888899.bit"
+        periods={[{ label: 'from minting', start: reg, end: reg + 365 * day }]}
+        now={reg + 549 * day}
+      />
+    );
+    expect(lapsed.container.querySelector('[data-lapsed]')).not.toBeNull();
+    expect(lapsed.container.querySelector('[data-elapsed]')).not.toBeNull();
+    expect(rects(lapsed.container).length).toBeGreaterThanOrEqual(2);
+    expect(roundedRects(lapsed.container)).toEqual([]);
   });
   it('writes day counts with thousands separators, as the rail does', () => {
     const { container } = render(
