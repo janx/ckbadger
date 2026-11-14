@@ -160,7 +160,7 @@ const columns: ListColumn<AddressTransaction>[] = [
     render: (tx) => (
       <span>
         {tx.isCellbase ? 0 : tx.inputsCount} <span className="text-text-dim">→</span>{' '}
-        {tx.outputsCount}
+        {tx.outputsCount.toLocaleString('en-US')}
       </span>
     ),
   },

@@ -417,7 +417,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
-                      {country} {count}
+                      {country} {count.toLocaleString('en-US')}
                     </text>
                   ))}
                   {layout.map(({ point, x, y: mapY }) => {
@@ -525,7 +525,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
             <Fragment key={country}>
               {i > 0 && ' · '}
               <span data-country-listed className="whitespace-nowrap">
-                <span className="text-text">{country}</span> {count}
+                <span className="text-text">{country}</span> {count.toLocaleString('en-US')}
               </span>
             </Fragment>
           ))}

@@ -210,8 +210,9 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 <span className="text-aqua" title={session.observerPeerId}>
                   <ShortId value={session.observerPeerId} kind="hash" size="row" />
                 </span>{' '}
-                · {session.clientVersion || 'unknown client'} · observed {session.observationCount}{' '}
-                completed {countNoun(session.observationCount, 'round')} · latest{' '}
+                · {session.clientVersion || 'unknown client'} · observed{' '}
+                {session.observationCount.toLocaleString('en-US')} completed{' '}
+                {countNoun(session.observationCount, 'round')} · latest{' '}
                 {formatTimeAgo(session.lastObservedAt * 1000)} · session address metadata:{' '}
                 {session.sessionAddresses.length === 0
                   ? 'none reported'

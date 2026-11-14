@@ -143,7 +143,7 @@ export function BlockTransactionsTable({
           <span aria-hidden="true" className="text-text-dim mx-1.5">
             →
           </span>
-          <span>{tx.outputsCount}</span>
+          <span>{tx.outputsCount.toLocaleString('en-US')}</span>
         </span>
       ),
     },
