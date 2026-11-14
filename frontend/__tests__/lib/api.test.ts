@@ -1,36 +1,12 @@
-import {
-  api,
-  isServiceUnavailableError,
-  resolveApiBase,
-  type DaoCalculatorResult,
-} from '@/lib/api';
+import { api, isServiceUnavailableError, type DaoCalculatorResult } from '@/lib/api';
 import { expectTypeOf } from 'vitest';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
-import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 import everDepositorsProducer from '@/__tests__/fixtures/dao-ever-depositors-api-producer.json';
 
 describe('api', () => {
-  describe('resolveApiBase', () => {
-    it('uses runtime config apiBase when present', () => {
-      const base = resolveApiBase({
-        apiBase: 'http://127.0.0.1:9101/api/v1/',
-      });
-
-      expect(base).toBe('http://127.0.0.1:9101/api/v1');
-    });
-
-    it('falls back to default when runtime config apiBase is blank', () => {
-      expect(resolveApiBase({ apiBase: '   ' })).toBe(DEFAULT_API_BASE);
-    });
-
-    it('falls back to default when runtime config is missing', () => {
-      expect(resolveApiBase({})).toBe(DEFAULT_API_BASE);
-    });
-  });
-
   describe('query parameter building', () => {
     beforeEach(() => {
       vi.spyOn(global, 'fetch');

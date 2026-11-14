@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
+import { CellMicroscope } from '@/components/cell/cell-microscope';
+import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
@@ -109,7 +110,7 @@ describe('cell microscope', () => {
     expect(box).toHaveAttribute('data-instrument-frame');
     expect(box).toHaveAttribute('data-cell-bytes');
     // a flat tile since rubbing × Song print: no lit top edge
-    expect(box).toHaveClass('rounded-lg', 'border', 'border-base-border');
+    expect(box).toHaveClass('border', 'border-base-border');
     expect(box).not.toHaveClass('neon-edge-top');
     expect(box).not.toHaveClass('border-base-border-subtle');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import resolveConfig from 'tailwindcss/resolveConfig';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import tailwindConfig from '@/tailwind.config';
 
@@ -9,8 +10,13 @@ import tailwindConfig from '@/tailwind.config';
  * rounds nothing but a dot).
  *
  * (a) The Tailwind theme's radius scale is 0 at every step but `full`, so `rounded`, `rounded-sm`,
- *     `rounded-lg`, … in any direction draw a square corner. The classes still written in page
- *     code are inert; a later cleanup removes them.
+ *     `rounded-lg`, … in any direction draw a square corner. Such a step is inert, and page code
+ *     writes none (lane E3): no class list holds a `rounded*` class other than `rounded…-full`,
+ *     bare, sized or directional, under any variant (`sm:rounded-t-md`, `hover:rounded`), and no
+ *     radius by a custom property (`[--well-radius:6px]`). A class list is a string literal or a
+ *     template's text whose every word is class-shaped (lowercase, digits, `-_:/.!@*`, bracketed
+ *     arbitrary values), or any string given to a `className` attribute; a comment, JSX text, and
+ *     a string with words no class has (`'cut, never rounded.'`, a `title`) are not class lists.
  * (b) `rounded-full` is for a mark only: a dot or a ring of at most 14 px, square, with no glyph.
  *     The class string that holds it (the quoted literal on its line) fixes that size itself: every
  *     height / width class in it is a small size (`h-0.5` … `h-3.5`, `w-*` the same, `size-*`, or
@@ -19,7 +25,7 @@ import tailwindConfig from '@/tailwind.config';
  *     round `?` is a control, not a mark, and is square. Anything else needs an ALLOWLIST entry.
  * (c) No arbitrary radius (`rounded-[3px]`, `[border-radius:6px]`): it would step around the theme.
  * (d) No radius outside the theme: no `borderRadius` in an inline style, and `globals.css`
- *     declares none but 0 (the `.well` is square whatever `--well-radius` says).
+ *     declares none but 0 (the `.well` is square).
  *
  * SVG corners (`rx` on a frame, card, tile or bar) are pinned by each component's own test; the
  * seal stones (lib/seal) are drawn, not styled, and are not corners of the page.
@@ -52,6 +58,15 @@ const ARBITRARY = new RegExp(
   'g'
 );
 const INLINE_RADIUS = /\bborderRadius\s*:/g;
+/** An inert radius step in any variant and direction (`rounded`, `sm:rounded-t-md`); not `-full`, not arbitrary. */
+const INERT_STEP = new RegExp(
+  `(?<![\\w-])(?:[\\w-]+:)*!?rounded${DIRECTIONS}(?:-(?:none|sm|md|lg|xl|2xl|3xl))?(?![\\w-])`,
+  'g'
+);
+/** A radius by a custom property, in any variant (`[--well-radius:6px]`). */
+const RADIUS_PROPERTY = /(?<![\w-])(?:[\w-]+:)*\[--[\w-]*radius[\w-]*:[^\]\s]*\]/g;
+/** A class-shaped word: lowercase, digits and `-_:/.!@*` around bracketed arbitrary values, never ending in `.` or `:`. */
+const CLASS_WORD = /^(?:[a-z0-9_:/.!@*-]|\[[^\]\s]*\])*(?:[a-z0-9_!*-]|\[[^\]\s]*\])$/;
 /** The type scale's classes (lib/type-scale.ts): a class string that sets one sets text. */
 const TYPE_CLASS = /^(?:[\w-]+:)*text-(?:meta|small|body|section|hero|index|entity|display)$/;
 const SIZE_CLASS = /^((?:[\w-]+:)*)(h|w|size)-(.+)$/;
@@ -116,6 +131,50 @@ function offRule(code: string): Offence[] {
     for (const m of text.matchAll(INLINE_RADIUS))
       out.push({ line: i + 1, what: `${m[0]} an inline radius` });
   });
+  return out;
+}
+
+/**
+ * Every radius a class list in a source text writes around the square theme (rule a): an inert
+ * step or a radius custom property. Comments and JSX text are not read; a string literal or a
+ * template's text is read when it is a class list.
+ */
+function inertRadii(path: string, code: string): Offence[] {
+  const source = ts.createSourceFile(
+    path,
+    code,
+    ts.ScriptTarget.Latest,
+    true,
+    path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+  const out: Offence[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isStringLiteral(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node)
+    ) {
+      const attribute = ts.isJsxAttribute(node.parent) ? node.parent.name.getText(source) : null;
+      const words = node.text.split(/\s+/).filter(Boolean);
+      const classList =
+        attribute === null ? words.every((w) => CLASS_WORD.test(w)) : /className$/i.test(attribute);
+      if (classList) {
+        const first = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+        const found = [
+          ...[...node.text.matchAll(INERT_STEP)].map((m) => ({ m, why: 'an inert step' })),
+          ...[...node.text.matchAll(RADIUS_PROPERTY)].map((m) => ({ m, why: 'a radius property' })),
+        ].sort((a, b) => a.m.index - b.m.index);
+        for (const { m, why } of found) {
+          const line = first + (node.text.slice(0, m.index).match(/\n/g)?.length ?? 0);
+          out.push({ line, what: `${m[0]}: ${why}` });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
   return out;
 }
 
@@ -188,6 +247,43 @@ describe('the corner gate finds what it must, and only that', () => {
     ].join('\n');
     expect(cssRadii(css)).toEqual(['var(--well-radius, 3px)', '2px']);
   });
+
+  it('flags every inert step and radius property in a class list, in any variant and direction', () => {
+    const code = [
+      '<div className="rounded border px-2" />',
+      "const BOX = 'flex rounded-lg sm:rounded-t-md';",
+      "cn('hover:rounded', active && 'lg:rounded-l-none rounded-sm first:rounded-r')",
+      'const t = `text-small rounded-tl-xl ${tone} md:!rounded`;',
+      "const f = 'well h-9 pl-7 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12)]';",
+      '<span className="h-1.5 w-1.5 rounded-full">a sentence, rounded.</span>',
+    ].join('\n');
+    expect(inertRadii('fixture.tsx', code)).toEqual([
+      { line: 1, what: 'rounded: an inert step' },
+      { line: 2, what: 'rounded-lg: an inert step' },
+      { line: 2, what: 'sm:rounded-t-md: an inert step' },
+      { line: 3, what: 'hover:rounded: an inert step' },
+      { line: 3, what: 'lg:rounded-l-none: an inert step' },
+      { line: 3, what: 'rounded-sm: an inert step' },
+      { line: 3, what: 'first:rounded-r: an inert step' },
+      { line: 4, what: 'rounded-tl-xl: an inert step' },
+      { line: 4, what: 'md:!rounded: an inert step' },
+      { line: 5, what: '[--well-radius:6px]: a radius property' },
+    ]);
+  });
+
+  it('leaves marks, look-alike words, comments, JSX text and strings that are not class lists', () => {
+    const code = [
+      "<span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', STATE_DOT[state])} />",
+      "const WORDS = 'surrounded grounded rounded-up';",
+      '// the tall rounded stone; the `[--well-radius:6px]` the field once set, `rounded-lg`',
+      '/* rounded up to a round number */',
+      '<p>rounded half up</p>',
+      '<abbr title="rounded half up">≈</abbr>',
+      "const NOTE = 'Amounts are cut, never rounded.';",
+      "const ARBITRARY = 'rounded-[3px] [border-radius:6px]';",
+    ].join('\n');
+    expect(inertRadii('fixture.tsx', code)).toEqual([]);
+  });
 });
 
 describe('square corners (R1)', () => {
@@ -222,6 +318,14 @@ describe('square corners (R1)', () => {
 
   it('scans the page source', () => {
     expect(files.length).toBeGreaterThan(250);
+  });
+
+  it('writes no inert radius step and no radius property in a class list (lane E3)', () => {
+    const inert = files.flatMap((file) => {
+      const path = relative(root, file);
+      return inertRadii(path, readFileSync(file, 'utf8')).map((o) => `${path}:${o.line} ${o.what}`);
+    });
+    expect(inert, `${inert.length} inert radii in page code`).toEqual([]);
   });
 
   it('rounds nothing but a small mark, and never by an arbitrary or inline radius', () => {

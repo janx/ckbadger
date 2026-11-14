@@ -546,7 +546,7 @@ export function Chart({
                         <span
                           aria-hidden="true"
                           data-swatch
-                          className="mr-1.5 inline-block h-2 w-2 rounded-sm align-middle"
+                          className="mr-1.5 inline-block h-2 w-2 align-middle"
                           style={{ backgroundColor: color(i) }}
                         />
                         {s.label}
@@ -1027,7 +1027,7 @@ export function Chart({
                 <span
                   aria-hidden="true"
                   data-swatch
-                  className="inline-block h-2.5 w-2.5 shrink-0 self-center rounded-sm"
+                  className="inline-block h-2.5 w-2.5 shrink-0 self-center"
                   style={{ backgroundColor: color(i) }}
                 />
                 <span className="text-text">{s.label}</span>

@@ -428,7 +428,3 @@ export function fiberGraphLayout(data: FiberGraphData, width: number): FiberGrap
     unpairedChannels: data.unpairedChannels,
   };
 }
-
-export function fiberGraphModel(network: FiberNetwork, width: number): FiberGraphModel {
-  return fiberGraphLayout(fiberGraphData(network), width);
-}

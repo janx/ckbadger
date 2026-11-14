@@ -16,7 +16,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
           <img
             src={value.src}
             alt={`${label ?? 'Record'}, a ${value.format} image of ${formatCount(value.bytes, 'byte')}`}
-            className="border-base-border h-12 w-12 shrink-0 rounded border object-cover"
+            className="border-base-border h-12 w-12 shrink-0 border object-cover"
           />
           <span className="text-text">
             {value.format} · {formatCount(value.bytes, 'byte')}
@@ -31,7 +31,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
           <span
             data-accent-swatch
             aria-hidden="true"
-            className="h-3 w-3 shrink-0 rounded-sm"
+            className="h-3 w-3 shrink-0"
             // The owner's own colour value, validated as #rgb / #rrggbb before it gets here.
             style={{ backgroundColor: value.text }}
           />

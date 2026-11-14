@@ -76,27 +76,10 @@ describe('redesign routes', () => {
     expect(screen.queryByText(/cell_not_found/)).toBeNull();
   });
 
-  // Consistency plan C2: whatever carries HTTP 404 to the boundary is a not-found — the
-  // `notFound()` signal of a route that names no page, and an API not-found thrown in render
-  // (the body is the API's real answer for a missing fork, curl 2026-11-02).
-  it('renders the 404 design for notFound() and for an API not-found, never the crash page', async () => {
-    const { notFound } = await vi.importActual<typeof import('@/src/next-compat/navigation')>(
-      '@/src/next-compat/navigation'
-    );
-    try {
-      notFound();
-    } catch (signal) {
-      routeError.current = signal;
-    }
-    const route = render(<RouteErrorBoundary />);
-    expect(
-      screen.getByRole('heading', {
-        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
-      })
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).toBeNull();
-    route.unmount();
-
+  // Consistency plan C2: whatever carries HTTP 404 to the boundary is a not-found — here an API
+  // not-found thrown in render (the body is the API's real answer for a missing fork, curl
+  // 2026-11-02). Lane E3 removed the `notFound()` signal no route threw, and its half of this test.
+  it('renders the 404 design for an API not-found, never the crash page', async () => {
     const { ApiRequestError } = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
     routeError.current = new ApiRequestError(
       404,

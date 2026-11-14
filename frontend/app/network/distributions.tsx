@@ -83,8 +83,7 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
 export function NetworkDistributions() {
   const read = useDistributions();
   const { data, error } = read;
-  if (isAwaited(read))
-    return <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />;
+  if (isAwaited(read)) return <div className="bg-base-elevated h-40 w-full animate-pulse" />;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -202,13 +201,13 @@ function HostingSection({
         role="img"
         aria-label="Verified nodes by hosting network"
         title={segments.map(([org, count]) => `${org} ${share(count)}`).join(' · ')}
-        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden rounded tabular-nums"
+        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden tabular-nums"
       >
         {segments.map(([org, count], i) => (
           <span
             key={org}
             data-provider={org}
-            className="flex items-center overflow-hidden whitespace-nowrap rounded px-2.5"
+            className="flex items-center overflow-hidden whitespace-nowrap px-2.5"
             style={{
               width: `${spans[i].width}%`,
               backgroundColor: dataHue(PROVIDER_OPACITY[i]),

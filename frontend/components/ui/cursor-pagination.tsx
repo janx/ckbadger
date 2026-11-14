@@ -22,7 +22,7 @@ interface CursorPaginationProps {
 }
 
 const PAGER_BUTTON =
-  'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text shrink-0 whitespace-nowrap rounded border px-3 py-2 font-mono text-body transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:px-4';
+  'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text shrink-0 whitespace-nowrap border px-3 py-2 font-mono text-body transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:px-4';
 
 export function CursorPagination({
   total,

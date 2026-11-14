@@ -81,7 +81,8 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
         ? label.split(' ')[0]
         : null;
   // Lane P: the now mark is dated on the UTC+8 clock; how long ago the term ended (or how long
-  // is left) is its hover — "ago" drifts while the page is read.
+  // is left) is its hover, from `now`, the page's one clock (useClockTime), so it ticks with every
+  // other age on screen.
   const nowText = `now · ${formatUtc8Date(now)}`;
   const nowAge = expired ? `expired ${days} ago` : `${days} left`;
   const nowX = x(now),

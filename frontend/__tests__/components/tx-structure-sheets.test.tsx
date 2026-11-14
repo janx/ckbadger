@@ -93,7 +93,7 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     // each sheet its own instrument frame, the page ground showing through the seam between them
     for (const sheet of [consumed, created]) {
       expect(sheet).toHaveAttribute('data-instrument-frame');
-      expect(sheet).toHaveClass('glass', 'rounded-lg', 'border', 'min-w-0');
+      expect(sheet).toHaveClass('glass', 'border', 'min-w-0');
     }
     expect(SHEETS.seam).toBe(4);
     expect(root).toHaveClass('grid', 'grid-cols-1', 'gap-y-3', 'lg:gap-y-0');
@@ -192,7 +192,7 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
   // fee, so 29 connectors met an edge with nothing beyond it and the seam ran 250 px. Two sheets
   // of one contract are one size: from lg both stretch to the taller, the seam runs the whole
   // height, and the inner corners are square so the pair reads as one frame cut by the seam.
-  it('makes the two sheets one size from lg, square on the seam side, round outside', () => {
+  it('makes the two sheets one size from lg, every corner square', () => {
     const { container } = structure({
       inputs: Array.from({ length: 30 }, (_, i) => tile(`in:${i}`)),
       outputs: [tile('out:0', '599999990000')],
@@ -204,14 +204,8 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     expect(seam).toHaveClass('self-stretch');
     for (const sheet of [consumed, created])
       expect(sheet.className).not.toMatch(/self-(start|center|end)/);
-    // the panel's 8 px radius outside; from lg the seam-side corners square
-    expect(consumed).toHaveClass('rounded-lg', 'lg:rounded-r-none');
-    expect(consumed.className).not.toMatch(/rounded-l-none/);
-    expect(created).toHaveClass('rounded-lg', 'lg:rounded-l-none');
-    expect(created.className).not.toMatch(/rounded-r-none/);
-    // below lg nothing squares a corner
-    for (const sheet of [consumed, created])
-      expect(sheet.className).not.toMatch(/(^|\s)rounded-[lr]-none/);
+    // every corner square (ruling R1): no side of the seam is set apart, one class list for both
+    expect(consumed.className).toBe(created.className);
     // the fee stays directly under the last created tile, not pushed to the sheet's floor
     const rows = sheetRows(created);
     expect(rows.map((r) => r.dataset.cellId ?? (r.dataset.fee !== undefined ? 'fee' : ''))).toEqual(
@@ -247,7 +241,7 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
       ['out:0', 'out:1', 'fee']
     );
     expect(fee).toBe(screen.getByTestId('tx-fee'));
-    expect(fee).toHaveClass('border', 'border-dashed', 'border-text-dim/60', 'rounded');
+    expect(fee).toHaveClass('border', 'border-dashed', 'border-text-dim/60');
     expect(fee.firstElementChild).toHaveTextContent(/^fee$/);
     expect(fee).toHaveTextContent(/^fee0\.00064119 CKB$/);
     // not hidden at any width, and once: the consumed sheet holds none

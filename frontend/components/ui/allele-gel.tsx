@@ -583,11 +583,8 @@ function GeneList({
                 {lane.variants.toLocaleString('en-US')}
               </span>
               <span role="cell" className="flex items-center justify-end gap-2">
-                <span aria-hidden="true" className="bg-bar-track flex h-1 w-14 rounded-sm">
-                  <span
-                    className="bg-jade rounded-sm"
-                    style={{ width: `${(top.count / total) * 100}%` }}
-                  />
+                <span aria-hidden="true" className="bg-bar-track flex h-1 w-14">
+                  <span className="bg-jade" style={{ width: `${(top.count / total) * 100}%` }} />
                 </span>
                 <span className="text-text whitespace-nowrap tabular-nums">{of(top.count)}</span>
               </span>

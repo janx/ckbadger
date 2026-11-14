@@ -21,8 +21,8 @@ export default {
     fontSize: TYPE_SCALE,
     // Square corners (UI review 2026-11-14, U-02, ruling R1): the boards round nothing but a dot.
     // Every step is 0 but `full`, which a mark of at most 14 px keeps (a status dot, a legend dot);
-    // set as the whole theme, so no default step survives. The `rounded*` classes still in page
-    // code draw square until a cleanup removes them; __tests__/lib/radius-scale.test.ts is the gate.
+    // set as the whole theme, so no default step survives. Page code writes no other `rounded*`
+    // class (each would draw square); __tests__/lib/radius-scale.test.ts is the gate.
     borderRadius: {
       none: '0',
       sm: '0',

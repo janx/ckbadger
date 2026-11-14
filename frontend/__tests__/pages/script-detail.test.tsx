@@ -26,8 +26,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

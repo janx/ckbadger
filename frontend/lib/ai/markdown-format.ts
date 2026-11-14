@@ -41,10 +41,6 @@ export function markdownList(items: string[]): string {
   return items.map((item) => `- ${item}`).join('\n');
 }
 
-export function markdownCodeBlock(language: string, content: string): string {
-  return `\`\`\`${language}\n${content}\n\`\`\``;
-}
-
 export function buildMarkdownDocument(meta: MarkdownDocMeta, sections: string[]): string {
   const frontmatter = [
     '---',

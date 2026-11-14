@@ -530,7 +530,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             activityPage.reset();
                           }}
                           className={cn(
-                            'text-small rounded border px-2.5 py-1.5',
+                            'text-small border px-2.5 py-1.5',
                             filter === value
                               ? 'border-base-border bg-base-elevated text-text-bright'
                               : 'border-base-border-subtle text-text-dim'
@@ -567,7 +567,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           cellPage.reset();
                         }}
                         className={cn(
-                          'text-small flex items-center gap-1.5 rounded border px-2.5 py-1.5',
+                          'text-small flex items-center gap-1.5 border px-2.5 py-1.5',
                           cellClass === c.key
                             ? 'border-base-border bg-base-elevated text-text-bright'
                             : 'border-base-border-subtle text-text-dim'

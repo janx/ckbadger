@@ -11,7 +11,7 @@ import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { api } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
 
-// The real router hooks and the real `notFound()` (setup.ts stubs this module for page tests).
+// The real router hooks (setup.ts stubs this module for page tests).
 vi.mock('@/src/navigation', async (importOriginal) => importOriginal());
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 vi.mock('@/components/layout/site-footer', () => ({ SiteFooter: () => null }));

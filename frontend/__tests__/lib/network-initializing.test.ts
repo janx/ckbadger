@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ApiRequestError, isNetworkInitializingError } from '@/lib/api';
+import { ApiRequestError } from '@/lib/api';
+import { isNetworkInitializingError } from '@/lib/api-errors';
 
 describe('isNetworkInitializingError', () => {
   it('matches a 503 initializing error', () => {

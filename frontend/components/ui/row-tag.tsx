@@ -14,9 +14,9 @@ import { ROW_TAG_COLORS } from '@/lib/design-tokens';
  */
 export type RowTagVariant = 'default' | 'ghost' | 'accent' | 'warn';
 
-/** The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, 2 px corners, 5 px sides. */
+/** The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, square corners, 5 px sides. */
 const BASE =
-  'text-meta text-text-dim inline-block whitespace-nowrap rounded-sm border px-[5px] align-middle leading-4';
+  'text-meta text-text-dim inline-block whitespace-nowrap border px-[5px] align-middle leading-4';
 /** Each variant's ink and edge; the accent's edge has no theme class and comes as a style. */
 const VARIANT: Record<RowTagVariant, string> = {
   default: 'border-base-border',

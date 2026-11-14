@@ -18,13 +18,9 @@ vi.mock('@/lib/api', () => ({
   api: {
     getGlobalActivities: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
   TAG_TOKEN: 1,
   TAG_OBJECT: 2,
   TAG_IDENTITY: 4,
-  TAG_DAO: 8,
-  TAG_PROTOCOL: 16,
   TAG_CELLBASE: 32,
 }));
 

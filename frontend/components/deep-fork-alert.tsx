@@ -73,7 +73,7 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
 
             <Link
               href="/forks"
-              className="bg-negative-bright hover:bg-negative-dim rounded-lg px-4 py-2 font-medium transition"
+              className="bg-negative-bright hover:bg-negative-dim px-4 py-2 font-medium transition"
               style={{ color: buttonInk }}
             >
               View Details →

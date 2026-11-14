@@ -3,12 +3,7 @@
 import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
 import { BlockContents } from '@/components/blocks/block-visual';
-import {
-  SentenceNodes,
-  heightListParts,
-  sentenceText,
-  type SentencePart,
-} from '@/components/ui/block-link';
+import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { BLOCK_POSITION_COLORS } from '@/lib/design-tokens';
 import { getUncleDetailHref } from '@/lib/detail-routes';
@@ -45,14 +40,6 @@ export function positionParts(
     ', ',
     `and included ${block.unclesCount ? formatCount(block.unclesCount, 'uncle') : 'no uncle'}`,
   ];
-}
-
-/** The position sentence as text (lane L: computed once, as parts; the page renders the parts). */
-export function positionSentence(
-  block: Pick<Block, 'number' | 'proposalsCount' | 'unclesCount'>,
-  links: readonly { from: number; to: number }[]
-): string {
-  return sentenceText(positionParts(block, links));
 }
 
 interface BlockPositionProps {
@@ -191,7 +178,7 @@ export function BlockPosition({
       )}
       <div aria-label="Chain position relationships" className="min-w-0 space-y-4 md:hidden">
         <div
-          className="text-small space-y-2 rounded p-3"
+          className="text-small space-y-2 p-3"
           style={{ backgroundColor: BLOCK_POSITION_COLORS.currentTile }}
         >
           <Link href={`/blocks/${block.hash}`} className="text-text-bright block">

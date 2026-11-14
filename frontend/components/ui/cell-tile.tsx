@@ -75,7 +75,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       onFocus={() => onHover?.(cell.id)}
       onBlur={() => onHover?.(null)}
       className={cn(
-        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 rounded border px-3 pb-2 pt-3 transition-colors',
+        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 border px-3 pb-2 pt-3 transition-colors',
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',

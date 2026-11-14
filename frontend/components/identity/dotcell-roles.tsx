@@ -91,7 +91,7 @@ export function DotcellRoles({
             role="group"
             aria-label={c.label}
             className={cn(
-              'flex min-w-0 flex-col gap-1 rounded-lg border px-4 py-3.5 [overflow-wrap:anywhere]',
+              'flex min-w-0 flex-col gap-1 border px-4 py-3.5 [overflow-wrap:anywhere]',
               c.accent ? 'border-identity/50' : 'border-base-border'
             )}
           >
@@ -115,7 +115,7 @@ export function DotcellRoles({
               key={`${run.owner}:${run.since.cell.txHash}`}
               data-owner-step={step}
               className={cn(
-                'flex min-w-0 flex-1 flex-col gap-0.5 rounded border px-3 py-2.5',
+                'flex min-w-0 flex-1 flex-col gap-0.5 border px-3 py-2.5',
                 step === 'now' ? 'border-identity/60' : 'border-base-border border-dashed'
               )}
             >

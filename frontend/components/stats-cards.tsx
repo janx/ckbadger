@@ -1,8 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { isAwaited } from '@/lib/query-state';
-import { api, NetworkStats } from '@/lib/api';
+import type { NetworkStats } from '@/lib/api';
 import { TerminalNumber } from '@/components/ui/terminal-number';
 
 function formatRate(value: number | null | undefined): string | null {
@@ -67,48 +65,6 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           className="from-gold-dim via-gold-dim to-gold h-full bg-gradient-to-r transition-all duration-500"
           style={{ width: `${syncStatus.progress}%` }}
         />
-      </div>
-    </div>
-  );
-}
-
-export function StatsCards() {
-  const read = useQuery({
-    queryKey: ['network-stats'],
-    queryFn: () => api.getNetworkStats(),
-    refetchInterval: 10000,
-  });
-  const stats = read.data;
-
-  const cards = [
-    {
-      label: 'LATEST BLOCK',
-      value: stats?.latestBlock?.toLocaleString() ?? '-',
-      glow: 'strong' as const,
-    },
-    { label: 'AVG BLOCK TIME', value: stats?.avgBlockTime ?? '—', glow: 'subtle' as const },
-    { label: 'HASH RATE', value: stats?.hashRate ?? '—', glow: 'subtle' as const },
-    { label: 'DIFFICULTY', value: stats?.difficulty ?? '-', glow: 'subtle' as const },
-    { label: 'CURRENT EPOCH', value: stats?.epoch ?? '-', glow: 'subtle' as const },
-    { label: 'TPS (24H)', value: stats?.tps ?? '—', glow: 'subtle' as const },
-  ];
-
-  return (
-    <div>
-      {stats && <SyncBanner stats={stats} />}
-      <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-        {cards.map((card) => (
-          <div key={card.label} data-testid="stats-card" className="well p-4">
-            <div className="eyebrow text-text-dim text-meta font-mono">{card.label}</div>
-            <div className="text-hero mt-1 font-semibold">
-              <TerminalNumber
-                value={card.value}
-                glowIntensity={card.glow}
-                animate={!isAwaited(read)}
-              />
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

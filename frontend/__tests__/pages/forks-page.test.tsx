@@ -14,8 +14,6 @@ import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,

@@ -146,7 +146,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               <input
                 id="inventory-search"
                 type="search"
-                className="border-base-border bg-base-surface text-small min-w-0 rounded border px-3 py-2"
+                className="border-base-border bg-base-surface text-small min-w-0 border px-3 py-2"
                 placeholder="search by name"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
@@ -203,7 +203,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   key={s}
                   type="button"
                   aria-pressed={(standard ?? '') === s}
-                  className={`text-small rounded border px-3 py-1.5 ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
+                  className={`text-small border px-3 py-1.5 ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
                   onClick={() => filter('standard', s)}
                 >
                   {s ? (
@@ -242,7 +242,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   value={standard ?? ''}
                   onChange={(e) => filter('standard', e.target.value)}
                   // Sized to the chosen standard, not the longest one (Chromium).
-                  className="border-base-border bg-base-surface text-text h-7 min-w-0 rounded border px-1.5 [field-sizing:content] sm:hidden"
+                  className="border-base-border bg-base-surface text-text h-7 min-w-0 border px-1.5 [field-sizing:content] sm:hidden"
                 >
                   {[
                     { standard: '', count: summary.data?.counts[assetType] ?? null },

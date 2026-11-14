@@ -272,7 +272,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                   data-part={p.key}
                   title={`${label} · ${exact(p.value)}`}
                   className={cn(
-                    'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-sm tabular-nums',
+                    'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap tabular-nums',
                     fits && 'px-2',
                     p.ink
                   )}
@@ -592,7 +592,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
         <div
           role="img"
           aria-label="Occupied capacity by class"
-          className="flex h-2.5 gap-0.5 overflow-hidden rounded"
+          className="flex h-2.5 gap-0.5 overflow-hidden"
         >
           {spaceOrder(holdings)
             .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) > BigInt(0))
@@ -1020,9 +1020,9 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
                   <span className="text-text-bright text-body min-w-0 truncate">{label}</span>
                 )}
               </span>
-              <span aria-hidden="true" className="bg-base-border hidden h-2 rounded-sm sm:block">
+              <span aria-hidden="true" className="bg-base-border hidden h-2 sm:block">
                 <span
-                  className="bg-text block h-full rounded-sm"
+                  className="bg-text block h-full"
                   style={{ width: `${max === 0 ? 0 : (g.itemCount / max) * 100}%` }}
                 />
               </span>

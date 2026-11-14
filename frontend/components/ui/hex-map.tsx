@@ -92,7 +92,7 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
               title={`Byte ${offsetBase + i}: 0x${byte}${owners.length ? ` · ${owners.map((f) => f.label).join(', ')}` : ''}`}
               {...target(own)}
               className={cn(
-                'text-small min-w-[2.5ch] rounded-sm px-0.5 py-1 tabular-nums',
+                'text-small min-w-[2.5ch] px-0.5 py-1 tabular-nums',
                 highlighted ? 'bg-base-elevated text-text-bright' : 'text-text-dim'
               )}
               style={{ color: owners[0]?.color }}
@@ -323,7 +323,7 @@ export function ByteScaleMap({
             paddingRight: text ? LABEL_PAD_PX : 0,
           };
           const className = cn(
-            'text-meta flex min-w-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-sm',
+            'text-meta flex min-w-0 items-center justify-center overflow-hidden whitespace-nowrap',
             on && 'outline outline-1 outline-text'
           );
           return s.target !== undefined && (onHover || onSelect) ? (

@@ -36,14 +36,9 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
       <div className="flex h-[22px] gap-0.5" aria-hidden="true">
         <div
           data-split="left"
-          className="rounded-l"
           style={{ width: `${leftPercent}%`, background: FIBER_COLORS.historyFill }}
         />
-        <div
-          data-split="right"
-          className="flex-1 rounded-r"
-          style={{ background: FIBER_COLORS.openFill }}
-        />
+        <div data-split="right" className="flex-1" style={{ background: FIBER_COLORS.openFill }} />
       </div>
       <div className="text-text-dim text-meta mt-1.5">{note}</div>
     </div>

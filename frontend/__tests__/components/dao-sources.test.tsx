@@ -6,8 +6,6 @@ import { DaoSources } from '@/components/dao/dao-sources';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
   api: { getGlobalActivities: vi.fn(), getTransactions: vi.fn() },
 }));
 

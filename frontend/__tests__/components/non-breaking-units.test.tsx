@@ -2,19 +2,11 @@
 // outpoint's ":index", a hyphenated term with its value (docs/RESPONSIVE_LAYOUT.md → Non-breaking
 // units; report A#14, B#18, B#22).
 import { render, screen } from '@/__tests__/utils/test-utils';
-import { CkbDelta } from '@/components/activity-event-row';
 import { ItemEvidence } from '@/components/asset/item-evidence';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { didProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
 import type { ItemProtocol } from '@/lib/api';
-
-it('keeps a CKB delta and its unit on one line', () => {
-  render(<CkbDelta delta="-509135264388627" />);
-  const amount = screen.getByText(/CKB$/);
-  expect(amount).toHaveTextContent('-5,091,352.64388627 CKB');
-  expect(amount).toHaveClass('whitespace-nowrap');
-});
 
 it('keeps an outpoint index whole after its hash', () => {
   render(<OutpointIndex index={16} />);

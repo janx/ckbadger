@@ -316,8 +316,6 @@ vi.mock('@/lib/api', async () => {
     },
     ApiRequestError: actual.ApiRequestError,
     isServiceUnavailableError: actual.isServiceUnavailableError,
-    isWarmupPendingError: vi.fn(() => false),
-    isNetworkInitializingError: vi.fn(() => false),
   };
 });
 

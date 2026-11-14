@@ -593,7 +593,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
       <span
         data-thumb-frame={frame ? (a.compositionTier ?? undefined) : undefined}
         className={cn(
-          '-my-[3px] flex h-6 w-6 shrink-0 items-center justify-center rounded-sm',
+          '-my-[3px] flex h-6 w-6 shrink-0 items-center justify-center',
           !frame && 'border-base-border border'
         )}
         style={frame}

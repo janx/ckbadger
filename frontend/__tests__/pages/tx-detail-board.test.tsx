@@ -47,8 +47,6 @@ vi.mock('@/lib/api', async () => {
       lookupScripts: vi.fn(),
       getBlock: vi.fn(),
     },
-    isWarmupPendingError: vi.fn(() => false),
-    isNetworkInitializingError: vi.fn(() => false),
   };
 });
 vi.mock('@/hooks/useCyclesCalculation', () => ({

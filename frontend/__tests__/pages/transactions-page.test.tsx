@@ -26,8 +26,6 @@ vi.mock('@/lib/api', async () => ({
     getDailyActivityStats: vi.fn(),
     getTxStats: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

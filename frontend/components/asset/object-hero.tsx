@@ -18,7 +18,7 @@ export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Bur
   return (
     <span
       className={cn(
-        'text-meta rounded border px-1.5',
+        'text-meta border px-1.5',
         live ? 'text-jade border-jade/40' : 'text-text-dim border-base-border'
       )}
     >
@@ -99,7 +99,7 @@ export function ObjectTraits({
               <dt className="text-text-dim flex items-center">
                 <span
                   aria-hidden
-                  className="mr-2 inline-block h-2 w-2 shrink-0 rounded-sm"
+                  className="mr-2 inline-block h-2 w-2 shrink-0"
                   style={{ background: color }}
                 />
                 {t.name}

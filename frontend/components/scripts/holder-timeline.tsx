@@ -240,7 +240,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
               onBlur={() => setActive(null)}
               onClick={() => setActive(i)}
               className={cn(
-                'text-small text-text-bright flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-sm px-1.5 text-left',
+                'text-small text-text-bright flex min-w-[3px] items-center overflow-hidden whitespace-nowrap px-1.5 text-left',
                 current && 'border-l-text border-l-[3px]'
               )}
               style={{
