@@ -79,6 +79,30 @@ describe('TapOrHoverHint under its provider', () => {
     expect(rendered()).toEqual(['tap or hover a day']);
   });
 
+  // DY-11 (UI review 2026-11-14): on the DAO page the hint landed on whichever chart's data came
+  // first, a different chart per load. The page's one hint is the first in the document.
+  it('gives the words to the first hint in document order, not the first mounted', () => {
+    function Figure({ what, ready }: { what: string; ready: boolean }) {
+      return <figure>{ready && <TapOrHoverHint what={what} />}</figure>;
+    }
+    const page = (first: boolean, second: boolean) => (
+      <TapOrHoverHintProvider>
+        <Figure what="a deposit" ready={first} />
+        <Figure what="a point" ready={second} />
+      </TapOrHoverHintProvider>
+    );
+    // the second figure's data arrives first …
+    const { rerender } = render(page(false, true));
+    expect(rendered()).toEqual(['tap or hover a point']);
+    // … then the first figure's: the hint moves to the first figure in the document
+    rerender(page(true, true));
+    expect(rendered()).toEqual(['tap or hover a deposit']);
+    // and stays there whichever way the later one comes and goes
+    rerender(page(true, false));
+    rerender(page(true, true));
+    expect(rendered()).toEqual(['tap or hover a deposit']);
+  });
+
   it('renders every hint when there is no provider (a piece rendered on its own)', () => {
     render(<Page hints={['a day', 'a bar']} />);
     expect(rendered()).toEqual(['tap or hover a day', 'tap or hover a bar']);
