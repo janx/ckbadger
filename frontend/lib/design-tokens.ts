@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { alpha, color } from '@/lib/palette';
+import { alpha, color, type PaletteKey } from '@/lib/palette';
 
 /**
  * The named colours the boards and graphics draw with. Every value is a CSS reference into the
@@ -8,14 +8,23 @@ import { alpha, color } from '@/lib/palette';
  * same roles on paper. A drawer that needs a concrete hex (a canvas) uses `useThemePalette()`.
  */
 
+/** The palette key of each class colour, for a drawer that reasons about the colour itself. */
+export const CLASS_KEYS = {
+  dao: 'gold',
+  tokens: 'token',
+  objects: 'object',
+  identities: 'identity',
+  ckb: 'slate-ckb',
+  other: 'slate-other',
+} as const satisfies Record<string, PaletteKey>;
 /** Canonical semantic encodings from the approved site review. */
 export const CLASS_COLORS = {
-  dao: color('gold'),
-  tokens: color('token'),
-  objects: color('object'),
-  identities: color('identity'),
-  ckb: color('slate-ckb'),
-  other: color('slate-other'),
+  dao: color(CLASS_KEYS.dao),
+  tokens: color(CLASS_KEYS.tokens),
+  objects: color(CLASS_KEYS.objects),
+  identities: color(CLASS_KEYS.identities),
+  ckb: color(CLASS_KEYS.ckb),
+  other: color(CLASS_KEYS.other),
 } as const;
 export type AssetClass = keyof typeof CLASS_COLORS;
 export const CELL_COLORS = {
@@ -30,7 +39,9 @@ export const BITCOIN_COLORS = {
   dark: color('bitcoin-dark'),
   inner: color('badge-inner-btc'),
 } as const;
-export const DATA_COLOR = color('jade');
+/** The data colour's palette key (celadon), and the colour. */
+export const DATA_KEY = 'jade' satisfies PaletteKey;
+export const DATA_COLOR = color(DATA_KEY);
 /**
  * The ribbons of the tx page's "What moved" flows (review 2026-11-03 v2): the class colours for
  * items; CKB a neutral grey bright enough for a stroke on the night sky (CLASS_COLORS.ckb is the
