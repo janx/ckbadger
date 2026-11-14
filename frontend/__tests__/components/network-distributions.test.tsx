@@ -63,6 +63,19 @@ describe('NetworkDistributions', () => {
   // without fetching, so isLoading is false: the three parts said "Failed to load …" while they
   // waited.
   it('waits while its read is paused offline, then draws the distributions once back online', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 5,
+          sameNetworkReachable: 5,
+          verifiedUnavailable: 0,
+          versions: [{ label: '0.114.0', count: 5 }],
+          countries: [{ label: 'Germany', count: 5 }],
+          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+          protocols: [{ label: '/ckb/2', count: 5 }],
+        })
+      )
+    );
     onlineManager.setOnline(false);
     try {
       render(

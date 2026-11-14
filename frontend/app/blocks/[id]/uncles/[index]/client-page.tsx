@@ -49,7 +49,8 @@ export default function UncleDetailPage() {
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
-        {query.isLoading && <p role="status">Loading uncle…</p>}
+        {/* pending, not isLoading: a read paused offline or between retries is still awaited */}
+        {query.isPending && <p role="status">Loading uncle…</p>}
         {query.error && !query.data && <ReadFailure what="uncle" error={query.error} />}
         {query.error && query.data && (
           <p role="alert">

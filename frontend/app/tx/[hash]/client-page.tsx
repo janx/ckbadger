@@ -638,7 +638,7 @@ export default function TransactionDetailPage() {
   const {
     data: tx,
     error,
-    isLoading,
+    status: readStatus,
   } = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
@@ -723,7 +723,9 @@ export default function TransactionDetailPage() {
       <main className="container mx-auto py-8">{children}</main>
     </div>
   );
-  if (isLoading) return shell(<DetailSkeleton />);
+  // Pending is loading, fetching or paused (offline, or a hidden tab between retries): isLoading
+  // is pending AND fetching, so a paused read would fall through as if it had completed.
+  if (readStatus === 'pending') return shell(<DetailSkeleton />);
   if (awaitingInputs && !tx)
     return shell(
       <DetailLayout
@@ -757,6 +759,7 @@ export default function TransactionDetailPage() {
   if (!tx && isBadRequestApiError(error))
     return <NotFoundPage notAnId={{ kind: 'transaction', reason: error.apiMessage }} />;
   if (!tx) {
+    // past pending, no error means the read succeeded: with no transaction, an API invariant broke
     if (!error) throw new Error(`Transaction ${hash}: request completed without a transaction`);
     return shell(<ReadFailure what="transaction" error={error} />);
   }

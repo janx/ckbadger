@@ -13,7 +13,7 @@ const FIRST_OBSERVATIONS = 10;
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const [showAll, setShowAll] = useState(false);
   const queryClient = useQueryClient();
-  const { data, isLoading, error } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['network', 'advertisements', roundId],
     queryFn: api.getNetworkAdvertisements,
     refetchInterval: 30000,
@@ -23,7 +23,8 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
       void queryClient.invalidateQueries({ queryKey: ['network', 'summary'] });
     }
   }, [data, roundId, queryClient]);
-  if (isLoading) return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
+  // pending, not isLoading: a read paused offline or between retries is still awaited
+  if (isPending) return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
       <p role="alert" className="text-negative text-small">

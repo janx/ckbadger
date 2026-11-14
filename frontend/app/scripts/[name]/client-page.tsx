@@ -377,6 +377,7 @@ export default function ScriptDetailPage({
   const {
     data: namedScriptDetail,
     isLoading: isNamedScriptDetailLoading,
+    isPaused: isNamedScriptDetailPaused,
     error: namedScriptDetailError,
   } = useQuery({
     queryKey: ['script-family-detail', name],
@@ -389,6 +390,7 @@ export default function ScriptDetailPage({
   const {
     data: usage,
     isLoading: isUsageLoading,
+    isPaused: isUsagePaused,
     error: usageError,
   } = useQuery({
     queryKey: ['script-usage', name],
@@ -410,6 +412,7 @@ export default function ScriptDetailPage({
   const {
     data: codeHashLookup,
     isLoading: isCodeHashLookupLoading,
+    isPaused: isCodeHashLookupPaused,
     error: codeHashLookupError,
   } = useQuery({
     queryKey: ['script-lookup-detail', normalizedCodeHash],
@@ -448,6 +451,7 @@ export default function ScriptDetailPage({
   const {
     data: codeHashCodeCells,
     isLoading: isCodeHashCodeCellsLoading,
+    isPaused: isCodeHashCodeCellsPaused,
     error: codeHashCodeCellsError,
   } = useQuery({
     queryKey: ['script-code-cells-unified', normalizedCodeHash, codeHashDeploymentQueryHashType],
@@ -1022,10 +1026,16 @@ export default function ScriptDetailPage({
     versionCellsCursorState,
     cellReferences,
   ]);
-  const isLoading = isCodeHashMode
-    ? isCodeHashLookupLoading || isCodeHashCodeCellsLoading
-    : isNamedScriptDetailLoading || isUsageLoading;
-  if (isLoading) {
+  // A read is awaited while it fetches or is paused (offline, or a hidden tab between retries);
+  // isLoading alone misses the paused one. A disabled read (the code cells of an ambiguous
+  // reference) is neither, so pending alone would wait for it forever.
+  const isAwaiting = isCodeHashMode
+    ? isCodeHashLookupLoading ||
+      isCodeHashLookupPaused ||
+      isCodeHashCodeCellsLoading ||
+      isCodeHashCodeCellsPaused
+    : isNamedScriptDetailLoading || isNamedScriptDetailPaused || isUsageLoading || isUsagePaused;
+  if (isAwaiting) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
