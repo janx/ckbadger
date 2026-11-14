@@ -59,6 +59,24 @@ describe('CkbytesSection', () => {
     );
   });
 
+  // PA-19 (UI review 2026-11-14): at 390 the supply figure filled the line and its "CKB" went to
+  // the caption's line, 3 px off its baseline; at 360 the figure itself, 23 characters at 26 px
+  // (355.2 px with its −0.01 em tracking), could break inside (overflow-wrap: anywhere). The same
+  // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.8 px), the
+  // decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at 360, and the figure
+  // and its unit are one unbreakable unit; "in circulation" moves under it whole.
+  it('keeps the supply figure and its unit one unit, the decimals 13 px below 640 (PA-19)', async () => {
+    render(<CkbytesSection />);
+    const total = await screen.findByTestId('ckbytes-circulating');
+    expect(total).not.toHaveClass('[overflow-wrap:anywhere]');
+    expect(total.children).toHaveLength(2);
+    const figure = total.firstElementChild as HTMLElement;
+    expect(figure).toHaveClass('whitespace-nowrap');
+    expect(figure).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
+    expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-body');
+    expect(total.lastElementChild).toBe(within(total).getByTestId('ckbytes-label'));
+  });
+
   // Rubbing × Song print, phase 5 (H3, the Main board): `■ supply`, the block the allocation was
   // read at as the heading row's note — moved up from the figure, so the block is said once.
   it('heads the section as supply, the block it is read at as the note, said once', async () => {
