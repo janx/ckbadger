@@ -621,20 +621,6 @@ svg a:hover {
   }
 }
 
-/* A stat figure's glow, held close (the rubbing's bloom is 6 px, never a wide neon wash): a 1 px
-   core in the figure's colour and two short halos (components/ui/stat-block.tsx sets the three). */
-.glow-neon {
-  text-shadow:
-    0 0 1px var(--glow-color),
-    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
-}
-.glow-soft {
-  text-shadow:
-    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
-}
-
 /* A live mark breathes: the square's ink fades to 45 % and back over 1.5 s (no bloom: the prompt
    square is ink, not phosphor). */
 @keyframes live-pulse {
