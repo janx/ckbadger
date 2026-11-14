@@ -5,6 +5,7 @@ import { HexCode } from '@/components/ui/hex-code';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { ExactCkb } from '@/components/activity-event-row';
 import { formatCount } from '@/lib/format-count';
@@ -62,6 +63,52 @@ describe('a shortened id is one unit', () => {
     const index = container.querySelector('[data-outpoint-index]');
     expect(index).toHaveAttribute('data-nobreak');
     expect(index).toHaveClass('whitespace-nowrap');
+  });
+});
+
+// A4 review 2: NoBreak wrote `style="display: inline"` so a name computed without a stylesheet read
+// "0x…:0", and an inline style beats every class: the /blocks Height cell's hash (`block`) ran on
+// after the block number's link. A unit sets no display of its own; a caller's class is the one
+// that applies. The out point's name reads as browsers read it, through the test environment
+// (setup.ts gives a unit the browser's default display of a span), not a style.
+describe('a unit sets no display of its own (A4 review 2)', () => {
+  const noInlineDisplay = (el: Element | null) => {
+    expect(el).not.toBeNull();
+    expect((el as HTMLElement).style.display).toBe('');
+  };
+
+  it('NoBreak, ShortId, HexCode and Hash keep a caller’s display class', () => {
+    const { container } = render(
+      <div>
+        <NoBreak className="block">2024-08-29</NoBreak>
+        <ShortId value={HASH} kind="hash" size="row" className="block" />
+        <HexCode value={HASH} size="row" copyable={false} className="block" />
+        <Hash
+          hash={HASH}
+          size="tight"
+          copyable={false}
+          className="text-text-dim text-meta block whitespace-nowrap"
+        />
+        <OutpointIndex index={0} />
+      </div>
+    );
+    const units = [...container.querySelectorAll('[data-nobreak]')];
+    expect(units).toHaveLength(5);
+    for (const unit of units.slice(0, 4)) {
+      expect(unit).toHaveClass('block');
+      noInlineDisplay(unit);
+    }
+    noInlineDisplay(units[4]);
+  });
+
+  it('an out point is named as browsers name it, with no space where its hash ends', () => {
+    render(
+      <a href="/cell/x-0">
+        <ShortId value={HASH} kind="hash" size="row" />
+        <OutpointIndex index={0} />
+      </a>
+    );
+    expect(screen.getByRole('link', { name: '0x12345678…abcdef:0' })).toBeInTheDocument();
   });
 });
 
