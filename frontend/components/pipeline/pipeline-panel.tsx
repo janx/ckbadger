@@ -842,7 +842,7 @@ export function PipelinePanel() {
           pipeline
           <span
             title={PIPELINE_HELP}
-            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 rounded-full border text-center font-mono normal-case leading-3 tracking-normal"
+            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 border text-center font-mono normal-case leading-3 tracking-normal"
           >
             ?
           </span>

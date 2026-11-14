@@ -206,7 +206,7 @@ export function HelpPopover({
         aria-controls={panelId}
         className={cn(
           'text-text-dim border-base-border/70 hover:border-emphasis/40 hover:text-emphasis',
-          'relative inline-flex h-5 w-5 items-center justify-center rounded-full border',
+          'relative inline-flex h-5 w-5 items-center justify-center border',
           'bg-base-elevated/70 text-meta font-mono transition-colors',
           'before:absolute before:-inset-3 before:content-[""]'
         )}

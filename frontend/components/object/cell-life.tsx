@@ -47,7 +47,6 @@ export function CellLifePlaceholder({ size = 56 }: CellLifePlaceholderProps) {
         height: `${size}px`,
         background: color('base-surface'),
         border: `1px solid ${color('base-border')}`,
-        borderRadius: `${size * 0.14}px`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -304,7 +303,6 @@ export function CellLife({ hash, size = 56, gridSize = 8, isDualChain = false }:
         position: 'relative',
         width: `${size}px`,
         height: `${size}px`,
-        borderRadius: `${size * 0.14}px`,
         overflow: 'hidden',
       }}
       onMouseEnter={handleMouseEnter}
@@ -315,7 +313,6 @@ export function CellLife({ hash, size = 56, gridSize = 8, isDualChain = false }:
         style={{
           position: 'absolute',
           inset: 0,
-          borderRadius: 'inherit',
           background: glowBg,
           animation: 'glow-breathe 4s ease-in-out infinite',
           animationDelay: `${glowPhaseOffset}s`,
@@ -328,7 +325,6 @@ export function CellLife({ hash, size = 56, gridSize = 8, isDualChain = false }:
           width: `${size}px`,
           height: `${size}px`,
           display: 'block',
-          borderRadius: 'inherit',
         }}
       />
     </div>

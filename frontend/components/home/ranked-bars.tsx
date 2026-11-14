@@ -62,10 +62,10 @@ export function RankedBars({
               >
                 {row.label}
               </span>
-              <span className="bg-base-border-subtle flex h-1.5 rounded-full">
+              <span className="bg-base-border-subtle flex h-1.5">
                 <span
                   data-role="share-fill"
-                  className="bg-jade h-1.5 min-w-[2px] rounded-full"
+                  className="bg-jade h-1.5 min-w-[2px]"
                   style={{ width: `${(row.share * 100).toFixed(2)}%` }}
                 />
               </span>
