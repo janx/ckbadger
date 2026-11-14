@@ -380,7 +380,7 @@ export function ByteScaleMap({
                   x={t.x}
                   y={15}
                   textAnchor={t.anchor}
-                  fill="var(--c-ink-quiet)"
+                  fill="var(--c-text-dim)"
                   className="text-meta"
                 >
                   {t.label}

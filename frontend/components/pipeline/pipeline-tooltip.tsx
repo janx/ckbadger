@@ -15,6 +15,7 @@ import { fmtInt } from '@/components/pipeline/svg-text';
 import { formatCapacity } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { color } from '@/lib/palette';
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
 export interface TipContent {
@@ -47,7 +48,8 @@ const TONE = {
   pending: tok('aqua'),
   proposed: tok('gold'),
   committed: tok('jade'),
-  dim: tok('ink-dim'),
+  // an uncle's tag is words: the dim ink, not the pipeline's muted ink-dim (R4)
+  dim: color('text-dim'),
 };
 
 /** Whether the next block may commit a tx proposed at height p, in words. */

@@ -39,7 +39,6 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
-import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { RowTag } from '@/components/ui/row-tag';
 import {
@@ -102,12 +101,7 @@ function CellOwner({ cell }: { cell: Cell }) {
 
 /** The type script beside the lock: its registry name (R6), or its code hash when unregistered. */
 function AlsoGuardedBy({ cell }: { cell: Cell }) {
-  if (!cell.typeScriptHash)
-    return (
-      <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
-        —
-      </span>
-    );
+  if (!cell.typeScriptHash) return <span className="text-text-dim">—</span>;
   if (!cell.typeCodeHash || !cell.typeHashType)
     return (
       <span role="alert" className="text-negative">

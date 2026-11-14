@@ -15,7 +15,6 @@ import {
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { cn } from '@/lib/utils';
-import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { formatCount, countNoun } from '@/lib/format-count';
 
 export interface ProtocolEvidenceField {
@@ -326,7 +325,7 @@ function FieldDetail({
             data-hex-row=""
             className="text-small mt-1.5 grid grid-cols-[52px_auto_minmax(0,1fr)] items-baseline gap-x-3 tabular-nums"
           >
-            <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
+            <span className="text-text-dim">
               0x{(reading.start + row.at).toString(16).padStart(digits, '0')}
             </span>
             <span className="flex flex-wrap gap-x-2">
@@ -336,7 +335,7 @@ function FieldDetail({
                   <span
                     key={i}
                     data-dim={dim}
-                    style={{ color: dim ? 'var(--c-ink-quiet)' : reading.ink }}
+                    style={{ color: dim ? 'var(--c-text-dim)' : reading.ink }}
                   >
                     {word}
                   </span>

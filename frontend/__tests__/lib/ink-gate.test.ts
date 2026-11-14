@@ -34,9 +34,11 @@ import { TYPE_SCALE } from '@/lib/type-scale';
  *   element, or an `opacity` in its inline `style`, whose value can be below 1 — a literal in
  *   (0, 1), or a value the source does not settle (a name, a call, arithmetic), which counts as
  *   fading; `cond ? 1 : 0` shows or hides and does not fade;
- * - is it painted in the ghost: a `fill` or `color` attribute (`stroke` too on SVG text), a style
- *   `color`, `fill` or `--ink`, or a `fill-text-ghost` class whose value reaches the ghost ink — a
- *   `var(--c-text-ghost)` string, `color('text-ghost')`, or a constant of the file or of
+ * - is it painted in an ink under text grade — the ghost, the quiet or the muted (`text-ghost`,
+ *   `ink-quiet`, `ink-muted`; R4 is about use, not a name): a `fill` or `color` attribute (`stroke`
+ *   too on SVG text), a style `color`, `fill` or `--ink`, or a `fill-text-ghost` /
+ *   `fill-ink-quiet` / `text-ink-muted` class, whose value reaches one of them — a
+ *   `var(--c-ink-quiet)` string, `color('text-ghost')`, or a constant of the file or of
  *   lib/design-tokens.ts / lib/chart-colors.ts that holds one, through `?:`, `??` and calls.
  *
  * An element holds words when it is SVG text (`<text>`, `<tspan>`, `<textPath>`) or when its JSX
@@ -48,10 +50,11 @@ import { TYPE_SCALE } from '@/lib/type-scale';
  *
  * Limits: a component's own props (`opacity` on `<LegendLine>`, `color` on a swatch) are its API,
  * judged where they land on an SVG or HTML element in its own file; a self-closing component
- * inside a faded or ghost-filled element counts as holding words (it may draw some); a `style`
+ * inside a faded or faintly painted element counts as holding words (it may draw some); a `style`
  * built by a call is not read for opacity; constants imported from other modules than those two,
- * a fill inherited from a parent in another file, and the stylesheet's own rules (globals.css)
- * are outside the scan.
+ * an ink carried in data (a part's `tone`, a tooltip's `tone` read from an object), a fill
+ * inherited from a parent in another file, and the stylesheet's own rules (globals.css) are
+ * outside the scan.
  */
 
 const PADDING = 'padding zeros: the trailing zeros of an amount’s fraction';
@@ -138,9 +141,20 @@ const FADE_ALLOWLIST: Allowlist = {
 const SPARK_GLYPH =
   'no word: a spark glyph (an eighth block) is a bar set in the font, the unfinished bucket’s bar faint';
 
-/** Elements that hold words, painted in the ghost by an attribute or a style, the gate tolerates. */
-const GHOST_PAINT_ALLOWLIST: Allowlist = {
+/**
+ * Elements that hold words, painted in an ink under text grade (ghost, quiet, muted) by an
+ * attribute or a style, that the gate tolerates.
+ */
+const FAINT_INK_ALLOWLIST: Allowlist = {
+  // the quiet slate's ↔ between a channel's two parties
+  'app/fiber/channels/client-page.tsx': [SEPARATOR],
+  // the quiet slate's ↔ between the two parties of a channel
+  'components/fiber/fiber-channel-board.tsx': [SEPARATOR],
   'components/home/mini-chart.tsx': [SPARK_GLYPH],
+  // the quiet slate's aria-hidden → between two holders
+  'components/scripts/script-family-board.tsx': [SEPARATOR],
+  // the quiet slate's → between a gene's raw bytes and its value
+  'components/ui/sequencing-gel.tsx': [SEPARATOR],
 };
 
 interface Site {
@@ -220,7 +234,7 @@ function inkOffences(code: string): { ghost: Offence[]; alpha: Offence[]; opacit
   return { ghost, alpha, opacity };
 }
 
-// ---- The JSX scan: opacity and the ghost written as attributes and inline styles ----
+// ---- The JSX scan: opacity and the inks under text grade written as attributes and styles ----
 
 /** SVG elements that draw words. */
 const TEXT_TAGS = new Set(['text', 'tspan', 'textPath']);
@@ -242,19 +256,34 @@ const UNPAINTED_TAGS = new Set([
 const FADE_ATTRS = new Set(['opacity', 'fillOpacity', 'strokeOpacity']);
 /** The style properties that set the ink of words (`--ink` is read by `text-[color:var(--ink)]`). */
 const INK_STYLE_PROPS = new Set(['color', 'fill', '--ink', 'WebkitTextFillColor']);
-/** A ghost class that paints words: the fill of SVG text (the stroke too, on a text element). */
-const GHOST_FILL_CLASS = /(?<![\w-])(?:[\w-]+:)*fill-text-ghost(?![\w-])/;
-const GHOST_STROKE_CLASS = /(?<![\w-])(?:[\w-]+:)*stroke-text-ghost(?![\w-])/;
+/** The palette keys under text grade: the ghost, the quiet and the muted ink. */
+const FAINT_KEYS = 'text-ghost|ink-quiet|ink-muted';
+/**
+ * A class that paints words in one of them: the fill of SVG text, the colour of HTML text (the
+ * ghost's `text-text-ghost` is the class scan's), and the stroke too on a text element.
+ */
+const FAINT_FILL_CLASS = new RegExp(
+  String.raw`(?<![\w-])(?:[\w-]+:)*(?:fill-text-ghost|(?:fill|text)-ink-(?:quiet|muted))(?![\w-])`
+);
+const FAINT_STROKE_CLASS = new RegExp(
+  String.raw`(?<![\w-])(?:[\w-]+:)*stroke-(?:${FAINT_KEYS})(?![\w-])`
+);
 
-/** The modules whose constants the ghost check reads by value, by import specifier. */
+/** The modules whose constants the faint-ink check reads by value, by import specifier. */
 type TokenModules = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 const TOKEN_MODULES: TokenModules = {
   '@/lib/design-tokens': DESIGN_TOKENS,
   '@/lib/chart-colors': CHART_COLORS,
 };
 
-/** A string that names the ghost ink: the key, its variable, its channels. */
-const isGhostInk = (s: string) => s === 'text-ghost' || /--(?:c|rgb)-text-ghost(?![\w-])/.test(s);
+/**
+ * A string that names an ink under text grade: the key, its variable, its channels, or the
+ * pipeline's `--pipeline-ink-dim` (the muted ink, app/globals.css).
+ */
+const FAINT_INK = new RegExp(
+  String.raw`^(?:${FAINT_KEYS})$|--(?:c|rgb)-(?:${FAINT_KEYS})(?![\w-])|--pipeline-ink-dim(?![\w-])`
+);
+const isFaintInk = (s: string) => FAINT_INK.test(s);
 
 type Jsx = ts.JsxElement | ts.JsxSelfClosingElement | ts.JsxFragment;
 const isJsx = (n: ts.Node): n is Jsx =>
@@ -281,11 +310,11 @@ const isNothing = (e: ts.Expression) =>
   e.kind === ts.SyntaxKind.FalseKeyword ||
   (ts.isIdentifier(e) && e.text === 'undefined');
 
-/** Every faded element and every ghost-painted one that holds words, in a TSX source. */
+/** Every faded element and every one painted in an ink under text grade that holds words, in a TSX source. */
 function jsxInkOffences(
   code: string,
   modules: TokenModules = TOKEN_MODULES
-): { fade: Offence[]; ghostPaint: Offence[] } {
+): { fade: Offence[]; faint: Offence[] } {
   const source = ts.createSourceFile(
     'scan.tsx',
     code,
@@ -374,7 +403,7 @@ function jsxInkOffences(
     return !isNothing(e);
   };
 
-  // ---- the strings a value can reach (for the ghost) ----
+  // ---- the strings a value can reach (for the inks under text grade) ----
   const stringsIn = (v: unknown): string[] =>
     typeof v === 'string'
       ? [v]
@@ -449,9 +478,13 @@ function jsxInkOffences(
     if (value !== undefined) return stringsIn(value);
     return staticTargets(e).flatMap(next);
   };
-  const reachesGhost = (e: ts.Expression) => leaves(e).some(isGhostInk);
+  const reachesFaint = (e: ts.Expression) => leaves(e).some(isFaintInk);
 
-  /** The values a style gives to `names`, through `?:`, `&&`, `??`, spreads and file constants. */
+  /**
+   * The values a style gives to `names`, through `?:`, `&&`, `??`, spreads and file constants. A
+   * style built by a call (`inkStyle(…)`, alone, spread or held in a constant) is read for the ink
+   * only: its arguments may set it.
+   */
   const styleValues = (e0: ts.Expression, names: Set<string>, depth = 0): ts.Expression[] => {
     if (depth > 8) return [];
     const e = unwrap(e0);
@@ -467,16 +500,12 @@ function jsxInkOffences(
     if (ts.isConditionalExpression(e)) return [...next(e.whenTrue), ...next(e.whenFalse)];
     if (ts.isBinaryExpression(e)) return [...next(e.left), ...next(e.right)];
     if (ts.isIdentifier(e)) return staticTargets(e).flatMap(next);
+    if (ts.isCallExpression(e) && names === INK_STYLE_PROPS) return [...e.arguments];
     return [];
-  };
-  /** A style built by a call (`inkStyle(…)`): its arguments may set the ink. */
-  const styleCallInks = (e0: ts.Expression): ts.Expression[] => {
-    const e = unwrap(e0);
-    return ts.isCallExpression(e) ? [...e.arguments] : [];
   };
 
   const fade: Offence[] = [];
-  const ghostPaint: Offence[] = [];
+  const faint: Offence[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
       const tag = tagOf(node);
@@ -500,28 +529,28 @@ function jsxInkOffences(
           for (const v of styleValues(value, new Set(['opacity'])))
             if (canFade(v) && holds())
               fade.push({ ...at, what: `<${tag}> style opacity: ${text(v)}` });
-          const inks = [...styleValues(value, INK_STYLE_PROPS), ...styleCallInks(value)];
-          if (inks.some(reachesGhost) && holds())
-            ghostPaint.push({ ...at, what: `<${tag}> ${text(attr)}` });
+          const inks = styleValues(value, INK_STYLE_PROPS);
+          if (inks.some(reachesFaint) && holds())
+            faint.push({ ...at, what: `<${tag}> ${text(attr)}` });
         }
         const paint =
           !component &&
           (name === 'fill' || name === 'color' || (name === 'stroke' && TEXT_TAGS.has(tag)));
-        if (paint && reachesGhost(value) && holds())
-          ghostPaint.push({ ...at, what: `<${tag}> ${text(attr)}` });
+        if (paint && reachesFaint(value) && holds())
+          faint.push({ ...at, what: `<${tag}> ${text(attr)}` });
         if (name === 'className') {
           const classes = leaves(value);
-          const ghostClass =
-            classes.some((c) => GHOST_FILL_CLASS.test(c)) ||
-            (TEXT_TAGS.has(tag) && classes.some((c) => GHOST_STROKE_CLASS.test(c)));
-          if (ghostClass && holds()) ghostPaint.push({ ...at, what: `<${tag}> ${text(attr)}` });
+          const faintClass =
+            classes.some((c) => FAINT_FILL_CLASS.test(c)) ||
+            (TEXT_TAGS.has(tag) && classes.some((c) => FAINT_STROKE_CLASS.test(c)));
+          if (faintClass && holds()) faint.push({ ...at, what: `<${tag}> ${text(attr)}` });
         }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return { fade, ghostPaint };
+  return { fade, faint };
 }
 
 function sourceFiles(root: string): string[] {
@@ -582,10 +611,10 @@ describe('the ink gate finds what it must, and only that', () => {
   });
 });
 
-describe('the JSX scan finds faded and ghost-painted words, and only those', () => {
+describe('the JSX scan finds faded words and words in an ink under text grade, and only those', () => {
   const fades = (lines: string[]) => jsxInkOffences(lines.join('\n')).fade;
-  const ghosts = (lines: string[], modules?: TokenModules) =>
-    jsxInkOffences(lines.join('\n'), modules).ghostPaint;
+  const faints = (lines: string[], modules?: TokenModules) =>
+    jsxInkOffences(lines.join('\n'), modules).faint;
 
   it('flags SVG text and elements holding words faded by an attribute', () => {
     expect(
@@ -646,12 +675,19 @@ describe('the JSX scan finds faded and ghost-painted words, and only those', () 
   });
 
   const tokens: TokenModules = {
-    '@/lib/inks': { INKS: { faint: 'var(--c-text-ghost)', quiet: 'var(--c-text-dim)' } },
+    '@/lib/inks': {
+      INKS: {
+        faint: 'var(--c-text-ghost)',
+        slate: 'var(--c-ink-quiet)',
+        muted: 'var(--c-ink-muted)',
+        dim: 'var(--c-text-dim)',
+      },
+    },
   };
 
   it('flags words painted in the ghost by an attribute, a style, a class or a constant', () => {
     expect(
-      ghosts(
+      faints(
         [
           "import { INKS } from '@/lib/inks';",
           "const SPARK = { done: 'var(--c-jade)', todo: 'var(--c-text-ghost)' };",
@@ -680,16 +716,62 @@ describe('the JSX scan finds faded and ghost-painted words, and only those', () 
 
   it('passes the ghost on a shape or a rule, a ground under words, a quieter named ink', () => {
     expect(
-      ghosts(
+      faints(
         [
           "import { INKS } from '@/lib/inks';",
           '<line stroke="var(--c-text-ghost)" /><path className="stroke-text-ghost" />;',
           '<rect fill={color(\'text-ghost\')} className="fill-text-ghost" />;',
           '<g stroke={INKS.faint}><line /><text>{t.label}</text></g>;',
           "<span style={{ backgroundColor: 'var(--c-text-ghost)' }}>{label}</span>;",
-          '<text fill={INKS.quiet}>{label}</text>;',
+          '<text fill={INKS.dim}>{label}</text>;',
           '<span className="text-text-ghost">{parts.ghost}</span>;',
           '<Swatch color={INKS.faint} />;',
+        ],
+        tokens
+      )
+    ).toEqual([]);
+  });
+
+  // Lane E2 follow-up (R4 is about use, not a name): the quiet and the muted ink are under text
+  // grade too (2.31–3.27:1 and 3:1), for marks, rules, ticks, swatches and frames; on words they
+  // fail as the ghost does.
+  it('flags words painted in the quiet or the muted ink, as the ghost', () => {
+    expect(
+      faints(
+        [
+          "import { INKS } from '@/lib/inks';",
+          'const QUIET = inkStyle(INKS.slate);',
+          '<text x={4} fill="var(--c-ink-quiet)">{t.label}</text>;',
+          "<text fill={color('ink-muted')}>uncle</text>;",
+          '<text className="fill-ink-quiet text-meta">{b}</text>;',
+          '<span className="text-ink-muted">{tick.date}</span>;',
+          "<span style={{ color: dim ? 'var(--c-ink-quiet)' : reading.ink }}>{word}</span>;",
+          '<span className="text-[color:var(--ink)]" style={QUIET}>0x{offset}</span>;',
+          '<text fill={INKS.muted}>{n}</text>;',
+        ],
+        tokens
+      )
+    ).toEqual([
+      { line: 3, what: '<text> fill="var(--c-ink-quiet)"' },
+      { line: 4, what: "<text> fill={color('ink-muted')}" },
+      { line: 5, what: '<text> className="fill-ink-quiet text-meta"' },
+      { line: 6, what: '<span> className="text-ink-muted"' },
+      { line: 7, what: "<span> style={{ color: dim ? 'var(--c-ink-quiet)' : reading.ink }}" },
+      { line: 8, what: '<span> style={QUIET}' },
+      { line: 9, what: '<text> fill={INKS.muted}' },
+    ]);
+  });
+
+  it('passes the quiet and the muted ink on a mark, a rule, a swatch or a frame', () => {
+    expect(
+      faints(
+        [
+          "import { INKS } from '@/lib/inks';",
+          '<line stroke="var(--c-ink-quiet)" /><circle r="1.8" fill="var(--c-ink-quiet)" />;',
+          '<rect fill="none" stroke={INKS.slate} strokeDasharray="3 3" />;',
+          '<div className="border border-dashed" style={{ borderColor: INKS.slate }}>{head}</div>;',
+          "<span style={{ backgroundColor: color('ink-muted') }} />;",
+          '<path className="stroke-ink-quiet" /><i className="bg-ink-muted border-ink-quiet" />;',
         ],
         tokens
       )
@@ -744,13 +826,13 @@ describe('inks that carry words (R4)', () => {
     alpha: [] as Site[],
     opacity: [] as Site[],
     fade: [] as Site[],
-    ghostPaint: [] as Site[],
+    faint: [] as Site[],
   };
   for (const file of files) {
     const path = relative(root, file);
     const code = readFileSync(file, 'utf8');
     const offences = { ...inkOffences(code), ...jsxInkOffences(code) };
-    for (const kind of ['ghost', 'alpha', 'opacity', 'fade', 'ghostPaint'] as const)
+    for (const kind of ['ghost', 'alpha', 'opacity', 'fade', 'faint'] as const)
       for (const o of offences[kind]) found[kind].push({ path, ...o });
   }
   const rules = [
@@ -758,7 +840,11 @@ describe('inks that carry words (R4)', () => {
     ['alpha', ALPHA_INK_ALLOWLIST, 'an ink thinned by an opacity modifier'],
     ['opacity', OPACITY_ALLOWLIST, 'an element faded by opacity'],
     ['fade', FADE_ALLOWLIST, 'words faded by an opacity attribute or style'],
-    ['ghostPaint', GHOST_PAINT_ALLOWLIST, 'words painted in the ghost by an attribute or style'],
+    [
+      'faint',
+      FAINT_INK_ALLOWLIST,
+      'words painted in the ghost, quiet or muted ink by an attribute or style',
+    ],
   ] as const;
 
   it('scans the page source', () => {

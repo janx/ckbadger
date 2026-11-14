@@ -28,7 +28,11 @@ export interface CellPart {
   indexed: boolean;
 }
 
-const FRAMING = 'var(--c-ink-quiet)';
+/**
+ * A field the cell does not occupy (molecule framing): its tone paints its hex digits, figures, so
+ * the dim ink (R4), apart from the occupied fields' group tones.
+ */
+const FRAMING = 'var(--c-text-dim)';
 /** SporeData-style framing inside the data: occupied, but structure rather than content. */
 const DATA_FRAMING = 'var(--c-data-framing)';
 

@@ -243,7 +243,9 @@ export const ELF_REGION_COLORS = {
   data: color('elf-data'),
   meta: color('elf-meta'),
   sectionHeaders: color('elf-header'),
-  padding: color('ink-quiet'),
+  // The padding's tone paints its hex digits on the cell page: a figure, so the dim ink (R4), apart
+  // from the sections' hues.
+  padding: color('text-dim'),
 } as const;
 
 // ---- F2 group `objects` (Object sequencing gel, collection allele gel, Inventory bars) ----
@@ -257,12 +259,17 @@ export const GENE_COLORS = {
   cycle: [color('aqua'), color('object'), color('text-dim')],
   shared: color('text-bright'),
 } as const;
-/** The gel plate: faint copper lanes, light wells, the byte ruler and the genotype overlay. */
+/**
+ * The gel plate: faint copper lanes, light wells, the byte ruler and the genotype overlay. The
+ * ruler's figures and a gene's empty value are words, in the dim ink (R4); only the arrow between
+ * a gene's raw bytes and its value, a separator, keeps the quiet slate.
+ */
 export const GEL_COLORS = {
   lane: BITCOIN_COLORS.copper,
   well: color('text-bright'),
   ruler: color('text-ghost'),
-  rulerText: color('ink-quiet'),
+  rulerText: color('text-dim'),
+  arrow: color('ink-quiet'),
   label: color('text-dim'),
   heading: color('text'),
   overlay: color('gel-overlay'),
@@ -296,8 +303,9 @@ export function inkStyle(color: string): CSSProperties {
 /** Inks the boards share. */
 export const BOARD_INKS = {
   /**
-   * The quiet slate between text.ghost and text.dim: separators (↔, vs, —, →), byte offsets, the
-   * version ruler's dates and day labels, the dashed frame of a note.
+   * The quiet slate between text.ghost and text.dim, under text grade: the separators between two
+   * names (↔, →), a version tick's rule, the dashed frame of a note. Never a word or a figure (R4):
+   * an offset, a date, a day label, "vs", a dash that stands for "none" are the dim ink.
    */
   quiet: color('ink-quiet'),
   /** A link on the cell, fiber and fork boards (hashes, outputs, a script): cyan under aqua. */
