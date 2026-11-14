@@ -18,13 +18,13 @@ Each object is stored as an `ObjectEntry` with standard-specific data in `Object
 
 A spore's `content_type` (MIME) determines how its cell data is presented:
 
-| Content Type                    | Frontend Standard | Behavior                         |
-| ------------------------------- | ----------------- | -------------------------------- |
-| `image/png`, `image/jpeg`, etc. | `plain-image`     | Raw bytes displayed as image     |
-| `image/svg+xml`                 | `plain-svg`       | Raw SVG in cell data             |
-| `text/plain`, `text/html`       | `plain-text`      | Raw text in cell data            |
-| `dob/0`, `dob/1`                | `dob/0`, `dob/1`  | DNA decoded by on-chain decoders |
-| other                           | `generic`         | Hex view only                    |
+| Content Type                    | Behavior                                             |
+| ------------------------------- | ---------------------------------------------------- |
+| `image/png`, `image/jpeg`, etc. | Raw bytes displayed as image                         |
+| `image/svg+xml`                 | Raw SVG in cell data                                 |
+| `text/plain`, `text/html`       | Raw text in cell data; only an embedded SVG is drawn |
+| `dob/0`, `dob/1`                | DNA decoded by on-chain decoders                     |
+| other                           | No picture; the cell's fields in the evidence tier   |
 
 A `dob/*` content type marks the spore as DOB-decodable, but it does **not**
 decide which DOB protocol version runs — see below.
@@ -249,16 +249,25 @@ The taxonomy is bincode-serialized in RocksDB, so new variants may only be **app
 
 **Rebuild note**: deterministic failures are remembered only for this DB's lifetime. A `ckbadger purge` + re-sync from genesis re-attempts and re-classifies every spore, so a dependency that legitimately appears on-chain later self-heals on rebuild. (The `CF_DOB_DECODED` value format changed from a bare `DobDecodedEntry` to `DecodeOutcome`, so shipping this feature required a re-sync.)
 
-## Frontend Per-Standard Behavior
+## Frontend Behavior by Content Type
 
-| Standard      | Trait Filter           | Media Labels                                           | Preview Source                   |
-| ------------- | ---------------------- | ------------------------------------------------------ | -------------------------------- |
-| `plain-image` | N/A (no traits)        | N/A                                                    | Raw cell bytes (base64)          |
-| `plain-svg`   | N/A                    | N/A                                                    | Raw SVG from cell data           |
-| `plain-text`  | N/A                    | N/A                                                    | None                             |
-| `dob/0`       | All traits shown       | "Decoded Output", "SVG Render"                         | Decoded media or render endpoint |
-| `dob/1`       | Filter SVG/image blobs | "Decoder Chain Output" (with step count), "SVG Render" | Decoded media or render endpoint |
-| `generic`     | N/A                    | N/A                                                    | None                             |
+The object page (`frontend/components/asset/spore-detail.tsx`) lists a DOB's traits in its hero
+(`frontend/components/asset/object-hero.tsx`, filtered by `isReadableTrait` in
+`frontend/lib/dob-genes.ts`) and picks its picture in `frontend/components/asset/object-media.tsx`
+with `detectPreview` (`frontend/lib/preview-utils.ts`):
+
+| Content Type                                                                    | Traits in the hero                                                                                        | Picture                                         |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `dob/0`, `dob/1`                                                                | Every trait but DOB/1's `prev.*` render hints and media values (a URI, SVG source), which stay on the gel | The decoded image media, the highest step first |
+| `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/avif`, `image/bmp` | None                                                                                                      | The cell's bytes, up to 2 MB                    |
+| `image/svg+xml`                                                                 | None                                                                                                      | The SVG in the cell's data, up to 256 KB        |
+| `text/*`, JSON, XML, JavaScript                                                 | None                                                                                                      | An `<svg>` inside the text, up to 256 KB        |
+| other                                                                           | None                                                                                                      | None                                            |
+
+A media source on Bitcoin (`btcfs`) comes first: the page says the image lives on Bitcoin and
+names the inscription, and fetches nothing. Without a picture it shows a placeholder ("Decode
+pending · awaiting DOB execution." while a DOB waits for its decoder, else "No renderable media
+available.").
 
 ## Key Files
 
