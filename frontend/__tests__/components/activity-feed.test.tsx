@@ -360,7 +360,9 @@ describe('ActivityFeed', () => {
 
   it('switches to Transactions: the old latest-transactions rows, View all pointing there', async () => {
     const user = userEvent.setup();
-    serveTransactions(Array.from({ length: 10 }, (_, i) => tx(i)));
+    // the rows served, kept: tx() stamps Date.now(), so a second call can be a second later
+    const served = Array.from({ length: 10 }, (_, i) => tx(i));
+    serveTransactions(served);
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
 
@@ -385,16 +387,16 @@ describe('ActivityFeed', () => {
     // date, consistency C3).
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(tx(0).timestamp)}$`)
+      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp)}$`)
     );
-    expect(within(evidence).getByText(formatTimeAgo(tx(0).timestamp))).toHaveAttribute(
+    expect(within(evidence).getByText(formatTimeAgo(served[0].timestamp))).toHaveAttribute(
       'title',
-      formatUtc8DateTime(tx(0).timestamp)
+      formatUtc8DateTime(served[0].timestamp)
     );
     // The row's hover is the activity row's: the hash and the age (was no title).
     expect(first).toHaveAttribute(
       'title',
-      expect.stringMatching(new RegExp(`^${tx(0).hash} · \\d+s ago$`))
+      expect.stringMatching(new RegExp(`^${served[0].hash} · \\d+s ago$`))
     );
   });
 
