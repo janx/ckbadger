@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -51,15 +52,12 @@ export default function BlockDetailPage() {
   const pagination = useCursorPagination();
   const activityPagination = useCursorPagination();
   const pageSize = usePageSize(100);
-  const {
-    data: block,
-    isLoading,
-    error,
-  } = useQuery({
+  const read = useQuery({
     queryKey: ['block', id],
     queryFn: () => api.getBlock(id as string),
     refetchInterval: (query) => (query.state.data?.cyclesStatus === 'pending' ? 3000 : false),
   });
+  const { data: block, error } = read;
   const transactions = useQuery({
     queryKey: ['block-transactions', id, block?.number, pagination.cursor, pageSize],
     queryFn: () =>
@@ -135,7 +133,9 @@ export default function BlockDetailPage() {
     return () => window.removeEventListener('keydown', navigate);
   }, [block, router]);
 
-  if (isLoading)
+  // Awaited, fetching or paused (offline, or a hidden tab between retries): isLoading is pending
+  // AND fetching, so a paused read would fall through as if it had completed.
+  if (isAwaited(read))
     return (
       <div>
         <main className="container mx-auto py-8">
@@ -164,6 +164,7 @@ export default function BlockDetailPage() {
         </main>
       </div>
     );
+  // past pending, no error means the read succeeded: with no block, an API invariant broke
   if (!block) throw new Error(`Block ${id}: request completed without block evidence`);
   const activation = block.hardforkActivation;
   const resources = activation?.resources?.length
@@ -636,7 +637,7 @@ export default function BlockDetailPage() {
               </div>
               {view === 'activities' ? (
                 <>
-                  {activities.isLoading && <p role="status">Loading activities…</p>}
+                  {isAwaited(activities) && <p role="status">Loading activities…</p>}
                   {activities.error && (
                     <p role="alert">Unable to read activities: {activities.error.message}</p>
                   )}
@@ -682,7 +683,7 @@ export default function BlockDetailPage() {
                 </>
               ) : (
                 <>
-                  {transactions.isLoading && <p role="status">Loading transactions…</p>}
+                  {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
                   {transactions.error && (
                     <p role="alert">Unable to read transactions: {transactions.error.message}</p>
                   )}

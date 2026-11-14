@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { onlineManager } from '@tanstack/react-query';
 import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
@@ -1429,5 +1430,47 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /^Could not read this transaction: API error: 500 - transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42$/
     );
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false; the page took that for a read that had completed
+  // without a transaction, threw, and the crash page did not recover when the read came back.
+  it('waits while its read is paused offline, then shows the transaction once back online', async () => {
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByRole('status', { name: 'Loading …' })).toBeInTheDocument();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(api.getTransactionDetail).not.toHaveBeenCalled();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+      expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it('still fails loudly when its read completes with no transaction', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValueOnce(null as never);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      expect(
+        await screen.findByText(
+          `crashed: Transaction ${TX_HASH}: request completed without a transaction`
+        )
+      ).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });

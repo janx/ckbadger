@@ -17,7 +17,7 @@ use crate::response::{
 };
 use crate::utils::{
     accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
-    parse_chart_date_range, parse_hash32, parse_optional_block_tx_cursor, script_to_address,
+    parse_chart_date_range, parse_hash32, parse_optional_block_tx_cursor,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
@@ -641,7 +641,7 @@ async fn get_token(
                 let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
                 response.issuer = Some(TokenIssuer {
                     lock_hash: format!("0x{}", hex::encode(lock)),
-                    address: owner.as_ref().map(|owner| owner.address.clone()),
+                    address: owner.as_ref().and_then(|owner| owner.address.clone()),
                     lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
                     lock_kind: owner.and_then(|owner| owner.lock_kind),
                 });
@@ -724,7 +724,7 @@ async fn get_token_holders(
                 .map_err(|_| ApiError::internal("invalid token holder lock length"))?;
             let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
             Ok(TokenHolderResponse {
-                address: owner.as_ref().map(|owner| owner.address.clone()),
+                address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
                 lock_script_hash: format!("0x{}", hex::encode(lock)),
@@ -780,10 +780,11 @@ pub struct ActivityParams {
     cursor: Option<String>,
 }
 
-/// Resolve lock hashes to CKB addresses through the single existing path:
-/// `CF_LOCK_SCRIPTS` (`get_lock_script`) + the shared `script_to_address`
-/// encoder. Lock hashes with no stored script (or an unencodable script) are
-/// simply absent from the map and render as null — never guessed.
+/// Resolve lock hashes to CKB addresses through the one party resolver,
+/// `resolve_lock_address`. A lock whose script is not indexed, and one whose
+/// script has no address form, is absent from the map and renders as null —
+/// never guessed; a store read failure or a stored script that is not a CKB
+/// script is an error naming the lock hash.
 fn resolve_lock_addresses<'a>(
     store: &CkbadgerStore,
     network: &str,
@@ -794,15 +795,12 @@ fn resolve_lock_addresses<'a>(
         if lock_hash.is_empty() || addresses.contains_key(lock_hash) {
             continue;
         }
-        let Some(entry) = store.get_lock_script(lock_hash)? else {
-            continue;
-        };
-        let Ok(address) =
-            script_to_address(&entry.code_hash, entry.hash_type, &entry.args, network)
-        else {
-            continue;
-        };
-        addresses.insert(lock_hash.to_vec(), address);
+        if let Some(address) =
+            crate::utils::address::resolve_lock_address(store, lock_hash, network)?
+                .and_then(|resolved| resolved.address)
+        {
+            addresses.insert(lock_hash.to_vec(), address);
+        }
     }
     Ok(addresses)
 }

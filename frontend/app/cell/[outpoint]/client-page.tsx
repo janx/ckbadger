@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useCopy } from '@/hooks/useCopy';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
@@ -537,7 +538,7 @@ export default function CellDetailPage() {
   if (!parts) return <NotFoundPage notAnId={{ kind: 'cell', reason: OUTPOINT_RULE }} />;
   if (!query.data && isBadRequestApiError(query.error))
     return <NotFoundPage notAnId={{ kind: 'cell', reason: query.error.apiMessage }} />;
-  const body = query.isPending ? (
+  const body = isAwaited(query) ? (
     <DetailSkeleton />
   ) : query.error && !query.data ? (
     <ReadFailure what="cell" error={query.error} />

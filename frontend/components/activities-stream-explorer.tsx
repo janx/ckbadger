@@ -12,6 +12,7 @@ import {
 } from '@/lib/design-tokens';
 import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -362,15 +363,7 @@ export function ActivitiesStreamExplorer({
     }, ROW_HIGHLIGHT_DURATION_MS);
   };
 
-  const {
-    data,
-    error,
-    isLoading,
-    hasNextPage,
-    fetchNextPage,
-    isFetchingNextPage,
-    isFetchNextPageError,
-  } = useInfiniteQuery({
+  const stream = useInfiniteQuery({
     queryKey: ['global-activities-stream', selectedFilter, pageSize],
     queryFn: ({ pageParam }) =>
       api.getGlobalActivities({
@@ -382,6 +375,11 @@ export function ActivitiesStreamExplorer({
     getNextPageParam: (lastPage) =>
       lastPage.hasMore ? (lastPage.nextCursor ?? undefined) : undefined,
   });
+  const { data, error, hasNextPage, fetchNextPage, isFetchingNextPage, isFetchNextPageError } =
+    stream;
+  // awaited, not isLoading: a first page paused offline or between retries has not answered
+  // "nothing of this kind"
+  const awaited = isAwaited(stream);
 
   const baseItems = useMemo(() => data?.pages.flatMap((page) => page.data) ?? [], [data?.pages]);
 
@@ -492,8 +490,8 @@ export function ActivitiesStreamExplorer({
     safeScrollIntoView(topAnchorRef.current, { behavior: 'smooth', block: 'start' });
   };
 
-  const initialError = !isLoading && !!error && visibleItems.length === 0;
-  const emptyState = !isLoading && !error && visibleItems.length === 0;
+  const initialError = !awaited && !!error && visibleItems.length === 0;
+  const emptyState = !awaited && !error && visibleItems.length === 0;
   const hasPending = pendingNewItems.length > 0;
 
   return (
@@ -547,7 +545,7 @@ export function ActivitiesStreamExplorer({
             onFilterChange={handleFilterChange}
           />
         </div>
-        {isLoading ? (
+        {awaited ? (
           <LoadingRows />
         ) : initialError ? (
           <div role="alert" className="text-small flex flex-col gap-1 py-4">

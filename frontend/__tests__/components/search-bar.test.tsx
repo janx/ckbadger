@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
@@ -549,5 +550,23 @@ describe('SearchBar', () => {
 
     fireEvent.submit(input.closest('form')!);
     expect(pushMock).toHaveBeenCalledWith(`/blocks/${hash}`);
+  });
+
+  // A1 review fix, round 2: a search paused offline, or in a hidden tab between retries, is still
+  // awaited: the field says it is searching, never "No results." / "No matches.", and a real
+  // empty answer still says so once back online.
+  it('says it is searching while its read is paused, then the true empty answer once back online', async () => {
+    vi.mocked(api.search).mockResolvedValue({ query: 'not-found', results: [] });
+    const { resume } = renderPaused(<SearchBar />);
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'not-found' } });
+    expect(await screen.findByText('Searching…')).toBeInTheDocument();
+    expect(screen.queryByText('No results.')).toBeNull();
+    fireEvent.submit(input.closest('form')!);
+    expect(screen.queryByText('No matches.')).toBeNull();
+    expect(pushMock).not.toHaveBeenCalled();
+    resume();
+    expect(await screen.findByText('No results.')).toBeInTheDocument();
   });
 });

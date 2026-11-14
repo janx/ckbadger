@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { act, createTestQueryClient, render } from '../utils/test-utils';
@@ -459,5 +460,18 @@ describe('shared chart detail', () => {
     expect(
       screen.getByText(/select it to keep it there, select it again to let it go/)
     ).toBeInTheDocument();
+  });
+
+  // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+  // awaited: the chart keeps its loading form, never a blank page, and draws once back online.
+  it('keeps its loading form while its read is paused, then draws once back online', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(response);
+    const { resume } = renderPaused(<ChartDetail slug="hash-rate" />);
+    expect(await screen.findByLabelText('Hash rate loading')).toBeInTheDocument();
+    resume();
+    expect(
+      await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hash rate loading')).toBeNull();
   });
 });

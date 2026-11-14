@@ -6,6 +6,7 @@ import { DetailTier2 } from '@/components/ui/detail-layout';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import type { AssetClass } from '@/lib/design-tokens';
 import { readErrorText } from '@/lib/read-error';
+import { isAwaited, type ReadState } from '@/lib/query-state';
 import { cn } from '@/lib/utils';
 import {
   documentTitleParts,
@@ -274,18 +275,30 @@ export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
     </section>
   );
 }
+/**
+ * A section's read as the section states it: its failure once it has failed, "Loading …" while
+ * the read is awaited (`isAwaited`: fetching, or paused offline or between retries), and
+ * "… unavailable." only once it has answered with nothing; a read nothing will answer (disabled)
+ * says nothing. A `retained` read is drawn from earlier data, so only a failed refresh is said.
+ */
 export function AssetReadState({
   error,
-  loading,
   label,
-  retained = false,
-}: {
-  error: Error | null;
-  loading?: boolean;
-  label: string;
-  retained?: boolean;
-}) {
-  if (retained && !error) return null;
+  ...props
+}: { error: Error | null; label: string } & (
+  | { retained: true; read?: never }
+  | { retained?: boolean; read: ReadState }
+)) {
+  const retained = props.retained ?? false;
+  if (!error && (retained || !props.read)) return null;
+  const sentence = error
+    ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${readErrorText(error)}.${retained ? ' Showing previously loaded data.' : ''}`
+    : props.read && isAwaited(props.read)
+      ? `Loading ${label}…`
+      : props.read?.status === 'success'
+        ? `${label} unavailable.`
+        : null;
+  if (sentence === null) return null;
   return (
     // F2 identities (round 2, ID-COL-1): a gateway failure is stated by its status, never the
     // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
@@ -293,11 +306,7 @@ export function AssetReadState({
       role={error ? 'alert' : 'status'}
       className="text-text-dim text-small py-3 [overflow-wrap:anywhere]"
     >
-      {error
-        ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${readErrorText(error)}.${retained ? ' Showing previously loaded data.' : ''}`
-        : loading
-          ? `Loading ${label}…`
-          : `${label} unavailable.`}
+      {sentence}
     </p>
   );
 }

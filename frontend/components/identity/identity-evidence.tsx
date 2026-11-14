@@ -449,7 +449,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
                   <AppLink href={`/identities/dotcell/${d.nextId}`}>
                     <Hash hash={d.nextId} size="row" copyable={false} className="text-small" />
                   </AppLink>
-                  <AssetReadState label="its name" error={next.error} loading={next.isLoading} />
+                  <AssetReadState label="its name" error={next.error} read={next} />
                 </>
               ),
             ],

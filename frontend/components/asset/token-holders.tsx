@@ -402,7 +402,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           )}
         </>
       ) : (
-        <AssetReadState error={holders.error} loading={holders.isLoading} label="holders" />
+        <AssetReadState error={holders.error} read={holders} label="holders" />
       )}
     </div>
   );
@@ -436,7 +436,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         <>
           <AssetReadState
             error={distribution.error}
-            loading={distribution.isLoading}
+            read={distribution}
             label={distributionSource}
           />
           {holderTable}

@@ -1,4 +1,5 @@
-import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { act, render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { onlineManager } from '@tanstack/react-query';
 import Page from '@/app/classes/[classId]/client-page';
 import { api } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
@@ -63,6 +64,21 @@ it('keeps a loading state until the collection is read', () => {
   vi.mocked(api.getObjectCollection).mockReturnValue(new Promise(() => {}));
   render(<Page classId={mockClassId} />);
   expect(screen.getByRole('status')).toHaveTextContent('Loading collection');
+});
+// Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+// without fetching, so isLoading is false: the page said "collection unavailable." while it
+// waited.
+it('keeps its loading state while the read is paused offline, then shows the class once back online', async () => {
+  onlineManager.setOnline(false);
+  try {
+    render(<Page classId={mockClassId} />);
+    expect(await screen.findByText('Loading collection…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText(/collection unavailable/)).toBeNull();
+    act(() => onlineManager.setOnline(true));
+    expect(await screen.findByRole('heading', { name: 'Test mNFT Class' })).toBeInTheDocument();
+  } finally {
+    onlineManager.setOnline(true);
+  }
 });
 it('reports read errors without generating a placeholder collection', async () => {
   vi.mocked(api.getObjectCollection).mockRejectedValue(new Error('Not found'));

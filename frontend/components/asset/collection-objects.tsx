@@ -462,11 +462,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               />
             </>
           ) : (
-            <AssetReadState
-              label="newest objects"
-              error={gallery.error}
-              loading={gallery.isLoading}
-            />
+            <AssetReadState label="newest objects" error={gallery.error} read={gallery} />
           )}
         </div>
       </div>

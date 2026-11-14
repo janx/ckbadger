@@ -1,6 +1,7 @@
 'use client';
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
@@ -635,17 +636,14 @@ export default function TransactionDetailPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const {
-    data: tx,
-    error,
-    isLoading,
-  } = useQuery<TransactionDetail>({
+  const read = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
     refetchInterval: (q) =>
       provisional(q.state.data) || isServiceUnavailableError(q.state.error) ? POLL_MS : false,
     refetchIntervalInBackground: true,
   });
+  const { data: tx, error } = read;
   const isProvisional = provisional(tx);
   const awaitingInputs = isServiceUnavailableError(error);
   const { data: activity, error: activityError } = useQuery({
@@ -723,7 +721,9 @@ export default function TransactionDetailPage() {
       <main className="container mx-auto py-8">{children}</main>
     </div>
   );
-  if (isLoading) return shell(<DetailSkeleton />);
+  // Awaited, fetching or paused (offline, or a hidden tab between retries): isLoading is pending
+  // AND fetching, so a paused read would fall through as if it had completed.
+  if (isAwaited(read)) return shell(<DetailSkeleton />);
   if (awaitingInputs && !tx)
     return shell(
       <DetailLayout
@@ -757,6 +757,7 @@ export default function TransactionDetailPage() {
   if (!tx && isBadRequestApiError(error))
     return <NotFoundPage notAnId={{ kind: 'transaction', reason: error.apiMessage }} />;
   if (!tx) {
+    // past pending, no error means the read succeeded: with no transaction, an API invariant broke
     if (!error) throw new Error(`Transaction ${hash}: request completed without a transaction`);
     return shell(<ReadFailure what="transaction" error={error} />);
   }

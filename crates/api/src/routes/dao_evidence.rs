@@ -693,7 +693,7 @@ pub(super) async fn get_depositors(
             .take(limit)
             .map(|(index, (lock, capacity, count))| -> anyhow::Result<_> {
                 let address = resolve_lock_address(&state.store, lock, &state.ckb_network)?
-                    .map(|resolved| resolved.address);
+                    .and_then(|resolved| resolved.address);
                 Ok(DaoDepositorResponse {
                     rank: index + 1,
                     lock_script_hash: format!("0x{}", hex::encode(lock)),

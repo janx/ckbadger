@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import {
   FiberGraphNotes,
@@ -372,7 +373,7 @@ export default function FiberChannelsPage() {
                 Channel list could not be loaded: {String(channels.error)}
               </p>
             )}
-            {channels.isLoading && (
+            {isAwaited(channels) && (
               <p className="text-text-dim text-body py-7">Loading channels…</p>
             )}
             {channels.data && (
