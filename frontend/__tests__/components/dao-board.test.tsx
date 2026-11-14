@@ -828,6 +828,61 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
   });
 });
 
+// PB-25 (UI review 2026-11-14): at 390 the icicle's blocks were blank and the legend's "paid out" /
+// "still owed" rows had no swatch, so the two sub-blocks could not be told apart.
+describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const issuance = () => screen.getByRole('region', { name: 'Where secondary issuance goes' });
+
+  it('gives every legend row the swatch of its block, the sub-blocks included', () => {
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const svg = within(issuance()).getByRole('img', {
+      name: /Secondary issuance since genesis, split three ways/,
+    });
+    const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
+    const rows = within(legend).getAllByRole('listitem');
+    const keys = ['total', 'miners', 'compensation', 'paid', 'owed', 'burnt'];
+    expect(rows).toHaveLength(keys.length);
+    // The two sub-blocks first: they are the rows the phone could not tell apart.
+    for (const i of [3, 4, 0, 1, 2, 5]) {
+      const key = keys[i];
+      const swatch = rows[i].querySelector(':scope > span[aria-hidden="true"]') as HTMLElement;
+      expect(swatch, `the ${key} row has a swatch`).not.toBeNull();
+      // The swatch is its block's paint: the same colour at the same strength.
+      const block = svg.querySelector(`[data-node="${key}"]`)!;
+      const [, colour, percent] = /^color-mix\(in srgb, (.+) ([\d.]+)%, transparent\)$/.exec(
+        swatch.style.background
+      )!;
+      expect(colour).toBe(block.getAttribute('fill'));
+      expect(Number(percent) / 100).toBe(Number(block.getAttribute('fill-opacity')));
+    }
+    // paid out and still owed are told apart by their swatches
+    const paid = rows[3].querySelector(':scope > span[aria-hidden="true"]') as HTMLElement;
+    const owed = rows[4].querySelector(':scope > span[aria-hidden="true"]') as HTMLElement;
+    expect(paid.style.background).not.toBe(owed.style.background);
+  });
+
+  it('writes a share inside every block wide enough for it at 358 px', () => {
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const svg = within(issuance()).getByRole('img', {
+      name: /Secondary issuance since genesis, split three ways/,
+    });
+    const label = (key: string) => svg.querySelector(`[data-label="${key}"]`)?.textContent ?? null;
+    // 7 CKB in all: miners 14.29 % (50 px, too narrow for "14.29%"), depositors and burnt
+    // 42.86 % each (151 px), paid out and still owed a third and two thirds of the depositors'.
+    expect(label('total')).toBe('secondary issuance since genesis 7 CKB');
+    expect(label('miners')).toBeNull();
+    expect(label('compensation')).toBe('42.86%');
+    expect(label('burnt')).toBe('burnt 42.86%');
+    expect(label('owed')).toBe('66.7%');
+  });
+});
+
 describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
   afterEach(() => vi.restoreAllMocks());
   const grows = () => screen.getByRole('region', { name: 'How a deposit grows' });
