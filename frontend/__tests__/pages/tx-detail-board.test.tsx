@@ -635,6 +635,35 @@ describe('Transaction board, tier 2', () => {
     expect(within(spore).getByRole('link', { name: 'code' })).toHaveAttribute('href', '#tx-dep-1');
   });
 
+  // PA-12 (UI review 2026-11-14): a dep row said what it supplies twice, "supplies code for Spore ·
+  // 76,752 B" and, in a second column, "for Spore" (and "no script here runs it" beside "not run
+  // here"), each wrapping in half the width of a phone. The row says it once at every width: the
+  // out point, then one statement led by the kind of dep — what it supplies code for, or whose code
+  // it holds and that it does not run here — and the code's size.
+  it('says once what each cell dep is for, the dep kind leading the statement (PA-12)', async () => {
+    render(<TransactionDetailPage />);
+    const dep = (i: number) =>
+      waitFor(() => {
+        const el = document.querySelector(`#tx-dep-${i}`);
+        if (!el) throw new Error(`no dep row ${i} yet`);
+        return el as HTMLElement;
+      });
+    const count = (el: HTMLElement, word: string) => el.textContent!.split(word).length - 1;
+    const code = await dep(1);
+    expect(code).toHaveTextContent(/^0x96b198fb\.\.\.b69824:0code for Spore · 76,752 B$/);
+    expect(count(code, 'Spore')).toBe(1);
+    const group = await dep(0);
+    expect(group).toHaveTextContent(/^0x71a7ba8f\.\.\.72e46c:0dep group for Default Lock↳/);
+    // the group's statement, then its member's own line
+    expect(count(group, 'Default Lock')).toBe(2);
+    expect(count(group, ' for ')).toBe(1);
+    const attached = await dep(2);
+    expect(attached).toHaveTextContent(
+      /^0xd00a0222\.\.\.2c47f7:0code of Default Lock, not run here · 122,552 B$/
+    );
+    expect(count(attached, 'not run here')).toBe(1);
+  });
+
   it('draws the proposal ruler and the exact capacity equation (TX-17, TX-19)', async () => {
     render(<TransactionDetailPage />);
     expect(
