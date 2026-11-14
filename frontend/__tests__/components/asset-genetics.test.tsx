@@ -41,7 +41,7 @@ describe('Independent DOB evidence', () => {
     expect(plate).toHaveAttribute('data-gel-plate', 'frame');
     expect(plate).toHaveAttribute('data-instrument-frame');
     // a flat tile since rubbing × Song print: no lit top edge
-    expect(plate).toHaveClass('rounded-lg', 'border-base-border');
+    expect(plate).toHaveClass('border-base-border');
     expect(plate).not.toHaveClass('neon-edge-top');
     expect(plate).toContainElement(container.querySelector('[data-gene]') as HTMLElement);
     expect(plate.querySelector('.space-y-4')).toHaveClass('px-4', 'py-4', 'sm:px-5');
@@ -49,7 +49,7 @@ describe('Independent DOB evidence', () => {
     const copper = container.querySelector('[data-gel-plate]') as HTMLElement;
     expect(copper).toHaveAttribute('data-gel-plate', 'copper');
     expect(copper).not.toHaveAttribute('data-instrument-frame');
-    expect(copper).toHaveClass('rounded-lg', 'p-[5px]');
+    expect(copper).toHaveClass('p-[5px]');
     expect(copper.style.border).toBe('1px solid transparent');
     expect(copper.style.backgroundImage).not.toBe('');
     expect(container.querySelector('[data-instrument-frame]')).toBeNull();

@@ -80,10 +80,7 @@ export function IdentityStatusBadge({ state }: { state: IdentityState }) {
   const s = STATE[state];
   if (!s) throw new Error(`Unknown identity state ${JSON.stringify(state)}`);
   return (
-    <span
-      data-identity-state={state}
-      className={cn('text-meta rounded border px-1.5 py-px', s.className)}
-    >
+    <span data-identity-state={state} className={cn('text-meta border px-1.5 py-px', s.className)}>
       {s.label}
     </span>
   );

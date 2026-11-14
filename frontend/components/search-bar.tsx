@@ -219,13 +219,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   return (
     <div className={cn('relative', className)}>
       <form onSubmit={handleSearch}>
-        <div
-          className={cn(
-            'group relative',
-            isHome && 'overflow-hidden rounded-lg',
-            isCompact && 'rounded'
-          )}
-        >
+        <div className={cn('group relative', isHome && 'overflow-hidden')}>
           <input
             ref={inputRef}
             data-ckbadger-global-search="true"
@@ -253,18 +247,18 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               // native caret is hidden under it), and
               // a jade-tinted border with a soft ring on focus. The "/" key hint stays. The
               // compact and default fields are wells (material pass v2, move 2: `.well`, dark
-              // glass inset, the board's 6 px corners); the home hero field keeps its approved
+              // glass inset, square corners); the home hero field keeps its approved
               // jade border and glow. That focus look is the field's one focus line: it opts out
               // of the global jade outline (visual finish V9, one ring per control).
               'text-text-bright w-full font-mono transition-colors focus-visible:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
-                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-lg border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 md:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 md:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key
                     // from md; below it no key and no room for one (PA-04).
-                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9'
-                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
+                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9'
+                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
             )}
           />
           {/* The prompt (U-01, the boards' `.search .sq`): the 7 px cinnabar square, centred on
@@ -297,11 +291,11 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             <>
               <span
                 data-testid="home-search-focus-glow"
-                className="border-jade/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 rounded-lg border opacity-100"
+                className="border-jade/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 border opacity-100"
               />
               <span
                 data-testid="home-search-focus-border-scan"
-                className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
+                className="pointer-events-none absolute inset-0 overflow-hidden"
               >
                 <span className="via-jade absolute bottom-0 left-0 h-[2px] w-24 -translate-x-full bg-gradient-to-r from-transparent to-transparent [animation:terminal-border-scan-ltr_2.4s_linear_infinite]" />
               </span>
@@ -323,8 +317,8 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           className={cn(
             'absolute z-50 mt-1 w-full border',
             isCompact
-              ? 'border-jade/12 rounded-none shadow-[var(--m-drop-shadow)]'
-              : 'border-base-border bg-base-surface rounded-lg shadow-lg'
+              ? 'border-jade/12 shadow-[var(--m-drop-shadow)]'
+              : 'border-base-border bg-base-surface shadow-lg'
           )}
           style={isCompact ? { backgroundColor: SEARCH_RESULT_COLORS.panel } : undefined}
         >
@@ -360,7 +354,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                       <div className="truncate font-medium">{result.label}</div>
                       <div className="text-text-dim text-small truncate font-mono">{result.id}</div>
                     </div>
-                    <span className="bg-base-elevated text-text-dim text-small shrink-0 rounded px-2 py-0.5 font-mono">
+                    <span className="bg-base-elevated text-text-dim text-small shrink-0 px-2 py-0.5 font-mono">
                       {result.resultType}
                     </span>
                   </button>
@@ -390,9 +384,9 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       <span
         data-testid="search-shortcut-key-slash"
         className={cn(
-          'text-meta rounded border px-1.5 py-0.5 font-mono leading-none',
+          'text-meta border px-1.5 py-0.5 font-mono leading-none',
           isCompact
-            ? 'border-base-border text-text-dim text-meta rounded px-1.5'
+            ? 'border-base-border text-text-dim text-meta px-1.5'
             : 'border-base-border/80 bg-base-surface/80 text-text-dim'
         )}
       >
@@ -401,7 +395,7 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       {!isCompact && (
         <span
           data-testid="search-shortcut-key-question"
-          className="border-base-border/80 bg-base-surface/80 text-text-dim text-meta rounded border px-1.5 py-0.5 font-mono leading-none"
+          className="border-base-border/80 bg-base-surface/80 text-text-dim text-meta border px-1.5 py-0.5 font-mono leading-none"
         >
           ?
         </span>

@@ -63,7 +63,7 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
               <span
                 aria-hidden="true"
                 data-swatch
-                className="inline-block h-2 w-2 rounded-sm"
+                className="inline-block h-2 w-2"
                 style={{ backgroundColor: CELL_COLORS[p.key] }}
               />
               <span>
@@ -96,7 +96,7 @@ function freeBar(
       role="img"
       data-free-shannons={free.toString()}
       aria-label={`${subject}: ${total} occupied bytes of ${shannons} shannons; capacity ${parts[0].value}, lock ${parts[1].value}, type ${parts[2].value}, data ${formatCount(parts[3].value, 'byte')}`}
-      className={`flex h-2 w-full overflow-hidden rounded-sm ${className ?? ''}`}
+      className={`flex h-2 w-full overflow-hidden ${className ?? ''}`}
       style={{ backgroundColor: FREE_CAPACITY_COLOR }}
     >
       <span className="flex h-full" style={{ width: `${share}%`, minWidth: 2 }}>

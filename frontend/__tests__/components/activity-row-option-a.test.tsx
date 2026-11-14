@@ -296,11 +296,7 @@ describe('option A: every participant, one line each (D1)', () => {
         'lowercase',
         'whitespace-nowrap'
       );
-      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass(
-        'border',
-        'rounded-sm',
-        'text-meta'
-      );
+      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('border', 'text-meta');
     }
     // Occupied last, 11 px, in the dim ink (R4, re-pinned on purpose: the dim at 60 % read 2.7:1).
     const occupied = container.querySelector('[data-role="occupied"]');

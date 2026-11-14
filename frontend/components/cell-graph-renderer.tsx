@@ -215,7 +215,7 @@ export function CellGraphRenderer({
     return (
       <div
         ref={containerRef}
-        className="border-base-border bg-base-surface/50 flex w-full items-center justify-center rounded-lg border"
+        className="border-base-border bg-base-surface/50 flex w-full items-center justify-center border"
         style={{ width: width ?? '100%', height }}
       >
         <p className="text-text-dim">No graph data.</p>
@@ -226,7 +226,7 @@ export function CellGraphRenderer({
   return (
     <div
       ref={containerRef}
-      className="border-base-border w-full overflow-hidden rounded-lg border"
+      className="border-base-border w-full overflow-hidden border"
       style={{ width: width ?? '100%', height }}
     >
       <ForceGraph2D

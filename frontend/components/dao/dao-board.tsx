@@ -603,7 +603,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
 /** A mechanism tile (the "Two names for the same script" chain's tile, `script-byte-map.tsx`). */
 function MechanismTile({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5">
+    <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5">
       <b className="text-text-bright mb-0.5 block font-medium">{title}</b>
       {children}
     </div>
@@ -750,7 +750,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
             <div
               key={part.key}
               title={`${part.title}: ${formatCapacity(part.value)}`}
-              className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap rounded ${part.key === 'other' ? 'text-text flex-1 px-2.5' : 'text-base-bg shrink-0 justify-center'}`}
+              className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap ${part.key === 'other' ? 'text-text flex-1 px-2.5' : 'text-base-bg shrink-0 justify-center'}`}
               style={{
                 width: part.key === 'other' ? undefined : `${percent}%`,
                 background: part.color,
@@ -785,7 +785,7 @@ function Swatch({ color }: { color: string }) {
   return (
     <span
       aria-hidden="true"
-      className="mr-1.5 inline-block h-[9px] w-[9px] rounded-sm align-middle"
+      className="mr-1.5 inline-block h-[9px] w-[9px] align-middle"
       style={{ background: color }}
     />
   );
@@ -875,7 +875,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               >
                 <div
                   data-window-bar
-                  className={`bg-gold w-full rounded-t-sm transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
+                  className={`bg-gold w-full transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
                   style={{ height: `${height}%` }}
                 />
               </div>
@@ -929,7 +929,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden"
             >
               <span
-                className="flex items-center overflow-hidden whitespace-nowrap rounded px-3"
+                className="flex items-center overflow-hidden whitespace-nowrap px-3"
                 style={{
                   width: `${readyPercent}%`,
                   backgroundColor: fade(CLASS_COLORS.dao, CLAIMABLE_FILL),
@@ -940,7 +940,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 {claimableInside ? <span>{claimable(true)}</span> : null}
               </span>
               <span
-                className="bg-gold rounded"
+                className="bg-gold"
                 style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
               />
             </div>

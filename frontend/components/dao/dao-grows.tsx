@@ -190,7 +190,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
                   <span className="text-text-bright text-small tabular-nums">{y.percent}%</span>
                   <span
                     aria-hidden="true"
-                    className="bg-gold w-full rounded-sm"
+                    className="bg-gold w-full"
                     style={{ height: `${Math.round(48 * share)}px`, opacity: 0.35 + 0.45 * share }}
                   />
                 </div>

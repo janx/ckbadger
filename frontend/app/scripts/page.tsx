@@ -573,7 +573,7 @@ export default function ScriptsPage() {
         onChange={(event) => setSearchInput(event.target.value)}
         placeholder="search by name or code hash"
         aria-label="Search scripts"
-        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 rounded border px-3 align-middle sm:w-64"
+        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 border px-3 align-middle sm:w-64"
       />
       {search && (
         <button
@@ -591,7 +591,7 @@ export default function ScriptsPage() {
       )}
       <button
         type="submit"
-        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center rounded border px-3 align-middle"
+        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center border px-3 align-middle"
       >
         Search
       </button>
@@ -682,7 +682,7 @@ export default function ScriptsPage() {
                     const next = event.target.value as SortKey;
                     sortBy(next, next === 'name' ? 'asc' : 'desc');
                   }}
-                  className="border-base-border bg-base-surface text-text text-small rounded border px-2 py-1"
+                  className="border-base-border bg-base-surface text-text text-small border px-2 py-1"
                 >
                   <option value="capacity">CKB in their cells</option>
                   <option value="used">Occupied CKB</option>
@@ -713,7 +713,7 @@ export default function ScriptsPage() {
                         type="button"
                         aria-pressed={bar === field.value}
                         onClick={() => chooseBar(field.value)}
-                        className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l' : '-ml-px rounded-r'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+                        className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? '' : '-ml-px'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
                       >
                         {field.label}
                       </button>

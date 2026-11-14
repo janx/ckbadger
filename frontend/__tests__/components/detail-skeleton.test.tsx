@@ -12,7 +12,7 @@ describe('DetailSkeleton', () => {
     const bars = [...status.children];
     expect(bars).toHaveLength(3);
     for (const bar of bars) {
-      expect(bar).toHaveClass('bg-base-surface', 'animate-pulse', 'rounded');
+      expect(bar).toHaveClass('bg-base-surface', 'animate-pulse');
       expect(bar).toBeEmptyDOMElement();
     }
     const [h1, lede, hero] = bars;

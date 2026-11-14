@@ -34,10 +34,10 @@ function PageShell({ children }: { children: ReactNode }) {
 function LoadingSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />
+      <div className="bg-base-elevated h-40 w-full animate-pulse" />
       <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 md:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="bg-base-elevated h-24 animate-pulse rounded" />
+          <div key={i} className="bg-base-elevated h-24 animate-pulse" />
         ))}
       </div>
     </div>
@@ -46,9 +46,7 @@ function LoadingSkeleton() {
 
 function ReachabilityCaveat({ className }: { className?: string }) {
   return (
-    <div
-      className={`border-base-border bg-base-surface rounded border px-4 py-3 ${className ?? ''}`}
-    >
+    <div className={`border-base-border bg-base-surface border px-4 py-3 ${className ?? ''}`}>
       <p className="text-text-dim text-body font-mono">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
@@ -68,7 +66,7 @@ function PeersOnboarding({
   return (
     <div className="space-y-4">
       {enabled && (
-        <div className="border-info/30 bg-info/10 rounded border px-4 py-3">
+        <div className="border-info/30 bg-info/10 border px-4 py-3">
           <p className="text-info text-body font-mono">
             {activeRound?.blockedReason
               ? `Crawler round #${activeRound.roundId} blocked — ${activeRound.blockedReason}`
@@ -79,7 +77,7 @@ function PeersOnboarding({
         </div>
       )}
 
-      <div className="border-base-border bg-base-surface rounded border p-6">
+      <div className="border-base-border bg-base-surface border p-6">
         {/* Phase 5 (B9): the crawler as a command, its config state the args. */}
         <PromptHeading
           command="peer crawler"
@@ -100,7 +98,7 @@ function PeersOnboarding({
           Set the crawler to enabled in{' '}
           <code className="text-aqua">this network&apos;s config.toml</code> and restart:
         </p>
-        <pre className="border-base-border bg-base-bg text-text text-small overflow-x-auto rounded border p-3 font-mono">
+        <pre className="border-base-border bg-base-bg text-text text-small overflow-x-auto border p-3 font-mono">
           {`[crawler]
 enabled = true
 # optional geo / ASN enrichment (MaxMind GeoLite2):
@@ -248,7 +246,7 @@ function Hero({
           </p>
         )}
         {activeRound?.blockedReason && (
-          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 rounded border px-3 py-2 font-mono">
+          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 border px-3 py-2 font-mono">
             Active crawler round blocked: {activeRound.blockedReason}
           </p>
         )}

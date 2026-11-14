@@ -599,7 +599,7 @@ export function PeersTable() {
           aria-expanded={filtersOpen}
           aria-controls={filtersId}
           onClick={() => setFiltersOpen((open) => !open)}
-          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 rounded border px-2.5 font-mono md:hidden"
+          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 border px-2.5 font-mono md:hidden"
         >
           filters{activeFilters > 0 ? ` · ${activeFilters}` : ''}{' '}
           <span aria-hidden="true" className="text-text-dim">
@@ -626,7 +626,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by crawler dial state"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             >
               <option value="">All crawler dial states</option>
               {STATE_OPTIONS.map((option) => (
@@ -646,7 +646,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by address observation"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             >
               <option value="">All address observations</option>
               {OBSERVATION_OPTIONS.map((option) => (
@@ -663,7 +663,7 @@ export function PeersTable() {
               }
               placeholder="country"
               aria-label="Filter by country"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             />
             <input
               type="text"
@@ -673,7 +673,7 @@ export function PeersTable() {
               }
               placeholder="version"
               aria-label="Filter by version"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             />
           </div>
 

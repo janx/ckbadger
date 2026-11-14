@@ -157,7 +157,7 @@ const HexRows = memo(function HexRows({
     for (let b = r; b < r + perRow; b++) {
       if (b < from || b >= to || b >= bytes.length) {
         hex.push(
-          <span key={b} aria-hidden="true" data-pad="" className="invisible rounded-sm px-px">
+          <span key={b} aria-hidden="true" data-pad="" className="invisible px-px">
             00
           </span>
         );
@@ -178,7 +178,7 @@ const HexRows = memo(function HexRows({
           data-part-id={part.id}
           data-byte={`${block}:${b}`}
           title={`${part.label} · byte ${b.toLocaleString('en-US')}`}
-          className="rounded-sm px-px"
+          className="px-px"
           style={{
             color: part.tone,
             backgroundColor: part.occupied ? rgba(part.tone, 0.15) : 'transparent',
@@ -598,7 +598,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             }
             title={`${g} · ${formatCount(groupBytes[g], 'byte')}`}
             {...handlers({ kind: 'group', group: g })}
-            className="text-meta flex items-center justify-center whitespace-nowrap rounded-sm"
+            className="text-meta flex items-center justify-center whitespace-nowrap"
             style={{
               flex: `${bytes} 0 0`,
               minWidth: mapSegmentMinWidth(label, big ? 28 : 8),
@@ -625,7 +625,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="text-meta text-base-bg flex items-center justify-center overflow-hidden rounded-sm"
+                className="text-meta text-base-bg flex items-center justify-center overflow-hidden"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
@@ -646,7 +646,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 <span key={region.id} className="inline-flex items-center gap-1.5">
                   <span
                     aria-hidden="true"
-                    className="inline-block h-2 w-2 rounded-sm"
+                    className="inline-block h-2 w-2"
                     style={{ backgroundColor: region.tone }}
                   />
                   {region.label}{' '}
@@ -685,7 +685,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     data-pill={part.id}
                     {...handlers({ kind: 'part', id: part.id })}
                     className={cn(
-                      'text-meta inline-flex h-6 items-center gap-1.5 rounded border px-2',
+                      'text-meta inline-flex h-6 items-center gap-1.5 border px-2',
                       active?.kind === 'part' && active.id === part.id
                         ? 'border-text'
                         : 'border-base-border-subtle',
@@ -784,7 +784,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           aria-label="Field detail"
           aria-live="polite"
           className={cn(
-            'text-small border-base-border-subtle min-h-[260px] rounded border px-3.5 py-3',
+            'text-small border-base-border-subtle min-h-[260px] border px-3.5 py-3',
             STICKY_RAIL
           )}
         >

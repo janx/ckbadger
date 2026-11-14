@@ -244,11 +244,7 @@ export function TxStructure({
     />
   );
   const sheet = (side: Side, cells: readonly CellTileData[], total: string | undefined) => (
-    <TerminalPanel
-      data-sheet={side}
-      // from lg, square on the seam side; the panel's 8 px radius outside (and all round below lg)
-      className={cn('min-w-0', side === 'consumed' ? 'lg:rounded-r-none' : 'lg:rounded-l-none')}
-    >
+    <TerminalPanel data-sheet={side} className="min-w-0">
       {/* the sheet's lane on its seam side (SHEETS.lane: 35 px and the 1 px border); 12 px on
           the outer side, above and under its rows, which stay at the top (the fee directly under
           the last created tile) when the sheet stretches to its pair */}
@@ -568,7 +564,7 @@ function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
     <div
       data-fee=""
       data-testid="tx-fee"
-      className="text-small border-text-dim/60 text-text rounded border border-dashed px-3 py-2"
+      className="text-small border-text-dim/60 text-text border border-dashed px-3 py-2"
     >
       <span className="block">fee</span>
       <ExactCkb
@@ -589,7 +585,7 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
       data-inflow={inflow.tone}
       data-testid="tx-inflow"
       className={cn(
-        'text-small rounded border border-dashed px-3 py-2',
+        'text-small border border-dashed px-3 py-2',
         inflow.tone === 'dao' ? 'border-gold/60 text-gold' : 'border-text-dim/60 text-text'
       )}
     >

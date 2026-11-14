@@ -139,7 +139,7 @@ describe('the rules in globals.css', () => {
     const well = css.match(/\.well\s*\{([^}]*)\}/)!;
     expect(well[1]).toContain('background: var(--c-well-bg)');
     expect(well[1]).toContain('border: 1px solid var(--c-base-border-subtle)');
-    // re-pinned with ruling R1 (UI review 2026-11-14): the well is square, whatever --well-radius says
+    // re-pinned with ruling R1 (UI review 2026-11-14): the well is square
     expect(well[1]).not.toMatch(/radius/);
     // visual finish V4: the well keeps its inset and gains a 4 % lower lip (both materials of
     // the theme: lib/palette.ts well-inset, well-lip)
@@ -348,7 +348,7 @@ describe('move 2 on the frame and the tier boundary', () => {
       </TerminalPanel>
     );
     const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('glass', 'border-base-border', 'rounded-lg');
+    expect(frame).toHaveClass('glass', 'border-base-border');
     // a flat tile since rubbing × Song print: no lit top edge
     expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).not.toHaveClass('bg-base-surface');
@@ -374,7 +374,7 @@ describe('move 2 on the frame and the tier boundary', () => {
     const { container } = render(<TintedJson text='{"a": 1}' />);
     const pre = container.querySelector('pre')!;
     expect(pre).toHaveClass('well');
-    expect(pre).not.toHaveClass('bg-base-surface', 'rounded');
+    expect(pre).not.toHaveClass('bg-base-surface');
   });
 });
 
@@ -470,7 +470,7 @@ describe('move 5 on the activity row', () => {
       const kind = line.querySelector('[data-role="lock-kind"]') as HTMLElement;
       expect(kind).toHaveTextContent('Default Lock');
       expect(kind).toHaveClass('small-caps', 'lowercase', 'text-text-dim', 'whitespace-nowrap');
-      expect(kind).not.toHaveClass('border', 'rounded-sm', 'text-meta');
+      expect(kind).not.toHaveClass('border', 'text-meta');
     }
     expect(container.querySelector('[data-row-tag]')).toBeNull();
   });
@@ -504,6 +504,6 @@ describe('move 5 on the activity row', () => {
       <LockKind size="row" lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />
     );
     expect(screen.getByText('JoyID')).not.toHaveClass('small-caps', 'lowercase');
-    expect(screen.getByText('JoyID')).toHaveClass('border', 'rounded-sm');
+    expect(screen.getByText('JoyID')).toHaveClass('border');
   });
 });

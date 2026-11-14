@@ -86,7 +86,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
           <div
             role="menu"
             aria-label="CKB network"
-            className="border-base-border bg-base-surface min-w-[11rem] overflow-hidden rounded border shadow-lg"
+            className="border-base-border bg-base-surface min-w-[11rem] overflow-hidden border shadow-lg"
           >
             <div className="eyebrow border-base-border/70 text-text-dim text-meta border-b px-3 py-2 font-mono">
               CKB network
@@ -104,7 +104,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
                     aria-current={isActive ? 'page' : undefined}
                     onClick={() => switchTo(net)}
                     className={cn(
-                      'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left transition-colors',
+                      'flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors',
                       isActive
                         ? 'bg-aqua/10 text-aqua'
                         : 'text-text-dim hover:bg-base-elevated/60 hover:text-text'

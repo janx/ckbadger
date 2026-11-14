@@ -491,10 +491,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   <div
                     aria-label={`${percentOf(BigInt(onchain), BigInt(coll.liveCount))} fully on-chain`}
                     role="img"
-                    className="bg-bar-track h-2 overflow-hidden rounded"
+                    className="bg-bar-track h-2 overflow-hidden"
                   >
                     <span
-                      className="block h-full rounded"
+                      className="block h-full"
                       style={{
                         width: `${formatPercent(BigInt(onchain), BigInt(coll.liveCount))}%`,
                         backgroundImage: COMPOSITION_BADGES[coll.composition.tier].bar,

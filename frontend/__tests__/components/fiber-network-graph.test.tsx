@@ -161,7 +161,7 @@ describe('FiberNetworkGraph', () => {
       expect(frame).not.toBeNull();
       expect(frame).toHaveAttribute('aria-label', 'The Fiber network on chain');
       // a flat tile since rubbing × Song print: no lit top edge
-      expect(frame).toHaveClass('glass', 'rounded-lg');
+      expect(frame).toHaveClass('glass');
       expect(frame).not.toHaveClass('neon-edge-top');
       // the detail column stays outside the frame
       expect(frame.contains(panel())).toBe(false);

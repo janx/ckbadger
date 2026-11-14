@@ -165,7 +165,7 @@ export function RewardBreakdown({
           <div key={p.key} className="contents">
             <span
               aria-hidden="true"
-              className="h-2 w-2 self-center rounded-sm"
+              className="h-2 w-2 self-center"
               style={{ backgroundColor: REWARD_COLORS[p.key] }}
             />
             <dt>{p.label}</dt>

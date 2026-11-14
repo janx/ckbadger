@@ -164,7 +164,7 @@ export function FiberChannelStep({
             hideGroups
           />
           <div
-            className="text-small flex flex-col items-start gap-1 rounded border border-dashed px-3 py-2.5"
+            className="text-small flex flex-col items-start gap-1 border border-dashed px-3 py-2.5"
             style={{ borderColor: BOARD_INKS.quiet }}
           >
             <span className="text-text-bright">{box.head}</span>

@@ -78,7 +78,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
           type="button"
           disabled={more.isFetching}
           onClick={() => (wantsMore ? void more.fetchNextPage() : setWantsMore(true))}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 rounded border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Show more sub-names
         </button>

@@ -85,7 +85,7 @@ export function RankedBars({
                   href={row.href}
                   className={cn(
                     grid,
-                    'hover:bg-base-elevated/60 focus-visible:bg-base-elevated/60 group -mx-1 rounded px-1 outline-none transition-colors'
+                    'hover:bg-base-elevated/60 focus-visible:bg-base-elevated/60 group -mx-1 px-1 outline-none transition-colors'
                   )}
                 >
                   {body}

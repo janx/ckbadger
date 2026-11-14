@@ -90,7 +90,7 @@ describe('NetworkMapView', () => {
     expect(frame).not.toBeNull();
     expect(frame).toHaveAttribute('aria-label', 'Map of verified peers');
     // a flat tile since rubbing × Song print: no lit top edge
-    expect(frame).toHaveClass('rounded-lg', 'border', 'border-base-border');
+    expect(frame).toHaveClass('border', 'border-base-border');
     expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).not.toContainElement(
       screen.getByRole('complementary', { name: 'Selected peer evidence' })

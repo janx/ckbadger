@@ -482,7 +482,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
           <aside
             aria-label="Selected peer evidence"
             aria-live="polite"
-            className={`border-base-border-subtle text-small min-w-0 self-start rounded border px-3.5 py-3 ${STICKY_RAIL}`}
+            className={`border-base-border-subtle text-small min-w-0 self-start border px-3.5 py-3 ${STICKY_RAIL}`}
           >
             {selected ? (
               <PeerReadout point={selected} roundId={ready.roundId} />

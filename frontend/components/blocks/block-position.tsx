@@ -191,7 +191,7 @@ export function BlockPosition({
       )}
       <div aria-label="Chain position relationships" className="min-w-0 space-y-4 md:hidden">
         <div
-          className="text-small space-y-2 rounded p-3"
+          className="text-small space-y-2 p-3"
           style={{ backgroundColor: BLOCK_POSITION_COLORS.currentTile }}
         >
           <Link href={`/blocks/${block.hash}`} className="text-text-bright block">

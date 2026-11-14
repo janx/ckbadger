@@ -447,7 +447,7 @@ function WitnessRow({
       onFocus={() => onHover({ t: 'witness', index: w.index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-row-rule text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 rounded border-b px-1.5 py-2.5 text-left transition-opacity',
+        'border-row-rule text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 border-b px-1.5 py-2.5 text-left transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
@@ -469,7 +469,7 @@ function WitnessRow({
           {fields.map((f, i) => (
             <span
               key={i}
-              className={cn('rounded-sm', OVERHEAD_FIELD.test(f.name) ? '' : 'bg-jade')}
+              className={OVERHEAD_FIELD.test(f.name) ? undefined : 'bg-jade'}
               style={{
                 width: Math.max(2, Math.round(((f.end - f.start) / scale) * 320)),
                 backgroundColor: OVERHEAD_FIELD.test(f.name) ? CLASS_COLORS.ckb : undefined,
@@ -576,7 +576,7 @@ function DepRow({
       onFocus={() => onHover({ t: 'dep', index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-row-rule text-small -mx-1.5 flex flex-col gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
+        'border-row-rule text-small -mx-1.5 flex flex-col gap-y-0.5 border-b px-1.5 py-2.5 transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}

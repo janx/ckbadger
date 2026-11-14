@@ -327,10 +327,7 @@ function LoadingVital({ label, cls }: { label: string; cls: string }) {
   return (
     <div className={cls}>
       <span className={LABEL}>{label}</span>
-      <span
-        aria-hidden="true"
-        className="bg-base-elevated inline-block h-3 w-16 animate-pulse rounded"
-      />
+      <span aria-hidden="true" className="bg-base-elevated inline-block h-3 w-16 animate-pulse" />
     </div>
   );
 }

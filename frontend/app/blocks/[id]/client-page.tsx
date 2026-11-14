@@ -787,7 +787,7 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
     <Link
       href={href}
       aria-label={label}
-      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center rounded border"
+      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -820,7 +820,7 @@ function EpochBar({
     <span
       role="img"
       aria-label={String(Array.isArray(children) ? children.join('') : children)}
-      className="bg-base-border flex h-1 w-[72px] shrink-0 overflow-hidden rounded-sm"
+      className="bg-base-border flex h-1 w-[72px] shrink-0 overflow-hidden"
     >
       <span className="bg-text h-full" style={{ width: `${((index + 1) / length) * 100}%` }} />
     </span>

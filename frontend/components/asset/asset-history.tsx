@@ -45,7 +45,7 @@ function Swatch({ color }: { color: string }) {
   return (
     <span
       aria-hidden
-      className="mr-1.5 inline-block h-2 w-2 rounded-sm align-middle"
+      className="mr-1.5 inline-block h-2 w-2 align-middle"
       style={{ backgroundColor: color }}
     />
   );
@@ -339,7 +339,7 @@ export function AssetHistory({
             <button
               key={r}
               aria-pressed={range === r}
-              className={`border-base-border text-small rounded border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
+              className={`border-base-border text-small border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
               onClick={() => {
                 setRange(r);
                 setSelectedDate(null);

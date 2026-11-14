@@ -61,12 +61,12 @@ export function ShareBar({
     <span
       aria-hidden="true"
       data-share-track
-      className={cn('bg-bar-track flex h-1 flex-none rounded-sm', className)}
+      className={cn('bg-bar-track flex h-1 flex-none', className)}
       style={{ width: `${track}px` }}
     >
       <span
         data-share-bar={width}
-        className="block h-full rounded-sm"
+        className="block h-full"
         style={{ width, minWidth: value > 0 ? 2 : 0, backgroundColor: color }}
       />
     </span>

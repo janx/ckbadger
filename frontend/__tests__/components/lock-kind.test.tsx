@@ -41,7 +41,7 @@ describe('LockKind (R-2)', () => {
     rerender(
       <LockKind size="row" lockKind="JoyID" lockCodeHash={CODE} className={rowTagClass()} />
     );
-    expect(screen.getByText('JoyID')).toHaveClass('text-meta', 'border', 'rounded-sm', 'leading-4');
+    expect(screen.getByText('JoyID')).toHaveClass('text-meta', 'border', 'leading-4');
     expect(screen.getByText('JoyID')).toHaveAttribute('title', CODE);
   });
 

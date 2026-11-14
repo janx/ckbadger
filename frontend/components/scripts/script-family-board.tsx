@@ -518,7 +518,7 @@ export function ScriptHistoryReading({
           <span className="flex items-baseline gap-1.5">
             <span
               aria-hidden="true"
-              className="inline-block h-2 w-2 rounded-sm"
+              className="inline-block h-2 w-2"
               style={{ backgroundColor: DATA_COLOR }}
             />
             <span>occupied</span> <ExactCkb shannons={used} signed={false} tone="plain" />
@@ -526,7 +526,7 @@ export function ScriptHistoryReading({
           <span className="flex items-baseline gap-1.5">
             <span
               aria-hidden="true"
-              className="inline-block h-2 w-2 rounded-sm"
+              className="inline-block h-2 w-2"
               style={{ backgroundColor: HELD_CAPACITY_COLOR }}
             />
             <span>free</span> <ExactCkb shannons={unused} signed={false} tone="plain" />
@@ -734,7 +734,7 @@ export function ScriptCustodyFigure({
                 ))}
               </ul>
             ) : holder.neverSigned ? (
-              <div className="text-meta border-text-ghost text-text mt-3 rounded border border-dashed p-3">
+              <div className="text-meta border-text-ghost text-text mt-3 border border-dashed p-3">
                 Its keys and threshold appear on chain the first time it signs.
               </div>
             ) : null}
