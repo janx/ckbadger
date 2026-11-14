@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
  * U-15 (UI review 2026-11-14): one wording for the same thing.
  *
  * - The ellipsis of a loading or pending string is "…": six still wrote "..." ("Loading graph...",
- *   "pending..."). A search field's placeholder is lane B4's, and so is the search bar.
+ *   "pending..."). A field's placeholder is a hint in the field, not page text, and is not read.
  * - An empty state is a sentence that names the thing and ends with a period: "No transactions."
  *   or "No transactions in this block." (was "No transactions" / "No transactions yet" / "No txns
  *   in this block" / "No data available" …). A "No …" that is a label, a value in a field that
@@ -24,7 +24,7 @@ const walk = (dir: string) => {
 };
 for (const dir of ['app', 'components']) walk(join(root, dir));
 
-/** Attributes whose values are never read as page text, or are a field's placeholder (lane B4). */
+/** Attributes whose values are never read as page text, or are a field's placeholder. */
 const SKIPPED_ATTR =
   /^(className|key|id|href|src|role|type|rel|target|style|testId|data-[\w-]+|\w+ClassName|viewBox|d|fill|stroke|transform|points|textAnchor|fontSize|paintOrder|placeholder)$/;
 
@@ -105,9 +105,7 @@ function texts(file: string): Text[] {
   return out;
 }
 
-/** Lane B4 edits the search bar now (its placeholders, its "Searching..." and its empty states). */
-const LANE_B4 = 'components/search-bar.tsx';
-const all = files.flatMap(texts).filter(({ file }) => file !== LANE_B4);
+const all = files.flatMap(texts);
 
 /** Nouns counted on screen; a count written before one by hand takes no plural rule. */
 const COUNTED =
@@ -259,12 +257,9 @@ describe('copy gates (U-15)', () => {
     '${witness.index} bytes',
     '${countText(script.cellsCount)} cells ever',
   ]);
-  /** Lane B4 edits the hardforks page now; its two "N days" are left to it (see the hand-back). */
-  const LANE_B4_HARDFORKS = 'app/hardforks/page.tsx';
 
   it('writes every count with its noun through the one plural rule (formatCount)', () => {
     const offenders = files
-      .filter((file) => ![LANE_B4, LANE_B4_HARDFORKS].includes(relative(root, file)))
       .flatMap(handCounts)
       .map(where)
       .filter((line) => !NOT_COUNTS.has(line.replace(/^[^ ]+ /, '')));
