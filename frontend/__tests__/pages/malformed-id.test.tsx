@@ -202,7 +202,10 @@ describe('a malformed id answered 400 by the API', () => {
   it('/identities/0x00: not a collection id', async () => {
     at('/identities/0x00', {});
     const message = 'Collection ID is not an identity collection';
-    const seen = answer400('/assets/identities/:id', (p) => p.id === '0x00', message);
+    // an identity collection's insights and capacity chart are read under /assets/objects/:id
+    const seen = answer400('/assets/identities/:id', (p) => p.id === '0x00', message, [
+      '/assets/objects/:id',
+    ]);
     renderWithAppClient(<IdentityCollectionPage collectionId="0x00" />);
     await expectNotAnId('that is not a collection id.', message);
     expect(seen.count).toBe(1);
