@@ -6443,3 +6443,163 @@ async fn object_path_insights_for_spore_cluster_match_spore_insights() {
     assert_eq!(status, StatusCode::OK, "{object}");
     assert_eq!(object, spore);
 }
+
+// ── U-06 (UI review 2026-11-14): a malformed id is a 400, a well-formed unknown one a 404 ──
+
+/// Every object-collection route, as a suffix of `/assets/objects/{id}`.
+const OBJECT_COLLECTION_SUFFIXES: [&str; 8] = [
+    "",
+    "/items",
+    "/holders",
+    "/activities",
+    "/activity-feed",
+    "/transactions",
+    "/charts/capacity-history",
+    "/insights",
+];
+
+/// A live Spore cluster whose id begins `0x00`, with its aggregate and one
+/// member in the cluster membership index: the row a one-byte `0x00` (or any
+/// shorter prefix of the id) would "find" if it were read as a cluster id.
+fn store_with_cluster_starting_00() -> (Arc<CkbadgerStore>, [u8; 32]) {
+    let store = test_store();
+    let mut cluster = [0x5au8; 32];
+    cluster[0] = 0x00;
+    store
+        .put_spore_direct(&cluster, &regression_cluster_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cluster_aggregate(
+        &cluster,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 1,
+            owner_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_spore_by_cluster(&cluster, &[0x51; 32]);
+    batch.commit().unwrap();
+    (store, cluster)
+}
+
+/// `/assets/objects/0x00` answered 500 "missing aggregate for cluster 0x00 with
+/// 7 indexed spores": the assets path took any 1..=32-byte id and handed it to
+/// the Spore cluster lookup, whose membership count is a key-prefix scan, so a
+/// short id counted the members of every cluster it is a prefix of. An object
+/// collection is named by an identity alias, a 24-byte m-NFT class id or a
+/// 32-byte id; any other id is refused before it reaches a store read.
+#[tokio::test]
+async fn regression_malformed_object_collection_id_is_bad_request() {
+    let (store, cluster) = store_with_cluster_starting_00();
+    let app = create_router(test_config(store)).await;
+    let malformed = [
+        "0x00".to_string(),
+        format!("0x{}", hex::encode(&cluster[..31])),
+        format!("0x{}", hex::encode(&cluster[..20])),
+        format!("0x{}", "ab".repeat(33)),
+        "0xzz".to_string(),
+        "nonsense".to_string(),
+    ];
+    let mut failures = Vec::new();
+    for id in &malformed {
+        for suffix in OBJECT_COLLECTION_SUFFIXES {
+            let path = format!("/assets/objects/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            let message = json["message"].as_str().unwrap_or_default();
+            if status != StatusCode::BAD_REQUEST
+                || !message.starts_with("Invalid object collection ID")
+            {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A 24-byte id has an m-NFT class's width; one that names no class is
+/// unknown (404), never read as the prefix of a Spore cluster's id.
+#[tokio::test]
+async fn regression_unknown_class_width_collection_id_is_not_found() {
+    let (store, cluster) = store_with_cluster_starting_00();
+    let app = create_router(test_config(store)).await;
+    let mut failures = Vec::new();
+    for id in [hex::encode(&cluster[..24]), hex::encode([0xc5u8; 24])] {
+        for suffix in OBJECT_COLLECTION_SUFFIXES {
+            let path = format!("/assets/objects/0x{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::NOT_FOUND {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The m-NFT item routes: an m-NFT token id is its type args, at least the 28
+/// bytes of issuer, class and token index; a shorter id names no token (400),
+/// a well-formed one the index does not hold is unknown (404).
+#[tokio::test]
+async fn regression_mnft_item_routes_reject_malformed_id_and_miss_unknown() {
+    let app = create_router(test_config(test_store())).await;
+    let suffixes = ["", "/activities", "/activity-feed", "/transactions"];
+    let mut failures = Vec::new();
+    for id in [
+        "0x00".to_string(),
+        format!("0x{}", "ab".repeat(24)),
+        format!("0x{}", "ab".repeat(33)),
+        "0xzz".to_string(),
+    ] {
+        for suffix in suffixes {
+            let path = format!("/assets/objects/items/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::BAD_REQUEST
+                || !json["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("Invalid m-NFT token ID")
+            {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    for suffix in suffixes {
+        let path = format!("/assets/objects/items/0x{}{suffix}", "ab".repeat(28));
+        let (status, json) = get_json(&app, &path).await;
+        if status != StatusCode::NOT_FOUND {
+            failures.push(format!("{path}: {status} {json}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The identity collection routes: only the four identity collections exist,
+/// named by alias or sentinel; any other id is not one (400), and a collection
+/// the index holds nothing of is unknown (404).
+#[tokio::test]
+async fn identity_collection_routes_reject_malformed_id_and_miss_unknown() {
+    let app = create_router(test_config(test_store())).await;
+    let suffixes = ["", "/items", "/holders", "/activities"];
+    let mut failures = Vec::new();
+    for id in [
+        "0x00".to_string(),
+        format!("0x{}", "ab".repeat(32)),
+        "0xzz".to_string(),
+    ] {
+        for suffix in suffixes {
+            let path = format!("/assets/identities/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::BAD_REQUEST {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    for suffix in suffixes {
+        let path = format!("/assets/identities/dotbit{suffix}");
+        let (status, json) = get_json(&app, &path).await;
+        if status != StatusCode::NOT_FOUND {
+            failures.push(format!("{path}: {status} {json}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
