@@ -11,7 +11,16 @@
 // band reads in the line under it, and a tap pins it until a second tap or Escape (R6, board V2).
 import { useId, useState, type ReactNode } from 'react';
 import type { AlleleLane } from '@/lib/dob-genes';
-import { GEL_COLORS, GEL_INK } from '@/lib/design-tokens';
+import { GEL_COLORS, GEL_INK, GEL_INK_KEYS } from '@/lib/design-tokens';
+import {
+  color,
+  hexToRgb,
+  inkOnColours,
+  overGround,
+  type PaletteKey,
+  type ThemeName,
+} from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount, countNoun } from '@/lib/format-count';
 import {
@@ -36,6 +45,46 @@ const MIN_ROW_BAND = 120;
 const LIST_FIRST = 10;
 
 const r = (v: number) => Math.round(v * 100) / 100;
+/** Where the plate-wide band gradient sets its stops, as fractions of the gel's width. */
+const INK_STOPS = [0, 0.45, 1] as const;
+
+/** `b` at `t` of the way from `a` (two hexes, sRGB, as an SVG gradient interpolates). */
+function lerpHex(a: string, b: string, t: number): string {
+  const [x, y] = [hexToRgb(a), hexToRgb(b)];
+  const c = (p: number, q: number) =>
+    Math.round(p + (q - p) * t)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${c(x.r, y.r)}${c(x.g, y.g)}${c(x.b, y.b)}`;
+}
+
+/**
+ * The ink of a label on a band (words on a fill, `inkOnFill`'s rule): the band is the plate-wide
+ * gradient of `stops` at `alpha` over `ground`, so the label, from `x0` to `x1` on a gel `width`
+ * wide, is read on each colour under it (its two ends and any stop between) and takes the fill ink
+ * that reads strongest on all of them.
+ */
+function bandLabelInk(
+  theme: ThemeName,
+  stops: readonly PaletteKey[],
+  alpha: number,
+  ground: PaletteKey,
+  [x0, x1]: readonly [number, number],
+  width: number
+): string {
+  const at = (x: number) => {
+    const t = Math.min(1, Math.max(0, x / width));
+    const i = t <= INK_STOPS[1] ? 0 : 1;
+    const u = (t - INK_STOPS[i]) / (INK_STOPS[i + 1] - INK_STOPS[i]);
+    return lerpHex(
+      overGround(theme, stops[i], alpha, ground),
+      overGround(theme, stops[i + 1], alpha, ground),
+      u
+    );
+  };
+  const xs = [x0, x1, ...INK_STOPS.map((s) => s * width).filter((x) => x > x0 && x < x1)];
+  return color(inkOnColours(theme, xs.map(at)).ink);
+}
 
 export interface GenotypeOverlay {
   key: string;
@@ -51,6 +100,11 @@ export interface AlleleGelProps {
   total: number;
   subject: string;
   ink?: keyof typeof GEL_INK;
+  /**
+   * The colour the gel is drawn on (its plate's fill, else the page ground): a band's label takes
+   * the ink the band's fill calls for over it.
+   */
+  ground?: PaletteKey;
   /** Height of the band area in one row; wrapped rows share it, down to 120 px each. */
   bandHeight?: number;
   overlays?: readonly GenotypeOverlay[];
@@ -115,6 +169,7 @@ function Gel({
   total,
   subject,
   ink = 'other',
+  ground = 'base-bg',
   bandHeight = 250,
   overlays = [],
   activeOverlay = null,
@@ -129,6 +184,7 @@ function Gel({
   layout,
 }: AlleleGelProps & { width: number; layout: Extract<AlleleGelLayout, { form: 'gel' }> }) {
   const inkId = `gel-ink-${useId().replace(/:/g, '')}`;
+  const { resolved: theme } = useTheme();
   const readout = usePinnedReadout<Variant>(variantKey);
   const read = readout.active;
   const readLane = read === null ? undefined : lanes.find((l) => l.gene === read.gene);
@@ -268,18 +324,34 @@ function Gel({
                         >
                           <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${formatPercent(BigInt(b.count), BigInt(total))}%)`}</title>
                         </rect>
-                        {p.h >= 13 && lw >= ALLELE_GEL.labelledLane && !b.isColour && (
-                          <text
-                            x={r(cx)}
-                            y={r(p.y + p.h / 2 + 3.5)}
-                            textAnchor="middle"
-                            fontSize="10"
-                            pointerEvents="none"
-                            fill={lane.conserved ? GEL_COLORS.well : GEL_COLORS.bandText}
-                          >
-                            {clipLabel(b.label, labelChars)}
-                          </text>
-                        )}
+                        {p.h >= 13 &&
+                          lw >= ALLELE_GEL.labelledLane &&
+                          !b.isColour &&
+                          (() => {
+                            const label = clipLabel(b.label, labelChars);
+                            // words on a fill: the ink the band calls for under the label's run
+                            const half = (label.length * ALLELE_GEL.charWidth) / 2;
+                            const fill = bandLabelInk(
+                              theme,
+                              GEL_INK_KEYS[ink],
+                              r(opacity),
+                              ground,
+                              [r(cx) - half, r(cx) + half],
+                              width
+                            );
+                            return (
+                              <text
+                                x={r(cx)}
+                                y={r(p.y + p.h / 2 + 3.5)}
+                                textAnchor="middle"
+                                fontSize="10"
+                                pointerEvents="none"
+                                fill={fill}
+                              >
+                                {label}
+                              </text>
+                            );
+                          })()}
                       </g>
                     );
                   })}

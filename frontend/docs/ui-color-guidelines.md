@@ -192,7 +192,11 @@ fill's own luminance over its ground in the theme in force — the well (`base-v
 ink (`text-bright`), whichever reads stronger — never an ink chosen by the segment's rank or by
 hand per node, and never the dim ink or an opacity on a fill: every word on one fill is in that
 one ink. `__tests__/lib/fill-ink.test.ts`, `segment-ink.test.tsx` and `icicle-ink.test.tsx` pin
-every labelled fill at 4.5:1 in both themes.
+every labelled fill at 4.5:1 in both themes. A gradient fill under one label (the allele gel's
+bands, the plate-wide ink at the band's strength over the plate the gel sits on) is read at every
+colour under the word, and the label takes the ink that reads best on the worst of them
+(`inkOnColours`); `allele-band-ink.test.tsx` pins it, and lists the bands where neither ink reaches
+4.5:1.
 
 A pipeline tile (elevated with 7 % jade) is a ground of its own, and its words are chosen for it:
 its labels ("+N") take the text ink, one step up from the dim, and a block number inside the drawn
@@ -245,8 +249,8 @@ lightness only (lighter by night, darker by day) until it clears that ratio on a
 | `search-*`, `stream-*`                                  | the well, celadon                       | panel mix well black 0.8 / `#fffdf8`; selected, hover = celadon 8 %, 3 % on the well (10 %, 4 % on the surface); stream mix well black 0.7, 0.88 / tile, mix elevated line 0.75                                                    |
 | `row-tag-accent-edge`, `reward-secondary`               | celadon into bg                         | 36 %; 58 % (day 50 %)                                                                                                                                                                                                              |
 | `code-fixed-fill`, `code-unspendable-fill`              | the inks                                | mix text dim 0.3, mix dim ghost 0.4 / mix dim ghost 0.8, mix ghost line 0.75                                                                                                                                                       |
-| `elf-*`                                                 | framing, celadon, moss, gold, lotus     | header = framing; program headers framing L +0.07; rodata mix celadon moss 0.55; eh-frame rodata C ×0.4; data gold L +0.06 C ×0.75; meta lotus L +0.06 C ×0.8 (day: the day accents, lighter)                                      |
-| `elf-*`, text grade                                     | the row above                           | ≥ 4.5 also on the tier-2 ground (night clears): day rodata `#3b7047` (4.40 → 4.53), eh-frame `#576a5a` (3.96 → 4.51), data `#7c6126` (4.15 → 4.53), meta `#695c9a` (3.81 → 4.53); program headers short (ruling pending)           |
+| `elf-*`                                                 | framing, celadon, moss, gold, lotus     | header = framing; program headers = header L +0.07 by night, L −0.07 by day; rodata mix celadon moss 0.55; eh-frame rodata C ×0.4; data gold L +0.06 C ×0.75; meta lotus L +0.06 C ×0.8 (day: the day accents, lighter)            |
+| `elf-*`, text grade                                     | the row above                           | ≥ 4.5 also on the tier-2 ground (night clears): day program headers `#2d5665` (3.28 → 6.19), rodata `#3b7047` (4.40 → 4.53), eh-frame `#576a5a` (3.96 → 4.51), data `#7c6126` (4.15 → 4.53), meta `#695c9a` (3.81 → 4.53)          |
 | `gel-*`                                                 | copper, celadon                         | overlay warm white / ink; band text the deepest well / surface; btc copper pale, copper, jade-bright (day jade-dim); pure neon-white, jade-bright, jade (day jade-dim, jade, jade-bright)                                          |
 | `tier-btc-*`                                            | moss, gold                              | ink moss C ×0.75 ≥ 4.5, lit L +0.07 (day −0.06); edges moss 36 / 52 % on bg (45 / 62 %); wash gold 28 % (30 %)                                                                                                                     |
 | `tier-pure-*`                                           | celadon                                 | ink jade L −0.04 ≥ 4.5 (day jade), lit jade-bright; edges 34 / 50 % (38 / 55 %); wash 16 % (20 %)                                                                                                                                  |

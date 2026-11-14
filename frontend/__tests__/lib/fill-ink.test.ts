@@ -4,6 +4,7 @@ import {
   PALETTE,
   THEMES,
   contrastRatio,
+  inkOnColours,
   inkOnFill,
   overGround,
   type PaletteKey,
@@ -31,6 +32,28 @@ describe('overGround', () => {
     expect(overGround('light', 'gold', 0.7)).toBe('#a38b4f');
     expect(overGround('light', 'gold', 0.7, 'base-surface')).toBe('#a58d53');
     expect(() => overGround('dark', 'gold', 1.2)).toThrow('alpha 1.2 of gold');
+  });
+});
+
+// Lane E2 round 4: a label on a gradient band stands on several colours at once; the ink is the
+// one whose lowest contrast over them is highest, and one colour is inkOnFill's own case.
+describe('inkOnColours', () => {
+  it('is inkOnFill for one colour', () => {
+    for (const theme of THEMES)
+      for (const a of [0.35, 0.68, 1])
+        expect(inkOnColours(theme, [overGround(theme, 'object', a, 'base-bg')])).toEqual(
+          inkOnFill(theme, 'object', a)
+        );
+  });
+
+  it('takes the ink that reads best on the worst of several colours', () => {
+    const colours = [PALETTE.dark['text-bright'], PALETTE.dark['base-surface']];
+    const picked = inkOnColours('dark', colours);
+    const worst = (ink: PaletteKey) =>
+      Math.min(...colours.map((c) => contrastRatio(PALETTE.dark[ink], c)));
+    expect(picked.contrast).toBeCloseTo(Math.max(...FILL_INKS.map(worst)), 10);
+    expect(picked.contrast).toBeCloseTo(worst(picked.ink), 10);
+    expect(() => inkOnColours('dark', [])).toThrow('an ink on no colour');
   });
 });
 
