@@ -6,7 +6,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
-import { SealedHead } from '@/components/ui/page-seal';
+import { PlateHash, SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
@@ -1261,7 +1261,7 @@ export default function TransactionDetailPage() {
             // its own classes
             identity={
               <div className="flex min-w-0 items-center gap-0.5">
-                <span className="min-w-0">{tx.hash}</span>
+                <PlateHash hash={tx.hash} />
                 <CopyHash hash={tx.hash} />
               </div>
             }

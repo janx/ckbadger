@@ -413,8 +413,12 @@ describe('Transaction board, tier 1', () => {
     // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
     // the copy button keeps its own classes
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const hash = within(idLine).getByText(TX_HASH);
-    expect(hash.className).toBe('min-w-0');
+    // the lead's ruling a: the hash is the plate's PlateHash, one line or two halves, never a
+    // scroller (re-pinned: it was a bare span, 'min-w-0'); still no size or ink of its own
+    const hash = idLine.querySelector('[data-plate-hash]') as HTMLElement;
+    expect(hash).toHaveAttribute('title', TX_HASH);
+    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
+    expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
     expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
       'text-text-dim',

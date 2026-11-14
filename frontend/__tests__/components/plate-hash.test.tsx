@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PlateHash } from '@/components/ui/page-seal';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
@@ -52,7 +52,7 @@ describe('PlateHash, the full hash on a name plate', () => {
     expect(halves()).toHaveLength(2);
   });
 
-  it('copies the whole id when it copies', () => {
+  it('copies the whole id when it copies, the plate keeping its two lines', async () => {
     stubChartWidth(326);
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
@@ -60,6 +60,10 @@ describe('PlateHash, the full hash on a name plate', () => {
     fireEvent.click(plate());
     expect(writeText).toHaveBeenCalledWith(HASH);
     expect(screen.getByTitle(HASH)).toBe(plate());
+    // the ✓ stands over the hash, which keeps its lines (hidden), so the page under it never moves
+    await waitFor(() => expect(screen.getByText('✓')).toBeInTheDocument());
+    expect(halves()).toHaveLength(2);
+    expect(halves()[0].parentElement).toHaveClass('invisible');
   });
 
   it('refuses a value that is not a full hash', () => {

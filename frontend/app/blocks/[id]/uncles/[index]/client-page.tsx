@@ -15,6 +15,7 @@ import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatEpochPosition } from '@/lib/epoch';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { PlateHash } from '@/components/ui/page-seal';
 
 const INDEX = /^(0|[1-9]\d*)$/;
 /** What `INDEX` accepts, as the not-an-id page says it. */
@@ -115,7 +116,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
     <DetailLayout
       title={`Uncle ${formatBlockNumber(uncle.number)}`}
       documentTitle={[formatBlockNumber(uncle.number), 'uncle']}
-      identity={<Hash hash={uncle.hash} truncate={false} />}
+      identity={<PlateHash hash={uncle.hash} copyable />}
       facts={[
         {
           label: 'Included by',

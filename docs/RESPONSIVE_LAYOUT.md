@@ -91,7 +91,9 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Touch**: anything a hover reveals must also be reachable by a tap that pins a readout under the
   figure; hints say "tap or hover".
 - **Non-breaking units**: an address with its lock label, a number with its unit, an outpoint with
-  its index, a date, a hyphenated term — never broken inside.
+  its index, a date, a hyphenated term — never broken inside. A name plate's full hash stands on
+  one line where the measured line holds it, else in two halves (`0x` and 32 digits, then the last
+  32 indented 2ch), each half one unit, never a scroller.
 
 ## Check
 

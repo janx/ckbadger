@@ -6,7 +6,6 @@ import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
-import { HexCode } from '@/components/ui/hex-code';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -36,6 +35,7 @@ import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { PlateHash } from '@/components/ui/page-seal';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -258,8 +258,9 @@ export default function BlockDetailPage() {
             </span>
           }
           // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
-          // voice (C10 round 2: `inherit` writes no ink or size), click to copy as before.
-          identity={<HexCode value={block.hash} truncate={false} variant="inherit" />}
+          // voice (C10 round 2), click to copy as before; one line or two halves, never a
+          // scroller (the lead's ruling a).
+          identity={<PlateHash hash={block.hash} copyable />}
           // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
           // hash, and the transactions it holds in rods. A count the API did not serve is refused
           // (the summary below reads it first), never filled in.
