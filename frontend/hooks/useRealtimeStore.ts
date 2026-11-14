@@ -261,15 +261,6 @@ export function useRealtimeData(enabled = true) {
             };
           }
         );
-
-        // Also update ChainWave's tip block cache
-        queryClient.setQueryData(['chain-wave-tip-block'], (old: { data: Block[] } | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            data: [blockData],
-          };
-        });
       } else if (message.type === 'new_transaction') {
         const txData = message.data as Transaction;
         setLatestTx(txData);
