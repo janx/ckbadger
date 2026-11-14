@@ -813,7 +813,14 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     const svg = within(issuance()).getByRole('img', {
       name: /Secondary issuance since genesis, split three ways/,
     });
-    expect(svg.querySelectorAll('text')).toHaveLength(0);
+    // Re-pinned with PB-25 (UI review 2026-11-14): a block wide enough for its share writes it
+    // inside at phone width too (the whole, depositors, burnt, still owed here); the narrow ones
+    // stay blank and the list below names every part.
+    // (paid out is 49 px: "33.3%" at 11 px and 6 px padding needs 47; miners' 50 px cannot hold
+    // "14.29%" at 13 px and 12 px padding, 72)
+    expect(
+      Array.from(svg.querySelectorAll('[data-label]')).map((t) => t.getAttribute('data-label'))
+    ).toEqual(['total', 'compensation', 'paid', 'owed', 'burnt']);
     const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
     expect(legend).toHaveTextContent('secondary issuance since genesis 7.00000000 CKB');
     expect(legend).toHaveTextContent('miners 14.29% · 1.00000000');

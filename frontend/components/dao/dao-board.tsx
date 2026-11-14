@@ -20,7 +20,11 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
+import {
+  IciclePartition,
+  icicleNodePaint,
+  type IcicleNode,
+} from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { CLASS_COLORS, CLASS_KEYS, DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
@@ -464,6 +468,15 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         ],
       };
   const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
+  /** PB-25: a legend row's swatch is its block's paint, so every row names one block. */
+  const swatchOf = (key: string) => {
+    const find = (node: IcicleNode): IcicleNode | undefined =>
+      node.key === key ? node : node.children?.map(find).find(Boolean);
+    const node = root && find(root);
+    if (!node) throw new Error(`DAO issuance: no icicle block ${key} for its legend row`);
+    const { color: paint, opacity } = icicleNodePaint(node);
+    return <Swatch color={fade(paint, opacity)} />;
+  };
   return (
     <Section
       title="Where secondary issuance goes"
@@ -487,7 +500,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
               formatValue={(v) => <SvgCkb shannons={v} />}
               width={width}
               rows={ICICLE_ROWS}
-              hideLabels={narrow}
             />
           )
         )}
@@ -498,6 +510,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           className="text-small text-text-dim mt-3 space-y-1.5"
         >
           <li>
+            {swatchOf('total')}
             secondary issuance since genesis{' '}
             <span className="text-text">
               <Amount value={total.toString()} />
@@ -505,26 +518,28 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             CKB
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.miners} />
+            {swatchOf('miners')}
             miners {share(mining)} ·{' '}
             <span className="text-text">
               <Amount value={mining.toString()} />
             </span>
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
+            {swatchOf('compensation')}
             depositors {share(compensation)} ·{' '}
             <span className="text-text">
               <Amount value={compensation.toString()} />
             </span>
             <ul className="mt-1 space-y-1 pl-5">
               <li>
+                {swatchOf('paid')}
                 paid out {ofCompensation(claimed)} ·{' '}
                 <span className="text-text">
                   <Amount value={claimed.toString()} />
                 </span>
               </li>
               <li>
+                {swatchOf('owed')}
                 still owed {ofCompensation(unclaimed)} ·{' '}
                 <span className="text-text">
                   <Amount value={unclaimed.toString()} />
@@ -534,7 +549,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             </ul>
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
+            {swatchOf('burnt')}
             burnt {share(burnt)} ·{' '}
             <span className="text-text">
               <Amount value={burnt.toString()} />
