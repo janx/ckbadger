@@ -9,7 +9,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { ListTable, type ListColumn, type ListTableForm } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
@@ -439,6 +439,9 @@ export default function ScriptsPage() {
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // PA-03: the bar switch belongs to the table's bar column; the rows the list takes below the
+  // table's minimum width draw no bar, so the switch is drawn with the form the list chose.
+  const [listForm, setListForm] = useState<ListTableForm | null>(null);
   // The table's page (declared first: its request goes first).
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
@@ -684,25 +687,28 @@ export default function ScriptsPage() {
                 >
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </button>
-                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. */}
-                <span
-                  role="group"
-                  aria-label="Bar shows"
-                  className="ml-3 inline-flex items-center whitespace-nowrap"
-                >
-                  <span className="mr-2">bar:</span>
-                  {BAR_FIELDS.map((field, i) => (
-                    <button
-                      key={field.value}
-                      type="button"
-                      aria-pressed={bar === field.value}
-                      onClick={() => chooseBar(field.value)}
-                      className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l' : '-ml-px rounded-r'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
-                    >
-                      {field.label}
-                    </button>
-                  ))}
-                </span>
+                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. Only
+                    with the table, the one form that draws the bar (PA-03). */}
+                {listForm === 'table' && (
+                  <span
+                    role="group"
+                    aria-label="Bar shows"
+                    className="ml-3 inline-flex items-center whitespace-nowrap"
+                  >
+                    <span className="mr-2">bar:</span>
+                    {BAR_FIELDS.map((field, i) => (
+                      <button
+                        key={field.value}
+                        type="button"
+                        aria-pressed={bar === field.value}
+                        onClick={() => chooseBar(field.value)}
+                        className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l' : '-ml-px rounded-r'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+                      >
+                        {field.label}
+                      </button>
+                    ))}
+                  </span>
+                )}
                 {data?.total !== undefined && data.total !== null && (
                   <span className="ml-auto">{formatCount(data.total, 'script')}</span>
                 )}
@@ -726,6 +732,7 @@ export default function ScriptsPage() {
                   // T5: body ink for the row, the name alone bright.
                   rowClassName={() => 'text-text'}
                   mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
+                  onForm={setListForm}
                 />
               )}
               {data && data.data.length > 0 && (
