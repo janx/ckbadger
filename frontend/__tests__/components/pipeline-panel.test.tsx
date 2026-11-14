@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { act, fireEvent, render as renderPlain } from '@testing-library/react';
@@ -56,6 +58,15 @@ import {
 import { FRESH_MS } from '@/lib/pipeline/motion';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
+import {
+  contrastRatio,
+  hexToRgb,
+  overGround,
+  PALETTE,
+  THEMES,
+  type PaletteKey,
+  type ThemeName,
+} from '@/lib/palette';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const VIEW_W = 1600;
@@ -193,6 +204,130 @@ const expectWordsAtFullStrength = (svg: Element) => {
     expect(c.querySelector('[data-words]')).toHaveAttribute('pointer-events', 'none');
   });
 };
+
+// ---- Lane E2 follow-up, ruling 2: every word the pipeline writes reads at 4.5:1 on its ground ----
+const GLOBALS_CSS = readFileSync(join(__dirname, '..', '..', 'app', 'globals.css'), 'utf8');
+/** The palette key a CSS variable resolves to in app/globals.css (`pipeline-elevated` → `base-elevated`). */
+function paletteKeyOfVar(name: string): PaletteKey {
+  let current = name;
+  for (let hop = 0; hop < 6; hop++) {
+    if (current.startsWith('c-')) return current.slice(2) as PaletteKey;
+    const m = new RegExp(`--${current}:\\s*var\\(--([a-z0-9-]+)\\)\\s*;`).exec(GLOBALS_CSS);
+    if (!m) throw new Error(`globals.css: --${current} is not a variable reference`);
+    current = m[1];
+  }
+  throw new Error(`globals.css: --${name} does not reach a palette key`);
+}
+/** `over` at `a` laid over `under` (two hexes), as overGround lays a key over a ground. */
+function mixHex(under: string, over: string, a: number): string {
+  const [u, o] = [hexToRgb(under), hexToRgb(over)];
+  const ch = (x: number, y: number) =>
+    Math.round(a * y + (1 - a) * x)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(u.r, o.r)}${ch(u.g, o.g)}${ch(u.b, o.b)}`;
+}
+/** A fill as the canvas writes it, a `var(--…)` or an sRGB `color-mix` of two, as a hex. */
+function fillHex(theme: ThemeName, fill: string): string {
+  const v = /^var\(--([a-z0-9-]+)\)$/.exec(fill);
+  if (v) return PALETTE[theme][paletteKeyOfVar(v[1])];
+  const m = /^color-mix\(in srgb, (var\(--[a-z0-9-]+\)) ([\d.]+)%, (var\(--[a-z0-9-]+\))\)$/.exec(
+    fill
+  );
+  if (m) return mixHex(fillHex(theme, m[3]), fillHex(theme, m[1]), Number(m[2]) / 100);
+  throw new Error(`pipeline fill "${fill}" is not a palette reference`);
+}
+/** The word inks of the canvas, by their fill class. */
+const WORD_INK: Readonly<Record<string, PaletteKey>> = {
+  'fill-text-dim': 'text-dim',
+  'fill-text': 'text',
+  'fill-text-bright': 'text-bright',
+  'fill-gold': 'gold',
+  'fill-warning-bright': 'gold-bright',
+  'fill-aqua': 'aqua',
+};
+const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'base-elevated'];
+
+/**
+ * Every word the canvas writes, its ink (its fill class), and the composite it stands on, over
+ * each page ground the glass panel can show through: a block's tile or an uncle box on it, at the
+ * tip's strength and at the age fade's floor (a block passes through every age, and the contrast
+ * is least at one end), NEXT's half-strength box, a pool's well, or the page itself. One line per
+ * ground, ink and theme under 4.5:1, with its worst ratio.
+ */
+function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
+  const styleFill = (el: Element) => (el as SVGElement).style.getPropertyValue('fill');
+  const alphaOf = (el: Element) => Number(el.getAttribute('fill-opacity') ?? '1');
+  /** The age fade's two ends: the tip, and tip − 7 on (pinned in pipeline-encoding.test.ts). */
+  const AGES = [ageOpacity(0), ageOpacity(7)];
+  const groundOf = (
+    word: Element
+  ): { kind: string; hexes: (theme: ThemeName, page: PaletteKey) => string[] } => {
+    const card = word.closest('[data-card]');
+    if (card) {
+      const label = word.closest('[data-uncle-label]');
+      if (label) {
+        const rect = card.querySelector(
+          `[data-uncle="${label.getAttribute('data-uncle-label')}"] rect`
+        ) as Element;
+        return {
+          kind: 'an uncle box',
+          hexes: (t, p) => AGES.map((a) => mixHex(PALETTE[t][p], fillHex(t, styleFill(rect)), a)),
+        };
+      }
+      const box = card.querySelector('[data-box]') as Element;
+      return {
+        kind: 'a tile',
+        hexes: (t, p) =>
+          AGES.map((a) => mixHex(PALETTE[t][p], fillHex(t, styleFill(box)), a * alphaOf(box))),
+      };
+    }
+    const next = word.closest('[data-next]');
+    if (next) {
+      const box = next.querySelector('[data-box]') as Element;
+      const key = paletteKeyOfVar(/^var\(--([a-z0-9-]+)\)$/.exec(styleFill(box))![1]);
+      return { kind: "NEXT's box", hexes: (t, p) => [overGround(t, key, alphaOf(box), p)] };
+    }
+    const pool = word.closest('[data-pool-card]');
+    if (pool && (form === 'column' || word.closest('[data-pool-status]'))) {
+      const tray = pool.querySelector('[data-tray]') as Element;
+      return { kind: 'a well', hexes: (t) => [fillHex(t, styleFill(tray))] };
+    }
+    return { kind: 'the page', hexes: (t, p) => [PALETTE[t][p]] };
+  };
+  const inkOf = (word: Element): PaletteKey => {
+    for (let a: Element | null = word; a && a !== svg; a = a.parentElement) {
+      const cls = [...a.classList].find((c) => c.startsWith('fill-'));
+      if (cls) {
+        const key = WORD_INK[cls];
+        if (!key) throw new Error(`pipeline word "${word.textContent}" in unknown ink ${cls}`);
+        return key;
+      }
+    }
+    throw new Error(`pipeline word "${word.textContent}" has no fill class`);
+  };
+  const words = [...svg.querySelectorAll('text, tspan')].filter((el) =>
+    [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim() !== '')
+  );
+  expect(words.length).toBeGreaterThan(4);
+  const worst = new Map<string, { ratio: number; example: string }>();
+  for (const word of words) {
+    const ink = inkOf(word);
+    const ground = groundOf(word);
+    for (const theme of THEMES)
+      for (const page of PAGE_GROUNDS) {
+        const ratio = Math.min(
+          ...ground.hexes(theme, page).map((hex) => contrastRatio(PALETTE[theme][ink], hex))
+        );
+        if (ratio >= 4.5) continue;
+        const key = `${form}: ${ink} on ${ground.kind} (${theme})`;
+        const seen = worst.get(key);
+        if (!seen || ratio < seen.ratio)
+          worst.set(key, { ratio, example: word.textContent!.trim() });
+      }
+  }
+  return [...worst].map(([key, w]) => `${key}, "${w.example}": ${w.ratio.toFixed(2)}`);
+}
 const path = (svg: Element, name: string) =>
   svg.querySelector(`[data-path="${name}"]`) as SVGPathElement;
 
@@ -395,6 +530,30 @@ describe('PipelinePanel static render', () => {
 
   it('keeps an older block’s words at full strength while its shapes step back (R4, lane E2)', async () => {
     expectWordsAtFullStrength(await renderPanel());
+  });
+
+  // Lane E2 follow-up, ruling 2: a tile is a ground of its own, so its words are chosen for it.
+  // With the window drawn (its gold numbers and label), and once with no pool (the well's word).
+  it('writes every word at 4.5:1 on what it stands on, in both themes (R4, lane E2)', async () => {
+    const svg = await renderPanel();
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    expect(svg.querySelector('[data-window-label]')).not.toBeNull();
+    const failures = wordInkFailures(svg, 'row');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(failures).toEqual([]);
+  });
+
+  it('writes the well’s and NEXT’s "unavailable" at 4.5:1 when the pool tip differs', async () => {
+    const svg = await renderPanel({
+      ...buildPipelineSnapshot(),
+      status: 'poolTipMismatch',
+      poolTip: { number: T + 1, hash: blockHash(T + 1) },
+      pool: null,
+      next: null,
+    });
+    expect(svg.querySelector('[data-pool-status]')).not.toBeNull();
+    expect(svg.querySelector('[data-next-column]')).not.toBeNull();
+    expect(wordInkFailures(svg, 'row')).toEqual([]);
   });
 
   it('draws the pool as two wells: no stroke, the stage name in its colour and its total', async () => {
@@ -1863,6 +2022,26 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
 
   it('keeps an older row’s words at full strength while its shapes step back (R4, lane E2)', async () => {
     expectWordsAtFullStrength(await renderPanel(quiet));
+  });
+
+  it('writes every word of a row at 4.5:1 on what it stands on, in both themes (R4, lane E2)', async () => {
+    const svg = await renderPanel(quiet);
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    const failures = wordInkFailures(svg, 'column');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(failures).toEqual([]);
+  });
+
+  it('writes the well’s and NEXT’s "unavailable" of a row at 4.5:1 when the pool tip differs', async () => {
+    const svg = await renderPanel({
+      ...quiet,
+      status: 'poolTipMismatch',
+      poolTip: { number: T + 1, hash: blockHash(T + 1) },
+      pool: null,
+      next: null,
+    });
+    expect(svg.querySelector('[data-pool-status]')).not.toBeNull();
+    expect(wordInkFailures(svg, 'column')).toEqual([]);
   });
 
   it('runs the chain at x 28 through the gaps, with the window tick and the gold tail of the board', async () => {
