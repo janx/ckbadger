@@ -1,11 +1,16 @@
 'use client';
 
+import Link from '@/components/ui/link';
 import { cn, truncateHash } from '@/lib/utils';
 
 /**
  * Round 3 (contracts R-A · R-2): an owner's lock kind as the API names it — the scripts registry's
  * name, else the lock's code hash (never a guessed kind). Nothing when the lock is not indexed.
  * The default form is dim small caps (material pass v2, move 5); a row chip's classes replace it.
+ *
+ * U-15: a lock the registry does not name is named by what is known, "lock 0x9b9b9b...9b9b": the
+ * word and its code hash, shortened, linking to the script page of that code hash (never "Lock
+ * kind unavailable", an internal state). Either form is one unit (`whitespace-nowrap`).
  */
 export function LockKind({
   lockKind,
@@ -30,7 +35,18 @@ export function LockKind({
       title={lockCodeHash}
       data-lock-kind
     >
-      {lockKind ?? truncateHash(lockCodeHash, 8, 4)}
+      {lockKind ?? (
+        <>
+          lock{' '}
+          <Link
+            href={`/script/${lockCodeHash}`}
+            title={lockCodeHash}
+            className="hover:text-jade transition-colors"
+          >
+            {truncateHash(lockCodeHash, 8, 4)}
+          </Link>
+        </>
+      )}
     </span>
   );
 }
