@@ -18,7 +18,7 @@ export function RouteErrorBoundary({ standalone = false }: RouteErrorBoundaryPro
   const error = useRouteError();
 
   // C2: anything that reaches the boundary carrying HTTP 404 is a not-found — a route error
-  // response, `notFound()` (RouteNotFoundError), or an API not-found thrown during render.
+  // response, or an API not-found thrown during render.
   if (isNotFoundApiError(error)) return <NotFoundPage standalone={standalone} />;
 
   let errMessage: string;

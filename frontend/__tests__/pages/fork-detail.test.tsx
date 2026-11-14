@@ -13,9 +13,7 @@ import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 const route = { height: '10', orphan: '17404795' };
-const notFound = vi.fn();
 vi.mock('@/src/navigation', () => ({
-  notFound: () => notFound(),
   useParams: () => route,
   usePathname: () => `/forks/${route.height}/${route.orphan}`,
 }));
@@ -491,7 +489,6 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     render(<ForkDetailPage />);
     expect(screen.getByText('that is not a fork height and orphan.')).toBeInTheDocument();
     expect(screen.getByText('Not an id · 400')).toBeInTheDocument();
-    expect(notFound).not.toHaveBeenCalled();
     expect(api.getForkAt).not.toHaveBeenCalled();
   });
 
