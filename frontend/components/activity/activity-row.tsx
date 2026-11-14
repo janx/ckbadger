@@ -47,8 +47,9 @@ export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null }
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
 
 /**
- * A row's hover (consistency C3, T7): the tx hash, and the block's age beside it — the age left
- * the visible row for the absolute date. A pool row has no block time, so its hover is the hash.
+ * A row's hover (consistency C3, T7): the tx hash, and the block's age beside it. On a list that is
+ * historical by nature the row shows the date and the age is here alone; a live list's row says
+ * its age (PA-22) and the hover repeats it. A pool row has no block time, so its hover is the hash.
  */
 export function activityRowTitle(hash: string, timestamp: string | null): string {
   return timestamp === null ? hash : `${hash} · ${formatTimeAgo(timestamp)}`;
@@ -72,7 +73,8 @@ function RowDate({ timestamp, age }: { timestamp: string; age: boolean }) {
  * and the details are one separated list (PA-25): a "·" never ends a line or opens one. With
  * `href` the title is the link to the transaction and the default evidence is block · date — the
  * hash is the row's hover (`title`), not text. The default `layout="wrap"` keeps the hash link
- * (TxRow). Consistency C3: both end with the absolute UTC+8 date, the age in its hover (was the age).
+ * (TxRow). Both end with the block's time: on a live list its age, the full date-time its hover
+ * (PA-22); on a list historical by nature the UTC+8 date, the age its hover (consistency C3).
  */
 export function ActivityRowHead({
   title,
@@ -1036,7 +1038,8 @@ export function ActivityRow({
       ref={articleRef}
       data-feed-row={activity.txHash}
       // T7: the hash leaves the visible row; it is the row's hover (and the headline's link).
-      // Consistency C3: so is the age, beside it; the row shows the date.
+      // and the age beside it (consistency C3); the row shows the date on a historical list, the
+      // age on a live one (PA-22)
       title={activityRowTitle(activity.txHash, activity.timestamp)}
       className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
     >

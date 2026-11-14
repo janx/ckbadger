@@ -6,9 +6,10 @@ import { clockNow, subscribeClock } from '@/lib/clock';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
 /**
- * A chain time as its UTC+8 date, the relative age its hover (consistency C3 and lane P: "ago"
- * drifts while the page is read, so it never stands in the text; one form on every page). The date
- * is one unit: a line never breaks at its hyphens (U-16, "since 2024-" / "08-29").
+ * A chain time as its UTC+8 date, the relative age its hover (consistency C3 and lane P): the form
+ * of a list that is historical by nature and of a time in a sentence. A row of a live list says its
+ * age instead (PA-22, `Utc8Age`), read from the page's one clock so it never drifts (the review's
+ * item H). The date is one unit: a line never breaks at its hyphens (U-16, "since 2024-" / "08-29").
  */
 export function Utc8Date({
   timestamp,

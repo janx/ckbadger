@@ -134,9 +134,8 @@ describe('ActivityFeed', () => {
       'href',
       '/mainnet/blocks/20819142'
     );
-    // T7 (option A): the headline links to the tx, the hash is the row's hover. Consistency C3:
-    // block · the absolute UTC+8 date on the right (was block · age); the age joins the hash in
-    // the row's hover.
+    // T7 (option A): the headline links to the tx, the hash is the row's hover, the age beside it
+    // (consistency C3); this feed is live, so its row ends block · age (PA-22; C3 had the date).
     expect(within(first).getByRole('link', { name: 'Script call' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
