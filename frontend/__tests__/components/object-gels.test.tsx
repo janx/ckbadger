@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
-import { SequencingGel } from '@/components/ui/sequencing-gel';
+import { MiniGel, SequencingGel } from '@/components/ui/sequencing-gel';
 import { AlleleGel } from '@/components/ui/allele-gel';
 import { alleleLanes, geneOrder, genotypePoints, sequencingGenes } from '@/lib/dob-genes';
 import { BITCOIN_COLORS, GENE_COLORS } from '@/lib/design-tokens';
 import type { AlleleLane } from '@/lib/dob-genes';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const layout = sequencingGenes(nervape3xGenetics, 'Nervape 3x');
 const lanes = alleleLanes(
@@ -129,6 +130,21 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
     expect(overlay).toHaveAttribute('opacity', '1');
     expect(overlay.querySelectorAll('[data-tick]')).toHaveLength(6);
     expect(overlay.textContent).toContain('this one');
+  });
+
+  it('draws its wells, bands and the "this one" outline square-cornered (U-02, R1)', () => {
+    const own = genotypePoints(lanes, nervape3xGenetics.cachedVmTraits.traits);
+    const { container } = render(
+      <AlleleGel
+        lanes={lanes}
+        total={90}
+        subject="Nervape 3x"
+        overlays={[{ key: 'me', label: 'this one', points: own.points, persistent: true }]}
+      />
+    );
+    expect(container.querySelectorAll('rect[data-allele]').length).toBeGreaterThan(6);
+    expect(container.querySelectorAll('rect[data-tick]')).toHaveLength(6);
+    expect(roundedRects(container)).toEqual([]);
   });
 
   it('shows a row overlay only while that row is active, and links lanes to genes', () => {
@@ -306,6 +322,25 @@ describe('SequencingGel at the measured width (V3)', () => {
     stubChartWidth(556);
     render(<ControlledGel />);
     expect(screen.getByRole('list', { name: 'Genes' })).toHaveAttribute('data-rows', 'one-line');
+  });
+
+  it.each([896, 358])(
+    'draws its wells, bands, gene spans and field square at %i px, a lit gene too (U-02, R1)',
+    (width) => {
+      stubChartWidth(width);
+      const { container } = render(
+        <SequencingGel layout={layout} subject="Nervape 3x" active="Color" onActive={() => {}} />
+      );
+      expect(container.querySelectorAll('rect[data-nibble]')).toHaveLength(106);
+      expect(rects(container).length).toBeGreaterThan(106);
+      expect(roundedRects(container)).toEqual([]);
+    }
+  );
+
+  it('draws the table row’s mini gel with square bands (U-02, R1)', () => {
+    const { container } = render(<MiniGel dna="0xa9031f" label="Nervape 3x" ink="currentColor" />);
+    expect(container.querySelectorAll('rect[data-nibble]')).toHaveLength(6);
+    expect(roundedRects(container)).toEqual([]);
   });
 
   it('refuses a box too narrow for 16 lanes of 14 px', () => {

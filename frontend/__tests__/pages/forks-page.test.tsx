@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import ForksPage from '@/app/forks/page';
 import { api } from '@/lib/api';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
@@ -232,6 +233,18 @@ describe('ForksPage', () => {
     expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
+
+  it('draws the rows’ fork glyphs and the shape key’s block swatch square (U-02, R1)', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const key = screen.getByRole('list', { name: 'Shape key' });
+    expect(rects(key)).toHaveLength(1);
+    expect(roundedRects(key)).toEqual([]);
+    expect(rects(table()).length).toBeGreaterThanOrEqual(5);
+    expect(roundedRects(table())).toEqual([]);
   });
 
   it('shows the first 5 branch switches, then every one in place under “Show all 18 branch switches ↓” (R15)', async () => {

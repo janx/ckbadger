@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '../utils/chart-width';
 import { act, fireEvent, render, screen } from '../utils/test-utils';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const days = [
   { date: '2026-10-20', canonicalBlocks: 9000, uncles: 230, nodeSwitches: 0 },
@@ -59,6 +60,14 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       expect(line).not.toHaveAttribute('stroke-dasharray');
     }
     expect(container.querySelectorAll('svg line[stroke-dasharray]')).toHaveLength(0);
+  });
+
+  it('draws its day bars and its key swatches with square ends (U-02, R1)', () => {
+    const { container } = render(<Chart days={days} />);
+    const svg = container.querySelector('svg')!;
+    expect(svg.querySelectorAll('[data-uncles], [data-switches]')).toHaveLength(5);
+    expect(rects(svg.querySelector('[data-role="chart-name"]')!)).toHaveLength(2);
+    expect(roundedRects(svg)).toEqual([]);
   });
 
   it('is the hero’s picture: at least 280 px tall, its name and key inside the plot, ticks inside in ghost ink (R13)', () => {
