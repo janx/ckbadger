@@ -377,6 +377,19 @@ describe('Block board · first tier', () => {
     expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
   });
 
+  // The review's item E: the plate's id is the block's copy control; a click writes the WHOLE hash
+  // to the clipboard (the test of its class and "Click to copy" title went with the old id line)
+  it('copies the whole block hash when the plate’s id is clicked', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const { container } = render(<BlockDetailPage />);
+    await screen.findByRole('heading', { level: 1 });
+    const id = container.querySelector('[data-sealed-id] [data-plate-hash]') as HTMLElement;
+    fireEvent.click(id);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(block.hash));
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
   // The hardfork activation is the block's status: on the kind line, after "Block".
   it('sets the hardfork activation on the kind line, after the kind word', async () => {
     vi.mocked(api.getBlock).mockResolvedValue({
