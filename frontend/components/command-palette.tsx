@@ -333,7 +333,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleInputKeyDown}
-                placeholder="Type a command, or search block / tx / address"
+                placeholder="type a command, or search block / tx / address"
                 className="focus:border-jade focus:ring-jade well text-text-bright text-body w-full px-3 py-2 font-mono focus:ring-1 focus-visible:outline-none"
                 aria-label="Command palette input"
               />
