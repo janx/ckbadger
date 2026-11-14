@@ -47,6 +47,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 ## Rules for the shared pieces
 
+- **Header search field**: the long placeholder `search block / tx / address / cell` (265.2 px at
+  13 px) only when the field's measured text box holds it whole, `search` otherwise, chosen
+  before paint (principle 4; a field 331.2 px wide from `md`: the header gives about 169 px at
+  768–1023, 368.6 px at 1024 with one network but less beside the network switcher, 460.8 px at
+  1280). The `/` key is drawn from `md`.
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
   every page. Below `md` the home page keeps the whole strip in three groups on their own lines —
   block number with the live mark, the epoch with its bar, `index / length` and the time left, the
