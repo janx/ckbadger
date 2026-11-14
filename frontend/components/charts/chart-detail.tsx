@@ -30,7 +30,7 @@ import {
   type SubChart,
 } from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
-import { chartAxisFormat, unitAfter, withUnit } from '@/components/charts/chart-format';
+import { chartAxisFormat, unitAfter, withUnit } from '@/lib/format-unit';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';

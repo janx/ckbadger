@@ -5,7 +5,7 @@ import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ClassMark } from '@/components/ui/class-mark';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
-import { chartAxisFormat, unitAfter, withUnit } from '@/components/charts/chart-format';
+import { chartAxisFormat, unitAfter, withUnit } from '@/lib/format-unit';
 import {
   axisStyle,
   axisTicks,

@@ -13,7 +13,7 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { MINUS, niceStep, stepDecimals } from '@/lib/chart-ticks';
-import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/components/charts/chart-format';
+import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/lib/format-unit';
 import { formatCount } from '@/lib/format-count';
 import {
   ACTIVITY_KIND_COLORS,

@@ -1,8 +1,11 @@
 /**
- * How the chart pages and the charts index write numbers, units and ranges (UI review 2026-11-14,
- * CH-03, CH-12, CH-14): one place for the chart template's forms, until the site's format helpers
- * (plan phase B3) take them over. Counts are grouped by `formatCount` and exact values by the
- * chart model's `formatChartExact`; this module only joins and spells.
+ * How a number meets its unit (UI review 2026-11-14, CH-03, CH-12, CH-14; `docs/RESPONSIVE_LAYOUT.md`,
+ * "Formats"): the one home for unit forms, lifted from the chart template (lane B3). A percentage
+ * takes `%` with no space, any other unit follows its number after a space (a no-break space in a
+ * display figure); a physical quantity keeps its SI prefix with its unit symbol (`PH/s`), a count
+ * or a CKB amount the compact k / M / B / T of `formatCompactInteger` and `formatTick`. Counts are
+ * grouped by `formatCount`, exact values by their own formatters; this module only joins and
+ * spells.
  */
 import { MINUS, formatTick, stepDecimals } from '@/lib/chart-ticks';
 
