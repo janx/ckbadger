@@ -25,6 +25,13 @@ import { describe, expect, it } from 'vitest';
  * kept without a user are in ALLOWLIST, each with its reason; an entry whose export gains a user
  * or goes fails the gate, so the list stays current.
  *
+ * The seal library (`lib/seal/`) is outside the scope by rule (RECORD_DIRS): it is the seal
+ * design's own record beside its drawing code — what each approved glyph and rim is called, in
+ * English and Chinese, which glyph is drawn from a later script, the order the design names the
+ * classes — pinned against the prototype by the fidelity tests so the drawn set cannot drift from
+ * the approved one. Its tables are kept whether or not a page reads them yet. Its files still
+ * count as users of other modules' exports.
+ *
  * Limits: a use the checker cannot resolve is not seen — a module's export read by a computed key
  * (`module[name]`), or named only outside TypeScript (index.html, a stylesheet, the Rust crates);
  * the source has none today but the external entry, and such an export is listed above with the
@@ -36,6 +43,13 @@ import { describe, expect, it } from 'vitest';
 
 /** The directories whose exports must be used (`.d.ts` files are out of scope). */
 const SOURCE_DIRS = ['app', 'components', 'hooks', 'lib', 'src'];
+
+/** Directories that record a design, kept whole whether or not a page reads them (see above). */
+const RECORD_DIRS = ['lib/seal/'];
+
+/** Whether the gate judges the exports of a file, by its path from the frontend root. */
+const judged = (path: string) =>
+  SOURCE_DIRS.includes(path.split('/')[0]) && !RECORD_DIRS.some((dir) => path.startsWith(dir));
 
 /** Build configuration that imports source: its uses count. */
 const CONFIG_IMPORTERS = ['tailwind.config.ts', 'vite.config.ts'];
@@ -196,7 +210,7 @@ function virtualDead(files: Record<string, string>, external: string[] = []): st
   const program = virtualProgram(files);
   const paths = Object.keys(files).map((f) => `/v/${f}`);
   const users = paths.filter((p) => !p.includes('__tests__/'));
-  const scope = users.filter((p) => SOURCE_DIRS.includes(p.slice(3).split('/')[0]));
+  const scope = users.filter((p) => judged(p.slice(3)));
   return deadExports(
     program,
     users,
@@ -307,6 +321,32 @@ describe('the export gate finds what it must, and only that', () => {
       )
     ).toEqual(['lib/list.ts:3 listed']);
   });
+
+  it('keeps the seal library’s record out of scope, and flags the same shape anywhere else', () => {
+    const table = [
+      'export const LABEL = { sun: ["sun", "日"] } as const;',
+      "export const ORDER = ['ckb', 'dao'] as const;",
+    ].join('\n');
+    expect(
+      virtualDead({
+        'lib/seal/glyphs.ts': table,
+        'lib/sealed.ts': table,
+        'lib/other/seal/window.ts': table,
+      })
+    ).toEqual([
+      'lib/other/seal/window.ts:1 LABEL',
+      'lib/other/seal/window.ts:2 ORDER',
+      'lib/sealed.ts:1 LABEL',
+      'lib/sealed.ts:2 ORDER',
+    ]);
+    // a module in the record still counts as a user of what it imports
+    expect(
+      virtualDead({
+        'lib/seal/core.ts': "import { brush } from '@/lib/brush';\nexport const RIM = brush;",
+        'lib/brush.ts': 'export const brush = 1;',
+      })
+    ).toEqual([]);
+  });
 });
 
 describe('no dead exports (lane E3)', () => {
@@ -334,7 +374,13 @@ describe('no dead exports (lane E3)', () => {
     options: { ...parsed.options, incremental: false, noEmit: true },
   });
   const external = new Set(Object.keys(EXTERNAL_ENTRIES).map((entry) => join(root, entry)));
-  const dead = deadExports(program, users, files, rel, external);
+  const dead = deadExports(
+    program,
+    users,
+    files.filter((file) => judged(rel(file))),
+    rel,
+    external
+  );
   const key = (site: string) => {
     const [path, name] = site.split(' ');
     return `${path.split(':')[0]}#${name}`;

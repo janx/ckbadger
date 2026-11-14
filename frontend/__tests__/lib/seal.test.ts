@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { bitsOf } from '@/lib/night/bits';
 import { assertSealHash, BitReader, valueOf } from '@/lib/seal/bits';
 import {
@@ -28,7 +28,18 @@ import {
 } from '@/lib/seal/core';
 import { compactEncoding, outlinesOf, PROTOTYPE } from '@/lib/seal/draw';
 import { compactOutline, joinNumbers, simplify, tenths } from '@/lib/seal/encode';
-import { ANIMALS, ARC, CUT, ELEMENTS, GLYPH, glyphOf, GLYPHS, SIGNS } from '@/lib/seal/glyphs';
+import {
+  ANIMALS,
+  ARC,
+  CUT,
+  ELEMENTS,
+  GLYPH,
+  GLYPH_LABEL,
+  glyphOf,
+  GLYPHS,
+  NOT_ORACLE,
+  SIGNS,
+} from '@/lib/seal/glyphs';
 import { assertPaint } from '@/lib/seal/paint';
 import { decimalDigits, ROD, ROD_FLAT, rodCount, rodDigit } from '@/lib/seal/rods';
 import {
@@ -53,7 +64,7 @@ import {
   type SealState,
 } from '@/lib/seal/stones';
 import { TEXTURE, TEXTURES, walkRect } from '@/lib/seal/textures';
-import { windowOf } from '@/lib/seal/window';
+import { WINDOW_CLASSES, windowOf } from '@/lib/seal/window';
 import { decode, distToPolyline } from '@/__tests__/utils/compact-path';
 
 // block #20,914,858's hash, which no transaction has (the night's test hash)
@@ -327,13 +338,25 @@ describe('the paints', () => {
 });
 
 describe('the glyphs', () => {
-  it('are forty: sixteen elements, twelve animals, twelve signs', () => {
+  it('are forty: sixteen elements, twelve animals, twelve signs, each named twice', () => {
     expect(ELEMENTS).toHaveLength(16);
     expect(ANIMALS).toHaveLength(12);
     expect(SIGNS).toHaveLength(12);
     expect(GLYPHS).toEqual([...ELEMENTS, ...ANIMALS, ...SIGNS]);
     expect(new Set(GLYPHS).size).toBe(40);
     expect(Object.keys(GLYPH).sort()).toEqual([...GLYPHS].sort());
+    expect(Object.keys(GLYPH_LABEL).sort()).toEqual([...GLYPHS].sort());
+    for (const name of GLYPHS) {
+      const [en, zh] = GLYPH_LABEL[name];
+      expect(en, name).toMatch(/^[A-Za-z]+$/);
+      expect(zh, name).toMatch(/^\p{Script=Han}{1,2}$/u);
+    }
+    expect([GLYPH_LABEL.peaks, GLYPH_LABEL.skein, GLYPH_LABEL.archer]).toEqual([
+      ['mountain', '山'],
+      ['thread', '丝'],
+      ['Sagittarius', '射手'],
+    ]);
+    expect(NOT_ORACLE).toEqual(['metal']);
     // the animals turn by one bit, the signs have no variant; no glyph reads more than three
     for (const a of ANIMALS) expect(GLYPH[a].bits, a).toBe(1);
     for (const s of SIGNS) expect(GLYPH[s].bits, s).toBe(0);
@@ -587,6 +610,10 @@ describe('the core of a transaction, and the owner of a cell', () => {
 describe('the windows', () => {
   const at = (cls: Parameters<typeof windowOf>[0]) => windowOf(cls, 10, 10, 4, '#c2452d', 0.4);
 
+  it('has one window for each of the six classes', () => {
+    expect([...WINDOW_CLASSES].sort()).toEqual(Object.keys(CLASS_COLORS).sort());
+  });
+
   it('draws none for plain CKB, a ring, a doubled ring, a square, a hexagon, an arch', () => {
     expect(at('ckb')).toBe('');
     expect(at('other')).toBe(
@@ -599,7 +626,7 @@ describe('the windows', () => {
     expect(hex.match(/[ML]/g)).toHaveLength(6);
     expect(hex.endsWith('Z')).toBe(true);
     expect(at('identities').match(/A/g)).toHaveLength(1);
-    for (const cls of (Object.keys(CLASS_COLORS) as AssetClass[]).filter((c) => c !== 'ckb'))
+    for (const cls of WINDOW_CLASSES.filter((c) => c !== 'ckb'))
       expect(at(cls)).toContain('fill="none" stroke="#c2452d"');
   });
 

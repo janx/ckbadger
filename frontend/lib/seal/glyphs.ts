@@ -183,6 +183,53 @@ export const SIGNS = [
 export const GLYPHS = [...ELEMENTS, ...ANIMALS, ...SIGNS] as const;
 export type GlyphName = (typeof GLYPHS)[number];
 
+/** What each glyph is called, in English and in Chinese. */
+export const GLYPH_LABEL: Readonly<Record<GlyphName, readonly [string, string]>> = {
+  sun: ['sun', '日'],
+  moon: ['moon', '月'],
+  peaks: ['mountain', '山'],
+  water: ['water', '水'],
+  fire: ['fire', '火'],
+  earth: ['earth', '土'],
+  metal: ['metal', '金'],
+  wood: ['wood', '木'],
+  person: ['person', '人'],
+  rain: ['rain', '雨'],
+  cloud: ['cloud', '云'],
+  cowrie: ['cowrie', '贝'],
+  skein: ['thread', '丝'],
+  jar: ['jar', '酉'],
+  arrow: ['arrow', '矢'],
+  chariot: ['chariot', '车'],
+  rat: ['rat', '鼠'],
+  ox: ['ox', '牛'],
+  tiger: ['tiger', '虎'],
+  rabbit: ['rabbit', '兔'],
+  dragon: ['dragon', '龙'],
+  snake: ['snake', '蛇'],
+  horse: ['horse', '马'],
+  goat: ['goat', '羊'],
+  monkey: ['monkey', '猴'],
+  rooster: ['rooster', '鸡'],
+  dog: ['dog', '狗'],
+  pig: ['pig', '猪'],
+  aries: ['Aries', '白羊'],
+  taurus: ['Taurus', '金牛'],
+  gemini: ['Gemini', '双子'],
+  cancer: ['Cancer', '巨蟹'],
+  leo: ['Leo', '狮子'],
+  virgo: ['Virgo', '处女'],
+  libra: ['Libra', '天秤'],
+  scorpio: ['Scorpio', '天蝎'],
+  archer: ['Sagittarius', '射手'],
+  capricorn: ['Capricorn', '摩羯'],
+  aquarius: ['Aquarius', '水瓶'],
+  pisces: ['Pisces', '双鱼'],
+};
+
+/** Drawn from a later script, because the oracle bones have no form for them. */
+export const NOT_ORACLE: readonly GlyphName[] = ['metal'];
+
 export interface Glyph {
   /** How many variant bits the glyph reads after the byte that chose it. */
   readonly bits: number;
