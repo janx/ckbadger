@@ -309,6 +309,36 @@ describe('a read that fails without a definite answer', () => {
     expect(alert).toHaveAttribute('role', 'alert');
     expect(document.body).not.toHaveTextContent(/ApiRequestError|Unable to read|Failed to load/);
   });
+
+  // PB-06 (lane A3's entity h1s step to 26 px below md): the two pages whose failed read keeps
+  // an h1 of its own take the same step.
+  it.each([
+    [
+      'Fiber channel',
+      () => {
+        at(`/fiber/channels/${HASH}`, { id: HASH });
+        answer500('/fiber/channels/:id', (p) => p.id === HASH);
+        return <FiberChannelDetailPage />;
+      },
+    ],
+    [
+      'm-NFT',
+      () => {
+        const token = `0x${'12'.repeat(28)}`;
+        at(`/objects/mnft/${token}`, {});
+        answer500('/assets/objects/items/:id', (p) => p.id === token);
+        return <MnftItemDetailPage objectId={token} />;
+      },
+    ],
+  ])('the %s h1 of a failed read takes the phone step', async (name, page) => {
+    const client = createAppQueryClient({ gcTime: Infinity, nonWarmupRetry: false });
+    render(<QueryClientProvider client={client}>{page()}</QueryClientProvider>);
+    await screen.findByRole('alert');
+    expect(screen.getByRole('heading', { level: 1, name })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
+  });
 });
 
 describe('a malformed id the page refuses before asking', () => {
