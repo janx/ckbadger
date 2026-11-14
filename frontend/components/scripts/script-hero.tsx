@@ -6,7 +6,11 @@ import { splitCkbAmount } from '@/lib/ckb-decimal';
 
 /**
  * The page's one figure (R4, R11): display from 640 up, index below, bright (scripts have no class
- * colour); the decimals at hero size in ink with the trailing zeros ghosted, the unit at body.
+ * colour); the decimals in ink with the trailing zeros ghosted, the unit at body. The figure and
+ * its unit are one unbreakable unit (RESPONSIVE_LAYOUT, a number with its unit; PA-19). Below 640
+ * the decimals are body, not hero: the integer of 49,890,081,314 CKB (14 characters at 26 px,
+ * 218.4 px), its 9 decimals at 22 px (118.8) and " CKB" (31.2) took 368.4 px, and at 17 px still
+ * 341.4, against the 326 px line at 360; at 13 px (70.2) they take 319.8.
  */
 export function CkbFigure({ shannons }: { shannons: bigint }) {
   if (shannons < BigInt(0)) throw new Error(`Script hero figure: negative amount ${shannons}`);
@@ -15,13 +19,13 @@ export function CkbFigure({ shannons }: { shannons: bigint }) {
     <div data-role="figure-amount" className="text-text-bright text-index sm:text-display">
       <span className="whitespace-nowrap font-mono tabular-nums">
         {parts.integer}
-        <span className="text-hero text-text font-normal">
+        <span className="text-body sm:text-hero text-text font-normal">
           {parts.fraction}
           <span className="opacity-50">{parts.ghost}</span>
         </span>
+        {/* The space takes the unit's size. */}
+        <span className="text-body text-text-dim font-normal"> CKB</span>
       </span>
-      {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
-      <span className="text-body text-text-dim font-normal"> CKB</span>
     </div>
   );
 }
