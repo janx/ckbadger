@@ -57,11 +57,10 @@ const TEXT_GRADE: PaletteKey[] = [
   'tier-btc-ink',
   'tier-pure-ink',
   // Lane E2 round 3 (ruling): an ELF region's hue paints the hex digits of its bytes on the cell
-  // page, so each is text grade, also on the evidence tier's ground (below). Not yet
-  // `elf-program-headers`: by day it is 3.28–4.02:1, and moved in lightness alone to 4.5:1 it
-  // would be #426b7b, the header's twin (#416a7a, ΔE 0.003), the region beside it; it awaits a
-  // ruling (see "the ELF region hues on the evidence tier").
+  // page, so each is text grade, also on the evidence tier's ground (below). The program headers
+  // are the header a step lighter by night and a step darker by day (round 4's ruling).
   'elf-header',
+  'elf-program-headers',
   'elf-rodata',
   'elf-eh-frame',
   'elf-data',
@@ -508,8 +507,14 @@ describe('the row rule and the bar track on the tier-2 ground (R5, ruling 4b)', 
 // (TEXT_GRADE) each reads at 4.5:1 on the tier-2 ground (`tier2-ground` over the sky), in both
 // themes. A key short of it moves in OKLCH lightness only, hue and chroma kept.
 describe('the ELF region hues on the evidence tier', () => {
-  // `elf-program-headers` is not among them yet: see TEXT_GRADE.
-  const ELF_KEYS = ['elf-header', 'elf-rodata', 'elf-eh-frame', 'elf-data', 'elf-meta'] as const;
+  const ELF_KEYS = [
+    'elf-header',
+    'elf-program-headers',
+    'elf-rodata',
+    'elf-eh-frame',
+    'elf-data',
+    'elf-meta',
+  ] as const;
 
   it('reads at body-text contrast on the tier-2 ground, in both themes', () => {
     const short: string[] = [];
@@ -531,6 +536,8 @@ describe('the ELF region hues on the evidence tier', () => {
     expect(PALETTE.light['elf-data']).toBe('#7c6126');
     expect(PALETTE.light['elf-meta']).toBe('#695c9a');
     expect(PALETTE.light['elf-header']).toBe('#416a7a');
+    // round 4: the header's hue and chroma at L 0.430 (the night pair's 0.0706 below the header)
+    expect(PALETTE.light['elf-program-headers']).toBe('#2d5665');
     expect([
       PALETTE.dark['elf-header'],
       PALETTE.dark['elf-program-headers'],
@@ -540,7 +547,40 @@ describe('the ELF region hues on the evidence tier', () => {
       PALETTE.dark['elf-meta'],
     ]).toEqual(['#7898a3', '#8daeb9', '#9ac09b', '#aab9aa', '#d5b985', '#b8acd0']);
   });
+
+  // Round 4's ruling: by night the program headers are the header's hue a step lighter; by day a
+  // lighter step cannot be text grade (at 4.5:1 it lands on the header), so, as the `*-bright`
+  // keys do, the step turns: by day the header's hue and chroma a step darker, spaced from the
+  // header as the night pair is.
+  it('makes the day program headers the header a step darker, as far as the night pair is apart', () => {
+    const night =
+      oklch(PALETTE.dark['elf-program-headers']).L - oklch(PALETTE.dark['elf-header']).L;
+    expect(night).toBeGreaterThan(0.07);
+    const header = oklch(PALETTE.light['elf-header']);
+    const program = oklch(PALETTE.light['elf-program-headers']);
+    expect(header.L - program.L).toBeGreaterThanOrEqual(night);
+    // the header's hue and chroma, to the rounding of a hex at this low chroma
+    expect(Math.abs(program.C - header.C)).toBeLessThan(0.002);
+    expect(Math.abs(program.hue - header.hue)).toBeLessThan(1.5);
+  });
 });
+
+/** A hex in OKLCH (Björn Ottosson's OKLab): lightness, chroma and hue in degrees. */
+function oklch(hex: string): { L: number; C: number; hue: number } {
+  const lin = (v: number) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const { r, g, b } = hexToRgb(hex);
+  const [R, G, B] = [lin(r), lin(g), lin(b)];
+  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+  const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+  const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+  const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+  const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const Bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  return { L, C: Math.hypot(A, Bb), hue: (Math.atan2(Bb, A) * 180) / Math.PI };
+}
 
 describe('the palette as CSS', () => {
   it('declares a colour, its channels and the materials per theme', () => {

@@ -276,11 +276,17 @@ export const GEL_COLORS = {
   bandText: color('gel-band-text'),
 } as const;
 /** Allele ink by the collection's composition (board `url(#ink)`, copper since FINAL_REVIEW 3). */
+export const GEL_INK_KEYS = {
+  btc_ckb: ['gel-ink-btc-0', 'gel-ink-btc-1', 'gel-ink-btc-2'],
+  pure_ckb: ['gel-ink-pure-0', 'gel-ink-pure-1', 'gel-ink-pure-2'],
+  other: [CLASS_KEYS.objects, CLASS_KEYS.objects, CLASS_KEYS.objects],
+} as const satisfies Record<string, readonly [PaletteKey, PaletteKey, PaletteKey]>;
+/** The same inks as colour references (a band's label reads the keys, to choose its own ink). */
 export const GEL_INK = {
-  btc_ckb: [color('gel-ink-btc-0'), color('gel-ink-btc-1'), color('gel-ink-btc-2')],
-  pure_ckb: [color('gel-ink-pure-0'), color('gel-ink-pure-1'), color('gel-ink-pure-2')],
-  other: [CLASS_COLORS.objects, CLASS_COLORS.objects, CLASS_COLORS.objects],
-} as const;
+  btc_ckb: GEL_INK_KEYS.btc_ckb.map(color),
+  pure_ckb: GEL_INK_KEYS.pure_ckb.map(color),
+  other: GEL_INK_KEYS.other.map(color),
+} as const satisfies Record<keyof typeof GEL_INK_KEYS, readonly string[]>;
 
 // ---- Inks with no theme token (visual finish V11) ---------------------------------------------
 // Values the pages drew as bracket-hex classes (`text-[#4b5266]`), named here so page code carries
