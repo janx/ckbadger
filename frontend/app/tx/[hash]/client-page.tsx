@@ -1,6 +1,7 @@
 'use client';
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
@@ -635,17 +636,14 @@ export default function TransactionDetailPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const {
-    data: tx,
-    error,
-    status: readStatus,
-  } = useQuery<TransactionDetail>({
+  const read = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
     refetchInterval: (q) =>
       provisional(q.state.data) || isServiceUnavailableError(q.state.error) ? POLL_MS : false,
     refetchIntervalInBackground: true,
   });
+  const { data: tx, error } = read;
   const isProvisional = provisional(tx);
   const awaitingInputs = isServiceUnavailableError(error);
   const { data: activity, error: activityError } = useQuery({
@@ -723,9 +721,9 @@ export default function TransactionDetailPage() {
       <main className="container mx-auto py-8">{children}</main>
     </div>
   );
-  // Pending is loading, fetching or paused (offline, or a hidden tab between retries): isLoading
-  // is pending AND fetching, so a paused read would fall through as if it had completed.
-  if (readStatus === 'pending') return shell(<DetailSkeleton />);
+  // Awaited, fetching or paused (offline, or a hidden tab between retries): isLoading is pending
+  // AND fetching, so a paused read would fall through as if it had completed.
+  if (isAwaited(read)) return shell(<DetailSkeleton />);
   if (awaitingInputs && !tx)
     return shell(
       <DetailLayout

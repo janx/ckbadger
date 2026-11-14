@@ -2,6 +2,7 @@
 
 import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { api, type Block } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
@@ -38,7 +39,7 @@ export default function BlocksPage() {
   // PA-02: the legend explains the wide table's Contents glyphs and size bar, which the 608 px
   // table and the phone rows write in figures; it is drawn with the form the list chose.
   const [form, setForm] = useState<ListTableForm | null>(null);
-  const { data, isLoading, error } = useQuery({
+  const read = useQuery({
     queryKey: ['blocks', cursor, limit],
     queryFn: () => api.getBlocks({ cursor, limit }),
     staleTime: 30_000,
@@ -46,6 +47,7 @@ export default function BlocksPage() {
     refetchInterval: (query) =>
       query.state.data?.data.some((block) => block.cyclesStatus === 'pending') ? 3000 : false,
   });
+  const { data, error } = read;
   const sizeScale = resourceScale(data ? data.data.map((block) => block.size) : []);
   const cyclesScale = resourceScale(
     data ? data.data.flatMap((block) => (block.cycles === null ? [] : [Number(block.cycles)])) : []
@@ -182,7 +184,7 @@ export default function BlocksPage() {
           kind="index"
           actions={form === 'table' ? <BlocksLegend /> : undefined}
         >
-          {isLoading && (
+          {isAwaited(read) && (
             <p role="status" className="text-text-dim">
               Loading blocks…
             </p>

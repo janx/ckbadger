@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { FiberChannelBoard } from '@/components/fiber/fiber-channel-board';
 import { api, isNotFoundApiError } from '@/lib/api';
@@ -66,7 +67,7 @@ export default function FiberChannelDetailPage() {
             <p className="text-text-dim text-small mt-1.5 break-all">{channelId}</p>
           </>
         )}
-        {channel.isPending && (
+        {isAwaited(channel) && (
           <p className="text-text-dim text-body py-8">Loading channel evidence…</p>
         )}
         {channel.error && <ReadFailure what="channel" error={channel.error} />}

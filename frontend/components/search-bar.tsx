@@ -3,6 +3,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { useRouter } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, type SearchResult } from '@/lib/api';
 import { normalizeHash32 } from '@/lib/search-intent';
 import { resolveSearchRoute } from '@/lib/search-routing';
@@ -90,13 +91,17 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       ? SEARCH_PLACEHOLDER
       : SEARCH_PLACEHOLDER_SHORT;
 
-  const { data: searchResults, isLoading } = useQuery({
+  const search = useQuery({
     queryKey: ['search', query],
     queryFn: () => api.search(query),
     enabled: query.length >= 2,
     staleTime: 30000,
   });
 
+  const searchResults = search.data;
+  // awaited, not isLoading: a search paused offline or between retries has not answered "no
+  // results"
+  const searching = isAwaited(search);
   const results = useMemo(() => searchResults?.results ?? [], [searchResults?.results]);
 
   useEffect(() => {
@@ -141,7 +146,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       return;
     }
 
-    if (isLoading) {
+    if (searching) {
       setSubmitFeedback('Searching…');
       return;
     }
@@ -323,7 +328,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           )}
           style={isCompact ? { backgroundColor: SEARCH_RESULT_COLORS.panel } : undefined}
         >
-          {isLoading ? (
+          {searching ? (
             <div className="text-text-dim px-4 py-3">Searching…</div>
           ) : results.length > 0 ? (
             <ul className="max-h-80 overflow-auto py-1">
