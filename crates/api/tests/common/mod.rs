@@ -724,6 +724,46 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
 pub const TEST_SECP_LOCK_CODE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 
+/// A lock code hash the scripts registry does not name.
+pub const UNREGISTERED_LOCK_CODE_HASH: [u8; 32] = [0x99; 32];
+
+/// [`UNREGISTERED_LOCK_CODE_HASH`] as the API writes a code hash.
+pub fn unregistered_lock_code_hash_hex() -> String {
+    format!("0x{}", hex::encode(UNREGISTERED_LOCK_CODE_HASH))
+}
+
+/// Seed `named` as a secp256k1-blake160 lock, which the scripts registry names
+/// "SECP256K1/blake160", and `unnamed` as a lock of
+/// [`UNREGISTERED_LOCK_CODE_HASH`], which the registry does not name (both
+/// with a secp-shaped 20-byte args, so no kind can come from the args).
+pub fn seed_named_and_unnamed_locks(store: &CkbadgerStore, named: &[u8], unnamed: &[u8]) {
+    let secp = hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap();
+    let mut batch = StoreBatch::new(store);
+    batch.put_script_info(
+        &secp,
+        &ScriptInfo {
+            code_hash: secp.clone(),
+            hash_type: 1,
+            name: Some("SECP256K1/blake160".into()),
+            ..Default::default()
+        },
+    );
+    for (lock_hash, code_hash) in [
+        (named, secp.as_slice()),
+        (unnamed, UNREGISTERED_LOCK_CODE_HASH.as_slice()),
+    ] {
+        batch.put_lock_script(
+            lock_hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: code_hash.to_vec(),
+                hash_type: 1,
+                args: vec![lock_hash[0]; 20],
+            },
+        );
+    }
+    batch.commit().unwrap();
+}
+
 pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
     mount_transaction_rpc(server, pending_transaction_rpc_response(hash, status)).await;
 }

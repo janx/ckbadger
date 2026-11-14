@@ -268,6 +268,49 @@ async fn token_supply_events_page_newest_first_with_exact_supply_after() {
     assert_eq!(all["data"].as_array().unwrap().len(), 2, "{all}");
 }
 
+/// U-15 / A4b (UI review 2026-11-14): a supply event's party is named on the
+/// token page by its lock; one the scripts registry does not name read "Lock
+/// kind unavailable", because the event carried `lockKind` but not the lock's
+/// code hash. Each event now carries `lockCodeHash`, as the collection
+/// holders do; null only when the lock script is not indexed (and then so is
+/// the address).
+#[tokio::test]
+async fn token_supply_events_carry_each_party_lock_code_hash() {
+    let path = format!("/tokens/0x{}/supply-events", hex::encode(TOKEN));
+    // The mint went to 0x32 (registered lock), the burn came from 0x31 (not).
+    let store = fixture();
+    seed_named_and_unnamed_locks(&store, &[0x32; 32], &[0x31; 32]);
+    let app = create_router(test_config(store)).await;
+    let (status, body) = response_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let burn = &body["data"][0];
+    assert_eq!(burn["kind"], "burn", "{body}");
+    assert_eq!(burn["lockHash"], format!("0x{}", "31".repeat(32)));
+    assert_eq!(
+        burn["lockCodeHash"],
+        unregistered_lock_code_hash_hex(),
+        "an unregistered lock is named by its code hash: {body}"
+    );
+    assert!(burn["lockKind"].is_null(), "{body}");
+    let mint = &body["data"][1];
+    assert_eq!(mint["kind"], "mint", "{body}");
+    assert_eq!(mint["lockHash"], format!("0x{}", "32".repeat(32)));
+    assert_eq!(mint["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{body}");
+    assert_eq!(mint["lockKind"], "SECP256K1/blake160", "{body}");
+
+    // No lock script row: the code hash is null, as the address is.
+    let app = create_router(test_config(fixture())).await;
+    let (status, body) = response_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for event in body["data"].as_array().unwrap() {
+        let event = event.as_object().unwrap();
+        assert!(event.contains_key("lockCodeHash"), "{body}");
+        assert!(event["lockCodeHash"].is_null(), "{body}");
+        assert!(event["address"].is_null(), "{body}");
+        assert!(event["lockKind"].is_null(), "{body}");
+    }
+}
+
 /// A day row that disagrees with the day's own mint / burn records is a
 /// write-path bug: a 500 naming the day.
 #[tokio::test]
