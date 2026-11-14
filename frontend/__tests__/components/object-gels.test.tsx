@@ -253,9 +253,12 @@ describe('SequencingGel at the measured width (V3)', () => {
       <SequencingGel layout={full} subject="Nervape 3x" active={null} onActive={() => {}} />
     );
     expect(screen.queryByRole('list', { name: 'Genes' })).toBeNull();
-    const serial = container.querySelector('[data-gene="Serial"]')!;
-    expect(serial.textContent).toContain(`${'N'.repeat(26)}…`);
-    expect(serial.textContent).not.toContain('N'.repeat(27));
+    // the drawn words (the group's <title> keeps the whole value for a reader)
+    const words = Array.from(container.querySelectorAll('[data-gene="Serial"] text')).map(
+      (t) => t.textContent
+    );
+    expect(words).toContain(`${'N'.repeat(26)}…`);
+    expect(words.some((w) => w!.includes('N'.repeat(27)))).toBe(false);
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
       'inscription a94617…79e0i0'
     );
