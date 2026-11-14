@@ -178,7 +178,8 @@ describe('DetailLayout seal', () => {
 
   // Every page without a seal (indexes, topics, the entity pages that press none) keeps the head as
   // it was before the name plate: the title row (h1 and status, then actions), the identity, the
-  // lede, then the facts. Pinned as the markup itself, taken from the code before C10.
+  // lede, then the facts. Pinned as the markup itself, taken from the code before C10. Re-pinned on
+  // purpose for PB-06 / PA-32: an unsealed entity's h1 now takes the phone step too.
   it('renders an unsealed head exactly as before the name plate', () => {
     const { container, unmount } = render(
       <DetailLayout
@@ -219,7 +220,8 @@ describe('DetailLayout seal', () => {
     expect(entity.container.querySelector('header')!.outerHTML).toBe(
       '<header class="mb-8"><div class="flex flex-wrap items-baseline justify-between gap-3">' +
         '<div class="flex min-w-0 flex-wrap items-baseline gap-3">' +
-        '<h1 class="text-text-bright break-words text-entity"><span>Transaction</span></h1>' +
+        '<h1 class="text-text-bright break-words text-entity max-md:text-index">' +
+        '<span>Transaction</span></h1>' +
         '</div></div>' +
         '<div class="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
         '<span>0xabc</span></div></header>'

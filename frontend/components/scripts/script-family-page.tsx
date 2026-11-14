@@ -906,7 +906,8 @@ export function ScriptFamilyPage({
             <section aria-label={family.name} className="min-w-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
                 <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <h1 className="text-text-bright text-entity break-words font-medium">
+                  {/* PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26). */}
+                  <h1 className="text-text-bright text-entity max-md:text-index break-words font-medium">
                     {family.name}
                   </h1>
                   <ScriptHeading family={family} />

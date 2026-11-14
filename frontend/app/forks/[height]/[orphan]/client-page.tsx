@@ -170,7 +170,8 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
         </Link>
       </nav>
       <div className="mt-2.5 flex flex-wrap items-baseline gap-3">
-        <h1 className="text-text-bright text-entity font-medium">
+        {/* PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px). */}
+        <h1 className="text-text-bright text-entity max-md:text-index font-medium">
           Fork at {formatBlockNumber(event.forkPointNumber)}
         </h1>
         <span className="text-text-dim text-body">
