@@ -51,13 +51,8 @@ const GHOST_ALLOWLIST: Allowlist = {
   'components/ui/script-byte-map.tsx': [ARROW],
 };
 
-const FORK_ALERT =
-  'the deep-fork banner’s words on its cinnabar fill: their ink is the fill-ink rule’s (inkOnFill), listed in the B2 hand-back';
-
-/** `text-<ink>/<n>` sites the gate tolerates. */
-const ALPHA_INK_ALLOWLIST: Allowlist = {
-  'components/deep-fork-alert.tsx': [FORK_ALERT, FORK_ALERT, FORK_ALERT, FORK_ALERT, FORK_ALERT],
-};
+/** `text-<ink>/<n>` sites the gate tolerates: none. */
+const ALPHA_INK_ALLOWLIST: Allowlist = {};
 
 const LINKED =
   'a linked highlight: while the reader points at (or pins) one part, the others fade back; their own focus, not a set-back state';
