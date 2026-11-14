@@ -65,8 +65,13 @@ describe('SecondaryIssuancePage', () => {
     expect(shannons('mining') + shannons('compensation') + shannons('burnt')).toBe(
       BigInt('9900000001')
     );
-    expect(screen.getByText(/99.00000001 CKB/)).toBeInTheDocument();
-    expect(screen.getByText('Frozen phase-1 overlap')).toBeInTheDocument();
-    expect(screen.getByText('1 CKB')).toBeInTheDocument();
+    // Re-pinned for CH-18: the protocol total is the head figure alone (its fact repeated it), and
+    // the frozen phase-1 overlap is a developer fact in the evidence tier.
+    expect(screen.getByRole('group', { name: 'Secondary issuance readings' })).toHaveTextContent(
+      // the unit after a no-break space (re-pinned for CH-14)
+      '99.00000001 CKB'
+    );
+    const evidence = document.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(evidence).toHaveTextContent('Frozen phase-1 overlap: 1 CKB');
   });
 });

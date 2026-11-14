@@ -44,16 +44,19 @@ describe('MinerAddressDistributionPage', () => {
     });
     render(<MinerAddressDistributionPage />);
     expect(await screen.findByText('Miners')).toBeInTheDocument();
-    expect(screen.getByText(/2026-07-23–2026-07-29 · 10 blocks/)).toBeInTheDocument();
+    // Re-pinned for CH-03: the window with an arrow; a lock hash shortened like an address, its
+    // kind said once under the ranking instead of a bracketed word on each row.
+    expect(screen.getByText('2026-07-23 → 2026-07-29 · 10 blocks')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Resolved Pool' })).toHaveAttribute(
       'href',
       `/mainnet/address/${minerAddress}`
     );
-    expect(screen.getByRole('link', { name: unresolvedHash })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${unresolvedHash.slice(2)}`
-    );
-    expect(screen.getByText('(Address)')).toBeInTheDocument();
-    expect(screen.getByText('(Lock hash)')).toBeInTheDocument();
+    const unresolved = screen.getByRole('link', { name: `0x${'b'.repeat(8)}…${'b'.repeat(6)}` });
+    expect(unresolved).toHaveAttribute('href', `/mainnet/address/${unresolvedHash.slice(2)}`);
+    expect(unresolved).toHaveAttribute('title', unresolvedHash);
+    expect(screen.queryByText('(Address)')).toBeNull();
+    expect(
+      screen.getByText('A row beginning 0x is a miner known only by its lock hash.')
+    ).toBeInTheDocument();
   });
 });
