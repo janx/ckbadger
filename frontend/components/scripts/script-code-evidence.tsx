@@ -400,52 +400,6 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
   );
 }
 
-export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi[] }) {
-  return (
-    <DetailSection title="Code history">
-      {markers.length === 0 ? (
-        <p className="text-text-dim text-small">
-          No observed code cell events for registered references.
-        </p>
-      ) : (
-        <ol className="border-base-border space-y-0 border-l pl-4">
-          {markers.map((marker) => (
-            <li
-              key={`${marker.referenceHash}:${marker.hashType}:${marker.codeCellTxHash}:${marker.codeCellOutputIndex}:${marker.event}`}
-              className="border-base-border border-b py-3 last:border-b-0"
-            >
-              <div className="text-small flex flex-wrap items-baseline justify-between gap-2">
-                <span className="text-text-bright capitalize">{marker.event}</span>
-                <AppLink
-                  href={`/blocks/${marker.blockNumber}`}
-                  className="text-emphasis hover:underline"
-                >
-                  Block {formatBlockNumber(marker.blockNumber)}
-                </AppLink>
-              </div>
-              <div className="text-text-dim text-meta mt-1 break-all font-mono">
-                {marker.hashType} reference{' '}
-                <NoBreak>{truncateHash(marker.referenceHash, 16, 8)}</NoBreak> · version{' '}
-                {marker.versionHash ? truncateHash(marker.versionHash, 16, 8) : 'unresolved'}
-              </div>
-              <div className="text-text-dim text-meta mt-1">
-                Chart day {marker.indexedDay} · code cell holder:{' '}
-                {scriptClassLabel(marker.custody.class)}
-              </div>
-              <AppLink
-                href={`/tx/${marker.eventTxHash}`}
-                className="text-emphasis text-meta hover:underline"
-              >
-                Event transaction <NoBreak>{truncateHash(marker.eventTxHash, 12, 8)}</NoBreak>
-              </AppLink>
-            </li>
-          ))}
-        </ol>
-      )}
-    </DetailSection>
-  );
-}
-
 export function ScriptCapacityEvidenceChart({
   chart,
   markers,

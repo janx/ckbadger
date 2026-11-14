@@ -202,7 +202,9 @@ describe('Shared asset feeds', () => {
       />
     );
     const headline = await screen.findByText('Neighbour registered a sub-name');
-    expect(headline.closest('article')).toHaveClass('opacity-[0.45]');
+    // R4 (re-pinned on purpose): a neighbour's row is the quiet variant, not 45 % opacity
+    expect(headline.closest('article')).toHaveClass('quiet');
+    expect(headline.closest('article')).not.toHaveClass('opacity-[0.45]');
     expect(screen.getByTestId('activity-read-error')).toHaveTextContent(
       `Cannot read tx ${broken.txHash}`
     );
@@ -246,11 +248,11 @@ describe('Shared asset feeds', () => {
       />
     );
     const renewed = await screen.findByText(/^Renewed/);
-    expect(renewed.closest('article')).not.toHaveClass('opacity-[0.45]');
+    expect(renewed.closest('article')).not.toHaveClass('quiet');
     const raw = renewed.querySelector('code[data-raw-action]')!;
     expect(raw).toHaveTextContent('dotbit:lock_account_for_cross_chain');
     expect(raw).toHaveClass('font-mono');
-    expect(screen.getByText('Neighbour recycled').closest('article')).toHaveClass('opacity-[0.45]');
+    expect(screen.getByText('Neighbour recycled').closest('article')).toHaveClass('quiet');
   });
 
   it('counts this token once from positive participant deltas, not CKB value or both sides', () => {

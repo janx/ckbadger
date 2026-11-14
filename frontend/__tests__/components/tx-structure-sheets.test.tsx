@@ -371,7 +371,8 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     expect(link).toHaveAttribute('stroke-width', '2');
     expect(article('in:0')).toHaveAttribute('data-highlighted', 'true');
     expect(article('out:1')).toHaveAttribute('data-highlighted', 'true');
-    expect(article('in:1')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(article('in:1')).toHaveClass('quiet');
     fireEvent.mouseLeave(article('in:0'));
     expect(link).toHaveAttribute('stroke-width', '1.3');
     expect(article('out:1')).toHaveAttribute('data-highlighted', 'false');

@@ -67,7 +67,7 @@ export function CapacityPartition({
       )}
       {sum > BigInt(0) && minSegmentWidth !== undefined && (
         <div
-          className="bg-base-surface flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full"
+          className="bg-base-surface flex h-2.5 w-full gap-0.5 overflow-hidden"
           aria-hidden="true"
         >
           {parts

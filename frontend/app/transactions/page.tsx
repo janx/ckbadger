@@ -628,7 +628,7 @@ export default function TransactionsPage() {
               <p className="text-text-dim text-small">Reading the pool…</p>
             )}
           </section>
-          <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+          <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
             <div
               role="group"
               aria-label="Transaction views"

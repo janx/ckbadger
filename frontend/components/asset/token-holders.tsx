@@ -174,7 +174,7 @@ export function TokenDistributionView({
                   key: 'share',
                   tone: 'quiet',
                   left: (
-                    <span aria-hidden="true" className="bg-base-elevated inline-block h-1.5 w-10">
+                    <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
                       <span
                         className="bg-token block h-full"
                         style={{

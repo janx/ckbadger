@@ -124,7 +124,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
               setSearch(e.target.value);
             }}
             className="bg-base-bg border-base-border max-w-full border-b py-2"
-            placeholder="Search names or IDs"
+            placeholder="search names or ids"
           />
           <select
             aria-label="Item status"

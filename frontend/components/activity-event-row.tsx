@@ -3,7 +3,6 @@
 import { Fragment, type ReactElement, type ReactNode } from 'react';
 import { lockArgsLine } from '@/lib/lock-args';
 import Link from '@/components/ui/link';
-import { Dotted } from '@/components/ui/phone-row';
 import { ErrorBoundary } from '@/components/error-boundary';
 import {
   getScriptDetailHref,
@@ -124,7 +123,7 @@ function CallExpr({
         href={href}
         className={cn(
           'transition-colors',
-          quiet ? 'text-text hover:text-jade' : 'text-gold hover:text-gold/80'
+          quiet ? 'text-text hover:text-jade' : 'text-gold hover:text-gold-dim'
         )}
         onClick={(e) => e.stopPropagation()}
       >
@@ -133,7 +132,7 @@ function CallExpr({
       {args !== null && (
         <>
           <span className="text-text-dim">(</span>
-          <span className={quiet ? 'text-text-dim' : 'text-aqua/70'}>{args}</span>
+          <span className={quiet ? 'text-text-dim' : 'text-aqua-dim'}>{args}</span>
           <span className="text-text-dim">)</span>
         </>
       )}
@@ -240,7 +239,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
         value: (
           <Link
             href={getObjectDetailHref(item.objectId)}
-            className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
+            className="text-lavender-dim hover:text-lavender text-small font-mono transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             <NoBreak>{truncateHash(item.objectId, 8, 6)}</NoBreak>
@@ -718,7 +717,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       return (
         <Link
           href={getObjectDetailHref(item.objectId)}
-          className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
+          className="text-lavender-dim hover:text-lavender text-small font-mono transition-colors"
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
@@ -873,10 +872,32 @@ export function activityHeadline(activity: ActivityBody): string {
 }
 
 /**
+ * The ink of an amount by its sign: the integer in the sign's own ink, the fraction digits a step
+ * quieter in a named ink of that sign (UI review 2026-11-14, R4, DY-06) — each at 4.5:1 on every
+ * ground in both themes (`__tests__/lib/palette.test.ts`), never the sign's ink at an opacity.
+ * The one table every amount renderer reads.
+ */
+export const AMOUNT_INK = {
+  positive: { integer: 'text-positive', fraction: 'text-jade-dim' },
+  negative: { integer: 'text-negative', fraction: 'text-rouge-dim' },
+  neutral: { integer: 'text-text', fraction: 'text-text-dim' },
+} as const;
+export type AmountSign = keyof typeof AMOUNT_INK;
+
+/** The sign of a split amount (`+`, `−` or none) as an {@link AMOUNT_INK} key. */
+export function amountSign(sign: string): AmountSign {
+  if (sign === '+') return 'positive';
+  if (sign === MINUS) return 'negative';
+  if (sign === '') return 'neutral';
+  throw new Error(`amount sign "${sign}" is not +, ${MINUS} or none`);
+}
+
+/**
  * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
- * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign. Zero is
- * "0 CKB" with the 0 ghosted and no fraction, for every caller (consistency plan C4): nothing
- * moved, so there are no decimals to read.
+ * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign, the
+ * fraction in the sign's quieter ink (`AMOUNT_INK`). Zero is "0 CKB" with no fraction, for every
+ * caller (consistency plan C4): nothing moved, so there are no decimals to read. That 0 is a
+ * datum, in the dim ink; the ghost is only for the padding zeros of a non-zero amount (R4).
  */
 export function ExactCkb({
   shannons,
@@ -900,21 +921,14 @@ export function ExactCkb({
   if (shannons === BigInt(0))
     return (
       <span data-ckb-amount className="whitespace-nowrap tabular-nums">
-        <span data-ghost className="text-text-ghost">
+        <span data-zero className="text-text-dim">
           0
         </span>
         {unitEl}
       </span>
     );
   const parts = splitCkbAmount(shannons);
-  const color =
-    tone === 'plain'
-      ? 'text-text'
-      : parts.sign === '+'
-        ? 'text-positive'
-        : parts.sign === MINUS
-          ? 'text-negative'
-          : 'text-text';
+  const ink = AMOUNT_INK[tone === 'plain' ? 'neutral' : amountSign(parts.sign)];
   return (
     <span
       data-ckb-amount
@@ -922,7 +936,7 @@ export function ExactCkb({
         wrap
           ? 'inline-flex max-w-full flex-wrap justify-end tabular-nums'
           : 'whitespace-nowrap tabular-nums',
-        color
+        ink.integer
       )}
     >
       <span className="whitespace-nowrap">
@@ -930,7 +944,9 @@ export function ExactCkb({
         {parts.integer}
       </span>
       <span className="whitespace-nowrap">
-        <span className="opacity-[0.78]">{parts.fraction}</span>
+        <span data-fraction className={ink.fraction}>
+          {parts.fraction}
+        </span>
         <span data-ghost className="text-text-ghost">
           {parts.ghost}
         </span>
@@ -1141,9 +1157,4 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
 
 export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
   return protocolActionNoteFacts(pa).map((f) => f.node);
-}
-
-/** A protocol action's metadata as one quiet line (the one separated list), or nothing. */
-export function ProtocolActionNote({ pa }: { pa: ActivityProtocolAction }) {
-  return <Dotted parts={protocolActionNoteParts(pa)} />;
 }

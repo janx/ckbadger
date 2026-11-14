@@ -377,7 +377,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         key={`gap:${from}`}
         data-gap={`${from}-${to}`}
         className={cn(
-          'text-text-dim text-meta border-base-border-subtle my-1 flex h-[30px] items-center gap-3 border-y border-dashed',
+          'text-text-dim text-meta border-row-rule my-1 flex h-[30px] items-center gap-3 border-y border-dashed',
           digits === 5 ? 'pl-[74px]' : 'pl-[62px]'
         )}
       >
@@ -751,9 +751,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 )}
                 <div
                   aria-label="CellData byte map"
-                  className={cn(
-                    molecule && 'border-base-border-subtle mt-2.5 border-t border-dashed pt-3.5'
-                  )}
+                  className={cn(molecule && 'border-row-rule mt-2.5 border-t border-dashed pt-3.5')}
                 >
                   <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
                     <span>

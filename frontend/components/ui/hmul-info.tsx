@@ -1,7 +1,6 @@
 'use client';
 
 import { HelpPopover } from '@/components/ui/help-popover';
-import { cn } from '@/lib/utils';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatScaledInteger } from '@/lib/exact-integer';
 
@@ -43,24 +42,5 @@ export function HMulHelpPopover({ align = 'start', className }: HMulHelpPopoverP
     >
       <p>{HMUL_EXPLANATION}</p>
     </HelpPopover>
-  );
-}
-
-interface HMulLabelWithHelpProps {
-  align?: 'start' | 'end';
-  className?: string;
-  labelClassName?: string;
-}
-
-export function HMulLabelWithHelp({
-  align = 'start',
-  className,
-  labelClassName,
-}: HMulLabelWithHelpProps) {
-  return (
-    <span className={cn('inline-flex items-center gap-1.5', className)}>
-      <span className={cn(labelClassName)}>HMul</span>
-      <HMulHelpPopover align={align} />
-    </span>
   );
 }

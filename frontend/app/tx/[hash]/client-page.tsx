@@ -438,7 +438,7 @@ function WitnessRow({
       onFocus={() => onHover({ t: 'witness', index: w.index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 rounded border-b px-1.5 py-2.5 text-left transition-opacity',
+        'border-row-rule text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 rounded border-b px-1.5 py-2.5 text-left transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
@@ -567,7 +567,7 @@ function DepRow({
       onFocus={() => onHover({ t: 'dep', index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated text-small -mx-1.5 flex flex-col gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
+        'border-row-rule text-small -mx-1.5 flex flex-col gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
@@ -618,7 +618,7 @@ function DepRow({
 
 function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
-    <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
+    <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
       <h2 className="text-body text-text font-medium">{title}</h2>
       <span className="text-text-dim text-small">{note}</span>
     </div>
@@ -1592,7 +1592,7 @@ export default function TransactionDetailPage() {
                 {headerDeps.map((h) => (
                   <div
                     key={h.blockHash}
-                    className="border-base-elevated flex flex-wrap justify-between gap-3 border-b py-2.5"
+                    className="border-row-rule flex flex-wrap justify-between gap-3 border-b py-2.5"
                   >
                     {h.blockNumber === null ? (
                       <span className="text-text-dim">block not indexed yet</span>
@@ -1782,7 +1782,7 @@ export default function TransactionDetailPage() {
           </div>
         </dl>
 
-        <details open={graphOpen} className="border-base-border-subtle border-t pt-4">
+        <details open={graphOpen} className="border-row-rule border-t pt-4">
           <summary className="text-text-dim hover:text-text text-small cursor-pointer">
             Raw data
           </summary>

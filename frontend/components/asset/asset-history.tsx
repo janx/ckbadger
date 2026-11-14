@@ -406,7 +406,7 @@ export function AssetHistory({
           <div
             aria-live="polite"
             aria-label="History readout"
-            className="border-base-border-subtle text-small mt-2 border-t pt-2"
+            className="border-row-rule text-small mt-2 border-t pt-2"
           >
             {/* PB-23: one separated list, so a wrapped item never opens its line with a "·" */}
             <Dotted className="gap-y-1" parts={readoutItems} />

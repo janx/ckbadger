@@ -4,6 +4,7 @@ import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { ExternalLink } from '@/components/ui/external-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -114,7 +115,7 @@ function EditionCard({
           {rfcs.map((feature) => (
             <div
               key={feature.rfc}
-              className="border-base-border-subtle grid grid-cols-[90px_minmax(0,1fr)] gap-2.5 border-t py-1.5"
+              className="border-row-rule grid grid-cols-[90px_minmax(0,1fr)] gap-2.5 border-t py-1.5"
             >
               <span className="text-text-bright">RFC {feature.rfc}</span>
               <span className="text-text">{RFC_TEXT[feature.rfc] ?? ''}</span>
@@ -122,27 +123,24 @@ function EditionCard({
           ))}
         </div>
       )}
+      {/* Every one leaves the site, so every one says so (U-20): ` ↗`, a new tab. */}
       <div className="text-small flex flex-wrap gap-x-5 gap-y-1">
         {overview && (
-          <a
+          <ExternalLink
             href={overview.url}
-            target="_blank"
-            rel="noreferrer"
             className="text-text hover:text-text-bright hover:underline"
           >
-            {overview.label} overview ↗
-          </a>
+            {overview.label} overview
+          </ExternalLink>
         )}
         {resources.map((resource) => (
-          <a
+          <ExternalLink
             key={resource.url}
             href={resource.url}
-            target="_blank"
-            rel="noreferrer"
             className="text-text hover:text-text-bright hover:underline"
           >
             {resource.label}
-          </a>
+          </ExternalLink>
         ))}
       </div>
     </article>
@@ -387,10 +385,7 @@ export default function HardforksPage() {
                 </p>
                 <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
                   {ready.data.consensusFeatures.map((feature) => (
-                    <div
-                      key={feature.rfc}
-                      className="border-base-border-subtle text-small border-t py-2"
-                    >
+                    <div key={feature.rfc} className="border-row-rule text-small border-t py-2">
                       <dt className="text-text-bright">RFC {feature.rfc}</dt>
                       <dd className="text-text-dim">
                         {feature.activationEpoch === null

@@ -56,7 +56,7 @@ export function PromptHeading({
   return (
     <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
       {heading}
-      <span data-prompt-note="" className="text-text-ghost text-meta ml-auto">
+      <span data-prompt-note="" className="text-text-dim text-meta ml-auto">
         {note}
       </span>
     </div>

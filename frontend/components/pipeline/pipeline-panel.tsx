@@ -276,7 +276,6 @@ function Ring({
       y={q.Y - pad}
       width={q.s + 2 * pad}
       height={q.s + 2 * pad}
-      rx={2}
       fill="none"
       strokeWidth={1.5}
       strokeDasharray={dashed ? '3 2' : undefined}
@@ -708,7 +707,6 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
                 y={hovered.Y - 4}
                 width={hovered.s + 8}
                 height={hovered.s + 8}
-                rx={3}
                 fill="none"
                 strokeWidth={3}
                 strokeOpacity={0.45}
@@ -846,7 +844,7 @@ export function PipelinePanel() {
           pipeline
           <span
             title={PIPELINE_HELP}
-            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 rounded-full border text-center font-mono normal-case leading-3 tracking-normal"
+            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 border text-center font-mono normal-case leading-3 tracking-normal"
           >
             ?
           </span>

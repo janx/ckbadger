@@ -183,7 +183,6 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               y="24"
               width={LANE - 4}
               height="4"
-              rx="1"
               fill="none"
               stroke={GEL_COLORS.well}
               strokeOpacity=".3"
@@ -251,7 +250,6 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             y={r(yOf(pos) - 0.8)}
             width={LANE - 5}
             height="1.6"
-            rx=".6"
             fill={owner?.color ?? GEL_COLORS.label}
             fillOpacity={bytes[byte] === '00' ? 0.45 : 0.95}
             opacity={lit && !inLit(byte) ? 0.15 : 1}
@@ -297,7 +295,6 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
                   y={r(y1 - 1)}
                   width={16 * LANE - 2}
                   height={r(y2 - y1 + 2)}
-                  rx="1.5"
                   fill="none"
                   stroke={g.color}
                   strokeOpacity=".6"
@@ -384,7 +381,6 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           y={TOP - 4}
           width={mapW}
           height={n * STEP + 8}
-          rx="2"
           fill={GEL_COLORS.lane}
           fillOpacity=".025"
         />
@@ -466,7 +462,6 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
             y={TOP + g.offset * 2 * STEP + 0.5}
             width={mapW - 1}
             height={g.length * 2 * STEP - 1}
-            rx="1.5"
             fill={g.color}
             fillOpacity=".08"
             stroke={g.color}
@@ -484,7 +479,6 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
               y={r(yOf(pos) - 1.5)}
               width={lane - 6}
               height="3"
-              rx="1"
               fill={owner?.color ?? GEL_COLORS.label}
               fillOpacity={bytes[byte] === '00' ? 0.45 : 0.95}
               opacity={lit && !inLit(byte) ? 0.15 : 1}
@@ -495,7 +489,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
       <ul
         aria-label="Genes"
         data-rows={oneLine ? 'one-line' : 'two-line'}
-        className="border-base-border-subtle text-small border-t"
+        className="border-row-rule text-small border-t"
       >
         {genes.map((g) => {
           const on = g.name === lit;
@@ -516,7 +510,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
             <li
               key={g.key}
               data-gene-row={g.name}
-              className="border-base-elevated border-b last:border-b-0"
+              className="border-row-rule border-b last:border-b-0"
             >
               <div
                 data-active={on ? 'true' : undefined}
@@ -550,65 +544,5 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
         })}
       </ul>
     </>
-  );
-}
-
-/**
- * The same gel turned on its side for a table row (seqgel.mini_gel, CollectionTxs/Collection
- * boards): 16 faint lane stripes top to bottom (0–f), the DNA's hex digits left to right, each a
- * short band in the lane of its value — it reads the DNA like the big gel does.
- */
-export function MiniGel({
-  dna,
-  label,
-  ink,
-  width = 128,
-  height = 32,
-}: {
-  dna: string;
-  label: string;
-  ink: string;
-  width?: number;
-  height?: number;
-}) {
-  const hex = (dna.startsWith('0x') ? dna.slice(2) : dna).toLowerCase();
-  if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex))
-    throw new Error(`${label}: expected byte-aligned hexadecimal DNA`);
-  const n = hex.length;
-  const pitch = n ? (width - 4) / n : 0;
-  const lane = (height - 2) / 16;
-  return (
-    <svg
-      role="img"
-      aria-label={`${label}: ${n / 2} bytes, ${hex}`}
-      viewBox={`0 0 ${width} ${height}`}
-      width={width}
-      height={height}
-      className="block max-w-full"
-    >
-      {Array.from({ length: 8 }, (_, i) => (
-        <rect
-          key={i}
-          x="0"
-          y={r(1 + i * 2 * lane)}
-          width={width}
-          height={r(lane)}
-          fill={GEL_COLORS.lane}
-          fillOpacity=".04"
-        />
-      ))}
-      {hex.split('').map((ch, i) => (
-        <rect
-          key={i}
-          data-nibble={i}
-          x={r(2 + i * pitch + pitch * 0.15)}
-          y={r(1 + parseInt(ch, 16) * lane)}
-          width={r(pitch * 0.7)}
-          height={r(lane)}
-          rx=".4"
-          fill={ink}
-        />
-      ))}
-    </svg>
   );
 }

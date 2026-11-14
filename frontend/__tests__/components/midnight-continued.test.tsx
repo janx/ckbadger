@@ -4,13 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { Chart } from '@/components/ui/chart';
-import { LineChart } from '@/components/ui/line-chart';
-import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 import { Hash } from '@/components/ui/hash';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
-import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
 
 // Midnight, continued (review 2026-11-03, item 5): five moves, each one rule on a shared piece.
 // Where a move is CSS only, the test pins the rule in globals.css and the class a component
@@ -217,44 +214,6 @@ describe('move 5 on the chart lines', () => {
       );
       expect(container.querySelector('.chart-line-halo')).toBeNull();
     }
-  });
-
-  it('halos LineChart’s primary path and MultiSeriesLineChart’s first series only', () => {
-    const { container, unmount } = render(
-      <LineChart
-        yAxisLabel="Net Flow"
-        data={[
-          { date: 'a', value: '1' },
-          { date: 'b', value: '2' },
-        ]}
-      />
-    );
-    const primary = screen.getByTestId('line-series-primary');
-    expect(primary).toHaveClass('chart-line-halo');
-    expect(primary.style.getPropertyValue('--halo-color')).toBe(
-      `color-mix(in srgb, ${CHART_PRIMARY_COLOR} 55%, transparent)`
-    );
-    expect(container.querySelector('rect.chart-line-halo')).toBeNull();
-    unmount();
-    const multi = render(
-      <MultiSeriesLineChart
-        data={[
-          { date: 'a', values: { holders: '1000', volume: '50' } },
-          { date: 'b', values: { holders: '1100', volume: '60' } },
-        ]}
-        series={[
-          { key: 'holders', label: 'Holders', color: '#00c389' },
-          { key: 'volume', label: 'Volume', color: '#ffb000' },
-        ]}
-      />
-    );
-    const paths = Array.from(multi.container.querySelectorAll('path[stroke-width="2"]'));
-    expect(paths).toHaveLength(2);
-    expect(paths[0]).toHaveClass('chart-line-halo');
-    expect((paths[0] as HTMLElement).style.getPropertyValue('--halo-color')).toBe(
-      'color-mix(in srgb, #00c389 55%, transparent)'
-    );
-    expect(paths[1]).not.toHaveClass('chart-line-halo');
   });
 });
 

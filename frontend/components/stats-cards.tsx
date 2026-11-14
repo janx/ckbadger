@@ -61,9 +61,9 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}
-      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden rounded-full">
+      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden">
         <div
-          className="from-gold-dim via-gold-dim to-gold h-full rounded-full bg-gradient-to-r transition-all duration-500"
+          className="from-gold-dim via-gold-dim to-gold h-full bg-gradient-to-r transition-all duration-500"
           style={{ width: `${syncStatus.progress}%` }}
         />
       </div>
@@ -97,7 +97,7 @@ export function StatsCards() {
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => (
           <div key={card.label} data-testid="stats-card" className="well p-4">
-            <div className="eyebrow text-text-dim text-small font-mono">{card.label}</div>
+            <div className="eyebrow text-text-dim text-meta font-mono">{card.label}</div>
             <div className="text-hero mt-1 font-semibold">
               <TerminalNumber value={card.value} glowIntensity={card.glow} animate={!isLoading} />
             </div>

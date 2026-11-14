@@ -113,7 +113,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                   {withUnit(formatChartExact(row.value, model.unit), model.unit)} · {row.share}
                 </span>
               </div>
-              <div className="bg-base-elevated mt-1 h-1 rounded">
+              <div className="bg-bar-track mt-1 h-1 rounded">
                 <div className="bg-jade h-1 rounded" style={{ width: `${width}%` }} />
               </div>
             </li>

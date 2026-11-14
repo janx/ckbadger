@@ -121,9 +121,10 @@ export interface TapOrHoverHintProps extends TapOrHoverOptions {
 }
 
 /**
- * The touch hint as an inline element: "tap or hover a day". Under `TapOrHoverHintProvider` only
- * the page's first hint in the document says its words; the later ones keep an empty, hidden
- * element in their place.
+ * The touch hint as an inline element: "tap or hover a day", in the dim ink wherever it stands (a
+ * hint is information, never the ghost: R4). Under `TapOrHoverHintProvider` only the page's first
+ * hint in the document says its words; the later ones keep an empty, hidden element in their
+ * place.
  */
 export function TapOrHoverHint({ what, capital, dotted = false, className }: TapOrHoverHintProps) {
   const place = useRef<HTMLSpanElement>(null);
@@ -131,7 +132,7 @@ export function TapOrHoverHint({ what, capital, dotted = false, className }: Tap
   // a later hint keeps only its place: an empty element that draws no box
   if (!first) return <span ref={place} data-hint-place="" hidden />;
   return (
-    <span ref={place} data-hint="tap-or-hover" className={cn(className)}>
+    <span ref={place} data-hint="tap-or-hover" className={cn('text-text-dim', className)}>
       {dotted && ' ·\u00a0'}
       {tapOrHover(what, { capital })}
     </span>

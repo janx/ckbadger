@@ -231,7 +231,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {/* F2 objects (OB-M6): the board's four properties; configure decoding is tier 2. */}
           {/* One column until md: at 640 the 2×2 grid broke "8 bytes" (responsive B#15). */}
           <dl aria-label="Properties" className="grid gap-x-7 md:grid-cols-2">
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Token</dt>
               <dd className="text-text-bright text-right">
                 #<AssetCount value={item.tokenIndex} />{' '}
@@ -241,14 +241,14 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </dd>
             </div>
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">State</dt>
               <dd className="text-text-bright text-right">
                 0x{item.state.toString(16).padStart(2, '0')} ·{' '}
                 {item.claimed ? 'claimed' : 'unclaimed'} · {item.locked ? 'locked' : 'unlocked'}
               </dd>
             </div>
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Issuer</dt>
               <dd className="text-text-bright text-right">
                 {item.issuer.name ?? 'Unnamed issuer'}{' '}
@@ -257,7 +257,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </dd>
             </div>
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Characteristic</dt>
               <dd className="text-text-bright min-w-0 text-right [overflow-wrap:anywhere]">
                 {characteristic.every((b) => b === '00') ? (

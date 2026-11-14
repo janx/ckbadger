@@ -18,10 +18,10 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="border-base-border-subtle grid min-w-0 gap-1 border-t py-3 sm:grid-cols-[210px_minmax(0,1fr)] sm:gap-4">
+    <div className="border-row-rule grid min-w-0 gap-1 border-t py-3 sm:grid-cols-[210px_minmax(0,1fr)] sm:gap-4">
       <dt className="text-text-dim">
         {term}
-        <span className="text-text-ghost text-meta block">{field}</span>
+        <span className="text-text-dim text-meta block">{field}</span>
       </dt>
       <dd className="flex min-w-0 flex-col gap-1">{children}</dd>
     </div>
@@ -56,7 +56,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
         args={`version ${n} of ${n}`}
         note="read from the cell"
       />
-      <dl className="border-base-border-subtle flex flex-col border-b">
+      <dl className="border-row-rule flex flex-col border-b">
         <Row term="Handle" field="alsoKnownAs">
           {current.handles.length ? (
             current.handles.map((h) => (
@@ -182,7 +182,7 @@ export function AmongDidCkb({
       <div
         role="img"
         aria-label={`did:ckb identities by personal data server: ${segments.map((s) => `${s.label} ${s.count}`).join(', ')}`}
-        className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full"
+        className="flex h-2.5 w-full gap-0.5 overflow-hidden"
       >
         {segments.map((s) => (
           <span

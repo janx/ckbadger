@@ -269,7 +269,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
         role="status"
         aria-live="polite"
         aria-label="Code cell holder reading"
-        className="border-base-border-subtle text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-[18px] gap-y-1 border-t pt-2.5 tabular-nums"
+        className="border-row-rule text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-[18px] gap-y-1 border-t pt-2.5 tabular-nums"
       >
         <span>
           {isNow ? 'held now by' : 'held by'}{' '}

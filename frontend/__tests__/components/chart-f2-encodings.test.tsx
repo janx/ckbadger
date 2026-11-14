@@ -3,6 +3,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { Chart } from '@/components/ui/chart';
+import { roundedRects } from '@/__tests__/utils/square-corners';
 
 // F2 charts group: the chart encodings of the Charts / ChartDetail boards the shared Chart lacked
 // (CH-09, CH-12, CH-15, CH-22, CH-23, CH-24, CH-35, CH-58). Every one is opt-in.
@@ -84,7 +85,8 @@ describe('shared Chart encodings for the charts boards', () => {
     // The plot starts below the key: every grid line and the marker's name are under it.
     const keyY = Number(key.querySelector('text')!.getAttribute('y'));
     const gridYs = [
-      ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
+      // the grid is the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
+      ...container.querySelectorAll('svg line[stroke="var(--c-row-rule)"]'),
     ].map((n) => Number(n.getAttribute('y1')));
     expect(Math.min(...gridYs) - keyY).toBeGreaterThanOrEqual(10);
     const marker = [...container.querySelectorAll('svg text')].find(
@@ -139,6 +141,27 @@ describe('shared Chart encodings for the charts boards', () => {
     const reading = container.querySelector('[data-hover-reading]')!;
     expect(reading.textContent).toContain('day 2025-01-01');
     expect(reading.textContent).toContain('3! PH/s');
+  });
+
+  it('draws the in-plot hover reading in a square-cornered box (U-02, R1)', () => {
+    const { container } = render(
+      <Chart
+        title="Hash rate"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="PH/s"
+        pointDots
+        formatLabel={(label) => `day ${label}`}
+        formatValue={(v) => `${v}!`}
+      />
+    );
+    const svg = container.querySelector('svg[role="img"]')!;
+    expect(container.querySelector('[data-hover-reading]')).toBeNull();
+    fireEvent.keyDown(svg, { key: 'ArrowLeft' });
+    const box = container.querySelector('[data-hover-reading] > rect');
+    expect(box).toHaveAttribute('stroke', 'var(--c-base-border)');
+    expect(roundedRects(svg)).toEqual([]);
   });
 
   it('draws a series dashed or as a bare line when asked (CH-12 real inflation, CH-58)', () => {
@@ -610,9 +633,7 @@ describe('chart material (visual finish V13)', () => {
           formatValue={(v) => v}
         />
       );
-      const grid = [
-        ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
-      ];
+      const grid = [...container.querySelectorAll('svg line[stroke="var(--c-row-rule)"]')];
       expect(grid.length).toBeGreaterThan(1);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
       // A target keeps its own dash (re-pinned for CH-21: 4 3, was 3 3 like a hardfork's).

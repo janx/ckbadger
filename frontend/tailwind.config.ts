@@ -19,6 +19,21 @@ export default {
     // The one type scale (hierarchy plan R1, S8): `text-meta` … `text-display`, defined in lib. Set
     // as the whole theme, not under `extend`, so Tailwind's default sizes (text-xs …) do not exist.
     fontSize: TYPE_SCALE,
+    // Square corners (UI review 2026-11-14, U-02, ruling R1): the boards round nothing but a dot.
+    // Every step is 0 but `full`, which a mark of at most 14 px keeps (a status dot, a legend dot);
+    // set as the whole theme, so no default step survives. The `rounded*` classes still in page
+    // code draw square until a cleanup removes them; __tests__/lib/radius-scale.test.ts is the gate.
+    borderRadius: {
+      none: '0',
+      sm: '0',
+      DEFAULT: '0',
+      md: '0',
+      lg: '0',
+      xl: '0',
+      '2xl': '0',
+      '3xl': '0',
+      full: '9999px',
+    },
     container: {
       center: true,
       // The page gutter (material pass v2, move 6): 16 px, 24 px from lg. Every `container`
@@ -49,6 +64,10 @@ export default {
           border: twColor('base-border'),
           'border-subtle': twColor('base-border-subtle'),
         },
+        // R5 (UI review 2026-11-14): the rule between rows and a bar's empty track, keys of their
+        // own so that by day they clear the ruled paper (the hair and the elevated tint do not).
+        'row-rule': twColor('row-rule'),
+        'bar-track': twColor('bar-track'),
         text: {
           bright: twColor('text-bright'),
           DEFAULT: twColor('text'),
@@ -157,54 +176,19 @@ export default {
         'glow-amber': glow('amber', 0.157, 0.078),
       },
       animation: {
-        'terminal-flicker': 'terminal-flicker 0.15s infinite',
         'terminal-glow-pulse': 'terminal-glow-pulse 4s ease-in-out infinite',
-        'digit-tick': 'digit-tick 0.2s ease-out',
-        'scan-line': 'scan-line 8s linear infinite',
-        'text-reveal': 'text-reveal 0.5s ease-out forwards',
         // Micro-interactions
-        'glow-pulse': 'glow-pulse 1.5s ease-in-out infinite',
         'confirm-fade': 'confirm-fade 0.3s cubic-bezier(0.25, 1, 0.5, 1)',
-        glitch: 'glitch 0.3s ease-out',
       },
       keyframes: {
-        'terminal-flicker': {
-          '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.99' },
-          '25%, 75%': { opacity: '0.98' },
-        },
         'terminal-glow-pulse': {
           '0%, 100%': { filter: 'brightness(1)' },
           '50%': { filter: 'brightness(1.05)' },
         },
-        'digit-tick': {
-          '0%': { transform: 'translateY(-100%)', opacity: '0' },
-          '100%': { transform: 'translateY(0)', opacity: '1' },
-        },
-        'scan-line': {
-          '0%': { transform: 'translateY(-100%)' },
-          '100%': { transform: 'translateY(100vh)' },
-        },
-        'text-reveal': {
-          '0%': { opacity: '0', filter: 'blur(4px)' },
-          '100%': { opacity: '1', filter: 'blur(0)' },
-        },
         // Micro-interaction keyframes
-        'glow-pulse': {
-          '0%, 100%': { opacity: '0.5' },
-          '50%': { opacity: '1' },
-        },
         'confirm-fade': {
           '0%': { opacity: '0', transform: 'translateY(2px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
-        },
-        glitch: {
-          '0%': { transform: 'translate(0)', opacity: '1' },
-          '20%': { transform: 'translate(-1px, 1px)', opacity: '0.9' },
-          '40%': { transform: 'translate(1px, -1px)', opacity: '0.95' },
-          '60%': { transform: 'translate(-0.5px, 0.5px)', opacity: '0.9' },
-          '80%': { transform: 'translate(0.5px, -0.5px)', opacity: '0.95' },
-          '100%': { transform: 'translate(0)', opacity: '1' },
         },
       },
       // Japanese poster inspired spacing rhythm

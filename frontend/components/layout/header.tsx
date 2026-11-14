@@ -115,6 +115,7 @@ export function Header() {
           >
             <NetworkSwitcher />
             {/* TX-02 (Main.dc.html): five entries; the current one bright and aria-current.
+                U-01 (R2): lowercase, by CSS (NAVBAR_LINK_CLASS), the labels as written.
                 U4: Inventory opens a menu of its index and its three views; review 2026-11-03
                 item 4: so does Activities (Activities · Transactions · Blocks · Forks). */}
             {navItems.map((item) => {
@@ -180,9 +181,10 @@ export function Header() {
             {/* PA-04, PB-26: the section word from 640 only. Below it the row cannot spare a slot
                 for it — the longest, "Transactions" (93.6 px and its 8 px gap), would leave the
                 field 78 px at 360 — so the field is what the row leaves, 180 px, on every page.
-                From 640 the field is its 288 px cap whatever the word (360 px are free). */}
+                From 640 the field is its 288 px cap whatever the word (360 px are free). The word
+                is lowercase as the nav is (U-01). */}
             {activeLabel && (
-              <span className="text-jade text-body hidden truncate font-mono sm:inline">
+              <span className="text-jade text-body hidden truncate font-mono lowercase sm:inline">
                 {activeLabel}
               </span>
             )}
@@ -198,6 +200,7 @@ export function Header() {
           </div>
         </div>
 
+        {/* The phone menu: the nav's entries, in its lowercase (U-01). */}
         {isMenuOpen && (
           <div className="border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm md:hidden">
             <nav className="container mx-auto py-4">
@@ -205,7 +208,7 @@ export function Header() {
                 <Link
                   href="/"
                   onClick={() => setIsMenuOpen(false)}
-                  className={`text-body block rounded border px-3 py-2.5 font-mono transition ${
+                  className={`text-body block rounded border px-3 py-2.5 font-mono lowercase transition ${
                     pathname === '/'
                       ? 'border-jade/40 bg-jade/8 text-jade'
                       : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -221,7 +224,7 @@ export function Header() {
                           a section with no index (Inventory) heads its views as text. */}
                       {item.indexLabel === undefined ? (
                         <span
-                          className={`text-body block px-3 py-2.5 font-mono ${
+                          className={`text-body block px-3 py-2.5 font-mono lowercase ${
                             isDropdownActive(item) ? 'text-jade' : 'text-text-dim'
                           }`}
                         >
@@ -231,7 +234,7 @@ export function Header() {
                         <Link
                           href={item.href}
                           onClick={() => setIsMenuOpen(false)}
-                          className={`text-body block rounded border px-3 py-2.5 font-mono transition ${
+                          className={`text-body block rounded border px-3 py-2.5 font-mono lowercase transition ${
                             isDropdownActive(item)
                               ? 'border-jade/40 bg-jade/8 text-jade'
                               : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -246,7 +249,7 @@ export function Header() {
                             key={child.href}
                             href={child.href}
                             onClick={() => setIsMenuOpen(false)}
-                            className={`text-small block rounded px-3 py-2 font-mono transition ${
+                            className={`text-small block rounded px-3 py-2 font-mono lowercase transition ${
                               isLinkActive(child.href)
                                 ? 'text-jade bg-jade/8'
                                 : 'text-text-dim hover:text-jade'
@@ -262,7 +265,7 @@ export function Header() {
                       key={item.href}
                       href={item.href}
                       onClick={() => setIsMenuOpen(false)}
-                      className={`text-body block rounded border px-3 py-2.5 font-mono transition ${
+                      className={`text-body block rounded border px-3 py-2.5 font-mono lowercase transition ${
                         isLinkActive(item.href)
                           ? 'border-jade/40 bg-jade/8 text-jade'
                           : 'text-text hover:text-jade hover:border-jade/20 border-transparent'

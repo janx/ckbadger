@@ -156,12 +156,19 @@ export const BLOCK_POSITION_COLORS = { currentTile: color('tile-current') } as c
 /**
  * Nervos DAO secondary-issuance partition (board V63): the whole issuance a quiet slate, miners
  * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
+ * The keys, for a drawer that picks the ink of words on these fills (`inkOnFill`).
  */
+export const DAO_ISSUANCE_KEYS = {
+  total: 'ink-quiet',
+  miners: 'text',
+  compensation: CLASS_KEYS.dao,
+  burnt: CLASS_KEYS.other,
+} as const satisfies Record<string, PaletteKey>;
 export const DAO_ISSUANCE_COLORS = {
-  total: color('ink-quiet'),
-  miners: color('text'),
-  compensation: CLASS_COLORS.dao,
-  burnt: CLASS_COLORS.other,
+  total: color(DAO_ISSUANCE_KEYS.total),
+  miners: color(DAO_ISSUANCE_KEYS.miners),
+  compensation: color(DAO_ISSUANCE_KEYS.compensation),
+  burnt: color(DAO_ISSUANCE_KEYS.burnt),
 } as const;
 
 // ---- F2 group `fiber` (Fiber network, Fiber channel, Forks, Fork detail) ----
@@ -192,9 +199,12 @@ export const FORK_COLORS = {
   tileFill: color('tile'),
   tileStroke: color('slate-other'),
   tileStrokeLit: color('text-bright'),
-  /** The row-rule ink: every chart's grid is 1 px solid border-subtle (visual finish V13 b). */
-  grid: color('base-border-subtle'),
-  axis: color('base-border-subtle'),
+  /**
+   * The row-rule ink: every chart's grid is 1 px solid (visual finish V13 b), a rule on the ruled
+   * paper (R5, ruling 4c: the hair by night, darker by day); the base line too.
+   */
+  grid: color('row-rule'),
+  axis: color('row-rule'),
   tick: color('text-dim'),
   ink: color('text-bright'),
   dim: color('text'),
@@ -216,8 +226,11 @@ export const CODE_CLASS_COLORS = {
   ambiguous: { fill: color('base-bg'), edge: color('identity') },
   retired: { fill: color('base-border-subtle'), edge: color('text-ghost') },
 } as const;
-/** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
-export const FREE_CAPACITY_COLOR = color('base-border-subtle');
+/**
+ * Free capacity in a cell anatomy bar (the Script board's "free" swatch): the bar's empty part, in
+ * the bar-track ink, which clears the ruled paper by day (R5).
+ */
+export const FREE_CAPACITY_COLOR = color('bar-track');
 /** The neutral of plain CKB held: the area under occupied in a script's history. */
 export const HELD_CAPACITY_COLOR = CLASS_COLORS.ckb;
 /** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */

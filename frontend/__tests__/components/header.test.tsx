@@ -157,6 +157,52 @@ describe('Header', () => {
     expect(banner).toContainElement(screen.getByTestId('wordmark'));
   });
 
+  // U-01 (UI review 2026-11-14), R2: the boards' header (lib.js `header()`) sets the nav in
+  // lowercase: dao · activities ∨ · inventory ∨ · scripts · charts, and the menus' items too. The
+  // case is the rendering's (`lowercase` on the element that holds the label), so the label text,
+  // and with it every accessible name, keeps its case: DAO is still read as DAO.
+  it('draws every nav label in lowercase, the names as they were (U-01)', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    for (const name of ['DAO', 'Scripts', 'Charts'])
+      expect(within(nav).getByRole('link', { name }), name).toHaveClass('lowercase');
+    for (const [name, views] of [
+      ['Activities', ['Activities', 'Transactions', 'Blocks', 'Forks']],
+      ['Inventory', ['Tokens', 'Objects', 'Identities']],
+    ] as const) {
+      const button = within(nav).getByRole('button', { name });
+      expect(button, name).toHaveClass('lowercase');
+      fireEvent.click(button);
+      const menu = within(nav).getByRole('menu', { name });
+      for (const view of views)
+        expect(within(menu).getByRole('menuitem', { name: view }), view).toHaveClass('lowercase');
+      fireEvent.click(button);
+    }
+    // the phone header's section word follows the same case
+    expect(screen.getByText('Blocks', { selector: 'span' })).toHaveClass('lowercase');
+    // the phone menu: every row, the Inventory heading too
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle menu' }));
+    const phoneNav = screen
+      .getAllByRole('navigation')
+      .find((n) => n.getAttribute('aria-label') !== 'Main')!;
+    for (const name of [
+      'Home',
+      'DAO',
+      'Activities',
+      'Transactions',
+      'Blocks',
+      'Forks',
+      'Tokens',
+      'Objects',
+      'Identities',
+      'Scripts',
+      'Charts',
+    ])
+      expect(within(phoneNav).getByRole('link', { name }), name).toHaveClass('lowercase');
+    expect(within(phoneNav).getByText('Inventory')).toHaveClass('lowercase');
+  });
+
   it('labels the nav in sentence case with normal tracking', () => {
     usePathnameMock.mockReturnValue('/dao');
     render(<Header />);

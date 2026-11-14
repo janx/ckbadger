@@ -108,7 +108,6 @@ export function ColumnBlock({
             y={0.5}
             width={Math.max(1, card.w - 1)}
             height={Math.max(1, card.h - 1)}
-            rx={3}
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
             fillOpacity={1}
@@ -131,7 +130,6 @@ export function ColumnBlock({
                   y={un.y}
                   width={un.w}
                   height={un.h}
-                  rx={3}
                   style={{ fill: tok('surface') }}
                 />
                 <text x={un.x + u.pad} y={un.y + countY(un.h)} className={T10}>
@@ -189,7 +187,6 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
           y={0.5}
           width={Math.max(1, next.w - 1)}
           height={Math.max(1, next.h - 1)}
-          rx={3}
           strokeWidth={1}
           strokeDasharray="3 2"
           vectorEffect="non-scaling-stroke"
@@ -247,7 +244,6 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
                 y={q.y + 0.5}
                 width={q.s - 1}
                 height={q.s - 1}
-                rx={1}
                 fillOpacity={GHOST.square.fillOpacity}
                 strokeOpacity={GHOST.square.strokeOpacity}
                 strokeWidth={1}
@@ -321,7 +317,6 @@ function ColumnWell({
         y={band.y}
         width={scene.viewW - 2 * COL.x0}
         height={band.h}
-        rx={3}
         stroke="none"
         style={{ fill: WELL_FILL }}
       />

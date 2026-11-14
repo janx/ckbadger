@@ -3,7 +3,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { exactUnsignedInteger, formatDecimal, formatScaledInteger } from '@/lib/exact-integer';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
@@ -43,8 +43,13 @@ export function AssetAmount({ amount, decimals }: AssetAmountProps) {
       )}
       {fraction && (
         <>
-          .<span className="opacity-80">{significant}</span>
-          <span className="text-text-ghost">{fraction.slice(significant.length)}</span>
+          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+            {significant ? `.${significant}` : ''}
+          </span>
+          <span className="text-text-ghost">
+            {significant ? '' : '.'}
+            {fraction.slice(significant.length)}
+          </span>
         </>
       )}
       {decimals === null && ' (raw)'}
@@ -354,7 +359,7 @@ export function CkbTwoPlaces({ shannons }: { shannons: bigint }) {
   );
 }
 
-/** A token amount to 2 dp, its decimals in ghost ink; unknown decimals print the raw integer. */
+/** A token amount to 2 dp, its decimals in the dim ink; unknown decimals print the raw integer. */
 export function TokenTwoPlaces({ amount, decimals }: { amount: string; decimals: number | null }) {
   const value = exactUnsignedInteger(amount, 'token amount');
   const exact = formatTokenBalanceWithRawMarker(amount, decimals);
@@ -368,7 +373,7 @@ export function TokenTwoPlaces({ amount, decimals }: { amount: string; decimals:
   return (
     <span className="tabular-nums" title={exact}>
       {whole}
-      {fraction && <span className="text-text-ghost text-meta">.{fraction}</span>}
+      {fraction && <span className="text-text-dim text-meta">.{fraction}</span>}
     </span>
   );
 }
@@ -477,7 +482,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
       {a.standard !== 'xudt' && a.standard !== 'xudt_compatible' && (
-        <RowTag className="text-text-ghost">{formatStandard(a.standard)}</RowTag>
+        <RowTag className="text-text-dim">{formatStandard(a.standard)}</RowTag>
       )}
     </span>
   );
@@ -615,7 +620,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
   );
 }
 
-/** Live items, and a ghost "/ N" only when minted differs from live (board objects). */
+/** Live items, and a dim "/ N" only when minted differs from live (board objects). */
 function LiveOfMinted({ asset: a }: { asset: Asset }) {
   const differs =
     a.liveCount !== null && a.totalSupply !== null && String(a.liveCount) !== a.totalSupply;
@@ -623,7 +628,7 @@ function LiveOfMinted({ asset: a }: { asset: Asset }) {
     <span>
       <AssetCount value={a.liveCount} />
       {differs && (
-        <span className="text-text-ghost text-meta">
+        <span className="text-text-dim text-meta">
           {' / '}
           <AssetCount value={a.totalSupply} />
         </span>

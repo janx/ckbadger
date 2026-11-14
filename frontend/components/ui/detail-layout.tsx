@@ -171,7 +171,7 @@ export function DetailLayout({
         <DetailTier2>
           {tier2}
           {rawData && (
-            <details open={rawOpen} className="border-base-border-subtle border-t pt-4">
+            <details open={rawOpen} className="border-row-rule border-t pt-4">
               <summary className="text-text-dim hover:text-text text-small cursor-pointer">
                 Raw data
               </summary>

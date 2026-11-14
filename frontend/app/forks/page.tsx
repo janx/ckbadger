@@ -311,7 +311,6 @@ function ShapeKey() {
             y="1"
             width="12"
             height="8"
-            rx="2"
             fill="none"
             stroke={FORK_COLORS.dropped}
             strokeDasharray="2 2"

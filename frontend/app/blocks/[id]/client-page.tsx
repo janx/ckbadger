@@ -467,7 +467,7 @@ export default function BlockDetailPage() {
                       <article
                         key={`${proposal.uncle?.hash}:${proposal.proposalIndex}`}
                         data-testid="block-proposal-row"
-                        className="border-base-border-subtle text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5"
+                        className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5"
                       >
                         <p className="flex flex-wrap items-baseline gap-2">
                           <span className="text-gold">●</span>
@@ -605,7 +605,7 @@ export default function BlockDetailPage() {
           )}
           <div className="grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]">
             <div className="min-w-0">
-              <div className="border-base-border-subtle mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+              <div className="border-row-rule mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
                 <div
                   role="group"
                   aria-label="Block contents"
@@ -914,7 +914,7 @@ function UncleRow({
       `Uncle ${index} of block ${formatBlockNumber(blockNumber)}: sibling facts disagree`
     );
   return (
-    <article className="border-base-border-subtle text-small flex flex-col gap-0.5 border-b py-2.5">
+    <article className="border-row-rule text-small flex flex-col gap-0.5 border-b py-2.5">
       <span className="flex flex-wrap items-baseline gap-x-2">
         <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
           {formatBlockNumber(uncle.number)}

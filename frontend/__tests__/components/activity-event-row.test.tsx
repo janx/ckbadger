@@ -6,7 +6,7 @@ import {
   ItemDeltaFact,
   LockCallExpr,
   ParticipantLine,
-  ProtocolActionNote,
+  protocolActionNoteParts,
   TypeCallExpr,
   activityHeadline,
   buildGlobalTxEvents,
@@ -17,6 +17,7 @@ import {
 import { MINUS } from '@/lib/chart-ticks';
 import { exactCkbText } from '@/lib/ckb-decimal';
 import type { Activity, GlobalActivity } from '@/lib/api';
+import { Dotted } from '@/components/ui/phone-row';
 
 // Spread the overrides rather than `??`-ing each field: a pool row's
 // `blockNumber` is explicitly null, and `null ?? default` would quietly hand it
@@ -708,7 +709,7 @@ describe('ExactCkb', () => {
     expect(amount?.children[1]).toHaveClass('whitespace-nowrap');
     expect(amount?.children[1]).toHaveTextContent('.09551615');
   });
-  it('keeps all 8 decimals, ghosting the trailing zeros, coloured by sign; zero is a ghost 0', () => {
+  it('keeps all 8 decimals, ghosting the trailing zeros, coloured by sign; zero is a dim 0', () => {
     const { container } = render(
       <>
         <ExactCkb shannons={BigInt(-30000)} />
@@ -723,13 +724,15 @@ describe('ExactCkb', () => {
     expect(whole).toHaveTextContent('+750.00000000 CKB');
     expect(whole).toHaveClass('text-positive');
     expect(whole.querySelector('[data-ghost]')).toHaveTextContent(/^\.00000000$/);
-    // Consistency plan C4 (old: "0.00000000 CKB" in text-text): zero is "0 CKB", the 0 ghosted.
+    // Consistency plan C4 (old: "0.00000000 CKB" in text-text): zero is "0 CKB"; its 0 is a datum
+    // in the dim ink (R4, re-pinned on purpose: it was ghosted as if it were padding).
     expect(zero).toHaveTextContent(/^0 CKB$/);
-    expect(zero.querySelector('[data-ghost]')).toHaveTextContent(/^0$/);
-    expect(zero.querySelector('[data-ghost]')).toHaveClass('text-text-ghost');
+    expect(zero.querySelector('[data-zero]')).toHaveTextContent(/^0$/);
+    expect(zero.querySelector('[data-zero]')).toHaveClass('text-text-dim');
+    expect(zero.querySelector('[data-ghost]')).toBeNull();
   });
 
-  it('states zero as a ghost "0 CKB" with no fraction for every caller (C4)', () => {
+  it('states zero as "0 CKB", its 0 dim, with no fraction for every caller (C4, R4)', () => {
     const { container } = render(
       <>
         <ExactCkb shannons={BigInt(0)} />
@@ -744,14 +747,62 @@ describe('ExactCkb', () => {
     for (const amount of [feed, plain, bare]) {
       expect(amount.textContent).not.toContain('.');
       expect(amount.textContent).not.toMatch(/[+−]/);
-      const digits = amount.querySelector('[data-ghost]');
+      const digits = amount.querySelector('[data-zero]');
       expect(digits).toHaveTextContent(/^0$/);
-      expect(digits).toHaveClass('text-text-ghost');
+      expect(digits).toHaveClass('text-text-dim');
     }
     // The unit as today: dim, meta, after a space.
     const unit = feed.lastElementChild;
     expect(unit).toHaveTextContent(/^CKB$/);
     expect(unit).toHaveClass('text-text-dim', 'text-meta');
+  });
+
+  // UI review 2026-11-14 (DY-06, U-08, ruling R4): the fraction digits are a step quieter than
+  // the integer in a named ink of the amount's sign at 4.5:1 (palette.test), never the sign's ink
+  // at 78 % (cinnabar 3.7:1 by night, celadon about 3.2–3.7:1 and the neutral 3.5:1 by day).
+  it('sets the fraction digits in the quieter ink of the amount’s sign, never at an opacity', () => {
+    const { container } = render(
+      <>
+        <ExactCkb shannons={BigInt(-30000)} />
+        <ExactCkb shannons={BigInt('75000000123')} />
+        <ExactCkb shannons={BigInt('75000000123')} signed={false} tone="plain" />
+        <ExactCkb shannons={BigInt(-30000)} signed={false} tone="plain" />
+      </>
+    );
+    const amounts = [...container.querySelectorAll('[data-ckb-amount]')];
+    const fractions = amounts.map((a) => a.querySelector('[data-fraction]'));
+    expect(fractions.map((f) => f?.textContent)).toEqual([
+      '.0003',
+      '.00000123',
+      '.00000123',
+      '.0003',
+    ]);
+    expect(fractions[0]).toHaveClass('text-rouge-dim');
+    expect(fractions[1]).toHaveClass('text-jade-dim');
+    expect(fractions[2]).toHaveClass('text-text-dim');
+    expect(fractions[3]).toHaveClass('text-text-dim');
+    for (const amount of amounts)
+      for (const el of [amount, ...amount.querySelectorAll('*')])
+        expect([...el.classList].filter((c) => c.startsWith('opacity-'))).toEqual([]);
+  });
+
+  // UI review 2026-11-14 (U-08, ruling R4): a value that IS zero is a datum ("fee 0 CKB"), so it
+  // is the dim ink; the ghost is only for the padding zeros of a non-zero amount.
+  it('draws a datum zero in the dim ink and only the padding zeros of a non-zero amount ghost', () => {
+    const { container } = render(
+      <>
+        <ExactCkb shannons={BigInt(0)} signed={false} tone="plain" />
+        <ExactCkb shannons={BigInt(100000000)} signed={false} tone="plain" />
+      </>
+    );
+    const [zero, one] = [...container.querySelectorAll('[data-ckb-amount]')];
+    const datum = zero.querySelector('[data-zero]');
+    expect(datum).toHaveTextContent(/^0$/);
+    expect(datum).toHaveClass('text-text-dim');
+    expect(zero.querySelector('.text-text-ghost')).toBeNull();
+    const padding = one.querySelector('[data-ghost]');
+    expect(padding).toHaveTextContent(/^\.00000000$/);
+    expect(padding).toHaveClass('text-text-ghost');
   });
 
   // Rubbing × Song print, phase 5 (T4): a sentence that names an amount the page draws (the
@@ -875,7 +926,13 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
   });
 });
 
-describe('ProtocolActionNote — the action metadata in one quiet line', () => {
+// The action metadata as the rows read it: its parts in the one separated list (E1 kept a dead
+// ProtocolActionNote wrapper for these tests; it is gone, and they read the live composition).
+function ProtocolActionNote({ pa }: { pa: Parameters<typeof protocolActionNoteParts>[0] }) {
+  return <Dotted parts={protocolActionNoteParts(pa)} />;
+}
+
+describe('protocol action metadata — in one quiet line', () => {
   it('reads a DAO withdraw request: amount and the deposit block', () => {
     render(
       <ProtocolActionNote

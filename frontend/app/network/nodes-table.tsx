@@ -606,7 +606,7 @@ export function PeersTable() {
         </button>
       }
     >
-      <div aria-busy={isFetching} ref={boxRef} className="border-base-border-subtle border-y">
+      <div aria-busy={isFetching} ref={boxRef} className="border-row-rule border-y">
         <div>
           <div
             id={filtersId}
@@ -659,7 +659,7 @@ export function PeersTable() {
               onChange={(event) =>
                 applyFilters({ ...filters, country: event.target.value || undefined })
               }
-              placeholder="Country"
+              placeholder="country"
               aria-label="Filter by country"
               className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
             />
@@ -669,7 +669,7 @@ export function PeersTable() {
               onChange={(event) =>
                 applyFilters({ ...filters, version: event.target.value || undefined })
               }
-              placeholder="Version"
+              placeholder="version"
               aria-label="Filter by version"
               className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
             />
@@ -710,7 +710,7 @@ export function PeersTable() {
         </div>
 
         {data?.nextCursor != null && (
-          <div className="border-base-border-subtle flex justify-center border-t px-4 py-2">
+          <div className="border-row-rule flex justify-center border-t px-4 py-2">
             <button
               type="button"
               onClick={() => setCursor(data.nextCursor ?? undefined)}

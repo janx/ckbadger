@@ -136,7 +136,7 @@ function coverageLine(from: number, to: number): string {
 
 function TrendPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border-base-border-subtle min-w-0 border-t pt-4">
+    <div className="border-row-rule min-w-0 border-t pt-4">
       <h3 className="text-text-bright text-body mb-3 font-mono font-medium">{title}</h3>
       {children}
     </div>

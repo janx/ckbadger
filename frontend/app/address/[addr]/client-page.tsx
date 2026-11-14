@@ -384,7 +384,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     {names.data.data.map((n) => (
                       <div
                         key={n.identityId}
-                        className="border-base-elevated text-small flex flex-wrap justify-between gap-2 border-b py-2"
+                        className="border-row-rule text-small flex flex-wrap justify-between gap-2 border-b py-2"
                       >
                         <Link
                           href={getIdentityItemDetailHref('dotcell', n.identityId)}
@@ -427,7 +427,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   {fiber.data.map((c) => (
                     <div
                       key={c.channelId}
-                      className="border-base-elevated text-small flex flex-wrap justify-between gap-3 border-b py-3"
+                      className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
                       <Link href={`/fiber/channels/${c.channelId}`}>
                         <Hash hash={c.channelId} className="text-small" copyable={false} />
@@ -457,7 +457,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <AddressStaleNotice error={cells.error} label="live cells" />
               )}
               {/* The Address board: views on the left, activity filters on the right of one row. */}
-              <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+              <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
                 <div
                   role="group"
                   aria-label="History views"
@@ -512,7 +512,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       // Exact or none: "All" is the address's total, a filter 0 or 1, else no number.
                       const count: number | 'many' | undefined =
                         value === 'all' ? activitiesCount.data : page && chipCount(page);
-                      const empty = count === 0;
+                      // An empty filter says so with its "0", in the dim ink of every other chip:
+                      // a count of nothing is a datum, never the ghost (R4).
                       return (
                         <button
                           key={value}
@@ -526,9 +527,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             'text-small rounded border px-2.5 py-1.5',
                             filter === value
                               ? 'border-base-border bg-base-elevated text-text-bright'
-                              : empty
-                                ? 'border-base-border-subtle text-text-ghost'
-                                : 'border-base-border-subtle text-text-dim'
+                              : 'border-base-border-subtle text-text-dim'
                           )}
                         >
                           {label}

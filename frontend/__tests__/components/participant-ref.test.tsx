@@ -24,12 +24,13 @@ describe('ParticipantRefView', () => {
 
   it('draws a compact address in jade, or in the plain ink when quiet', () => {
     const { unmount } = render(<ParticipantRefView participant={makeRef({ address })} compact />);
-    expect(screen.getByRole('link')).toHaveClass('text-jade/80');
+    // R4 (re-pinned on purpose): the jade's dim step, a named ink at 4.5:1, not jade at 80 %
+    expect(screen.getByRole('link')).toHaveClass('text-jade-dim');
     unmount();
     render(<ParticipantRefView participant={makeRef({ address })} compact quiet />);
     const link = screen.getByRole('link');
     expect(link).toHaveClass('text-text');
-    expect(link).not.toHaveClass('text-jade/80');
+    expect(link).not.toHaveClass('text-jade-dim');
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
 

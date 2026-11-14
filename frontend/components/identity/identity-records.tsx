@@ -95,11 +95,11 @@ export function IdentityRecords({
               {view.addresses.map((a) => (
                 <div
                   key={a.key}
-                  className="border-base-border-subtle grid min-w-0 gap-1 border-t py-2.5 sm:grid-cols-[190px_minmax(0,1fr)] sm:gap-4"
+                  className="border-row-rule grid min-w-0 gap-1 border-t py-2.5 sm:grid-cols-[190px_minmax(0,1fr)] sm:gap-4"
                 >
                   <dt className="text-text-dim">
                     <span>{a.coin}</span>
-                    <span className="text-text-ghost text-meta block">
+                    <span className="text-text-dim text-meta block">
                       {a.key} · coin type {a.coinType}
                     </span>
                   </dt>
@@ -125,7 +125,7 @@ export function IdentityRecords({
             </dl>
           )}
           {view.profile.length > 0 && (
-            <dl className="border-base-border-subtle grid min-w-0 grid-cols-1 gap-x-6 gap-y-3.5 border-t pt-3.5 sm:grid-cols-3">
+            <dl className="border-row-rule grid min-w-0 grid-cols-1 gap-x-6 gap-y-3.5 border-t pt-3.5 sm:grid-cols-3">
               {view.profile.map((p) => (
                 <div key={p.key} className="min-w-0">
                   <dt className="text-text-dim text-meta">{p.label}</dt>
@@ -137,7 +137,7 @@ export function IdentityRecords({
             </dl>
           )}
           {view.other.length > 0 && (
-            <dl className="border-base-border-subtle flex flex-col border-t pt-2">
+            <dl className="border-row-rule flex flex-col border-t pt-2">
               {view.other.map((o, i) => (
                 <div
                   key={`${o.key}:${i}`}

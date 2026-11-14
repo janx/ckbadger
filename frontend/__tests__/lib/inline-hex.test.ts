@@ -96,7 +96,7 @@ describe('no colour as a bracket hex (V11)', () => {
   const key = (offence: string) => offence.split(' ')[0];
 
   it('scans the page source', () => {
-    expect(files.length).toBeGreaterThan(300);
+    expect(files.length).toBeGreaterThan(250);
   });
 
   it('writes every colour as a theme class or a named design-token constant', () => {

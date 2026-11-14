@@ -38,7 +38,7 @@ interface ErrorPageShellProps {
   children: ReactNode;
   /**
    * Drawn in place of AppFrame — the frame route's error boundary caught a failure of the frame
-   * itself: the shell draws its own header, page end and footer and fills the screen. Otherwise
+   * itself: the shell draws its own header, footer and page end and fills the screen. Otherwise
    * (the not-found route, a page's not-found, a page's route error) it renders inside the frame,
    * under the frame's header (visual finish V6), and fills what the header leaves.
    */
@@ -87,7 +87,7 @@ export function ErrorPageShell({
           <p className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-1">
             <span aria-hidden="true" className="section-mark self-center" />
             <span
-              className="eyebrow text-text-dim"
+              className="eyebrow text-text-dim text-meta"
               data-eyebrow
               onPointerEnter={eggOn}
               onPointerLeave={eggOff}
@@ -105,8 +105,10 @@ export function ErrorPageShell({
           {!contextSafe && <TipSeal />}
         </div>
       </main>
-      {wholeScreen && <PromptEnd />}
+      {/* U-20: the footer is the last quiet row, then the empty prompt ends the page, as the
+          frame's pages end */}
       {standalone && <SiteFooter />}
+      {wholeScreen && <PromptEnd />}
     </div>
   );
 }
@@ -161,7 +163,7 @@ function TipSeal() {
           />
         </Suspense>
       </div>
-      <p data-seal-caption="" className="text-text-ghost text-meta m-0 mt-8 min-w-0">
+      <p data-seal-caption="" className="text-text-dim text-meta m-0 mt-8 min-w-0">
         behind: the seal of the newest block, <BlockLink number={block.number} />{' '}
         {/* U-16: the shortened hash is one unit, and the dot goes with it to a new line */}
         <NoBreak>· {truncateHash(block.hash)}</NoBreak>

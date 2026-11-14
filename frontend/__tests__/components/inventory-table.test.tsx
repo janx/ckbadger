@@ -92,9 +92,21 @@ describe('Inventory rows', () => {
     const breaks = Array.from(root.querySelectorAll('wbr'));
     expect(breaks.length).toBe(3);
     for (const wbr of breaks) expect(wbr.previousSibling?.textContent?.endsWith(',')).toBe(true);
-    expect(screen.getByText('00000000000000000000')).toHaveClass('text-text-ghost');
+    // the point joins its zeros when no decimal is significant, as ExactCkb's ghost does (R4,
+    // re-pinned on purpose: the point stood alone in the amount's ink)
+    expect(screen.getByText('.00000000000000000000')).toHaveClass('text-text-ghost');
     expect(container.querySelector('.text-text-muted')).toBeNull();
   });
+  // UI review 2026-11-14 (DY-06, ruling R4): a token amount's significant decimals are the neutral
+  // fraction ink (text-dim, 4.5:1), never the amount's ink at 80 %.
+  it('sets the significant decimals in the neutral fraction ink, with no opacity', () => {
+    const { container } = render(<AssetAmount amount="123450000" decimals={8} />);
+    const fraction = container.querySelector('[data-fraction]');
+    expect(fraction).toHaveTextContent(/^\.2345$/);
+    expect(fraction).toHaveClass('text-text-dim');
+    expect(container.innerHTML).not.toMatch(/opacity-/);
+  });
+
   it('labels unknown decimals as raw instead of guessing the unit', () => {
     render(<AssetAmount amount="12345678901234567890" decimals={null} />);
     expect(screen.getByText('12,345,678,901,234,567,890 (raw)')).toBeInTheDocument();
@@ -118,9 +130,9 @@ describe('Inventory rows', () => {
       />
     );
     const table = screen.getByRole('table', { name: 'Object collections' });
-    // Table-rows L2-2: minted ≠ live shows as a ghost "/ 7" beside the live count; the words
-    // are the row's title.
-    expect(within(table).getByText('/ 7', { exact: false })).toHaveClass('text-text-ghost');
+    // Table-rows L2-2: minted ≠ live shows as a dim "/ 7" beside the live count (R4, re-pinned
+    // on purpose: a count is never the ghost); the words are the row's title.
+    expect(within(table).getByText('/ 7', { exact: false })).toHaveClass('text-text-dim');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
       '3 live of 7 minted'
     );
@@ -213,10 +225,11 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const tags = (row: HTMLElement) =>
       Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => t.textContent);
     expect(tags(token)).toEqual(['T']);
-    // A token with only a symbol shows it once, as its name; sUDT is set back in ghost ink.
+    // A token with only a symbol shows it once, as its name; sUDT is set back in the dim ink (R4,
+    // re-pinned on purpose: the standard is a word, never the ghost).
     expect(within(sealRow).getByRole('link', { name: 'SEAL' })).toBeInTheDocument();
     expect(tags(sealRow)).toEqual(['sUDT']);
-    expect(within(sealRow).getByText('sUDT')).toHaveClass('text-text-ghost', 'border-base-border');
+    expect(within(sealRow).getByText('sUDT')).toHaveClass('text-text-dim', 'border-base-border');
     expect(token.querySelector('svg[data-class="tokens"]')).not.toBeNull();
   });
 

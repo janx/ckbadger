@@ -55,7 +55,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
             <div
               role="listitem"
               key={edge.advertiserPeerId + ':' + edge.targetPeerId + ':' + edge.alias}
-              className="border-base-border-subtle flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t py-2.5"
+              className="border-row-rule flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t py-2.5"
             >
               {/* One line (table-rows T8): who, "named", whom — the row's one bright thing — then
                   the address it named. The ids are cut in the middle so both ends stay, whole in

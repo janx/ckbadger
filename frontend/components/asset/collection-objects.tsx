@@ -340,7 +340,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                       onBlur={() => setRow(null)}
                       className={cn(
                         grid,
-                        'border-base-border-subtle min-h-[41px] border-t py-1 transition-colors',
+                        'border-row-rule min-h-[41px] border-t py-1 transition-colors',
                         lit && 'bg-base-surface'
                       )}
                     >
@@ -393,7 +393,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                 {band && (
                                   <span
                                     data-role="gene-share"
-                                    className="text-text-ghost shrink-0 whitespace-nowrap"
+                                    className="text-text-dim shrink-0 whitespace-nowrap"
                                   >
                                     {geneShare(band.count)}
                                   </span>

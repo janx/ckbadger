@@ -163,7 +163,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // the grid of deposited and the share multiple's half-scale line: solid hairlines
     const share = container.querySelector('svg[data-panel="share"]')!;
     for (const panel of [main, share]) {
-      const grid = [...panel.querySelectorAll('line.stroke-base-border-subtle')];
+      // in the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
+      const grid = [...panel.querySelectorAll('line.stroke-row-rule')];
       expect(grid.length).toBeGreaterThan(0);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
     }
@@ -181,6 +182,29 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // Evidence first: the reading follows every panel.
     for (const svg of Array.from(container.querySelectorAll('svg')))
       expect(svg.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // UI review 2026-11-14 (DY-06, ruling R4): the reading's fraction digits are the quieter ink of
+  // the amount's sign (AMOUNT_INK), never the amount's ink at 70 %; its padding zeros the ghost.
+  it('sets the reading’s fraction digits in the sign’s quieter ink, never at an opacity', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const last = deposited.data.length - 1;
+    deposited.data[last] = { ...deposited.data[last], value: '101190.25' };
+    deposited.peak = { date: date(last), value: '101190.25' };
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(reading).toHaveTextContent('deposited 101,190.25000000');
+    expect(reading).toHaveTextContent('+10.25000000');
+    const fractions = [...reading.querySelectorAll('[data-fraction]')];
+    expect(fractions.map((f) => f.textContent)).toEqual(['.25', '.25', '.25']);
+    // deposited and the peak are plain, the week's net is signed and rising
+    expect(fractions.map((f) => f.className)).toEqual([
+      'text-text-dim',
+      'text-jade-dim',
+      'text-text-dim',
+    ]);
+    expect(reading.innerHTML).not.toMatch(/opacity-/);
   });
 
   it('moves the one reading with the pointer across all panels; a tap pins the day, a second tap lets go (R6)', () => {

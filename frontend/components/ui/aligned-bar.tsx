@@ -92,7 +92,7 @@ export function AlignedBar({
         {...(display === undefined
           ? { role: 'img', 'aria-label': `${label}: ${described.join(', ')}` }
           : { 'aria-hidden': true })}
-        className="bg-base-elevated flex shrink-0 overflow-hidden rounded-sm"
+        className="bg-bar-track flex shrink-0 overflow-hidden rounded-sm"
         style={{ width: `${trackWidth}px`, height: `${height}px` }}
       >
         {segments.map((s) => (
@@ -162,14 +162,5 @@ export function ScaleHeader({
         ))}
       </span>
     </span>
-  );
-}
-
-/** The scale and the consensus cap live in one quiet footnote under the column (Blocks v3). */
-export function AlignedBarFootnote({ scale, cap }: { scale: string; cap: string }) {
-  return (
-    <p className="text-text-dim text-meta">
-      Scale {scale} · {cap}
-    </p>
   );
 }

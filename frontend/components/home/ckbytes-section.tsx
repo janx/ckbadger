@@ -209,7 +209,7 @@ export function supplyFormula(view: AllocationView): string {
 }
 
 /**
- * The supply's note (the Main board's aside): the comment, then the formula line in the ghost ink,
+ * The supply's note (the Main board's aside): the comment, then the formula line in the dim ink,
  * set in under the comment's words. Rendered only for a ready allocation.
  */
 function SupplyNote({ view }: { view: AllocationView }) {
@@ -222,7 +222,7 @@ function SupplyNote({ view }: { view: AllocationView }) {
       <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-ghost text-meta m-0 mt-3 pl-[18px] font-mono"
+        className="text-text-dim text-meta m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>
@@ -239,7 +239,7 @@ function Allocation({ d }: { d: Derived<AllocationView> }) {
     return (
       <div aria-hidden="true" className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
         <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
-        <div className="bg-base-surface h-2.5 animate-pulse rounded-full" />
+        <div className="bg-base-surface h-2.5 animate-pulse" />
       </div>
     );
   }
@@ -349,7 +349,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       <div
         role="img"
         aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
-        className="bg-base-surface flex h-2.5 overflow-hidden rounded-full"
+        className="bg-base-surface flex h-2.5 overflow-hidden"
       >
         {knowledge > BigInt(0) && (
           <span

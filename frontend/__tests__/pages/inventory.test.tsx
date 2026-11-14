@@ -550,8 +550,9 @@ describe('Tokens Inventory Page', () => {
 
     render(<TokensPage />);
 
-    // F2 objects (IV-07): the board's search box filters as you type; there is no button.
-    const searchInput = screen.getByPlaceholderText('Search by name...');
+    // F2 objects (IV-07): the board's search box filters as you type; there is no button. Its
+    // placeholder is lowercase without dots, as the header's (U-01, R2).
+    const searchInput = screen.getByPlaceholderText('search by name');
     fireEvent.change(searchInput, { target: { value: 'test' } });
 
     await waitFor(() => {
@@ -843,8 +844,9 @@ describe('Inventory approved board regressions', () => {
     render(<ObjectsPage />);
     const table = await screen.findByRole('table', { name: 'Object collections' });
     expect(within(table).getByText('41')).toBeInTheDocument();
-    // Table-rows L2-2: minted ≠ live is a ghost "/ 50"; the words are in the row's title.
-    expect(within(table).getByText('/ 50', { exact: false })).toHaveClass('text-text-ghost');
+    // Table-rows L2-2: minted ≠ live is a dim "/ 50" (R4, re-pinned on purpose); the words are in
+    // the row's title.
+    expect(within(table).getByText('/ 50', { exact: false })).toHaveClass('text-text-dim');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
       '41 live of 50 minted'
     );

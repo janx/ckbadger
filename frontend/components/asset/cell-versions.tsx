@@ -114,7 +114,7 @@ export function CellVersions({
               onFocus={() => setActive(key)}
               onBlur={() => setActive(null)}
               className={cn(
-                'border-base-border-subtle text-small grid min-w-0 gap-3 border-b py-3 sm:grid-cols-[130px_minmax(0,1fr)_160px]',
+                'border-row-rule text-small grid min-w-0 gap-3 border-b py-3 sm:grid-cols-[130px_minmax(0,1fr)_160px]',
                 active && active !== key && 'opacity-35'
               )}
             >

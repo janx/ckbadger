@@ -7,7 +7,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
@@ -116,7 +116,9 @@ function TokenAmount({ amount, decimals }: { amount: string; decimals: number | 
       {integer}
       {fraction && (
         <>
-          <span className="opacity-[0.78]">{significant ? '.' + significant : ''}</span>
+          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+            {significant ? '.' + significant : ''}
+          </span>
           <span data-ghost className="text-text-ghost">
             {significant ? '' : '.'}
             {fraction.slice(significant.length)}
@@ -215,7 +217,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           <span className="eyebrow text-text-dim text-meta block w-fit">balance</span>
           <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
             {zero ? (
-              <span data-ghost className="text-text-ghost text-entity sm:text-display">
+              <span data-zero className="text-text-dim text-entity sm:text-display">
                 0
               </span>
             ) : (
@@ -423,7 +425,7 @@ function HoldingSection({
         if (!e.currentTarget.contains(e.relatedTarget)) onActive(null);
       }}
     >
-      <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
+      <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
         <h3 className="text-text-bright text-body flex items-center gap-2 font-medium">
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
@@ -551,7 +553,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
         {/* The right-prompt note, drawn as PromptHeading draws one: the count nav stands between
             the heading and it, and PromptHeading's own row has no place for that. */}
         {missing.length > 0 && (
-          <span data-prompt-note="" className="text-text-ghost text-meta ml-auto">
+          <span data-prompt-note="" className="text-text-dim text-meta ml-auto">
             {missing.map((c) => c.none).join(' · ')}
           </span>
         )}
@@ -738,7 +740,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         <div
                           key={`${cell.txHash}:${cell.outputIndex}`}
                           data-dao-cell
-                          className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
+                          className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
                         >
                           <span className="text-text-dim">
                             <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
@@ -805,7 +807,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   <div
                     key={t.typeScriptHash}
                     data-token-row={t.typeScriptHash}
-                    className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
+                    className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                   >
                     <span className="min-w-0">
                       <Link
@@ -871,7 +873,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   return (
                     <div
                       key={`${c.txHash}:${c.outputIndex}`}
-                      className="border-base-elevated space-y-1 border-b py-3"
+                      className="border-row-rule space-y-1 border-b py-3"
                     >
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link
@@ -969,7 +971,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
       <div className={cn(COLLECTION_GRID, 'text-text-dim text-meta h-7')}>
         <span>Collection</span>
         <span className="hidden sm:block">
-          Items <span className="text-text-ghost">0 — {max.toLocaleString('en-US')}</span>
+          Items <span className="text-text-dim">0 — {max.toLocaleString('en-US')}</span>
         </span>
         <span className="text-right">Items</span>
         <span className="hidden sm:block">Made of</span>
@@ -992,7 +994,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
               onClick={() => setOpen(isOpen ? null : key)}
               className={cn(
                 COLLECTION_GRID,
-                'border-base-border-subtle text-small min-h-[41px] cursor-pointer border-t py-1',
+                'border-row-rule text-small min-h-[41px] cursor-pointer border-t py-1',
                 isOpen && 'bg-base-surface'
               )}
             >
@@ -1108,10 +1110,7 @@ function AddressCollectionObjects({
                 <div
                   key={`${c.txHash}:${c.outputIndex}`}
                   role="row"
-                  className={cn(
-                    OBJECT_GRID,
-                    'border-base-border-subtle min-h-[41px] border-t py-1'
-                  )}
+                  className={cn(OBJECT_GRID, 'border-row-rule min-h-[41px] border-t py-1')}
                 >
                   <span role="cell" className="flex min-w-0 items-center gap-2">
                     <ClassMark kind="objects" size={12} />
@@ -1148,7 +1147,7 @@ function AddressCollectionObjects({
               );
             })}
           </div>
-          <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
+          <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
             <CursorPagination
               total={group.itemCount}
               totalLabel="objects"

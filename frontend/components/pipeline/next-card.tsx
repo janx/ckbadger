@@ -41,7 +41,6 @@ export function NextCard({ next, dim }: NextCardProps) {
           y={G.cardTop + 0.5}
           width={Math.max(1, next.w - 1)}
           height={Math.max(1, next.h - 1)}
-          rx={6}
           strokeWidth={1}
           strokeDasharray="3 2"
           vectorEffect="non-scaling-stroke"
@@ -99,7 +98,6 @@ export function NextCard({ next, dim }: NextCardProps) {
                 y={q.y + 0.5}
                 width={q.s - 1}
                 height={q.s - 1}
-                rx={1}
                 fillOpacity={GHOST.square.fillOpacity}
                 strokeOpacity={GHOST.square.strokeOpacity}
                 strokeWidth={1}

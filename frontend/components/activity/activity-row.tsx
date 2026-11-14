@@ -44,7 +44,7 @@ import { Utc8Date } from '@/components/ui/utc8-date';
 import { NoBreak } from '@/components/ui/no-break';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
-const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-base-elevated py-2 transition-colors';
+const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
 
 /**
  * A row's hover (consistency C3, T7): the tx hash, and the block's age beside it — the age left
@@ -725,8 +725,8 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 /**
  * One participant, one 18 px line (T7 · option A, Feed.dc.html column A): the address (and any
  * roles), the lock kind in small caps, a note the API attaches, the signed exact CKB, each item change
- * with its mark (signed, by sign; symbol dim), and the occupied change last in the board's 11 px
- * ghost tone (≈ #4a5268). The line wraps between those items, in that order, when it cannot hold
+ * with its mark (signed, by sign; symbol dim), and the occupied change last at 11 px in the
+ * dim ink (a figure: never the ghost, never the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
  * them — never inside one.
  *
  * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
@@ -822,7 +822,7 @@ function ParticipantLine({
       {p.usedDelta !== '0' && (
         <span
           data-role="occupied"
-          className="text-meta text-text-dim/60 whitespace-nowrap tabular-nums"
+          className="text-meta text-text-dim whitespace-nowrap tabular-nums"
         >
           occupied {formatOccupiedDelta(p.usedDelta)}
         </span>

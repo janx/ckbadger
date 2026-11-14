@@ -178,7 +178,7 @@ export function ListTable<T>({
               role="listitem"
               key={rowKey(row)}
               title={titleOf(row)}
-              className={cn('border-base-border-subtle border-b py-2.5', rowClassName?.(row))}
+              className={cn('border-row-rule border-b py-2.5', rowClassName?.(row))}
             >
               {mobileRow(row, width! >= WIDE_ROW_MIN_WIDTH)}
             </div>
@@ -206,7 +206,7 @@ export function ListTable<T>({
                   scope="col"
                   // Table-rows T5: column heads at meta (11 px), dim, in every table.
                   className={cn(
-                    'border-base-border-subtle text-text-dim text-meta border-b py-3 pr-4 font-normal last:pr-0',
+                    'border-row-rule text-text-dim text-meta border-b py-3 pr-4 font-normal last:pr-0',
                     c.numeric ? 'text-right' : 'text-left'
                   )}
                 >
@@ -224,7 +224,7 @@ export function ListTable<T>({
                 onMouseLeave={() => onRowHover?.(null)}
                 // Midnight, continued (move 4): a hovered row gets the row-scan sweep; its rule
                 // is the row-rule ink, #1a1f30 (material pass v2, move 6).
-                className={cn('row-scan border-base-border-subtle border-b', rowClassName?.(row))}
+                className={cn('row-scan border-row-rule border-b', rowClassName?.(row))}
               >
                 {shown.map((c) => (
                   <td

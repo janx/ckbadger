@@ -185,7 +185,7 @@ const ANATOMY_LEGEND = [
   ['lock', 'var(--c-cell-lock)'],
   ['type', 'var(--c-cell-type)'],
   ['data', 'var(--c-cell-data)'],
-  ['free', 'var(--c-base-border-subtle)'],
+  ['free', 'var(--c-bar-track)'],
 ] as const;
 
 type ReferenceRow = NonNullable<ScriptFamilyDetail['references']>[number];
@@ -210,7 +210,7 @@ function ReferenceFacts({
   const term = 'text-text-dim';
   const value = 'm-0 min-w-0 [overflow-wrap:anywhere]';
   return (
-    <dl className="border-base-border-subtle grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 border-t pt-3 first:border-t-0 first:pt-0">
+    <dl className="border-row-rule grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 border-t pt-3 first:border-t-0 first:pt-0">
       <dt className={term}>code hash</dt>
       <dd className={value}>{reference.referenceHash}</dd>
       <dt className={term}>hash type</dt>
