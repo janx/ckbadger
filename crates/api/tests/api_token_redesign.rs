@@ -311,6 +311,30 @@ async fn token_supply_events_carry_each_party_lock_code_hash() {
     }
 }
 
+/// A4b review: a supply event's party whose lock has no address form (args
+/// longer than an RFC-0021 full address can carry; unbounded on chain) is
+/// named by its lock hash, code hash and kind, with a null address — not a
+/// 500 for the whole list.
+#[tokio::test]
+async fn token_supply_event_party_whose_lock_has_no_address_form_is_named_by_its_lock() {
+    let store = fixture();
+    // The mint went to 0x32.
+    seed_unaddressable_lock(&store, &[0x32; 32]);
+    let app = create_router(test_config(store)).await;
+    let (status, body) = response_json(
+        &app,
+        &format!("/tokens/0x{}/supply-events", hex::encode(TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mint = &body["data"][1];
+    assert_eq!(mint["kind"], "mint", "{body}");
+    assert_eq!(mint["lockHash"], format!("0x{}", "32".repeat(32)));
+    assert!(mint["address"].is_null(), "{body}");
+    assert_eq!(mint["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{body}");
+    assert_eq!(mint["lockKind"], "SECP256K1/blake160", "{body}");
+}
+
 /// A day row that disagrees with the day's own mint / burn records is a
 /// write-path bug: a 500 naming the day.
 #[tokio::test]

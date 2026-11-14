@@ -776,7 +776,7 @@ fn build_supply_events(
                 amount: amount.to_string(),
                 supply_after: supply_after.to_string(),
                 lock_hash: format!("0x{}", hex::encode(lock)),
-                address: owner.as_ref().map(|owner| owner.address.clone()),
+                address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
             });

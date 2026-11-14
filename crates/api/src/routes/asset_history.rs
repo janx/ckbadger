@@ -240,13 +240,22 @@ fn canonical_version_from_marker(
         "cell capacity below its occupied capacity: {context}, occupied={occupied} capacity={}",
         cell.capacity
     );
+    // `owner_address` is not nullable in this answer: a cell whose lock has no
+    // address form is still refused here (api_cells
+    // `test_get_cell_fails_fast_when_address_cannot_be_encoded`; A4b review:
+    // listed, not reshaped).
     let owner_address = crate::utils::address::encode_lock_address(
         &cell.lock_script_hash(),
         &cell.lock_code_hash,
         cell.lock_hash_type,
         &cell.lock_args,
         &state.ckb_network,
-    )?;
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "lock script cannot be encoded as an address: it has no address form (its args are longer than an address can carry): {context}"
+        )
+    })?;
     Ok(CanonicalCellVersion {
         response: CellVersion {
             tx_hash: format!("0x{}", hex::encode(tx_hash)),

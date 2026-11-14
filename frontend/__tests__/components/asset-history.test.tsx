@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, within, cleanup } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -384,6 +384,65 @@ describe('Asset history', () => {
         vi.unstubAllGlobals();
       }
     });
+  });
+  // A4b review: a party whose lock has no address form (args longer than an address can carry)
+  // comes with a null address and its lock's code hash and kind: it is named by its lock hash,
+  // linked to the address page that takes a lock hash, and by its lock kind.
+  it('names a supply-event party whose lock has no address form by its lock hash and kind (A4b review)', () => {
+    const lockHash = `0x${'88'.repeat(32)}`;
+    const addressPage = expect.stringMatching(new RegExp(`/address/${lockHash}$`));
+    const mount = () => {
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 0 }}
+          supplyEvents={{
+            total: 1,
+            rows: [
+              {
+                txHash: `0x${'aa'.repeat(32)}`,
+                blockNumber: 10,
+                txIndex: 0,
+                transferSequence: 0,
+                timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+                kind: 'mint',
+                amount: '1',
+                supplyAfter: '13',
+                lockHash,
+                address: null,
+                lockCodeHash: `0x${'9b'.repeat(32)}`,
+                lockKind: 'SECP256K1/blake160',
+              },
+            ],
+          }}
+        />
+      );
+      fireEvent.click(screen.getByText('Every change to the supply (1)'));
+    };
+    mount();
+    const [, row] = within(screen.getByRole('table', { name: 'Mints and burns' })).getAllByRole(
+      'row'
+    );
+    expect(within(row).getByRole('link', { name: /^0x8888/ })).toHaveAttribute('href', addressPage);
+    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
+    cleanup();
+    atContainerWidth(358);
+    try {
+      mount();
+      const [phone] = screen.getAllByTestId('supply-event-row-mobile');
+      expect(within(phone).getByRole('link', { name: /^0x8888/ })).toHaveAttribute(
+        'href',
+        addressPage
+      );
+      expect(phoneLines(phone)[2].right).toMatch(/^to 0x8888.* SECP256K1\/blake160$/);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
   it('names what the weekly totals count and says when only the newest supply events are listed', () => {
     stubChartWidth(358);

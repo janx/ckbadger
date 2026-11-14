@@ -569,7 +569,8 @@ pub struct CollectionHolderResponse {
 /// A holder's or object owner's lock as one row shows it: its address, its
 /// code hash and the scripts registry's name for that code hash.
 pub(super) struct OwnerLock {
-    pub(super) address: String,
+    /// `None` when the lock has no address form (`encode_lock_address`).
+    pub(super) address: Option<String>,
     pub(super) lock_code_hash: String,
     pub(super) lock_kind: Option<String>,
 }
@@ -624,7 +625,7 @@ pub(super) fn holder_row(
     Ok(CollectionHolderResponse {
         lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
         owner_hash_prefix: None,
-        address: owner.as_ref().map(|owner| owner.address.clone()),
+        address: owner.as_ref().and_then(|owner| owner.address.clone()),
         lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
         lock_kind: owner.and_then(|owner| owner.lock_kind),
         item_count,
@@ -646,7 +647,7 @@ pub(super) fn lock_address(
                     hex::encode(lock_hash)
                 ))
             })?
-            .map(|resolved| resolved.address),
+            .and_then(|resolved| resolved.address),
     )
 }
 
@@ -2094,7 +2095,7 @@ async fn get_object_item_detail(
             .transpose()
             .map_err(|e| ApiError::internal(e.to_string()))?
             .flatten()
-            .map(|resolved| resolved.address),
+            .and_then(|resolved| resolved.address),
         nft_id: format!("0x{}", hex::encode(&object_id_bytes)),
         standard: "m-nft".to_string(),
         is_live: entry.is_live,
@@ -2196,13 +2197,21 @@ pub(crate) fn mnft_class_cell_of_tx(
         "class outpoint index row disagrees with its cell's type args: {} output={output_index}",
         context()
     );
+    // The answer's `address` is not nullable: a class cell whose lock has no
+    // address form is still refused here (A4b review: listed, not reshaped).
     let address = crate::utils::address::encode_lock_address(
         &cell.lock_script_hash(),
         &cell.lock_code_hash,
         cell.lock_hash_type,
         &cell.lock_args,
         &state.ckb_network,
-    )?;
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "class cell lock has no address form (its args are longer than an address can carry): {} output={output_index}",
+            context()
+        )
+    })?;
     Ok(Some(MnftClassCellRef {
         output_index,
         lock_hash: format!("0x{}", hex::encode(cell.lock_script_hash())),
