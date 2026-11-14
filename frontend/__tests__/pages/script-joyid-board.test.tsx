@@ -387,7 +387,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(tier1()).toContainElement(nav);
     expect(follows(nav, hero())).toBe(true);
     const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
-    expect(h1).toHaveClass('text-entity', 'text-text-bright');
+    // PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px).
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index', 'text-text-bright');
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();

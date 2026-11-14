@@ -48,6 +48,11 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
       'text-entity'
     );
     expect(await screen.findByText('force-closed · settled')).toBeInTheDocument();
+    // PB-06 / PA-32: the board's h1 is an entity h1, one type step smaller below md (30 → 26 px).
+    expect(screen.getByRole('heading', { level: 1, name: 'Fiber channel' })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
     // Consistency plan C1: the tab names the page.
     await waitFor(() =>
       expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · Fiber channel · CKBadger$/)
