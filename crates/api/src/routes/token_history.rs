@@ -1,10 +1,8 @@
 //! Exact read projections of the existing token indexes; no persistent state.
 use super::{
-    activities::{participant_lock_kind, GlobalActivityResponse},
-    asset_feed,
+    activities::GlobalActivityResponse, asset_feed, assets::owner_lock,
     transactions::TransactionResponse,
 };
-use crate::utils::address::resolve_lock_address;
 use crate::{
     response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse},
     utils::{apply_owned_capacity_delta, parse_hash32, stats_bucket::ChainTime},
@@ -413,7 +411,10 @@ pub(super) struct SupplyEvent {
     amount: String,
     supply_after: String,
     lock_hash: String,
+    /// This and the next two: the party's lock, named as
+    /// [`super::tokens::TokenIssuer`] names it.
     address: Option<String>,
+    lock_code_hash: Option<String>,
     lock_kind: Option<String>,
 }
 
@@ -758,6 +759,13 @@ fn build_supply_events(
             let lock32: [u8; 32] = lock.try_into().with_context(|| {
                 format!("token supply event invalid lock block={block} sequence={seq}")
             })?;
+            let owner = owner_lock(store, &lock32, &state.ckb_network).map_err(|(_, error)| {
+                anyhow::anyhow!(
+                    "token supply event party block={block} sequence={seq}: {} {}",
+                    error.0.message,
+                    context()
+                )
+            })?;
             events.push(SupplyEvent {
                 tx_hash: format!("0x{}", hex::encode(&row.tx_hash)),
                 block_number: block,
@@ -768,9 +776,9 @@ fn build_supply_events(
                 amount: amount.to_string(),
                 supply_after: supply_after.to_string(),
                 lock_hash: format!("0x{}", hex::encode(lock)),
-                address: resolve_lock_address(store, lock, &state.ckb_network)?
-                    .map(|resolved| resolved.address),
-                lock_kind: participant_lock_kind(store, &lock32, None)?,
+                address: owner.as_ref().map(|owner| owner.address.clone()),
+                lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_kind: owner.and_then(|owner| owner.lock_kind),
             });
         }
     }
