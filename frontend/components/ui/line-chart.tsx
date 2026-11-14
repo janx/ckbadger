@@ -732,7 +732,6 @@ export function LineChart({
               y={0}
               width={180}
               height={y2AxisLabel ? 60 : 44}
-              rx={4}
               fill={CHART_TOOLTIP_BG}
               fillOpacity={0.95}
               stroke={CHART_TOOLTIP_BORDER}

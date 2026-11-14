@@ -460,7 +460,6 @@ export function MultiSeriesLineChart({
               y={0}
               width={180}
               height={20 + series.filter((s) => visibleSeries.has(s.key)).length * 16}
-              rx={4}
               fill={CHART_TOOLTIP_BG}
               fillOpacity={0.95}
               stroke={CHART_TOOLTIP_BORDER}
