@@ -520,10 +520,12 @@ export function WhatMoved({
   const Strip = form === 'ribbons' ? RibbonStrip : ListStrip;
   return (
     <TerminalPanel aria-label="What moved" data-testid="tx-what-moved" data-form={form}>
+      {/* The direction once, over the two ends of the ribbons; the list form labels each flow's
+          two groups itself, so its header keeps the hint alone (PA-11). */}
       <div className="border-base-border flex items-center justify-between gap-3 border-b px-3 py-1.5">
-        <span className="eyebrow text-text-dim text-small">from</span>
+        {form === 'ribbons' && <span className="eyebrow text-text-dim text-small">from</span>}
         <TapOrHoverHint what="a party or an asset" className="text-text-ghost text-meta" />
-        <span className="eyebrow text-text-dim text-small">to</span>
+        {form === 'ribbons' && <span className="eyebrow text-text-dim text-small">to</span>}
       </div>
       <div ref={ref} className="divide-base-border-subtle flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
