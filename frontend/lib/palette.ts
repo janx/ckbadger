@@ -31,6 +31,13 @@ const dark = {
   'base-elevated': '#241f1a',
   'base-border': '#2a231d',
   'base-border-subtle': '#221c17',
+  /**
+   * The 1 px rule between the rows of a list or a table (and under its head): the hair by night;
+   * by day the hair stepped down until it clears the paper and a ruled line by 1.25:1 (R5).
+   */
+  'row-rule': '#221c17',
+  /** A bar's empty track: the elevated tint by night; by day stepped down as the row rule (R5). */
+  'bar-track': '#241f1a',
   // inks (lib.js: moon, text, dim — lightened from #8a8073 to 4.5:1 — ghost)
   'text-bright': '#e8e2d6',
   text: '#b9b0a2',
@@ -56,6 +63,11 @@ const dark = {
   rouge: '#d9634a',
   'rouge-dim': '#aa503c',
   'rouge-bright': '#f57c62',
+  /**
+   * The fraction digits of a negative amount (R4): rouge-dim moved in lightness until it reads at
+   * 4.5:1. A positive amount's fraction is jade-dim, a neutral one's text-dim.
+   */
+  'rouge-fraction': '#ca6c57',
   lavender: '#a797c4',
   'lavender-dim': '#8e82a5',
   amber: '#a3bf7a',
@@ -191,6 +203,8 @@ const light: Palette = {
   'base-elevated': '#e9e2d4',
   'base-border': '#d4cab8',
   'base-border-subtle': '#e3dbcc',
+  'row-rule': '#d5cdbf',
+  'bar-track': '#d4cdc0',
   'text-bright': '#1f1b17',
   text: '#4a433b',
   'text-dim': '#6c6356',
@@ -210,6 +224,7 @@ const light: Palette = {
   rouge: '#a8392a',
   'rouge-dim': '#a6594c',
   'rouge-bright': '#902214',
+  'rouge-fraction': '#9b4f43',
   lavender: '#5e4d9a',
   'lavender-dim': '#675d93',
   amber: '#46701f',

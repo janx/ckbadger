@@ -41,6 +41,8 @@ const TEXT_GRADE: PaletteKey[] = [
   'lavender',
   'lavender-dim',
   'amber',
+  // the fraction ink of a negative amount (R4, DY-06)
+  'rouge-fraction',
   'token',
   'object',
   'identity',
