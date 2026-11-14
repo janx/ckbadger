@@ -333,7 +333,7 @@ function GroupList({
 }) {
   return (
     <ul aria-label="Script groups" className="text-small">
-      {groups.map((g, i) => {
+      {groups.map((g) => {
         const on = lit?.groups.has(g.id) ?? false;
         return (
           <li
