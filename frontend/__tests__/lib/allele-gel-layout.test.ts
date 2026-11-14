@@ -68,10 +68,15 @@ describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lane
     expect(layout.gutter).toBeGreaterThanOrEqual(15 * ALLELE_GEL.charWidth + 4);
   });
 
+  // Re-pinned with PB-04 (UI review 2026-11-14): no tag, no left margin, so the floor is reached
+  // under 34 px (22 px right edge + one 12 px lane) instead of under 96.
   it('refuses a width under one 12 px lane instead of drawing an empty gel', () => {
-    expect(() => alleleGelLayout({ genes: NERVAPE, width: 90, subject: 'Nervape 3x' })).toThrow(
-      /Nervape 3x: a 90 px allele gel cannot hold a 12 px lane/
+    expect(() => alleleGelLayout({ genes: NERVAPE, width: 30, subject: 'Nervape 3x' })).toThrow(
+      /Nervape 3x: a 30 px allele gel cannot hold a 12 px lane \(0 px gutter\)/
     );
+    expect(() =>
+      alleleGelLayout({ genes: NERVAPE, width: 90, subject: 'x', overlayLabels: ['this one'] })
+    ).toThrow(/a 90 px allele gel cannot hold a 12 px lane \(62 px gutter\)/);
     expect(() => alleleGelLayout({ genes: [], width: 358, subject: 'empty' })).toThrow(
       /empty: allele gel has no genes/
     );
