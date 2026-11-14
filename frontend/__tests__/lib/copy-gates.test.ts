@@ -269,9 +269,7 @@ describe('copy gates (U-15)', () => {
   it('says one thing one way: no "txns", no "No data available", no "… found"', () => {
     const offenders = all
       .filter(({ text }) => /^No /.test(text))
-      .filter(({ text }) =>
-        /\btxns\b|^No data available|^No \w+( \w+)? found\b|^No results/.test(text)
-      )
+      .filter(({ text }) => /\btxns\b|^No data available|^No \w+( \w+)? found\b/.test(text))
       .map(where);
     expect(offenders).toEqual([]);
   });

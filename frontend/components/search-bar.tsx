@@ -142,7 +142,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     }
 
     if (isLoading) {
-      setSubmitFeedback('Searching...');
+      setSubmitFeedback('Searching…');
       return;
     }
 
@@ -177,7 +177,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       return;
     }
 
-    setSubmitFeedback('No matches found.');
+    setSubmitFeedback('No matches.');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -324,7 +324,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           style={isCompact ? { backgroundColor: SEARCH_RESULT_COLORS.panel } : undefined}
         >
           {isLoading ? (
-            <div className="text-text-dim px-4 py-3">Searching...</div>
+            <div className="text-text-dim px-4 py-3">Searching…</div>
           ) : results.length > 0 ? (
             <ul className="max-h-80 overflow-auto py-1">
               {results.map((result, index) => (
@@ -363,7 +363,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               ))}
             </ul>
           ) : (
-            <div className="text-text-dim px-4 py-3">No results found</div>
+            <div className="text-text-dim px-4 py-3">No results.</div>
           )}
         </div>
       )}

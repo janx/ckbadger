@@ -498,12 +498,12 @@ describe('SearchBar', () => {
       expect(api.search).toHaveBeenCalledWith('not-found');
     });
     await waitFor(() => {
-      expect(screen.getByText('No results found')).toBeInTheDocument();
+      expect(screen.getByText('No results.')).toBeInTheDocument();
     });
 
     fireEvent.submit(input.closest('form')!);
     expect(pushMock).not.toHaveBeenCalled();
-    expect(screen.getByText('No matches found.')).toBeInTheDocument();
+    expect(screen.getByText('No matches.')).toBeInTheDocument();
   });
 
   it('prefers exact block hash result on submit when hash query has mixed results', async () => {
