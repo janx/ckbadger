@@ -10,7 +10,10 @@ import { Dotted } from '@/components/ui/phone-row';
  * and a separator is not drawn when its item starts a line. jsdom lays nothing out, so the geometry
  * is pinned by its classes:
  *
- * - the list is a wrapping flex row that clips what lies left of its box (`overflow-hidden`);
+ * - the list is a wrapping flex row that clips what lies LEFT of its box only (a clip-path inset
+ *   of 0 at the left and far out on the other sides): never its right, so an unbreakable unit
+ *   wider than the list shows past its edge, where the page-overflow survey sees it, instead of
+ *   being cut with no scroll and no error (the lead's ruling b; `overflow-hidden` cut it);
  * - every item after the first hangs its separator 2ch left of its own text (`-ml-[2ch]` with
  *   `pl-[2ch] -indent-[2ch]`): an item that starts a line has its separator in those 2ch left of
  *   the list's box, clipped; mid-line, the 3ch gap less those 2ch leaves 1ch before the dot;
@@ -43,9 +46,12 @@ describe('Dotted: the one separator-joined list', () => {
       'flex',
       'flex-wrap',
       'items-baseline',
-      'overflow-hidden',
-      'gap-x-[3ch]'
+      'gap-x-[3ch]',
+      'min-w-0',
+      '[clip-path:inset(-1em_-100vw_-1em_0)]'
     );
+    // re-pinned (ruling b): the list never hides text on its right
+    expect(list).not.toHaveClass('overflow-hidden');
     const [first, second] = items(list);
     expect(first).not.toHaveClass('-ml-[2ch]');
     expect(second).toHaveClass('-ml-[2ch]', 'pl-[2ch]', '-indent-[2ch]', 'min-w-0');
