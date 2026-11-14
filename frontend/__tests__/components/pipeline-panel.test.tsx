@@ -977,6 +977,47 @@ describe('PipelineCanvas motion', () => {
     expect(box).toHaveAttribute('fill-opacity', '1');
   });
 
+  // Lane E2 follow-up, item 3: the chips' "+N" left `data-chips` for the card's words; an entrance
+  // is motion, not a resting state, so it enters with its dots (the same opacity, step for step)
+  // and stands at full strength once the block is solid.
+  it('lets a landing block’s chip count enter with its dots, then stand at full strength', () => {
+    const pool = s1.pool as NonNullable<PipelineSnapshot['pool']>;
+    const extra = Array.from({ length: 40 }, (_, i) => ({
+      ...pool.pending[0],
+      hash: poolTxHash(`x${i}`),
+    }));
+    const many: PipelineSnapshot = {
+      ...s1,
+      pool: {
+        ...pool,
+        pending: [...pool.pending, ...extra],
+        pendingTotal: pool.pendingTotal + extra.length,
+      },
+    };
+    const landed = mineNext(many, { commit: [w0], propose: extra.map((x) => x.hash) });
+    const tr = diffSnapshots(many, landed);
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={many} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={landed} />);
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    const chips = landing.querySelector('[data-chips]') as SVGGElement;
+    const label = landing.querySelector('[data-chips-label]') as SVGGElement;
+    expect(label).not.toBeNull();
+    // Dashed: the dots at 0.2, and their count with them.
+    expect(chips).toHaveAttribute('opacity', '0.200');
+    expect(label).toHaveAttribute('opacity', '0.200');
+    // Solidifying (from contact − 80 ms over 420 ms): the count follows the dots.
+    at(tr.contact + 100);
+    const mid = Number(chips.getAttribute('opacity'));
+    expect(mid).toBeGreaterThan(0.2);
+    expect(mid).toBeLessThan(1);
+    expect(label.getAttribute('opacity')).toBe(chips.getAttribute('opacity'));
+    // Solid: both at rest, at full strength.
+    at(600);
+    expect(chips).not.toHaveAttribute('opacity');
+    expect(label).not.toHaveAttribute('opacity');
+  });
+
   it('outlines a highlighted tile while the motion layer is painting it', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
