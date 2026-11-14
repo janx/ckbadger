@@ -113,7 +113,8 @@ const COUNTED =
 
 /**
  * Where a count is written straight before its noun: `{n} cells` in JSX, `${n} cells` in a
- * template. Attributes a page does not show (a title, an accessible name) and thrown errors aside.
+ * template — in page text and in what a reader hears or hovers (an accessible name, a title, an
+ * alt); thrown errors aside.
  */
 function handCounts(file: string): Text[] {
   const code = readFileSync(file, 'utf8');
@@ -139,7 +140,7 @@ function handCounts(file: string): Text[] {
     if (ts.isNewExpression(node) && node.expression.getText(source) === 'Error') return;
     if (
       ts.isJsxAttribute(node) &&
-      /^(aria-label|title|alt|className|key|href|data-[\w-]+)$/.test(node.name.getText(source))
+      /^(className|key|href|data-[\w-]+)$/.test(node.name.getText(source))
     )
       return;
     if (ts.isTemplateSpan(node) && noun.test(node.literal.text))
