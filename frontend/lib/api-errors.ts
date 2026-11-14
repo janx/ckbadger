@@ -13,6 +13,18 @@ export function isNotFoundApiError(error: unknown): error is { status: 404 } {
   return (error as { status?: unknown }).status === 404;
 }
 
+/**
+ * "That names nothing that could exist" (HTTP 400): the API refused the request as malformed —
+ * on an entity lookup, the id is not one. A definite answer like a 404, read from the status;
+ * `apiMessage` says why.
+ */
+export function isBadRequestApiError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  return (error as { status?: unknown }).status === 400;
+}
+
 /** A 503 whose `error` code is `code` (read from the fields, so a plain object matches too). */
 function is503(error: unknown, code: string): error is ApiRequestError {
   if (!error || typeof error !== 'object') {

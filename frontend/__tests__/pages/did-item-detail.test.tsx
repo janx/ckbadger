@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { truncateHash } from '@/lib/utils';
 import Page from '@/app/identities/did/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
@@ -161,7 +162,10 @@ it('reports missing identity and unavailable raw evidence without inventing a do
       name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
     })
   ).toBeInTheDocument();
-  expect(screen.getByText(`/assets/identities/did/items/${evidence.itemId}`)).toBeInTheDocument();
+  // U-18: the facts name the checked endpoint with the id shortened, once
+  expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+    `/assets/identities/did/items/${truncateHash(evidence.itemId)}`
+  );
   unmount();
   vi.mocked(api.getDidCkbItemDetail).mockResolvedValue(identityItem('did'));
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));

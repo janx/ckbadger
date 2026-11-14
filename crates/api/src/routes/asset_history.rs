@@ -339,10 +339,13 @@ pub(crate) fn parse_item_id(
     raw: &str,
     standard: NftLifecycleStandard,
 ) -> Result<Vec<u8>, crate::response::ApiRouteError> {
-    if matches!(standard, NftLifecycleStandard::DotCell) {
-        return super::identities::decode_dotcell_item_ref(raw).map(|id| id.to_vec());
+    match standard {
+        NftLifecycleStandard::DotCell => {
+            super::identities::decode_dotcell_item_ref(raw).map(|id| id.to_vec())
+        }
+        NftLifecycleStandard::MnftToken => super::assets::decode_mnft_token_id(raw),
+        _ => parse_asset_id_max32(raw, "item ID"),
     }
-    parse_asset_id_max32(raw, "item ID")
 }
 pub(crate) fn checked_versions(
     state: &AppState,

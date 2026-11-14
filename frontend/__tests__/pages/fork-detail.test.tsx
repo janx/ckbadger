@@ -445,10 +445,14 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     ).toBe(true);
   });
 
-  it('sends a malformed address (the old millisecond id) to not-found without a request', () => {
+  // U-06, R11: a malformed address is not an id: the voice page with its own first line, not
+  // the route 404's "no page at this path."
+  it('answers a malformed address (the old millisecond id) as not an id, without a request', () => {
     at('1754000000000', '');
     render(<ForkDetailPage />);
-    expect(notFound).toHaveBeenCalled();
+    expect(screen.getByText('that is not a fork height and orphan.')).toBeInTheDocument();
+    expect(screen.getByText('Not an id · 400')).toBeInTheDocument();
+    expect(notFound).not.toHaveBeenCalled();
     expect(api.getForkAt).not.toHaveBeenCalled();
   });
 });

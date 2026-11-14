@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
+import { truncateHash } from '@/lib/utils';
 import {
   api,
   ApiRequestError,
@@ -139,8 +140,11 @@ describe('TokenDetailPage', () => {
       new ApiRequestError(404, 'not_found', 'token absent')
     );
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(`/tokens/${hash}`)).toBeInTheDocument();
-    expect(screen.getByText('no token at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no token at this address.')).toBeInTheDocument();
+    // U-18: the facts name the checked endpoint with the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/tokens/${truncateHash(hash)}`
+    );
   });
 
   // Visual finish V8: the page loads as the shared detail skeleton, in the page's main, not the

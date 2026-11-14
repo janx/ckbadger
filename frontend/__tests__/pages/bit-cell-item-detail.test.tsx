@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
+import { truncateHash } from '@/lib/utils';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import Page from '@/app/identities/bit-cell/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
@@ -165,9 +166,10 @@ it('reports missing identity and unavailable raw evidence without inventing a do
       name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
     })
   ).toBeInTheDocument();
-  expect(
-    screen.getByText(`/assets/identities/bit-cell/items/${evidence.itemId}`)
-  ).toBeInTheDocument();
+  // U-18: the facts name the checked endpoint with the id shortened, once
+  expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+    `/assets/identities/bit-cell/items/${truncateHash(evidence.itemId)}`
+  );
   unmount();
   vi.mocked(api.getBitCellItemDetail).mockResolvedValue(identityItem('bit-cell'));
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));

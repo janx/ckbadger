@@ -4,13 +4,16 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
+import { truncateHash } from '@/lib/utils';
 
 const BLOCK_ID = '8775638';
 const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
 const pushMock = vi.hoisted(() => vi.fn());
 const paramsIdRef = vi.hoisted(() => ({ current: '8775638' }));
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // the error class itself: the page's failed-read line reads a gateway status off it
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: {
     getBlock: vi.fn(),
     getBlocks: vi.fn(),
@@ -152,11 +155,11 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_HASH;
     vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
     render(<BlockDetailPage />);
-    // the checked endpoint stands in the facts (the eyebrow shows the route, which here reads the same)
-    expect(
-      (await screen.findAllByText(`/blocks/${BLOCK_HASH}`)).some((el) => el.closest('.error-facts'))
-    ).toBe(true);
-    expect(screen.getByText('no block at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no block at this address.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/blocks/${truncateHash(BLOCK_HASH)}`
+    );
   });
 
   // Visual finish V8: the page loads as the shared detail skeleton, not a "Loading…" line.

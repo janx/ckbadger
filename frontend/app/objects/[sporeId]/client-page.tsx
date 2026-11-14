@@ -2,14 +2,19 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { useRouter } from '@/src/navigation';
 import { resolveObjectRouteTarget } from '@/lib/detail-routes';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetDetailShell } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
 import { retryTransientOnly } from '@/lib/query-client';
+/** What `resolveObjectRouteTarget` routes (an identity alias redirects), as the not-an-id page says. */
+const OBJECT_ID_RULE =
+  'an object id is 64 hex digits (a Spore or a cluster) or 48 (an m-NFT class).';
 export interface SporeDetailPageProps {
   sporeId: string;
 }
@@ -46,7 +51,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         initial={collection.data}
       />
     );
-  const invalidIdentifier = route.kind === 'unroutable';
+  if (route.kind === 'unroutable')
+    return <NotFoundPage notAnId={{ kind: 'object', reason: OBJECT_ID_RULE }} />;
+  // The collection is asked only once the object lookup said 404, so its 404 means neither is.
   if (collectionEnabled && isNotFoundApiError(collection.error)) {
     return (
       <NotFoundPage
@@ -55,29 +62,20 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           identifier: id,
           checkedEndpoint: `/assets/objects/${encodeURIComponent(id)}`,
         }}
-        errMessage={`Both /spore/objects/${encodeURIComponent(id)} and /assets/objects/${encodeURIComponent(id)} returned HTTP 404.`}
       />
     );
   }
-  if (!invalidIdentifier && (object.isLoading || (collectionEnabled && collection.isLoading)))
-    return <DetailSkeletonPage />;
+  const failed = collectionEnabled ? collection.error : object.error;
+  if (isBadRequestApiError(failed))
+    return <NotFoundPage notAnId={{ kind: 'object', reason: failed.apiMessage }} />;
+  if (!failed) return <DetailSkeletonPage />;
   return (
     <AssetDetailShell
-      title={invalidIdentifier ? 'Invalid object identifier' : 'Object'}
+      title="Object"
       kind="objects"
       breadcrumb={[{ label: 'Inventory', href: '/inventory/objects' }]}
     >
-      {invalidIdentifier ? (
-        <p className="text-text-dim">
-          This route identifier is not a supported object or collection ID.
-        </p>
-      ) : (
-        <AssetReadState
-          label="object"
-          error={collectionEnabled ? collection.error : object.error}
-          loading={object.isLoading || (collectionEnabled && collection.isLoading)}
-        />
-      )}
+      <ReadFailure what="object" error={failed} />
     </AssetDetailShell>
   );
 }

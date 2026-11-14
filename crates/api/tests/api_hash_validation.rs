@@ -230,8 +230,14 @@ async fn test_spore_endpoints_reject_malformed_ids() {
 /// Asset IDs are *not* 32-byte hashes: an mNFT class ID is 24 bytes, a token ID
 /// 28, a `.bit` account ID 20. The store right-pads them into a 32-byte key
 /// window, so the boundary invariant is "at most 32 bytes" — anything wider hits
-/// the `pad_id_32` assert. Short IDs must stay usable; oversized ones must 400.
-async fn assert_rejects_oversized_asset_id(app: &axum::Router, template: &str) {
+/// the `pad_id_32` assert. Narrow IDs of the route's own width must stay
+/// usable (`narrow_bytes`: 24 for an m-NFT class, 28 for an m-NFT token);
+/// oversized ones must 400.
+async fn assert_rejects_oversized_asset_id(
+    app: &axum::Router,
+    template: &str,
+    narrow_bytes: usize,
+) {
     let oversized = template.replace("{H}", &long_hash_hex());
     let (status, body) = get_json(app, &oversized).await;
     assert_eq!(
@@ -242,11 +248,11 @@ async fn assert_rejects_oversized_asset_id(app: &axum::Router, template: &str) {
 
     // A legitimately narrow ID must still be served (not found here, but never
     // a panic and never a 5xx).
-    let narrow = template.replace("{H}", &format!("0x{}", "ab".repeat(24)));
+    let narrow = template.replace("{H}", &format!("0x{}", "ab".repeat(narrow_bytes)));
     let (status, body) = get_json(app, &narrow).await;
     assert!(
         status.is_success() || status == StatusCode::NOT_FOUND,
-        "GET /api/v1{narrow} must still accept a 24-byte asset ID, got {status} body={body}"
+        "GET /api/v1{narrow} must still accept a {narrow_bytes}-byte asset ID, got {status} body={body}"
     );
 }
 
@@ -259,10 +265,16 @@ async fn test_object_asset_endpoints_reject_oversized_ids() {
         "/assets/objects/{H}/holders",
         "/assets/objects/{H}/activities",
         "/assets/objects/{H}/charts/capacity-history",
+    ] {
+        assert_rejects_oversized_asset_id(&app, template, 24).await;
+    }
+    // U-06: the m-NFT item routes name a token, at least 28 bytes; a 24-byte
+    // (class-width) id is malformed there (api_assets pins its 400).
+    for template in [
         "/assets/objects/items/{H}",
         "/assets/objects/items/{H}/activities",
     ] {
-        assert_rejects_oversized_asset_id(&app, template).await;
+        assert_rejects_oversized_asset_id(&app, template, 28).await;
     }
 }
 
@@ -294,7 +306,7 @@ async fn test_identity_item_endpoints_reject_oversized_ids() {
         "/assets/identities/did/items/{H}",
         "/assets/identities/bit-cell/items/{H}",
     ] {
-        assert_rejects_oversized_asset_id(&app, template).await;
+        assert_rejects_oversized_asset_id(&app, template, 24).await;
     }
 }
 

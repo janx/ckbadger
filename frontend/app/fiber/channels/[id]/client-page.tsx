@@ -4,6 +4,9 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { FiberChannelBoard } from '@/components/fiber/fiber-channel-board';
 import { api, isNotFoundApiError } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { readErrorText } from '@/lib/read-error';
+import { ReadFailure } from '@/components/read-failure';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
@@ -37,6 +40,9 @@ export default function FiberChannelDetailPage() {
       />
     );
   }
+  if (!channel.data && isBadRequestApiError(channel.error)) {
+    return <NotFoundPage notAnId={{ kind: 'fiber-channel', reason: channel.error.apiMessage }} />;
+  }
   return (
     <div className="min-h-screen">
       <main className="container mx-auto max-w-[1280px] pb-[72px] pt-7">
@@ -54,21 +60,19 @@ export default function FiberChannelDetailPage() {
         {/* Hierarchy v3: once loaded, the board's hero section holds the title, state and id. */}
         {!channel.data && (
           <>
-            <h1 className="text-text-bright text-entity mt-2.5 font-medium">Fiber channel</h1>
+            <h1 className="text-text-bright text-entity max-md:text-index mt-2.5 font-medium">
+              Fiber channel
+            </h1>
             <p className="text-text-dim text-small mt-1.5 break-all">{channelId}</p>
           </>
         )}
         {channel.isPending && (
           <p className="text-text-dim text-body py-8">Loading channel evidence…</p>
         )}
-        {channel.isError && (
-          <p role="alert" className="text-rouge text-body py-8">
-            Channel could not be loaded: {String(channel.error)}
-          </p>
-        )}
+        {channel.error && <ReadFailure what="channel" error={channel.error} />}
         {token.isError && (
           <p role="alert" className="text-rouge text-small mt-2">
-            Funding token could not be loaded: {String(token.error)}
+            Funding token could not be loaded: {readErrorText(token.error)}
           </p>
         )}
         {channel.data && (
@@ -76,7 +80,7 @@ export default function FiberChannelDetailPage() {
             <FiberChannelBoard
               channel={channel.data}
               evidence={evidence.data}
-              evidenceError={evidence.isError ? String(evidence.error) : undefined}
+              evidenceError={evidence.isError ? readErrorText(evidence.error) : undefined}
               token={
                 token.data
                   ? { symbol: token.data.symbol, decimals: token.data.decimals }

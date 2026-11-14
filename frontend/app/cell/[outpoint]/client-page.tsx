@@ -12,7 +12,9 @@ import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ExactCkb } from '@/components/activity-event-row';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
@@ -22,6 +24,10 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
+
+/** What `outpointParts` accepts, as the not-an-id page states it. */
+const OUTPOINT_RULE =
+  'an out point is a transaction hash and an output index: 0x and 64 hex digits, a dash, 0 to 65535.';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -527,20 +533,13 @@ export default function CellDetailPage() {
       />
     );
   }
-  const body = !parts ? (
-    <DetailLayout title="Invalid cell outpoint">
-      <p role="alert" className="text-rouge text-small break-all">
-        {String(outpoint)}
-      </p>
-    </DetailLayout>
-  ) : query.isPending ? (
+  if (!parts) return <NotFoundPage notAnId={{ kind: 'cell', reason: OUTPOINT_RULE }} />;
+  if (!query.data && isBadRequestApiError(query.error))
+    return <NotFoundPage notAnId={{ kind: 'cell', reason: query.error.apiMessage }} />;
+  const body = query.isPending ? (
     <DetailSkeleton />
   ) : query.error && !query.data ? (
-    <DetailLayout title="Cell data unavailable">
-      <p role="alert" className="text-rouge text-small break-all">
-        {query.error.message}
-      </p>
-    </DetailLayout>
+    <ReadFailure what="cell" error={query.error} />
   ) : !query.data ? (
     <DetailLayout title="Cell data unavailable">
       <p role="alert" className="text-rouge text-small">

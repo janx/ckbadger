@@ -1100,10 +1100,19 @@ type ResolvedCluster = (
 
 /// One existence/source contract for native and generic collection endpoints.
 /// A cluster may be empty, inferred from membership, or virtual (sole).
+///
+/// `id` is a parsed 32-byte cluster id: the membership count below is a key
+/// prefix scan, so a shorter id would count other clusters' members.
 pub(super) fn resolve_cluster(
     store: &ckbadger_store::CkbadgerStore,
     id: &[u8],
 ) -> anyhow::Result<Option<ResolvedCluster>> {
+    anyhow::ensure!(
+        id.len() == crate::utils::HASH32_LEN,
+        "cluster lookup given a {}-byte id 0x{}; a cluster id is 32 bytes",
+        id.len(),
+        hex::encode(id)
+    );
     let entry = store.get_spore(id)?;
     if entry
         .as_ref()

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
+import { truncateHash } from '@/lib/utils';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
@@ -19,7 +20,9 @@ vi.mock('@/components/cell/cell-transactions', () => ({
     </div>
   ),
 }));
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // the error class itself: the page's failed-read line reads a gateway status off it
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: { getCell: vi.fn(), lookupScripts: vi.fn(async () => ({})) },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
@@ -94,16 +97,17 @@ describe('CellDetailPage', () => {
     vi.clearAllMocks();
     outpoint = `${hash}-0`;
   });
+  // U-06: an out point the page cannot read is not an id: the voice page with its own line
   it('rejects an outpoint without an index before fetching', () => {
     outpoint = hash;
     view();
-    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(screen.getByText('that is not a cell out point.')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
   });
   it('rejects output indices outside the store range before fetching', () => {
     outpoint = `${hash}-65536`;
     view();
-    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(screen.getByText('that is not a cell out point.')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
   });
   // The seals by kind (C3): the cell's own page seal (112 px, 88 below md, −4°) — its
@@ -224,14 +228,16 @@ describe('CellDetailPage', () => {
   it('presses no seal when the out point cannot be read', () => {
     outpoint = hash;
     const { container } = view();
-    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(screen.getByText('that is not a cell out point.')).toBeInTheDocument();
     expect(container.querySelector('[data-seal]')).toBeNull();
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
   it('presses no seal when the cell cannot be read', async () => {
     getCell.mockRejectedValue(new Error('node unavailable'));
     const { container } = view();
-    expect(await screen.findByText('Cell data unavailable')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this cell: node unavailable'
+    );
     expect(container.querySelector('[data-seal]')).toBeNull();
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
@@ -376,14 +382,16 @@ describe('CellDetailPage', () => {
   it('distinguishes missing cells from transport failures', async () => {
     getCell.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const rendered = view();
-    expect(await screen.findByText(`${hash}-0`)).toBeInTheDocument();
-    expect(screen.getByText('no cell at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no cell at this address.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the hash shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/cells/${truncateHash(hash)}/0`
+    );
     rendered.unmount();
     getCell.mockRejectedValue(new Error('node unavailable'));
     view();
-    expect(await screen.findByText('Cell data unavailable')).toBeInTheDocument();
-    expect(
-      screen.getAllByRole('alert').some((item) => item.textContent?.includes('node unavailable'))
-    ).toBe(true);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this cell: node unavailable'
+    );
   });
 });

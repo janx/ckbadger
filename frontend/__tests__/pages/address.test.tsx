@@ -18,6 +18,7 @@ import {
   addressProducerHoldings,
 } from '@/__tests__/msw/fixtures/address-producer';
 import AddressDetailPage from '@/app/address/[addr]/client-page';
+import { truncateHash } from '@/lib/utils';
 import fiberOpenDetail from '@/__tests__/fixtures/fiber-open-detail.json';
 import {
   api,
@@ -190,8 +191,11 @@ describe('Address v3', () => {
   it('shows typed 404 evidence only when the address endpoint actually returns 404', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);
-    expect(await screen.findByText(`/addresses/${addressText}`)).toBeInTheDocument();
-    expect(screen.getByText('no address at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no address at this address.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the address shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/addresses/${truncateHash(addressText)}`
+    );
   });
 
   // Visual finish V8: the page loads as the shared detail skeleton, not a "Loading…" line.
@@ -292,13 +296,26 @@ describe('Address v3', () => {
     expectOnePageSeal(container, { kind: 'script', hash: addressHash });
   });
 
-  it('keeps an invalid address 400 as a read error', async () => {
+  // U-06, PA-01, R11: a 400 says the address is not one: the voice page with its own first
+  // line and the API's reason, not a grey read-error line (nor the 404's "no address").
+  it('answers an invalid address 400 with the not-an-id page and the API’s reason', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(
       new ApiRequestError(400, 'bad_request', 'invalid address')
     );
     render(<AddressDetailPage />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('invalid address');
+    expect(await screen.findByText('that is not a ckb address.')).toBeInTheDocument();
+    expect(document.querySelector('.error-facts')).toHaveTextContent('invalid address');
     expect(screen.queryByText('no address at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+  it('says a failed address read in the one shared line', async () => {
+    vi.mocked(api.getAddress).mockRejectedValue(
+      new ApiRequestError(500, 'internal_error', 'addr index mismatch')
+    );
+    render(<AddressDetailPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^Could not read this address: API error: 500 - addr index mismatch$/
+    );
   });
   it('uses one holdings snapshot for balance and the exact three-way partition', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
