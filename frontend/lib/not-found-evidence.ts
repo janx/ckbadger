@@ -32,7 +32,8 @@ export interface NotFoundEvidence {
   /** A separate, scoped classifier lookup; null where no exact lookup is suitable. */
   query: string | null;
   searchEndpoint: string | null;
-  finding: string;
+  /** null where no exact /search lookup was run (U-18: the diagnostics line says only its check). */
+  finding: string | null;
   alternative?: {
     label: string;
     href: string;

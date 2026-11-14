@@ -25,6 +25,15 @@ async function pressedSeal(): Promise<HTMLElement> {
 /** What the tip block's stone says (MSW's `/blocks/:id`: TIP_HASH, 5 transactions). */
 const TIP_SEAL_LABEL = `Block seal ${TIP_HASH.slice(0, 10)}, 5 transactions`;
 
+/** The facts' lines under the verse, the ways on (a nav) aside. */
+function factLines(): HTMLElement[] {
+  const facts = document.querySelector('.error-facts');
+  if (!(facts instanceof HTMLElement)) throw new Error('the page has no facts');
+  return Array.from(facts.children).filter(
+    (el): el is HTMLElement => el instanceof HTMLElement && el.tagName !== 'NAV'
+  );
+}
+
 /** The verse's lines as rendered, in order. */
 function verseLines(h1: HTMLElement): string[] {
   return Array.from(h1.querySelectorAll('[data-comment-line]'), (l) => l.textContent ?? '');
@@ -85,9 +94,9 @@ describe('NotFoundPage', () => {
       status: 'checked',
       evidence: {
         checkedEndpoint: '/transactions/0xabc',
-        query: 'tx:0xabc',
+        query: 'block:0xabc',
         searchEndpoint: '/search',
-        finding: 'The transaction endpoint returned 404. A block matched this exact hash.',
+        finding: '/search: this hash is a block',
         alternative: {
           label: 'block #42',
           href: '/blocks/42',
@@ -117,7 +126,10 @@ describe('NotFoundPage', () => {
     expect(verseLines(h1)[0]).toBe('no transaction at this address.');
     expect(screen.queryByText(/the chain was not asked/)).toBeNull();
     expect(screen.getByText('/transactions/0xabc')).toBeInTheDocument();
-    expect(screen.getByText(/A block matched this exact hash/)).toBeInTheDocument();
+    // U-18: what was asked, its answer and what /search said, in one line
+    expect(factLines()[0]).toHaveTextContent(
+      /^checked \/transactions\/0xabc → 404 · \/search: this hash is a block → open block #42$/
+    );
     expect(screen.getByRole('link', { name: '→ open block #42' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/42'
@@ -129,16 +141,17 @@ describe('NotFoundPage', () => {
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
   });
 
-  it('preserves and wraps a full endpoint in a verified finding; the seal is the tip’s, not the asked hash', async () => {
+  // U-18: the diagnostics were two lines saying the same thing, the full 66-character hash three
+  // times, and `break-all` on the whole finding cut "r / eturned" on a phone.
+  it('says what was asked in one line, the id once and shortened; the seal is the tip’s, not the asked hash', async () => {
     const endpoint = `/transactions/${HASH}/detail`;
-    const finding = `The ${endpoint} entity request returned HTTP 404; /search identified this exact hash as a block.`;
     vi.mocked(useNotFoundEvidence).mockReturnValueOnce({
       status: 'checked',
       evidence: {
         checkedEndpoint: endpoint,
-        query: `tx:${HASH}`,
+        query: `block:${HASH}`,
         searchEndpoint: '/search',
-        finding,
+        finding: '/search: no block has this hash either',
       },
     });
 
@@ -150,9 +163,18 @@ describe('NotFoundPage', () => {
       </MemoryRouter>
     );
 
-    const findingText = screen.getByText(finding);
-    expect(findingText).toHaveTextContent(endpoint);
-    expect(findingText).toHaveClass('break-all');
+    const short = `${HASH.slice(0, 10)}...${HASH.slice(-8)}`;
+    const lines = factLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveTextContent(
+      `checked /transactions/${short}/detail → 404 · /search: no block has this hash either`
+    );
+    expect(document.querySelector('.error-facts')).not.toHaveTextContent(HASH);
+    // only the id breaks anywhere; the words of the line wrap between words
+    const id = within(lines[0]).getByText(short);
+    expect(id).toHaveClass('break-all');
+    expect(lines[0].querySelectorAll('.break-all')).toHaveLength(1);
+    expect(lines[0]).not.toHaveClass('break-all');
     // nothing answered: the same verse as an entity known as something else
     expect(verseLines(screen.getByRole('heading', { level: 1 }))).toEqual([
       'no transaction at this address.',
@@ -181,15 +203,39 @@ describe('NotFoundPage', () => {
     );
     // the header's vitals have a status of their own: the facts' is inside main
     expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent(
-      'the separate /search check could not complete: search unavailable'
+      'the /search check could not complete: search unavailable'
     );
-    expect(screen.getByText('/transactions/0x' + 'f'.repeat(64))).toBeInTheDocument();
-    expect(screen.getByText('0x' + 'f'.repeat(64))).toHaveClass('break-all');
-    // the words of the line wrap between words; only the endpoint and the identifier break anywhere
-    const endpoint = screen.getByText('/transactions/0x' + 'f'.repeat(64));
-    expect(endpoint).toHaveClass('break-all');
-    expect(endpoint.parentElement).not.toHaveClass('break-all');
-    expect(endpoint.parentElement).toHaveClass('[overflow-wrap:anywhere]');
+    // the same one line: the check, its 404, and that /search could not say more
+    const lines = factLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveTextContent(
+      'checked /transactions/0xffffffff...ffffffff → 404 · the /search check could not complete: search unavailable'
+    );
+    // the words of the line wrap between words; only the id breaks anywhere
+    expect(within(lines[0]).getByText('0xffffffff...ffffffff')).toHaveClass('break-all');
+    expect(lines[0]).not.toHaveClass('break-all');
+    expect(lines[0]).toHaveClass('[overflow-wrap:anywhere]');
+  });
+
+  it('a short id is shown as it is, and an endpoint with no exact /search says only its check', () => {
+    vi.mocked(useNotFoundEvidence).mockReturnValueOnce({
+      status: 'checked',
+      evidence: {
+        checkedEndpoint: '/forks/7/a9bc1b75',
+        query: null,
+        searchEndpoint: null,
+        finding: null,
+      },
+    });
+    render(
+      <NotFoundPage
+        entity={{ kind: 'fork', identifier: '7/a9bc1b75', checkedEndpoint: '/forks/7/a9bc1b75' }}
+      />
+    );
+    const lines = factLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveTextContent(/^checked \/forks\/7\/a9bc1b75 → 404$/);
+    expect(lines[0].querySelector('.break-all')).toBeNull();
   });
 
   it('an entity’s verse: its kind in words, the index asked, and the meme last — never the route’s second line', () => {
