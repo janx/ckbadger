@@ -182,10 +182,6 @@ body * {
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-
   .tabular-nums {
     font-feature-settings: 'tnum';
     font-variant-numeric: tabular-nums;
@@ -231,20 +227,6 @@ body * {
     transform: scale(1.1);
   }
 
-  .digit-slot {
-    display: inline-block;
-    overflow: hidden;
-    vertical-align: bottom;
-  }
-
-  .digit-value {
-    display: inline-block;
-  }
-
-  .digit-value.changing {
-    animation: digit-tick 0.2s ease-out;
-  }
-
   /*
    * Row scan (Midnight, continued: move 4): a faint jade band crosses a hovered row once, in
    * 0.5 s. Painted as the row's own background image — a gradient three rows wide whose middle
@@ -268,53 +250,6 @@ body * {
   .row-scan:hover {
     animation: row-scan-sweep 0.5s ease-out forwards;
   }
-
-  .byte-hover-breathe {
-    animation: byte-breathe 1.15s ease-in-out infinite;
-  }
-
-  .status-marquee-shine {
-    display: inline-block;
-    background-image: linear-gradient(
-      90deg,
-      var(--c-ink-muted) 0%,
-      var(--c-text-bright) 45%,
-      var(--c-ink-muted) 100%
-    );
-    background-size: 220% 100%;
-    background-position: 220% 0;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-
-  .cycles-calculating-marquee {
-    display: inline-block;
-    background-image: linear-gradient(
-      90deg,
-      var(--c-ink-muted) 0%,
-      var(--c-text-bright) 45%,
-      var(--c-ink-muted) 100%
-    );
-    background-size: 220% 100%;
-    background-position: 220% 0;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-}
-
-@keyframes cycles-marquee-shine {
-  0% {
-    background-position: 220% 0;
-  }
-  100% {
-    background-position: -220% 0;
-  }
 }
 
 @keyframes terminal-border-scan-ltr {
@@ -323,29 +258,6 @@ body * {
   }
   100% {
     transform: translateX(520%);
-  }
-}
-
-@keyframes digit-tick {
-  0% {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes byte-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    filter: brightness(1);
-  }
-  50% {
-    transform: scale(1.08);
-    filter: brightness(1.15);
   }
 }
 
