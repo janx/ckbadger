@@ -92,7 +92,7 @@ export function AlignedBar({
         {...(display === undefined
           ? { role: 'img', 'aria-label': `${label}: ${described.join(', ')}` }
           : { 'aria-hidden': true })}
-        className="bg-base-elevated flex shrink-0 overflow-hidden rounded-sm"
+        className="bg-bar-track flex shrink-0 overflow-hidden rounded-sm"
         style={{ width: `${trackWidth}px`, height: `${height}px` }}
       >
         {segments.map((s) => (

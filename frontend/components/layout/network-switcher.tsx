@@ -73,7 +73,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
         <span className="truncate">{active}</span>
         <svg
           aria-hidden="true"
-          className="text-aqua/70 ml-auto h-3 w-3 shrink-0"
+          className="text-aqua-dim ml-auto h-3 w-3 shrink-0"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -88,7 +88,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
             aria-label="CKB network"
             className="border-base-border bg-base-surface min-w-[11rem] overflow-hidden rounded border shadow-lg"
           >
-            <div className="eyebrow border-base-border/70 text-text-ghost text-meta border-b px-3 py-2 font-mono">
+            <div className="eyebrow border-base-border/70 text-text-dim text-meta border-b px-3 py-2 font-mono">
               CKB network
             </div>
             <div className="p-1.5">
@@ -123,7 +123,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
                       {net}
                     </span>
                     {isActive && (
-                      <span className="eyebrow text-aqua/70 text-meta font-mono">Current</span>
+                      <span className="eyebrow text-aqua-dim text-meta font-mono">Current</span>
                     )}
                   </button>
                 );

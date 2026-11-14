@@ -225,7 +225,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           <div
             key={row.key}
             data-row={row.key}
-            className="border-base-border-subtle grid min-h-8 min-w-0 grid-cols-1 items-center gap-x-4 border-t py-1.5 sm:grid-cols-[168px_minmax(0,1fr)]"
+            className="border-row-rule grid min-h-8 min-w-0 grid-cols-1 items-center gap-x-4 border-t py-1.5 sm:grid-cols-[168px_minmax(0,1fr)]"
           >
             <span data-role="row-key" className="text-meta text-text-dim">
               {row.label}
@@ -236,7 +236,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </div>
         ))}
       </div>
-      <p className="text-text-ghost text-meta">
+      <p className="text-text-dim text-meta">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
           <Hash hash={v.cell.txHash} copyable={false} className="text-meta" />
@@ -393,7 +393,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
             {d.records.map((r, i) => (
               <div
                 key={`${r.key}:${i}`}
-                className="border-base-border-subtle grid min-w-0 grid-cols-[minmax(0,160px)_70px_minmax(0,1fr)] gap-3 border-t py-1.5"
+                className="border-row-rule grid min-w-0 grid-cols-[minmax(0,160px)_70px_minmax(0,1fr)] gap-3 border-t py-1.5"
               >
                 <span className="[overflow-wrap:anywhere]">{r.key || '(empty key)'}</span>
                 <span className="text-text-dim">ttl {r.ttl}</span>

@@ -64,6 +64,10 @@ export default {
           border: twColor('base-border'),
           'border-subtle': twColor('base-border-subtle'),
         },
+        // R5 (UI review 2026-11-14): the rule between rows and a bar's empty track, keys of their
+        // own so that by day they clear the ruled paper (the hair and the elevated tint do not).
+        'row-rule': twColor('row-rule'),
+        'bar-track': twColor('bar-track'),
         text: {
           bright: twColor('text-bright'),
           DEFAULT: twColor('text'),

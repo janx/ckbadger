@@ -115,7 +115,7 @@ function EditionCard({
           {rfcs.map((feature) => (
             <div
               key={feature.rfc}
-              className="border-base-border-subtle grid grid-cols-[90px_minmax(0,1fr)] gap-2.5 border-t py-1.5"
+              className="border-row-rule grid grid-cols-[90px_minmax(0,1fr)] gap-2.5 border-t py-1.5"
             >
               <span className="text-text-bright">RFC {feature.rfc}</span>
               <span className="text-text">{RFC_TEXT[feature.rfc] ?? ''}</span>
@@ -385,10 +385,7 @@ export default function HardforksPage() {
                 </p>
                 <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
                   {ready.data.consensusFeatures.map((feature) => (
-                    <div
-                      key={feature.rfc}
-                      className="border-base-border-subtle text-small border-t py-2"
-                    >
+                    <div key={feature.rfc} className="border-row-rule text-small border-t py-2">
                       <dt className="text-text-bright">RFC {feature.rfc}</dt>
                       <dd className="text-text-dim">
                         {feature.activationEpoch === null

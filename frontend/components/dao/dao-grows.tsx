@@ -10,6 +10,7 @@ import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal'
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
+import { AMOUNT_INK } from '@/components/activity-event-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatUtc8Date } from '@/lib/utils';
 
@@ -226,8 +227,10 @@ function OwedAmount({ shannons }: { shannons: bigint }) {
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       +{parts.integer}
-      <span className="opacity-70">{parts.fraction}</span>
-      {parts.ghost}
+      <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+        {parts.fraction}
+      </span>
+      <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
 }

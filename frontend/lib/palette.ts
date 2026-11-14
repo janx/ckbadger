@@ -31,6 +31,20 @@ const dark = {
   'base-elevated': '#241f1a',
   'base-border': '#2a231d',
   'base-border-subtle': '#221c17',
+  /**
+   * The 1 px rule between the rows of a list or a table (and under its head): the hair by night;
+   * by day the hair stepped down until it clears the paper and a ruled line by 1.25:1 (R5).
+   */
+  'row-rule': '#221c17',
+  /** A bar's empty track: the elevated tint by night; by day stepped down as the row rule (R5). */
+  'bar-track': '#241f1a',
+  /**
+   * The row rule and the bar track on the tier-2 ground (ruling 4b), where `.tier2-ground`
+   * re-points the two keys to these: the same by night (they clear that ground by 1.14 / 1.18);
+   * by day L −0.030 until they clear the tier-2 ground and a ruled line on it by 1.25:1.
+   */
+  'row-rule-deep': '#221c17',
+  'bar-track-deep': '#241f1a',
   // inks (lib.js: moon, text, dim — lightened from #8a8073 to 4.5:1 — ghost)
   'text-bright': '#e8e2d6',
   text: '#b9b0a2',
@@ -54,7 +68,12 @@ const dark = {
   'gold-dim': '#a38750',
   'gold-bright': '#e3bd75',
   rouge: '#d9634a',
-  'rouge-dim': '#aa503c',
+  /**
+   * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
+   * the board's dim moved in lightness until it reads at 4.5:1. It is also the fraction digits of
+   * a negative amount (R4), as jade-dim is a positive one's and text-dim a neutral one's.
+   */
+  'rouge-dim': '#ca6c57',
   'rouge-bright': '#f57c62',
   lavender: '#a797c4',
   'lavender-dim': '#8e82a5',
@@ -191,6 +210,10 @@ const light: Palette = {
   'base-elevated': '#e9e2d4',
   'base-border': '#d4cab8',
   'base-border-subtle': '#e3dbcc',
+  'row-rule': '#d5cdbf',
+  'bar-track': '#d4cdc0',
+  'row-rule-deep': '#cbc3b5',
+  'bar-track-deep': '#cac3b6',
   'text-bright': '#1f1b17',
   text: '#4a433b',
   'text-dim': '#6c6356',
@@ -208,7 +231,7 @@ const light: Palette = {
   'gold-dim': '#786234',
   'gold-bright': '#684e0d',
   rouge: '#a8392a',
-  'rouge-dim': '#a6594c',
+  'rouge-dim': '#9b4f43',
   'rouge-bright': '#902214',
   lavender: '#5e4d9a',
   'lavender-dim': '#675d93',

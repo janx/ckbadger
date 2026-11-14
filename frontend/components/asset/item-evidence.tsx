@@ -122,7 +122,8 @@ export function ItemTransactionContext({
       data-acted-on={context.actedOn}
       className={cn(
         'text-meta space-y-1 whitespace-normal',
-        headline.neighbour && 'opacity-[0.45]'
+        // a neighbour's row is set back (R4): every word dim, nothing faded
+        headline.neighbour && 'quiet'
       )}
     >
       {part !== 'cell' && (

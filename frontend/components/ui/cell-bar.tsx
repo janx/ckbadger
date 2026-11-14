@@ -46,11 +46,28 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
           />
         ))}
       </div>
+      {/* A legend's label is text, in the text ink; the part's colour is on its swatch (U-08). */}
       {!hideLegend && (
-        <div className="text-text-dim text-meta mt-2 flex flex-wrap gap-x-4 gap-y-1">
+        <div
+          data-role="cell-bar-legend"
+          className="text-text-dim text-meta mt-2 flex flex-wrap gap-x-4 gap-y-1"
+        >
           {parts.map((p) => (
-            <span key={p.key} title={`${p.key}: ${p.value} bytes`}>
-              <span style={{ color: CELL_COLORS[p.key] }}>{p.key}</span> {p.value.toString()} B
+            <span
+              key={p.key}
+              data-part-legend={p.key}
+              title={`${p.key}: ${p.value} bytes`}
+              className="inline-flex items-center gap-1.5"
+            >
+              <span
+                aria-hidden="true"
+                data-swatch
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ backgroundColor: CELL_COLORS[p.key] }}
+              />
+              <span>
+                <span className="text-text">{p.key}</span> {p.value.toString()} B
+              </span>
             </span>
           ))}
         </div>

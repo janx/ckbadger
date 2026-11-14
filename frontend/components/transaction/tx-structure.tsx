@@ -399,7 +399,7 @@ export function TxStructure({
       {!hideGroups && groups.length > 0 && (
         <section>
           <h3 className="text-text-bright text-body mb-3 font-medium">{groupsTitle}</h3>
-          <div className="divide-base-elevated divide-y">
+          <div className="divide-row-rule divide-y">
             {groups.map((g) => (
               <div
                 key={g.id}

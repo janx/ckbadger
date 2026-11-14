@@ -135,7 +135,8 @@ describe('Address v3 components', () => {
       );
       const figure = document.querySelector('[data-role="balance-figure"]')!;
       expect(figure).toHaveTextContent(/^0 CKB$/);
-      expect(within(figure as HTMLElement).getByText('0')).toHaveClass('text-text-ghost');
+      // R4 (re-pinned on purpose): a zero balance is a datum, in the dim ink, not the ghost
+      expect(within(figure as HTMLElement).getByText('0')).toHaveClass('text-text-dim');
       expect(screen.queryByRole('img', { name: /^Balance partition:/ })).toBeNull();
     });
   });

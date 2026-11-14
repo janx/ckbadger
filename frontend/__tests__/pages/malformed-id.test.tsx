@@ -1,8 +1,8 @@
 import type { ReactElement, ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse, type PathParams } from 'msw';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { server } from '@/__tests__/msw/server';
 import { createAppQueryClient } from '@/lib/query-client';
 import { POOL_POLL_INTERVAL_MS } from '@/lib/pool-polling';
@@ -103,8 +103,37 @@ async function expectNotAnId(firstLine: string, reason: string) {
   await waitFor(() => expect(document.title).toBe('Not found · CKBadger'));
 }
 
+/**
+ * Every request a page in this file sends is answered as the API would answer it: one that no
+ * handler matches fails the test that sent it, by method and path (setup.ts's 'error' strategy
+ * only logs it and fails the fetch, and the page still passes). A request still in flight when
+ * its test ends lands in the next test's list, or in the file's last check.
+ *
+ * MSW's `request:unhandled` event cannot see these: msw 2.12 emits it only after the strategy
+ * returns, and the 'error' strategy throws first (core/utils/handleRequest). So the file listens
+ * with a strategy that records the request and then applies that same 'error' strategy.
+ */
+const unhandled: string[] = [];
+beforeAll(() => {
+  server.close();
+  server.listen({
+    onUnhandledRequest: (request, print) => {
+      unhandled.push(`${request.method} ${new URL(request.url).pathname}`);
+      print.error();
+    },
+  });
+});
+afterAll(() => {
+  expect(unhandled, 'requests no handler answered after the last test').toEqual([]);
+});
+
 afterEach(() => {
   nav.replace.mockReset();
+  // a failed check below skips the hooks after it: unmount and drop this test's handlers first,
+  // so one test's failure does not leak its page into the next
+  cleanup();
+  server.resetHandlers();
+  expect(unhandled.splice(0), 'requests no handler answered').toEqual([]);
 });
 
 describe('a malformed id answered 400 by the API', () => {
@@ -173,7 +202,10 @@ describe('a malformed id answered 400 by the API', () => {
   it('/identities/0x00: not a collection id', async () => {
     at('/identities/0x00', {});
     const message = 'Collection ID is not an identity collection';
-    const seen = answer400('/assets/identities/:id', (p) => p.id === '0x00', message);
+    // an identity collection's insights and capacity chart are read under /assets/objects/:id
+    const seen = answer400('/assets/identities/:id', (p) => p.id === '0x00', message, [
+      '/assets/objects/:id',
+    ]);
     renderWithAppClient(<IdentityCollectionPage collectionId="0x00" />);
     await expectNotAnId('that is not a collection id.', message);
     expect(seen.count).toBe(1);

@@ -57,7 +57,7 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
           >
             {it.label}
           </span>
-          <span aria-hidden="true" className="bg-base-elevated flex h-1.5">
+          <span aria-hidden="true" className="bg-bar-track flex h-1.5">
             <span
               {...{ [attr]: '' }}
               style={{

@@ -146,7 +146,7 @@ describe('FiberChannelBoard', () => {
     expect(container.querySelector('#evidence')!.contains(tier2)).toBe(true);
     const summary = within(tier2).getByTestId('channel-summary');
     // Material pass v2 leftovers: the story is set in the shared tier-2 Prose piece (.prose-tier2:
-    // 14 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph.
+    // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph.
     expect(summary.closest('[data-prose]')).toHaveClass('prose-tier2');
     expect(summary).not.toHaveClass('text-body', 'text-text-dim');
     expect(summary).toHaveTextContent(

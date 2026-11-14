@@ -66,7 +66,7 @@ describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', ()
     );
     const head = screen.getByText('Key').closest('tr') as HTMLElement;
     eyebrow(head);
-    expect(head).toHaveClass('text-small', 'text-text-dim');
+    expect(head).toHaveClass('text-meta', 'text-text-dim');
   });
 
   it('the header dropdown trigger', () => {
@@ -76,9 +76,10 @@ describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', ()
 });
 
 describe('tier-2 prose: one piece, components/ui/prose.tsx', () => {
-  it('globals.css sets a Prose paragraph at 14 px / 1.7 / 64ch, dim, 14 px apart, em italic', () => {
+  it('globals.css sets a Prose paragraph at 13 px / 1.7 / 64ch, dim, 14 px apart, em italic', () => {
     const p = css.match(/\.prose-tier2 p\s*\{([^}]*)\}/)!;
-    expect(p[1]).toContain('font-size: 14px');
+    // R12 (re-pinned on purpose): the body step, so the scale has no stylesheet-only size
+    expect(p[1]).toContain('font-size: 13px');
     expect(p[1]).toContain('line-height: 1.7');
     expect(p[1]).toContain('max-width: 64ch');
     expect(p[1]).toContain('color: var(--c-text-dim)');

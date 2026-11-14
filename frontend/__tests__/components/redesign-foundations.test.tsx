@@ -389,7 +389,8 @@ describe('transaction and activity foundations', () => {
       'data-highlighted',
       'true'
     );
-    expect(container.querySelector('[data-cell-id="out:0"]')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(container.querySelector('[data-cell-id="out:0"]')).toHaveClass('quiet');
     fireEvent.mouseEnter(container.querySelector('[data-cell-id="in:0"]')!);
     expect(container.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
       'data-highlighted',

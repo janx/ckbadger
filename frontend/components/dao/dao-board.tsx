@@ -20,13 +20,19 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
+import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
 import {
   IciclePartition,
   icicleNodePaint,
   type IcicleNode,
 } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { CLASS_COLORS, CLASS_KEYS, DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
+import {
+  CLASS_COLORS,
+  CLASS_KEYS,
+  DAO_ISSUANCE_COLORS,
+  DAO_ISSUANCE_KEYS,
+} from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
@@ -69,7 +75,7 @@ function Amount({
       {signed ? parts.sign : null}
       {parts.integer}
       <span className={plain ? undefined : 'text-text-dim'}>{parts.fraction}</span>
-      <span className={plain ? undefined : 'text-text-dim/50'}>{parts.ghost}</span>
+      <span className={plain ? undefined : 'text-text-ghost'}>{parts.ghost}</span>
     </span>
   );
 }
@@ -143,7 +149,7 @@ function DepositedFigure({ shannons }: { shannons: string }) {
         {parts.integer}
         <span className="text-hero text-gold-dim font-normal">
           {parts.fraction}
-          <span className="opacity-50">{parts.ghost}</span>
+          <span className="text-text-ghost">{parts.ghost}</span>
         </span>
       </span>
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
@@ -152,15 +158,20 @@ function DepositedFigure({ shannons }: { shannons: string }) {
   );
 }
 
-/** A signed CKB decimal in its sign's hue: the fraction in the same hue's dim step. */
-function SignedCkbDecimal({ value, fractionClass }: { value: string; fractionClass: string }) {
+/**
+ * A signed CKB decimal in its sign's hue: the fraction in the sign's quieter ink (`AMOUNT_INK`, a
+ * named key at 4.5:1), the padding zeros ghost.
+ */
+function SignedCkbDecimal({ value }: { value: string }) {
   const parts = splitCkbAmount(parseCkbDecimal(value));
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {parts.sign}
       {parts.integer}
-      <span className={fractionClass}>{parts.fraction}</span>
-      <span className="opacity-40">{parts.ghost}</span>
+      <span data-fraction className={AMOUNT_INK[amountSign(parts.sign)].fraction}>
+        {parts.fraction}
+      </span>
+      <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
 }
@@ -264,17 +275,7 @@ function Hero({
                         : 'text-text'
                   }
                 >
-                  <SignedCkbDecimal
-                    value={change!}
-                    fractionClass={
-                      changeShannons > BigInt(0)
-                        ? 'text-positive-dim'
-                        : changeShannons < BigInt(0)
-                          ? 'text-negative-dim'
-                          : 'text-text-dim'
-                    }
-                  />{' '}
-                  CKB
+                  <SignedCkbDecimal value={change!} /> CKB
                 </span>
               )}{' '}
               <span className="text-text-dim">
@@ -405,9 +406,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         label: 'Secondary issuance since genesis',
         value: total,
         tone: 'ckb',
-        color: DAO_ISSUANCE_COLORS.total,
+        fill: DAO_ISSUANCE_KEYS.total,
         opacity: 0.55,
-        ink: 'bright',
         // The board's root label: the whole as a whole number of CKB (cut, not rounded); the
         // exact parts are the line under the icicle.
         boxLabel: {
@@ -421,9 +421,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             label: 'to miners',
             value: mining,
             tone: 'ckb',
-            color: DAO_ISSUANCE_COLORS.miners,
+            fill: DAO_ISSUANCE_KEYS.miners,
             opacity: 1,
-            ink: 'dark',
             boxLabel: { name: 'miners', share: share(mining) },
           },
           {
@@ -432,7 +431,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             value: compensation,
             tone: 'dao',
             opacity: 1,
-            ink: 'dark',
             boxLabel: { name: 'depositors', share: share(compensation) },
             children: [
               {
@@ -441,7 +439,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
                 value: claimed,
                 tone: 'dao',
                 opacity: 1,
-                ink: 'dark',
                 boxLabel: { name: 'paid out', share: ofCompensation(claimed) },
               },
               {
@@ -450,7 +447,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
                 value: unclaimed,
                 tone: 'dao',
                 opacity: 0.4,
-                ink: 'bright',
                 boxLabel: { name: 'still owed', share: ofCompensation(unclaimed) },
               },
             ],
@@ -460,9 +456,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             label: 'burnt',
             value: burnt,
             tone: 'other',
-            color: DAO_ISSUANCE_COLORS.burnt,
+            fill: DAO_ISSUANCE_KEYS.burnt,
             opacity: 1,
-            ink: 'bright',
             boxLabel: { name: 'burnt', share: share(burnt), note: 'no cell can ever claim it' },
           },
         ],
@@ -1236,7 +1231,7 @@ function RawEvidence({
         {fields.map((field) => (
           <div
             key={field.key}
-            className="border-base-elevated grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+            className="border-row-rule grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
           >
             <span className="text-text-bright">{field.key}</span>
             <span className="text-text-dim">bytes {field.bytes}</span>

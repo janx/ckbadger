@@ -113,14 +113,15 @@ export interface TapOrHoverHintProps extends TapOrHoverOptions {
 }
 
 /**
- * The touch hint as an inline element: "tap or hover a day". Under `TapOrHoverHintProvider` only
- * the page's first mounted hint renders; the later ones render nothing.
+ * The touch hint as an inline element: "tap or hover a day", in the dim ink wherever it stands (a
+ * hint is information, never the ghost: R4). Under `TapOrHoverHintProvider` only the page's first
+ * mounted hint renders; the later ones render nothing.
  */
 export function TapOrHoverHint({ what, capital, className }: TapOrHoverHintProps) {
   const first = useIsFirstHint();
   if (!first) return null;
   return (
-    <span data-hint="tap-or-hover" className={cn(className)}>
+    <span data-hint="tap-or-hover" className={cn('text-text-dim', className)}>
       {tapOrHover(what, { capital })}
     </span>
   );

@@ -139,7 +139,7 @@ export function ScriptGroupMatrix({
       <div role="table" aria-label="Script groups" className="text-small">
         <div
           role="row"
-          className="border-base-border-subtle text-text-dim text-meta grid items-end border-b pb-1.5"
+          className="border-row-rule text-text-dim text-meta grid items-end border-b pb-1.5"
           style={{ gridTemplateColumns: template }}
         >
           <span role="columnheader">Script</span>
@@ -162,7 +162,7 @@ export function ScriptGroupMatrix({
                     dim(lit?.cells.has(c.id) ?? false) && 'opacity-25'
                   )}
                 >
-                  <span title={c.top} className="text-text-ghost text-meta max-w-[68px] truncate">
+                  <span title={c.top} className="text-text-dim text-meta max-w-[68px] truncate">
                     {c.top}
                   </span>
                   {c.href ? (
@@ -203,7 +203,7 @@ export function ScriptGroupMatrix({
               onFocus={() => onHover({ t: 'group', id: g.id })}
               onBlur={() => onHover(null)}
               className={cn(
-                'border-base-elevated grid items-center border-b transition-opacity',
+                'border-row-rule grid items-center border-b transition-opacity',
                 g.ran ? 'text-text min-h-[54px]' : 'text-text-dim min-h-[46px]',
                 on && 'bg-base-surface',
                 dim(on) && 'opacity-25'
@@ -333,7 +333,7 @@ function GroupList({
 }) {
   return (
     <ul aria-label="Script groups" className="text-small">
-      {groups.map((g, i) => {
+      {groups.map((g) => {
         const on = lit?.groups.has(g.id) ?? false;
         return (
           <li
@@ -348,8 +348,7 @@ function GroupList({
             onFocus={() => onHover({ t: 'group', id: g.id })}
             onBlur={() => onHover(null)}
             className={cn(
-              'flex flex-col gap-1 border-t py-2.5 transition-opacity',
-              i === 0 ? 'border-base-border-subtle' : 'border-base-elevated',
+              'border-row-rule flex flex-col gap-1 border-t py-2.5 transition-opacity',
               g.ran ? 'text-text' : 'text-text-dim',
               on && 'bg-base-surface',
               dim(on) && 'opacity-25'

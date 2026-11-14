@@ -188,7 +188,7 @@ function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
         {parts.integer}
         <span className="text-hero text-text-dim font-normal">
           {parts.fraction}
-          <span className="opacity-50">{parts.ghost}</span>
+          <span className="text-text-ghost">{parts.ghost}</span>
         </span>
       </span>
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}

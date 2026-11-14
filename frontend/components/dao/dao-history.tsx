@@ -5,6 +5,7 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
 import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
@@ -127,13 +128,17 @@ function cutCkb(shannons: bigint): { sign: string; integer: string; fraction: st
   return { sign: parts.sign, integer: parts.integer, fraction: `.${digits.slice(0, 2)}` };
 }
 
+/** Exact CKB as text: the fraction in the sign's quieter ink (`AMOUNT_INK`), padding zeros ghost. */
 function ExactCkbText({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
   const parts = splitCkbAmount(shannons);
+  const ink = AMOUNT_INK[signed ? amountSign(parts.sign) : 'neutral'];
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {signed ? parts.sign : null}
       {parts.integer}
-      <span className="opacity-70">{parts.fraction}</span>
+      <span data-fraction className={ink.fraction}>
+        {parts.fraction}
+      </span>
       <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
@@ -284,7 +289,7 @@ function DepositedPlot({
       {shown.map((v) => (
         <g key={v}>
           {/* Visual finish V13: the grid is solid; a dash means a reference. */}
-          <line x1={left} x2={width} y1={y(v)} y2={y(v)} className="stroke-base-border-subtle" />
+          <line x1={left} x2={width} y1={y(v)} y2={y(v)} className="stroke-row-rule" />
           <text
             data-role="y-tick"
             x={left - 8}
@@ -417,13 +422,7 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
               {...plotHandlers(pin, last)}
             >
               {/* The half-scale guide is grid, not a reference: solid (visual finish V13). */}
-              <line
-                x1={0}
-                x2={width}
-                y1={y(top / 2)}
-                y2={y(top / 2)}
-                className="stroke-base-border-subtle"
-              />
+              <line x1={0} x2={width} y1={y(top / 2)} y2={y(top / 2)} className="stroke-row-rule" />
               <path d={path} fill="none" className="stroke-text" strokeWidth={1.25} />
               <text
                 data-role="chart-name"

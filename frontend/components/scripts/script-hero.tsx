@@ -21,7 +21,7 @@ export function CkbFigure({ shannons }: { shannons: bigint }) {
         {parts.integer}
         <span className="text-body sm:text-hero text-text font-normal">
           {parts.fraction}
-          <span className="opacity-50">{parts.ghost}</span>
+          <span className="text-text-ghost">{parts.ghost}</span>
         </span>
         {/* The space takes the unit's size. */}
         <span className="text-body text-text-dim font-normal"> CKB</span>
