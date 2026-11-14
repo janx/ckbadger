@@ -251,6 +251,16 @@ function countText(value: number | undefined): string {
   return value === undefined ? 'unavailable' : value.toLocaleString('en-US');
 }
 
+/**
+ * A row's live and ever cells for its hover: "1,234 live of 5,678 cells ever", the noun by the one
+ * plural rule (U-15), or a plain sentence when the API states no count.
+ */
+function cellsEverText(script: KnownScript): string {
+  if (script.liveCellsCount === undefined || script.cellsCount === undefined)
+    return 'cell counts unavailable';
+  return `${script.liveCellsCount.toLocaleString('en-US')} live of ${formatCount(script.cellsCount, 'cell')} ever`;
+}
+
 function roleText(script: KnownScript): string {
   return script.scriptKind ? script.scriptKind.replace('+', ' + ') : 'unregistered';
 }
@@ -378,7 +388,7 @@ function scriptRowTitle(script: KnownScript): string {
     ...(script.deprecated ? ['deprecated'] : []),
     ...(hasName(script) && script.description?.trim() ? [script.description.trim()] : []),
     codeStatusText(script),
-    `${countText(script.liveCellsCount)} live of ${countText(script.cellsCount)} cells ever`,
+    cellsEverText(script),
     `${formatCkbAmount(total).full} CKB`,
     `${formatCkbAmount(occupied).full} occupied (${occupiedShare(script).share})`,
   ].join(' · ');
@@ -502,13 +512,7 @@ export default function ScriptsPage() {
       header: <Head label="Live cells" />,
       minWidth: 110,
       numeric: true,
-      render: (s) => (
-        <span
-          title={`${countText(s.liveCellsCount)} live of ${countText(s.cellsCount)} cells ever`}
-        >
-          {countText(s.liveCellsCount)}
-        </span>
-      ),
+      render: (s) => <span title={cellsEverText(s)}>{countText(s.liveCellsCount)}</span>,
     },
     {
       key: 'capacity',
