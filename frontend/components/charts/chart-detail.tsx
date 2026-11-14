@@ -20,6 +20,7 @@ import {
   axisTicks,
   categoricalAxis,
   chartModel,
+  chartSpan,
   formatChartExact,
   formatChartHover,
   formatEpochLabel,
@@ -123,15 +124,6 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
     </div>
   );
 }
-
-/** How the chart's points are counted under its title (CH-36). */
-const POINT_NOUN = {
-  date: 'days',
-  month: 'cohorts',
-  epoch: 'epochs',
-  'model-year': 'model samples',
-  bucket: 'buckets',
-} as const;
 
 /** One big reading of the chart head: a small label over a rounded value, exact on hover. */
 function Reading({
@@ -265,6 +257,11 @@ function DetailBody({
               </Link>
             )}
           </div>
+          {model.evidence?.map((fact) => (
+            <div key={fact.label} className="text-text-dim mt-2">
+              {fact.label}: <span className="text-text">{fact.value}</span>
+            </div>
+          ))}
           <div className="text-text-dim mt-2">
             Raw series:{' '}
             <a
@@ -331,7 +328,6 @@ function DetailBody({
           },
         ]
       : []),
-    ...(model.coverage ? [{ label: 'Coverage', value: model.coverage }] : []),
     ...(model.contextFacts ?? []),
   ];
   return (
@@ -356,11 +352,7 @@ function DetailBody({
             days`, `distribution 24 buckets`; a ranked chart counts nothing here. */}
         <DetailSection
           title={distribution ? 'Distribution' : 'Full history'}
-          args={
-            model.kind !== 'ranked'
-              ? `${points.length.toLocaleString()} ${POINT_NOUN[style]}`
-              : undefined
-          }
+          args={model.kind !== 'ranked' ? chartSpan(points, style) : undefined}
         >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div role="group" aria-label="Chart range" className="flex flex-wrap gap-1">
@@ -425,7 +417,7 @@ function DetailBody({
           ) : (
             <Chart
               title={definition.title}
-              subtitle={`${definition.subtitle} · ${points.length} ${POINT_NOUN[style]}`}
+              subtitle={`${definition.subtitle} · ${chartSpan(points, style)}`}
               data={points}
               series={model.series}
               unit={model.unit}
@@ -459,36 +451,39 @@ function DetailBody({
             />
           )}
         </DetailSection>
-        {model.historicalShares?.map((history) => (
-          <DetailSection key={history.title} title={history.title}>
-            <p className="text-text-dim text-small mb-3">
-              {history.title === 'Occupied common knowledge'
-                ? 'Exact occupied CKB in live cells attributed to each script or asset.'
-                : 'Full live cell capacity attributed to each script or asset. This is a different scope from occupied common knowledge.'}
-            </p>
-            {history.points.length ? (
-              <Chart
-                title={history.title}
-                subtitle={`${definition.subtitle} · ${history.points.length} returned dates`}
-                data={rangePoints(history.points, range)}
-                series={history.series}
-                unit={history.unit}
-                kind="stacked"
-                height={260}
-                formatValue={(value) => formatChartHover(value, history.unit)}
-                xTicks={axisTicks(rangePoints(history.points, range), 'date', 8)}
-                pointDots
-                // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
-                seriesLegend
-                pinnedReadout={readout(history.title)}
-              />
-            ) : (
-              <p className="text-text-dim text-small py-8">
-                No indexed observations for this scope.
-              </p>
-            )}
-          </DetailSection>
-        ))}
+        {model.historicalShares?.map((history) => {
+          const shown = rangePoints(history.points, range);
+          const span = chartSpan(shown, 'date');
+          // Named once, by the command line; the note says what is counted; the chart's caption
+          // is its own quantity and span, for assistive technology (CH-04, CH-06).
+          return (
+            <DetailSection key={history.title} title={history.title} args={span}>
+              <p className="text-text-dim text-small mb-3">{history.note}</p>
+              {history.points.length ? (
+                <Chart
+                  title={history.title}
+                  subtitle={`${history.caption} · ${span}`}
+                  data={shown}
+                  series={history.series}
+                  unit={history.unit}
+                  kind="stacked"
+                  height={260}
+                  hideCaption
+                  formatValue={(value) => formatChartHover(value, history.unit)}
+                  xTicks={axisTicks(shown, 'date', 8)}
+                  pointDots
+                  // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
+                  seriesLegend
+                  pinnedReadout={readout(history.title)}
+                />
+              ) : (
+                <p className="text-text-dim text-small py-8">
+                  No indexed observations for this scope.
+                </p>
+              )}
+            </DetailSection>
+          );
+        })}
         {model.secondary && model.secondary.points.length > 0 && (
           <DetailSection title={model.secondary.title}>
             <p className="text-text-dim text-small mb-3">
@@ -497,7 +492,7 @@ function DetailBody({
             </p>
             <Chart
               title={model.secondary.title}
-              subtitle={`${model.secondary.title} · ${secondaryPoints.length.toLocaleString()} ${POINT_NOUN[style]}`}
+              subtitle={`${model.secondary.title} · ${chartSpan(secondaryPoints, style)}`}
               data={secondaryPoints}
               series={model.secondary.series}
               unit={model.secondary.unit}

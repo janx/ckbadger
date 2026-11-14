@@ -56,6 +56,20 @@ export interface ChartFact {
   value: string;
 }
 
+/**
+ * A chart drawn under the main one (CH-04, CH-06): named once by its `title` (the section's
+ * command line), `note` says in plain words what is counted, and `caption` is its own quantity and
+ * unit for the chart's caption — never the page's subtitle.
+ */
+export interface SubChart {
+  title: string;
+  caption: string;
+  note: string;
+  points: ChartPoint[];
+  series: ChartSeries[];
+  unit: string;
+}
+
 export interface ChartModel {
   title: string;
   points: ChartPoint[];
@@ -83,7 +97,7 @@ export interface ChartModel {
   /** Exact signed day-over-day change in occupied CKB, when the source is knowledge size. */
   dailyFlow?: { points: ChartPoint[]; series: ChartSeries[]; unit: string; title: string };
   /** Exact daily histories from both distinct utilization scopes. */
-  historicalShares?: { title: string; points: ChartPoint[]; series: ChartSeries[]; unit: string }[];
+  historicalShares?: SubChart[];
   summaryLabel?: string;
   /** A model timeline's "today" index: drawn solid up to it and dashed ahead (CH-03). */
   projectedAfter?: number;
@@ -94,7 +108,8 @@ export interface ChartModel {
    */
   today?: ChartPoint | null;
   contextFacts?: { label: string; value: string }[];
-  coverage?: string;
+  /** Developer facts, in the page's evidence tier, never under the lede (CH-04, CH-18). */
+  evidence?: ChartFact[];
   /**
    * Facts under the lede that the head figure does not say (CH-18): a leader's `name` is the bright
    * part of the value, kept on one line (CH-03).
@@ -813,11 +828,27 @@ function shareRows(
 ): ChartModel {
   const used = payload.usedShare;
   const last = used.data.at(-1);
-  const histories = [
-    { key: 'usedShare', title: 'Occupied common knowledge', payload: payload.usedShare },
-    { key: 'capacityShare', title: 'Owned live capacity', payload: payload.capacityShare },
-  ].map(({ key, title, payload: history }) => ({
+  const entity = definition.source === 'scripts' ? 'script' : 'asset';
+  // Each scope captioned by its own quantity, never the page's subtitle (CH-04).
+  const histories: SubChart[] = [
+    {
+      key: 'usedShare',
+      title: 'Occupied common knowledge',
+      caption: `CKB occupied, by ${entity}`,
+      note: `Occupied CKB in the live cells attributed to each ${entity}.`,
+      payload: payload.usedShare,
+    },
+    {
+      key: 'capacityShare',
+      title: 'Owned live capacity',
+      caption: `CKB owned, by ${entity}`,
+      note: `The full capacity of the live cells attributed to each ${entity}, a different scope from occupied common knowledge.`,
+      payload: payload.capacityShare,
+    },
+  ].map(({ key, title, caption, note, payload: history }) => ({
     title,
+    caption,
+    note,
     unit: 'CKB',
     series: history.series.map((series, index) => ({
       key: series.key,
@@ -951,7 +982,12 @@ function shareRows(
       summaryLabel,
     },
     historicalShares: histories,
-    coverage: `${payload.capacityShare.data.length} owned-capacity dates`,
+    evidence: [
+      {
+        label: 'Owned-capacity history',
+        value: formatCount(payload.capacityShare.data.length, 'day'),
+      },
+    ],
     summaryLabel,
     headline:
       total === BigInt(0)
@@ -1300,6 +1336,20 @@ export function formatEpochLabel(label: string, slug: string): string {
 }
 
 export type AxisStyle = 'date' | 'month' | 'epoch' | 'model-year' | 'bucket';
+
+/** What a chart's points are, counted (CH-04, CH-36): `2,555 days`, `85 cohorts`, `6 buckets`. */
+const POINT_NOUN: Record<AxisStyle, string> = {
+  date: 'day',
+  month: 'cohort',
+  epoch: 'epoch',
+  'model-year': 'model sample',
+  bucket: 'bucket',
+};
+
+/** The span a chart draws, in the page's words, grouped: `2,555 days` (CH-04). */
+export function chartSpan(points: readonly ChartPoint[], style: AxisStyle): string {
+  return formatCount(points.length, POINT_NOUN[style]);
+}
 
 /** How a chart's x labels read (CH-24, CH-35). */
 export function axisStyle(definition: ChartDefinition): AxisStyle {
