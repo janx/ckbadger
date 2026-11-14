@@ -122,10 +122,10 @@ describe('BlockPosition', () => {
       'href',
       `/mainnet/blocks/${parent}`
     );
-    expect(mobile.getByRole('link', { name: `Uncle #931 · ${uncle}` })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks/932/uncles/0'
-    );
+    expect(
+      // U-16 (re-pinned): the uncle line is one separated list, its dot hidden from the name
+      mobile.getByRole('link', { name: `Uncle #931 ${uncle}` })
+    ).toHaveAttribute('href', '/mainnet/blocks/932/uncles/0');
     expect(screen.getByRole('region', { name: 'Chain position diagram' })).toHaveClass(
       'hidden',
       'md:block'

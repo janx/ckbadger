@@ -191,7 +191,7 @@ describe('Cell page against the Cell board', () => {
     );
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     expect(facts).toHaveTextContent('Occupied320 B');
-    expect(facts).toHaveTextContent('Unspent for3 d 10 h');
+    expect(facts).toHaveTextContent('Unspent for3d 10h');
     expect(facts).toHaveTextContent('as of #20,834,844');
     expect(within(facts).getByRole('link', { name: '#20,834,844' })).toHaveAttribute(
       'href',

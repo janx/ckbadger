@@ -241,7 +241,7 @@ describe('Its transactions against the Cell board', () => {
     ).not.toBeNull();
     const box = screen.getByTestId('not-spent-yet');
     expect(box).toHaveTextContent('Not spent yet');
-    expect(box).toHaveTextContent('3 d 10 h · as of #20,834,844');
+    expect(box).toHaveTextContent('3d 10h · as of #20,834,844');
     // Lane L: the block it is measured at is a link.
     expect(within(box).getByRole('link', { name: '#20,834,844' })).toHaveAttribute(
       'href',

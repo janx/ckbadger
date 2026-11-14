@@ -11,6 +11,15 @@ import { cn } from '@/lib/utils';
  *
  * `data-nobreak` names it for tests and the gate.
  */
-export function NoBreak({ className, ...props }: ComponentProps<'span'>) {
-  return <span data-nobreak="" className={cn('whitespace-nowrap', className)} {...props} />;
+export function NoBreak({ className, style, ...props }: ComponentProps<'span'>) {
+  // `display: inline` is the span's default, stated so that a name computed without a stylesheet
+  // reads "0x673e18…55f9:0" as browsers do, with no space where the unit ends (OutpointIndex).
+  return (
+    <span
+      data-nobreak=""
+      className={cn('whitespace-nowrap', className)}
+      style={{ display: 'inline', ...style }}
+      {...props}
+    />
+  );
 }

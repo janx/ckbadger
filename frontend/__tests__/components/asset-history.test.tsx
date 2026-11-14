@@ -96,7 +96,10 @@ describe('Asset history', () => {
         'CKB held · occupied, free'
       );
       const swatches = [
-        ...screen.getByLabelText('History readout').querySelectorAll<HTMLElement>('[aria-hidden]'),
+        // PB-23: the readout is one separated list; its dots are not swatches
+        ...screen
+          .getByLabelText('History readout')
+          .querySelectorAll<HTMLElement>('[aria-hidden]:not([data-dotted-separator])'),
       ];
       expect(swatches.map((s) => s.style.backgroundColor)).toEqual([
         'var(--c-jade)',
