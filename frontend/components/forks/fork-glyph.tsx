@@ -62,7 +62,6 @@ export function ForkGlyph({
           y="26"
           width="18"
           height="14"
-          rx="2"
           fill={FORK_COLORS.tileFill}
           stroke={k === 0 ? FORK_COLORS.ink : FORK_COLORS.dim}
           strokeOpacity={k === 0 ? 1 : 0.6}
@@ -75,7 +74,6 @@ export function ForkGlyph({
             y="3"
             width="18"
             height="14"
-            rx="2"
             fill="none"
             stroke={FORK_COLORS.tick}
             strokeDasharray="2 2"
@@ -92,7 +90,6 @@ export function ForkGlyph({
               y="3"
               width="18"
               height="14"
-              rx="2"
               fill="none"
               stroke={FORK_COLORS.dropped}
               strokeDasharray="2 2"

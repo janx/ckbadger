@@ -169,7 +169,7 @@ describe('BlockPosition', () => {
             number: 930,
             hash: parent,
             timestamp: '2026-10-26T08:55:20Z',
-            transactionSizes: [],
+            transactionSizes: [355],
             proposalsCount: 0,
             unclesCount: 0,
           },

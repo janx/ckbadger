@@ -274,7 +274,6 @@ function Ring({
       y={q.Y - pad}
       width={q.s + 2 * pad}
       height={q.s + 2 * pad}
-      rx={2}
       fill="none"
       strokeWidth={1.5}
       strokeDasharray={dashed ? '3 2' : undefined}
@@ -706,7 +705,6 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
                 y={hovered.Y - 4}
                 width={hovered.s + 8}
                 height={hovered.s + 8}
-                rx={3}
                 fill="none"
                 strokeWidth={3}
                 strokeOpacity={0.45}

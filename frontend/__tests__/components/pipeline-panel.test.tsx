@@ -1758,13 +1758,14 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       const tray = well.querySelector('[data-tray]') as SVGRectElement;
       expect(tray).toHaveAttribute('stroke', 'none');
       expect(tray.style.getPropertyValue('fill')).toBe(WELL_FILL);
-      expect(['x', 'y', 'width', 'height', 'rx'].map((a) => Number(tray.getAttribute(a)))).toEqual([
+      expect(['x', 'y', 'width', 'height'].map((a) => Number(tray.getAttribute(a)))).toEqual([
         6,
         w.y,
         344,
         30,
-        3,
       ]);
+      // re-pinned with ruling R1 (U-02): the well is square
+      expect(tray).not.toHaveAttribute('rx');
       const name = within(well as unknown as HTMLElement).getByText(w.title);
       expect(name).toHaveClass(w.tone);
       expect(Number(name.closest('text')?.getAttribute('x'))).toBe(12);
@@ -1788,7 +1789,8 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       const el = card(svg, c.block.number);
       const t = tile(svg, c.block.number);
       expect(t.style.getPropertyValue('fill')).toBe(TILE_FILL);
-      expect(t).toHaveAttribute('rx', '3');
+      // re-pinned with ruling R1 (U-02): the tile is square
+      expect(t).not.toHaveAttribute('rx');
       expect(t).toHaveAttribute('stroke-opacity', '0');
       const age = el.querySelector(':scope > [data-age]') as SVGGElement;
       expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);

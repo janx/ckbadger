@@ -174,7 +174,6 @@ export function paintSquareNode(n: MotionNode): void {
     el.setAttribute('y', (Y + off).toFixed(2));
     el.setAttribute('width', s.toFixed(2));
     el.setAttribute('height', s.toFixed(2));
-    el.setAttribute('rx', Math.min(1.5, s * 0.2).toFixed(2));
   }
   // A square born from nothing stays unseen until it has a size (a 0-size diamond is still a dot).
   el.setAttribute('opacity', (n.v.s < 0.5 ? 0 : op).toFixed(3));

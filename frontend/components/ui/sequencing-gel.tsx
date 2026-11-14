@@ -182,7 +182,6 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               y="24"
               width={LANE - 4}
               height="4"
-              rx="1"
               fill="none"
               stroke={GEL_COLORS.well}
               strokeOpacity=".3"
@@ -250,7 +249,6 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             y={r(yOf(pos) - 0.8)}
             width={LANE - 5}
             height="1.6"
-            rx=".6"
             fill={owner?.color ?? GEL_COLORS.label}
             fillOpacity={bytes[byte] === '00' ? 0.45 : 0.95}
             opacity={lit && !inLit(byte) ? 0.15 : 1}
@@ -296,7 +294,6 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
                   y={r(y1 - 1)}
                   width={16 * LANE - 2}
                   height={r(y2 - y1 + 2)}
-                  rx="1.5"
                   fill="none"
                   stroke={g.color}
                   strokeOpacity=".6"
@@ -383,7 +380,6 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           y={TOP - 4}
           width={mapW}
           height={n * STEP + 8}
-          rx="2"
           fill={GEL_COLORS.lane}
           fillOpacity=".025"
         />
@@ -465,7 +461,6 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
             y={TOP + g.offset * 2 * STEP + 0.5}
             width={mapW - 1}
             height={g.length * 2 * STEP - 1}
-            rx="1.5"
             fill={g.color}
             fillOpacity=".08"
             stroke={g.color}
@@ -483,7 +478,6 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
               y={r(yOf(pos) - 1.5)}
               width={lane - 6}
               height="3"
-              rx="1"
               fill={owner?.color ?? GEL_COLORS.label}
               fillOpacity={bytes[byte] === '00' ? 0.45 : 0.95}
               opacity={lit && !inLit(byte) ? 0.15 : 1}
@@ -604,7 +598,6 @@ export function MiniGel({
           y={r(1 + parseInt(ch, 16) * lane)}
           width={r(pitch * 0.7)}
           height={r(lane)}
-          rx=".4"
           fill={ink}
         />
       ))}
