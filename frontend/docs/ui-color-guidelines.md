@@ -58,7 +58,8 @@ Use the following hierarchy in `frontend/app` and `frontend/components`:
 
 4. `Padding and decoration` (never a word, never a figure)
 
-- `text-text-ghost`
+- `text-text-ghost`; for marks and rules also the quiet slate (`ink-quiet`) and the muted ink
+  (`ink-muted`), both under text grade
 
 ### The ghost ink
 
@@ -69,6 +70,14 @@ arrow between two tiles, a rule). It never carries information. A section headin
 ("tap or hover …"), a caption, a footnote, a field's name, a count, "occupied ±N" and a tick are
 information: they are the dim ink. A link inside a note names no ink of its own: it keeps the
 note's dim and takes the page's link hover (`a:hover`).
+
+The rule is about what an ink is used for, not its name: the quiet slate (`ink-quiet`, 2.3–2.7:1
+by night, 2.7–3.3:1 by day) and the muted ink (`ink-muted`, pinned at 3:1 as a mark's ink) are
+under text grade too. Like the ghost they draw marks — a rule, a tick, a swatch, a frame, the
+separator between two names (↔, →) — and never a word or a figure: an offset, a date, a day label,
+a caption, a framing byte's hex, "vs", a dash that stands for "none" are the dim ink. Where a quiet
+ink used to set two kinds of bytes apart (framing from fields, padding from sections), the dim ink
+against the other's own tone does it, both readable. The gate refuses all three on words.
 
 A value that **is** zero is a datum, not padding: "fee 0 CKB", a zero balance, a tier with 0
 objects, an empty filter's "0" are the dim ink. Only the padding zeros of a non-zero number are
@@ -184,6 +193,11 @@ ink (`text-bright`), whichever reads stronger — never an ink chosen by the seg
 hand per node, and never the dim ink or an opacity on a fill: every word on one fill is in that
 one ink. `__tests__/lib/fill-ink.test.ts`, `segment-ink.test.tsx` and `icicle-ink.test.tsx` pin
 every labelled fill at 4.5:1 in both themes.
+
+A pipeline tile (elevated with 7 % jade) is a ground of its own, and its words are chosen for it:
+its labels ("+N") take the text ink, one step up from the dim, and a block number inside the drawn
+window the gold's bright step (more ink by day), so each reads at 4.5:1 on the tile at every age;
+`pipeline-panel.test.tsx` computes every word the canvas writes against what it stands on.
 
 ### The display figure
 
