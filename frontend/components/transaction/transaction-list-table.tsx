@@ -18,7 +18,7 @@ import {
 } from '@/components/activity-event-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { Utc8Date } from '@/components/ui/utc8-date';
+import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import type { ShortSize } from '@/lib/shorten';
@@ -195,7 +195,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
               </Link>
               <span className="text-text">
                 {' · '}
-                <Utc8Date timestamp={tx.timestamp} />
+                <Utc8Age timestamp={tx.timestamp} />
               </span>
             </span>
           ),
@@ -295,7 +295,7 @@ export function TransactionListTable({
           </Link>
           <span className="text-text-dim">
             {' · '}
-            <Utc8Date timestamp={tx.timestamp} />
+            <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
       ),

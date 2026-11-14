@@ -500,7 +500,8 @@ describe('TransactionListTable phone row (board L2)', () => {
         tone: 'head',
         left: '0x00de…cbbc',
         // Lane P: the block's UTC+8 date; its age is the date's hover.
-        right: expect.stringMatching(/^#20,829,775 · \d{4}-\d\d-\d\d$/),
+        // PA-22 (re-pinned): the live list's row says its age (it was the date)
+        right: expect.stringMatching(/^#20,829,775 · \d+[smhdy] ago$/),
       },
       {
         key: 'what',

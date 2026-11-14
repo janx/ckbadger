@@ -87,7 +87,7 @@ export function ActivityFeed() {
           query={activities}
           what="activity"
           keyOf={(a) => a.txHash}
-          row={(a, fresh) => <ActivityRow activity={a} fresh={fresh} />}
+          row={(a, fresh) => <ActivityRow activity={a} fresh={fresh} age />}
           items={activities.data}
         />
       ) : (
@@ -195,6 +195,7 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
         hash={tx.hash}
         blockNumber={tx.blockNumber}
         timestamp={tx.timestamp}
+        age
       />
     </article>
   );

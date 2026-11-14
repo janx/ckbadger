@@ -40,7 +40,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { Utc8Date } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
@@ -55,11 +55,12 @@ export function activityRowTitle(hash: string, timestamp: string | null): string
 }
 
 /**
- * The block's date on the UTC+8 clock every dated row uses (consistency C3: one date form on every
- * feed; "ago" drifts as the page is read). The age is the date's own hover.
+ * When the row's block was made: its age on a row of a live feed (PA-22: the activities, the home
+ * feed, the DAO's recent activity), the full date-time its hover; the date on the UTC+8 clock on a
+ * list that is historical by nature (consistency C3), the age its hover.
  */
-function RowDate({ timestamp }: { timestamp: string }) {
-  return <Utc8Date timestamp={timestamp} />;
+function RowDate({ timestamp, age }: { timestamp: string; age: boolean }) {
+  return age ? <Utc8Age timestamp={timestamp} /> : <Utc8Date timestamp={timestamp} />;
 }
 
 /**
@@ -85,6 +86,7 @@ export function ActivityRowHead({
   layout = 'wrap',
   href,
   details,
+  age = false,
 }: {
   /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
   evidence?: ReactNode;
@@ -101,6 +103,8 @@ export function ActivityRowHead({
   href?: string;
   /** T7 (line layout): the tx-level facts after the title, as parts of the head's one list. */
   details?: readonly (ReactNode | DottedGroup)[];
+  /** PA-22: a row of a live list says its age, the date-time its hover; else the date. */
+  age?: boolean;
 }) {
   const line = layout === 'line';
   const linked = line && href !== undefined;
@@ -177,7 +181,7 @@ export function ActivityRowHead({
             </>
           )}
           {timestamp !== null ? (
-            <RowDate timestamp={timestamp} />
+            <RowDate timestamp={timestamp} age={age} />
           ) : timeAddedToPool ? (
             <TimeInPool since={timeAddedToPool} />
           ) : (
@@ -967,6 +971,8 @@ export type ActivityRowProps = {
    * address as text with a "this address" tag; it must be a participant of the transaction.
    */
   focusLockHash?: string;
+  /** PA-22: a row of a live feed says its age, the date-time its hover; else the date. */
+  age?: boolean;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -989,6 +995,7 @@ export function ActivityRow({
   itemTone = 'sign',
   participantNotes,
   focusLockHash,
+  age = false,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -1052,6 +1059,7 @@ export function ActivityRow({
         evidence={evidence}
         poolStatus={activity.poolStatus}
         timeAddedToPool={activity.timeAddedToPool}
+        age={age}
       />
       {listed && <ProtocolActionList actions={actions} groups={groups} />}
       {errors}

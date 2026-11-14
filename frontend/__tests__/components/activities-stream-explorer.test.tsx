@@ -5,7 +5,7 @@ import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatUtc8Date } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
@@ -346,10 +346,13 @@ describe('ActivitiesStreamExplorer', () => {
     );
     // Block number shown
     expect(within(row).getByText('#123,456')).toBeInTheDocument();
-    // Time shown: consistency C3, the absolute UTC+8 date (was the age, /ago$/), the age its hover.
-    const date = formatUtc8Date(timestamp);
-    expect(within(row).getByText(date)).toHaveAttribute('title', expect.stringMatching(/ago$/));
-    expect(row.querySelector('[data-role="evidence"]')).not.toHaveTextContent('ago');
+    // PA-22 (re-pinned): a live feed's row says its age, the full date-time its hover (it was the
+    // date, consistency C3, which left a row of seconds ago reading only today's date)
+    const evidence = row.querySelector('[data-role="evidence"]') as HTMLElement;
+    expect(within(evidence).getByText(formatTimeAgo(timestamp))).toHaveAttribute(
+      'title',
+      formatUtc8DateTime(timestamp)
+    );
     // Script call event row (badge includes icon prefix)
     expect(within(row).getByText('Script call')).toBeInTheDocument();
     expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();

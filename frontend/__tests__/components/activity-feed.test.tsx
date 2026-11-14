@@ -11,7 +11,7 @@ import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction } from '@/lib/api';
-import { formatUtc8Date } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 
 const API = '/api/:network/v1';
 
@@ -137,10 +137,8 @@ describe('ActivityFeed', () => {
       expect.stringMatching(new RegExp(`^${a.txHash} · \\d+s ago$`))
     );
     expect(evidence).not.toHaveTextContent('0x01ababab');
-    expect(evidence).toHaveTextContent(
-      new RegExp(`^#20,819,142 · ${formatUtc8Date(a.timestamp)}$`)
-    );
-    expect(evidence).not.toHaveTextContent('ago');
+    // PA-22 (re-pinned): the home feed is live, its row says its age (it was the date)
+    expect(evidence).toHaveTextContent(new RegExp(`^#20,819,142 · ${formatTimeAgo(a.timestamp)}$`));
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
@@ -382,15 +380,16 @@ describe('ActivityFeed', () => {
       '/mainnet/blocks/8775638'
     );
     expect(first.querySelector('[data-role="headline"]')).toHaveTextContent('2 inputs → 3 outputs');
-    // The same row grammar: primary info left, the evidence quiet on the right. Consistency C3:
-    // the date closes it (was the age), the age is the date's hover.
+    // The same row grammar: primary info left, the evidence quiet on the right. PA-22
+    // (re-pinned): the age closes it on this live list, the full date-time its hover (it was the
+    // date, consistency C3).
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatUtc8Date(tx(0).timestamp)}$`)
+      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(tx(0).timestamp)}$`)
     );
-    expect(within(evidence).getByText(formatUtc8Date(tx(0).timestamp))).toHaveAttribute(
+    expect(within(evidence).getByText(formatTimeAgo(tx(0).timestamp))).toHaveAttribute(
       'title',
-      expect.stringMatching(/ago$/)
+      formatUtc8DateTime(tx(0).timestamp)
     );
     // The row's hover is the activity row's: the hash and the age (was no title).
     expect(first).toHaveAttribute(
