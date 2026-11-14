@@ -111,10 +111,16 @@ const OPACITY_ALLOWLIST: Allowlist = {
 
 /**
  * Elements that hold words, faded by an `opacity` / `fillOpacity` / `strokeOpacity` attribute or a
- * style `opacity` (the JSX scan), that the gate tolerates. Every one is a pointer's state: nothing
- * is faded at rest.
+ * style `opacity` (the JSX scan), that the gate tolerates. Every one is a pointer's state but the
+ * pipeline's age fade, whose group holds shapes only: the scan counts the self-closing `TxSquare`
+ * and `Dots` in it as words, and they draw a square and dots (pipeline-panel.test.tsx proves no
+ * word of a card is faded).
  */
 const FADE_ALLOWLIST: Allowlist = {
+  // the age fade on a block card's shapes: the tile, the uncle boxes, the dots, the TxSquares
+  'components/pipeline/block-card.tsx': [NO_WORDS],
+  // the age fade on a block row's shapes: the tile, the uncle boxes, the Dots, the TxSquares
+  'components/pipeline/column-rows.tsx': [NO_WORDS],
   // a party node and its label while another party or pair is pointed at or pinned
   'components/fiber/fiber-network-graph.tsx': [LINKED],
   // a day's bars and its date while another day is pointed at or pinned
