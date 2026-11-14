@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import type { NetworkStats } from '@/lib/api';
 import { chainMode, type ChainMode } from '@/lib/chain-mode';
-import { clockText, localZone } from '@/lib/clock';
+import { clockNow, clockText, localZone, subscribeClock } from '@/lib/clock';
 import { formatBlockNumber } from '@/lib/format-block';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
@@ -132,23 +132,12 @@ function modeTitle(
   return `Syncing: indexed ${formatBlockNumber(syncedBlock)} of ${formatBlockNumber(tipBlock)}`;
 }
 
-/** The clock: local time, ticking on the second (each tick waits for the next whole second). */
+/**
+ * The clock: local time, ticking on the second, read from the page's one clock (lib/clock.ts, the
+ * same the ages read; each tick waits for the next whole second).
+ */
 export function StatusClock() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const schedule = () => {
-      timer = setTimeout(
-        () => {
-          setNow(new Date());
-          schedule();
-        },
-        1000 - (Date.now() % 1000)
-      );
-    };
-    schedule();
-    return () => clearTimeout(timer);
-  }, []);
+  const now = new Date(useSyncExternalStore(subscribeClock, clockNow, clockNow));
   return (
     <time
       aria-live="off"

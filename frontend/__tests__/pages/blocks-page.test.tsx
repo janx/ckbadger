@@ -688,6 +688,28 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
     });
 
+    // The review's item H: a block row's age reads the page's one clock, so it moves with no data
+    // change (it was written once at render and froze between refetches). Date stands still and
+    // moves by hand; the clock's timer is real.
+    it('moves a block row’s age with no data change', async () => {
+      atContainerWidth(358);
+      const T = Date.parse('2026-11-14T12:00:00.000Z');
+      vi.useFakeTimers({ toFake: ['Date'], now: T });
+      try {
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [{ ...page.data[0], timestamp: new Date(T - 20_000).toISOString() }],
+        });
+        render(<BlocksPage />);
+        const [card] = await screen.findAllByTestId('block-row-mobile');
+        expect(phoneLines(card)[0].right).toMatch(/ · 20s ago$/);
+        vi.setSystemTime(T + 1000);
+        await waitFor(() => expect(phoneLines(card)[0].right).toMatch(/ · 21s ago$/));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own
     // column, before the height; the height is still the row's link. Seals by kind: the column
     // is the 26 px stone and its 8 px gap.

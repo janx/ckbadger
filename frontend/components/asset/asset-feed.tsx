@@ -30,7 +30,8 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
+import { formatUtc8Date } from '@/lib/utils';
+import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
@@ -124,7 +125,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
           <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
           <span className="text-text-dim">
             {' '}
-            · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
+            · {identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />}
           </span>
           <span className="text-text-dim text-meta block">tx {r.index} in block</span>
         </>
@@ -295,7 +296,8 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                     </AppLink>
                     <span className="text-text">
                       {' '}
-                      · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
+                      ·{' '}
+                      {identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />}
                     </span>
                   </span>
                 ),

@@ -26,7 +26,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo } from '@/lib/utils';
+import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import type { ShortSize } from '@/lib/shorten';
@@ -68,7 +68,8 @@ export default function BlocksPage() {
       label: 'Age',
       minWidth: 70,
       className: 'whitespace-nowrap',
-      render: (block) => <span className="text-text-dim">{formatTimeAgo(block.timestamp)}</span>,
+      // the age reads the page's one clock (the review's item H), the date-time its hover
+      render: (block) => <Utc8Age timestamp={block.timestamp} className="text-text-dim" />,
     },
     {
       key: 'contents',
@@ -415,7 +416,12 @@ function BlockPhoneRow({ block }: { block: Block }) {
               {formatBlockNumber(block.number)}
             </Link>
           ),
-          right: `${formatCount(block.transactionSizes.length, 'tx', 'txs')} · ${formatTimeAgo(block.timestamp)}`,
+          right: (
+            <>
+              {formatCount(block.transactionSizes.length, 'tx', 'txs')} ·{' '}
+              <Utc8Age timestamp={block.timestamp} />
+            </>
+          ),
         },
         {
           key: 'miner',
@@ -513,7 +519,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     label: 'Age',
     minWidth: 76,
     className: 'whitespace-nowrap',
-    render: (block) => <span className="text-text-dim">{formatTimeAgo(block.timestamp)}</span>,
+    render: (block) => <Utc8Age timestamp={block.timestamp} className="text-text-dim" />,
   },
   {
     key: 'txs',
