@@ -149,7 +149,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto min-w-0 py-8">
-          <h1 className="text-text-bright text-entity">m-NFT</h1>
+          <h1 className="text-text-bright text-entity max-md:text-index">m-NFT</h1>
           <ReadFailure what="object" error={detail.error} />
         </main>
       </div>

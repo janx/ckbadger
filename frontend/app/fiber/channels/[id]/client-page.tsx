@@ -60,7 +60,9 @@ export default function FiberChannelDetailPage() {
         {/* Hierarchy v3: once loaded, the board's hero section holds the title, state and id. */}
         {!channel.data && (
           <>
-            <h1 className="text-text-bright text-entity mt-2.5 font-medium">Fiber channel</h1>
+            <h1 className="text-text-bright text-entity max-md:text-index mt-2.5 font-medium">
+              Fiber channel
+            </h1>
             <p className="text-text-dim text-small mt-1.5 break-all">{channelId}</p>
           </>
         )}
