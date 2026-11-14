@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PlateHash } from '@/components/ui/page-seal';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
@@ -68,5 +68,65 @@ describe('PlateHash, the full hash on a name plate', () => {
 
   it('refuses a value that is not a full hash', () => {
     expect(() => render(<PlateHash hash="0x1234" />)).toThrow('not a full hash');
+  });
+
+  // A4 review 3: the plate copies through the one copy path (hooks/useCopy). A copy that cannot
+  // work (no clipboard, as over plain HTTP on a LAN address; or a refusal) shows no tick and
+  // rejects nothing; a copy that worked shows its tick, then the hash again; no timer outlives it.
+  describe('through the one copy path', () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    beforeEach(() => {
+      rejections.length = 0;
+      process.on('unhandledRejection', onRejection);
+    });
+    afterEach(() => {
+      process.off('unhandledRejection', onRejection);
+      Object.assign(navigator, { clipboard: undefined });
+      vi.useRealTimers();
+    });
+    // a click, then every pending promise and a macrotask for an unhandled rejection to surface
+    const clickAndSettle = async () => {
+      await act(async () => {
+        fireEvent.click(plate());
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+
+    for (const [label, clipboard] of [
+      ['is absent', undefined],
+      ['refuses', { writeText: vi.fn().mockRejectedValue(new DOMException('denied')) }],
+    ] as const)
+      it(`shows no tick and throws nothing where the clipboard ${label}`, async () => {
+        stubChartWidth(600);
+        Object.assign(navigator, { clipboard });
+        render(<PlateHash hash={HASH} copyable />);
+        await clickAndSettle();
+        expect(screen.queryByText('✓')).toBeNull();
+        expect(halves()[0].parentElement).not.toHaveClass('invisible');
+        expect(rejections).toEqual([]);
+      });
+
+    it('shows the tick, then the hash again, and leaves no timer when it goes', async () => {
+      stubChartWidth(600);
+      Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+      vi.useFakeTimers();
+      const click = () =>
+        act(async () => {
+          fireEvent.click(plate());
+        });
+      const { unmount } = render(<PlateHash hash={HASH} copyable />);
+      await click();
+      expect(screen.getByText('✓')).toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(1);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      render(<PlateHash hash={HASH} copyable />);
+      await click();
+      expect(screen.getByText('✓')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1500));
+      expect(screen.queryByText('✓')).toBeNull();
+      expect(halves()[0].parentElement).not.toHaveClass('invisible');
+    });
   });
 });
