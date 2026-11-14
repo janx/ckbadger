@@ -110,7 +110,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                   )}
                 </span>
                 <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
-                  {formatChartExact(row.value, model.unit)} {model.unit} · {row.share}
+                  {withUnit(formatChartExact(row.value, model.unit), model.unit)} · {row.share}
                 </span>
               </div>
               <div className="bg-base-elevated mt-1 h-1 rounded">
