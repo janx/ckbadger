@@ -445,6 +445,15 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
     expect(line.startsWith('M0,')).toBe(true);
   });
 
+  // Lane E2 (ruling R4): an in-plot value is a figure, in the dim ink; the ghost (1.64–2.22:1) is
+  // only for padding zeros and decoration.
+  it('writes the in-plot values in the dim ink, never the ghost', () => {
+    const { container } = render(<Chart {...props} plotName="AR" insideYTicks />);
+    const ticks = Array.from(container.querySelectorAll('svg [data-role="y-tick"]'));
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const t of ticks) expect(t).toHaveAttribute('fill', 'var(--c-text-dim)');
+  });
+
   it("writes the latest value at the line's end", () => {
     const { container } = render(
       <Chart {...props} plotName="AR" endLabel={(v) => v.slice(0, 5)} />

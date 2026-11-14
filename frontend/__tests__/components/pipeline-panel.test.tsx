@@ -158,6 +158,39 @@ describe('the tip flares (material pass v2, move 4)', () => {
 const card = (svg: Element, n: number) =>
   svg.querySelector(`[data-card="${blockHash(n)}"]`) as SVGGElement;
 const tile = (svg: Element, n: number) => card(svg, n).querySelector('[data-box]') as SVGElement;
+/**
+ * How strongly `el` is drawn inside its card: the product of the opacities (style and attribute)
+ * of `el` and its ancestors below the card, whose own `opacity` the motion layer owns.
+ */
+const strengthInCard = (el: Element, cardEl: Element) => {
+  let strength = 1;
+  for (let a: Element | null = el; a && a !== cardEl; a = a.parentElement) {
+    const style = (a as SVGElement).style.opacity;
+    if (style !== '') strength *= Number(style);
+    const attr = a.getAttribute('opacity');
+    if (attr !== null) strength *= Number(attr);
+  }
+  return strength;
+};
+/**
+ * Lane E2 (ruling R4): "set back" is never an opacity on words. Every card's words (its number,
+ * "uncle", the "+N" counts) are drawn at full strength; its tile keeps the age fade.
+ */
+const expectWordsAtFullStrength = (svg: Element) => {
+  const cards = [...svg.querySelectorAll('[data-card]')];
+  // the tip and at least three blocks behind it, each a step further back
+  expect(cards.length).toBeGreaterThan(3);
+  const words = cards.flatMap((c, i) => [...c.querySelectorAll('text')].map((t) => ({ c, i, t })));
+  expect(words.length).toBeGreaterThanOrEqual(cards.length);
+  expect(
+    words
+      .filter(({ c, t }) => strengthInCard(t, c) !== 1)
+      .map(({ c, i, t }) => `card ${i} "${t.textContent}" at ${strengthInCard(t, c)}`)
+  ).toEqual([]);
+  cards.forEach((c, i) =>
+    expect(strengthInCard(c.querySelector('[data-box]')!, c)).toBeCloseTo(ageOpacity(i), 6)
+  );
+};
 const path = (svg: Element, name: string) =>
   svg.querySelector(`[data-path="${name}"]`) as SVGPathElement;
 
@@ -350,6 +383,10 @@ describe('PipelinePanel static render', () => {
       0.4,
       6
     );
+  });
+
+  it('keeps an older block’s words at full strength while its shapes step back (R4, lane E2)', async () => {
+    expectWordsAtFullStrength(await renderPanel());
   });
 
   it('draws the pool as two wells: no stroke, the stage name in its colour and its total', async () => {
@@ -1810,6 +1847,10 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     const uncle = card(svg, T - 1).querySelector('[data-uncle="0"]') as SVGGElement;
     expect([...uncle.querySelectorAll('text')].map((x) => x.textContent)).toEqual(['uncle']);
     expect(card(svg, T - 1).querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
+  });
+
+  it('keeps an older row’s words at full strength while its shapes step back (R4, lane E2)', async () => {
+    expectWordsAtFullStrength(await renderPanel(quiet));
   });
 
   it('runs the chain at x 28 through the gaps, with the window tick and the gold tail of the board', async () => {
