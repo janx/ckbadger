@@ -5,6 +5,7 @@ import { Atmosphere } from '@/components/layout/atmosphere';
 import { Header } from '@/components/layout/header';
 import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { PAGE_CONTENT_ID, SkipLink } from '@/components/layout/skip-link';
 import { StatusLine } from '@/components/layout/status-line';
 import { TapOrHoverHintProvider } from '@/components/ui/tap-or-hover-hint';
 import { tintOfPath } from '@/lib/page-tint';
@@ -47,10 +48,19 @@ function AppFrame() {
       <TapOrHoverHintProvider>
         <NetworkQueryScope>
           <div className="flex min-h-screen flex-1 flex-col">
+            {/* The first focusable element (U-20): past the header to the page. */}
+            <SkipLink />
             <Header />
             {/* Visual finish V7: keyed by the path, so each route change mounts the new page and it
-                fades in (`.arrive`); the header, outside, stays. */}
-            <div key={pathname} className="arrive flex flex-1 flex-col">
+                fades in (`.arrive`); the header, outside, stays. It is the skip link's target: the
+                page renders its own <main> inside it, so the frame adds no second one; focused by
+                the link, it draws no ring of its own around the page. */}
+            <div
+              key={pathname}
+              id={PAGE_CONTENT_ID}
+              tabIndex={-1}
+              className="arrive flex flex-1 flex-col focus-visible:shadow-none focus-visible:outline-none"
+            >
               <Outlet />
             </div>
             {/* The page ends on an empty prompt (rubbing × Song print, phase 2; rubric A4): the
