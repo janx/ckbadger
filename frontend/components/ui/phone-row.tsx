@@ -115,6 +115,8 @@ export interface DottedGroup {
   readonly parts: readonly ReactNode[];
   readonly role: string;
   readonly className?: string;
+  /** A navigation landmark of the run's links (named by `label`) in place of a plain span. */
+  readonly nav?: { label: string };
 }
 
 /**
@@ -124,9 +126,9 @@ export interface DottedGroup {
  */
 export function dottedGroup(
   parts: readonly ReactNode[],
-  { role, className }: { role: string; className?: string }
+  { role, className, nav }: { role: string; className?: string; nav?: { label: string } }
 ): DottedGroup {
-  return { [GROUP]: true, parts, role, className };
+  return { [GROUP]: true, parts, role, className, nav };
 }
 
 function isGroup(part: ReactNode | DottedGroup): part is DottedGroup {
@@ -207,10 +209,16 @@ export function Dotted({
     if (!isGroup(part)) return shownPart(part) ? [item(part)] : [];
     const shown = part.parts.filter(shownPart);
     if (shown.length === 0) return [];
+    const Group = part.nav ? 'nav' : 'span';
     return [
-      <span key={`g${g}`} data-role={part.role} className={cn('contents', part.className)}>
+      <Group
+        key={`g${g}`}
+        data-role={part.role}
+        aria-label={part.nav?.label}
+        className={cn('contents', part.className)}
+      >
         {shown.map(item)}
-      </span>,
+      </Group>,
     ];
   });
   if (nodes.length === 0) return null;

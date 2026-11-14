@@ -373,7 +373,8 @@ describe('Address v3', () => {
     // outside its name, and the section is named by the heading.
     const heading = screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' });
     expectPrompt(heading, 'Holdings', '40 cells');
-    expect(heading.parentElement).toContainElement(nav);
+    // re-pinned (PA-25): the heading and the nav are items of one separated list
+    expect(heading.closest('[data-dotted]')).toContainElement(nav);
     expect(heading).not.toContainElement(nav);
     expect(screen.getByRole('region', { name: 'Holdings 40\u00a0cells' })).toContainElement(
       heading

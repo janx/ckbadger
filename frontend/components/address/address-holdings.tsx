@@ -26,6 +26,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { META_CHAR_PX } from '@/lib/byte-map';
 import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -521,35 +522,37 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   return (
     <section aria-labelledby="holdings-heading" className="space-y-7">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-          {/* Rubbing × Song print, phase 5 (A21): the holdings, run on the live cells they are;
-              the count nav stays beside, the classes it does not hold are the note. */}
-          <PromptHeading
-            id="holdings-heading"
-            command="Holdings"
-            args={formatCount(holdings.liveCellsCount, 'cell')}
-          />
-          {held.length > 0 && (
-            <nav aria-label="Holdings" className="text-text-dim text-small">
-              ·{' '}
-              {held.map((c, i) => (
-                <span key={c.key}>
-                  {i > 0 && ' · '}
-                  <a
-                    href={`#holdings-${c.key}`}
-                    className="hover:text-jade tabular-nums"
-                    onMouseEnter={() => setActive(c.key)}
-                    onMouseLeave={() => setActive(null)}
-                    onFocus={() => setActive(c.key)}
-                    onBlur={() => setActive(null)}
-                  >
-                    {formatCount(c.count, c.one, c.many)}
-                  </a>
-                </span>
-              ))}
-            </nav>
-          )}
-        </div>
+        {/* Rubbing × Song print, phase 5 (A21): the holdings, run on the live cells they are;
+            the count nav stays beside, the classes it does not hold are the note. PA-25: the
+            heading and the nav's links are one separated list, so a link that wraps under the
+            heading starts its line with no dot. */}
+        <Dotted
+          className="text-small gap-y-1"
+          parts={[
+            <PromptHeading
+              key="heading"
+              id="holdings-heading"
+              command="Holdings"
+              args={formatCount(holdings.liveCellsCount, 'cell')}
+            />,
+            dottedGroup(
+              held.map((c) => (
+                <a
+                  key={c.key}
+                  href={`#holdings-${c.key}`}
+                  className="hover:text-jade tabular-nums"
+                  onMouseEnter={() => setActive(c.key)}
+                  onMouseLeave={() => setActive(null)}
+                  onFocus={() => setActive(c.key)}
+                  onBlur={() => setActive(null)}
+                >
+                  {formatCount(c.count, c.one, c.many)}
+                </a>
+              )),
+              { role: 'holdings-nav', className: 'text-text-dim', nav: { label: 'Holdings' } }
+            ),
+          ]}
+        />
         {/* The right-prompt note, drawn as PromptHeading draws one: the count nav stands between
             the heading and it, and PromptHeading's own row has no place for that. */}
         {missing.length > 0 && (
