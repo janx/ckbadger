@@ -56,6 +56,14 @@ const TEXT_GRADE: PaletteKey[] = [
   'board-link',
   'tier-btc-ink',
   'tier-pure-ink',
+  // Lane E2 round 3 (ruling): an ELF region's hue paints the hex digits of its bytes on the cell
+  // page, so each is text grade, also on the evidence tier's ground (below).
+  'elf-header',
+  'elf-program-headers',
+  'elf-rodata',
+  'elf-eh-frame',
+  'elf-data',
+  'elf-meta',
 ];
 
 /** Hover and secondary inks: ≥ 3:1 (large text, UI components). */
@@ -426,24 +434,25 @@ describe('the row rule and the bar track (R5, DY-01)', () => {
   });
 });
 
+/** A material `rgba(r, g, b, a)` laid over a ground key, as the eye sees it. */
+function materialOver(theme: (typeof THEMES)[number], value: string, ground: PaletteKey) {
+  const m = value.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
+  if (!m) throw new Error(`${value} is not rgba(r, g, b, a)`);
+  const a = Number(m[4]);
+  const under = hexToRgb(PALETTE[theme][ground]);
+  const ch = (f: string, g: number) =>
+    Math.round(a * Number(f) + (1 - a) * g)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(m[1], under.r)}${ch(m[2], under.g)}${ch(m[3], under.b)}`;
+}
+
 // Ruling 4b (UI review 2026-11-14): the ground decides its rule. The evidence tier lies on its own
 // ground (`tier2-ground`, the elevated tint at 90 % by day over the sky), where the day row rule and
 // track read 1.24:1 over the ground and 1.14:1 over a ruled line on it. Inside `.tier2-ground` the
 // variables behind `row-rule` and `bar-track` resolve to deeper keys that clear both by 1.25:1;
 // the whole site's rule is not darkened (it would pass the frame border, `base-border`).
 describe('the row rule and the bar track on the tier-2 ground (R5, ruling 4b)', () => {
-  /** A material `rgba(r, g, b, a)` laid over a ground key, as the eye sees it. */
-  function materialOver(theme: (typeof THEMES)[number], value: string, ground: PaletteKey) {
-    const m = value.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
-    if (!m) throw new Error(`${value} is not rgba(r, g, b, a)`);
-    const a = Number(m[4]);
-    const under = hexToRgb(PALETTE[theme][ground]);
-    const ch = (f: string, g: number) =>
-      Math.round(a * Number(f) + (1 - a) * g)
-        .toString(16)
-        .padStart(2, '0');
-    return `#${ch(m[1], under.r)}${ch(m[2], under.g)}${ch(m[3], under.b)}`;
-  }
   const dayGround = materialOver('light', MATERIALS.light['tier2-ground'], 'base-bg');
   const scan = MATERIALS.light['scanline-ink'].match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/)!;
   const dayRuled = (() => {
@@ -489,6 +498,33 @@ describe('the row rule and the bar track on the tier-2 ground (R5, ruling 4b)', 
       expect(ink('dark', deep), deep).toBe(PALETTE.dark[flat]);
       expect(contrastRatio(ink('dark', deep), nightGround), deep).toBeGreaterThanOrEqual(1.1);
     }
+  });
+});
+
+// Lane E2 round 3 (ruling): the ELF region hues are text. They paint the hex digits of a code
+// cell's bytes in the cell microscope, which sits in the evidence tier, so besides the four grounds
+// (TEXT_GRADE) each reads at 4.5:1 on the tier-2 ground (`tier2-ground` over the sky), in both
+// themes. A key short of it moves in OKLCH lightness only, hue and chroma kept.
+describe('the ELF region hues on the evidence tier', () => {
+  const ELF_KEYS = [
+    'elf-header',
+    'elf-program-headers',
+    'elf-rodata',
+    'elf-eh-frame',
+    'elf-data',
+    'elf-meta',
+  ] as const;
+
+  it('reads at body-text contrast on the tier-2 ground, in both themes', () => {
+    const short: string[] = [];
+    for (const theme of THEMES) {
+      const ground = materialOver(theme, MATERIALS[theme]['tier2-ground'], 'base-bg');
+      for (const key of ELF_KEYS) {
+        const ratio = contrastRatio(PALETTE[theme][key], ground);
+        if (ratio < 4.5) short.push(`${theme} ${key} on tier-2 ${ground}: ${ratio.toFixed(2)}`);
+      }
+    }
+    expect(short).toEqual([]);
   });
 });
 
