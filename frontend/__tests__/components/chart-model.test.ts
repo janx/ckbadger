@@ -527,6 +527,35 @@ describe('29 chart variants', () => {
     expect(model.secondary?.title).toBe('Utilization');
   });
 
+  // The review's item I: a miner's share is its blocks in the window's blocks through the one
+  // percentage (it was the API's floored four decimals rounded to two: 1 block of 1,000,000 read
+  // 0.00%, 999,999 read 100.00%)
+  it('reads each miner’s share from its blocks through the one percentage', () => {
+    const at = (blocksMined: number[]) =>
+      chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+        title: 'Miners',
+        totalBlocks: 1_000_000,
+        windowDays: 7,
+        fromDate: '2026-07-23',
+        toDate: '2026-07-29',
+        data: blocksMined.map((n, i) => ({
+          minerLockHash: `0x${String(i).repeat(64)}`,
+          address: null,
+          minerName: `Pool ${i}`,
+          blocksMined: n,
+          percentage: ((n / 1_000_000) * 100).toFixed(4),
+        })),
+      });
+    const model = at([999_999, 1]);
+    expect(model.rankedRows?.map((row) => row.share)).toEqual(['>99.99%', '<0.01%']);
+    expect(model.headline).toMatchObject({ display: '>99.99', unit: '%' });
+    expect(model.facts?.[0].value).toBe('999,999\u00a0blocks · >99.99%');
+    expect(at([600_000, 400_000]).rankedRows?.map((row) => row.share)).toEqual([
+      '60.00%',
+      '40.00%',
+    ]);
+  });
+
   it('retains miner address and unresolved lock-hash identities in ranking links', () => {
     const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       title: 'Miners',

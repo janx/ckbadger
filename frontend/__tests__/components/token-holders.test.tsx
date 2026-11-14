@@ -341,6 +341,49 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
   });
 });
 
+// The review's item I: a holder's share is the one percentage, never a false 0.00% or 100.00%
+describe('Token holders’ shares at the extremes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('writes <0.01% for a holder above nothing and >99.99% for one below the whole', async () => {
+    atContainerWidth(1248);
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      data: [
+        {
+          lockScriptHash: `0x${'11'.repeat(32)}`,
+          address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+          balance: '999999',
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockKind: 'JoyID',
+        },
+        {
+          lockScriptHash: `0x${'22'.repeat(32)}`,
+          address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
+          balance: '1',
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockKind: 'JoyID',
+        },
+      ],
+      total: 2,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+      totalSupply: '1000000',
+      anchor: null,
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const [, whale, dust] = within(table).getAllByRole('row');
+    expect(whale).toHaveTextContent('>99.99%');
+    expect(whale).not.toHaveTextContent('100.00%');
+    expect(dust).toHaveTextContent('<0.01%');
+    expect(dust).not.toHaveTextContent('0.00%');
+  });
+});
+
 describe('Token holders where the table does not fit (L5)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

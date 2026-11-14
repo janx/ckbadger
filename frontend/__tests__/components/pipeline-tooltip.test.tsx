@@ -10,6 +10,7 @@ import {
 import type { PipelineBlock, PipelineSnapshot } from '@/lib/api';
 import {
   PipelineTooltip,
+  pct,
   cellbaseTip,
   txTip,
   uncleTip,
@@ -18,6 +19,20 @@ import {
 } from '@/components/pipeline/pipeline-tooltip';
 
 const T = FIXTURE_TIP;
+
+// CH-14 and the review's item I: the tooltip's share of a block's room is the one percentage, two
+// decimals (it wrote one from 1 %, two below), never a false 0.00% or 100.00%
+describe('pct: the share of a block’s room through percentOf', () => {
+  it('writes two decimals and bounds the two false results', () => {
+    expect(pct(1, 3)).toBe('33.33%');
+    expect(pct(25, 1000)).toBe('2.50%');
+    expect(pct(5, 1000)).toBe('0.50%');
+    expect(pct(0, 1000)).toBe('0.00%');
+    expect(pct(1, 1_000_000)).toBe('<0.01%');
+    expect(pct(999_999, 1_000_000)).toBe('>99.99%');
+    expect(pct(1000, 1000)).toBe('100.00%');
+  });
+});
 const snapshot = buildPipelineSnapshot();
 
 function renderTip(content: TipContent) {
