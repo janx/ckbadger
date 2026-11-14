@@ -646,7 +646,14 @@ describe('the JSX scan finds faded and ghost-painted words, and only those', () 
   });
 
   const tokens: TokenModules = {
-    '@/lib/inks': { INKS: { faint: 'var(--c-text-ghost)', quiet: 'var(--c-text-dim)' } },
+    '@/lib/inks': {
+      INKS: {
+        faint: 'var(--c-text-ghost)',
+        slate: 'var(--c-ink-quiet)',
+        muted: 'var(--c-ink-muted)',
+        dim: 'var(--c-text-dim)',
+      },
+    },
   };
 
   it('flags words painted in the ghost by an attribute, a style, a class or a constant', () => {
@@ -687,9 +694,55 @@ describe('the JSX scan finds faded and ghost-painted words, and only those', () 
           '<rect fill={color(\'text-ghost\')} className="fill-text-ghost" />;',
           '<g stroke={INKS.faint}><line /><text>{t.label}</text></g>;',
           "<span style={{ backgroundColor: 'var(--c-text-ghost)' }}>{label}</span>;",
-          '<text fill={INKS.quiet}>{label}</text>;',
+          '<text fill={INKS.dim}>{label}</text>;',
           '<span className="text-text-ghost">{parts.ghost}</span>;',
           '<Swatch color={INKS.faint} />;',
+        ],
+        tokens
+      )
+    ).toEqual([]);
+  });
+
+  // Lane E2 follow-up (R4 is about use, not a name): the quiet and the muted ink are under text
+  // grade too (2.31–3.27:1 and 3:1), for marks, rules, ticks, swatches and frames; on words they
+  // fail as the ghost does.
+  it('flags words painted in the quiet or the muted ink, as the ghost', () => {
+    expect(
+      ghosts(
+        [
+          "import { INKS } from '@/lib/inks';",
+          'const QUIET = inkStyle(INKS.slate);',
+          '<text x={4} fill="var(--c-ink-quiet)">{t.label}</text>;',
+          "<text fill={color('ink-muted')}>uncle</text>;",
+          '<text className="fill-ink-quiet text-meta">{b}</text>;',
+          '<span className="text-ink-muted">{tick.date}</span>;',
+          "<span style={{ color: dim ? 'var(--c-ink-quiet)' : reading.ink }}>{word}</span>;",
+          '<span className="text-[color:var(--ink)]" style={QUIET}>0x{offset}</span>;',
+          '<text fill={INKS.muted}>{n}</text>;',
+        ],
+        tokens
+      )
+    ).toEqual([
+      { line: 3, what: '<text> fill="var(--c-ink-quiet)"' },
+      { line: 4, what: "<text> fill={color('ink-muted')}" },
+      { line: 5, what: '<text> className="fill-ink-quiet text-meta"' },
+      { line: 6, what: '<span> className="text-ink-muted"' },
+      { line: 7, what: "<span> style={{ color: dim ? 'var(--c-ink-quiet)' : reading.ink }}" },
+      { line: 8, what: '<span> style={QUIET}' },
+      { line: 9, what: '<text> fill={INKS.muted}' },
+    ]);
+  });
+
+  it('passes the quiet and the muted ink on a mark, a rule, a swatch or a frame', () => {
+    expect(
+      ghosts(
+        [
+          "import { INKS } from '@/lib/inks';",
+          '<line stroke="var(--c-ink-quiet)" /><circle r="1.8" fill="var(--c-ink-quiet)" />;',
+          '<rect fill="none" stroke={INKS.slate} strokeDasharray="3 3" />;',
+          '<div className="border border-dashed" style={{ borderColor: INKS.slate }}>{head}</div>;',
+          "<span style={{ backgroundColor: color('ink-muted') }} />;",
+          '<path className="stroke-ink-quiet" /><i className="bg-ink-muted border-ink-quiet" />;',
         ],
         tokens
       )

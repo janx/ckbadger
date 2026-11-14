@@ -60,6 +60,7 @@ const TEXT_GRADE: PaletteKey[] = [
 
 /** Hover and secondary inks: ≥ 3:1 (large text, UI components). */
 const UI_GRADE: PaletteKey[] = [
+  // a mark's ink at 3:1 (a rule, a tick, a swatch), never a word's: see "the inks under text grade"
   'ink-muted',
   'jade-bright',
   'aqua-bright',
@@ -190,6 +191,23 @@ describe('the palette: one source for both themes', () => {
           if (ratio < 4.5) failures.push(`${theme} ${ink} on ${ground}: ${ratio.toFixed(2)}`);
         }
     expect(failures).toEqual([]);
+  });
+
+  // Lane E2 follow-up (ruling R4 is about what an ink is used for, not its name): the ghost, the
+  // quiet and the muted ink sit under text grade on purpose. They are for marks, rules, ticks,
+  // swatches, frames, the padding zeros of a number and pure decoration, never for a word or a
+  // figure; the muted's 3:1 pin above is a mark's, not a text pin. The ink gate refuses all three
+  // on words (__tests__/lib/ink-gate.test.ts); a quieter word is the dim ink.
+  it('keeps the inks under text grade (ghost, quiet, muted) out of the text grade: marks, never words', () => {
+    for (const key of ['text-ghost', 'ink-quiet', 'ink-muted'] as const) {
+      expect(TEXT_GRADE).not.toContain(key);
+      for (const theme of THEMES) {
+        const worst = Math.min(
+          ...GROUNDS.map((g) => contrastRatio(PALETTE[theme][key], PALETTE[theme][g]))
+        );
+        expect(worst, `${theme} ${key}`).toBeLessThan(4.5);
+      }
+    }
   });
 
   it('keeps hover and secondary inks at UI contrast on every ground', () => {
