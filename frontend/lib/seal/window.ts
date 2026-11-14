@@ -9,16 +9,6 @@
 import type { AssetClass } from '@/lib/design-tokens';
 import { f1, f2 } from '@/lib/seal/brush';
 
-/** The six classes, in the order the design names them. */
-export const WINDOW_CLASSES = [
-  'ckb',
-  'dao',
-  'tokens',
-  'objects',
-  'identities',
-  'other',
-] as const satisfies readonly AssetClass[];
-
 type Window = (cx: number, cy: number, r: number, paint: string, sw: number) => string;
 
 const line = (d: string, paint: string, sw: number) =>

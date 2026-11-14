@@ -3,16 +3,8 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type { Pt } from '@/lib/seal/brush';
-import { RIM_LABEL, RIMS, RINGS } from '@/lib/seal/core';
-import {
-  ANIMALS,
-  ELEMENTS,
-  GLYPH,
-  GLYPH_LABEL,
-  GLYPHS,
-  NOT_ORACLE,
-  SIGNS,
-} from '@/lib/seal/glyphs';
+import { RIMS, RINGS } from '@/lib/seal/core';
+import { ANIMALS, ELEMENTS, GLYPH, GLYPHS, SIGNS } from '@/lib/seal/glyphs';
 import {
   CAPACITY_DIGITS,
   drawStone,
@@ -23,7 +15,6 @@ import {
   type SealState,
 } from '@/lib/seal/stones';
 import { TEXTURE, TEXTURES } from '@/lib/seal/textures';
-import { WINDOW_CLASSES } from '@/lib/seal/window';
 import { decode, distToPolyline } from '@/__tests__/utils/compact-path';
 
 /**
@@ -158,13 +149,11 @@ const unlabel = (svg: string) => svg.replace(/ aria-label="[^"]*"/, ' aria-label
 const labelOf = (svg: string) => /aria-label="([^"]*)"/.exec(svg)?.[1];
 
 describe('the glyphs, textures, rims, borders and classes are the prototype’s', () => {
-  it('has the forty glyphs in the prototype’s order, named as it names them', () => {
+  it('has the forty glyphs in the prototype’s order', () => {
     expect([...GLYPHS]).toEqual(proto.GLYPHS);
     expect([...ELEMENTS]).toEqual(proto.ELEMENTS);
     expect([...ANIMALS]).toEqual(proto.ANIMALS);
     expect([...SIGNS]).toEqual(proto.SIGNS);
-    expect(GLYPH_LABEL).toEqual(proto.GLYPH_LABEL);
-    expect([...NOT_ORACLE]).toEqual(proto.NOT_ORACLE);
   });
 
   it('draws every glyph in every variant with the prototype’s strokes', () => {
@@ -178,12 +167,10 @@ describe('the glyphs, textures, rims, borders and classes are the prototype’s'
     }
   });
 
-  it('keeps the eight textures, rims, borders, classes and the eleven-digit gauge', () => {
+  it('keeps the eight textures, rims, borders and the eleven-digit gauge', () => {
     expect([...TEXTURES]).toEqual(proto.TEXTURES);
     expect([...RIMS]).toEqual(proto.RIMS);
-    expect(RIM_LABEL).toEqual(proto.RIM_LABEL);
     expect([...RINGS]).toEqual(proto.RINGS);
-    expect([...WINDOW_CLASSES]).toEqual(proto.CLASSES);
     expect(CAPACITY_DIGITS).toBe(proto.GAUGE);
   });
 

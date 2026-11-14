@@ -273,7 +273,6 @@ export const GEL_COLORS = {
   label: color('text-dim'),
   heading: color('text'),
   overlay: color('gel-overlay'),
-  bandText: color('gel-band-text'),
 } as const;
 /** Allele ink by the collection's composition (board `url(#ink)`, copper since FINAL_REVIEW 3). */
 export const GEL_INK_KEYS = {
@@ -333,28 +332,4 @@ export const SEARCH_RESULT_COLORS = {
 export const STREAM_COLORS = {
   pending: color('stream-pending'),
   pendingHover: color('stream-pending-hover'),
-} as const;
-
-// ---- Storage tiers (composition card, content preview; visual finish V11) ----
-/**
- * The storage tiers' own inks: BTC+CKB a moss green over a dark amber wash, Pure CKB a deep jade
- * over a dark jade wash, centralised a dark rouge edge. `inkLit` / `edgeLit` are the tooltip
- * button's hover; a `wash` is the preview header gradient's start, at 50 % (it fades to nothing).
- */
-export const STORAGE_TIER_COLORS = {
-  btc_ckb: {
-    ink: color('tier-btc-ink'),
-    inkLit: color('tier-btc-ink-lit'),
-    edge: color('tier-btc-edge'),
-    edgeLit: color('tier-btc-edge-lit'),
-    wash: alpha('tier-btc-wash', 0.5),
-  },
-  pure_ckb: {
-    ink: color('tier-pure-ink'),
-    inkLit: color('tier-pure-ink-lit'),
-    edge: color('tier-pure-edge'),
-    edgeLit: color('tier-pure-edge-lit'),
-    wash: alpha('tier-pure-wash', 0.5),
-  },
-  centralized_mixture: { edge: color('tier-centralized-edge') },
 } as const;

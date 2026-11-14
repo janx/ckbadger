@@ -5,15 +5,11 @@ import {
   formatUtc8Date,
   formatCkbAmount,
   formatCkbCompact,
-  formatCkbValue,
-  formatCompactCkbDelta,
   formatTimeAgo,
   formatDurationMs,
   formatUtc8DateTime,
   formatUtc8Time,
   formatUnixSecondsUtc8,
-  hexToBytes,
-  bytesToHex,
   cn,
 } from '@/lib/utils';
 
@@ -36,19 +32,6 @@ describe('formatCkbCompact', () => {
   it('rounds a large shannon amount without losing the threshold bit', () => {
     expect(formatCkbCompact('100499999999999999999').value).toBe('1.00T');
     expect(formatCkbCompact('100500000000000000000').value).toBe('1.01T');
-  });
-});
-
-describe('exact CKB decimal readouts', () => {
-  it('keeps fractional CKB from a large API decimal string', () => {
-    expect(formatCkbValue('9007199254740993.00000001').full).toBe('9,007,199,254,740,993.00000001');
-  });
-
-  it('rounds signed activity deltas only at display precision', () => {
-    expect(formatCompactCkbDelta('-9007199254740993.005')).toEqual({
-      compact: '9007199.25B',
-      direction: 'down',
-    });
   });
 });
 
@@ -199,37 +182,6 @@ describe('one site clock: UTC+8 (D2)', () => {
     walk(join(root, 'components'));
     walk(join(root, 'lib'));
     expect(offenders).toEqual([]);
-  });
-});
-
-describe('hexToBytes', () => {
-  it('converts hex string to bytes', () => {
-    const bytes = hexToBytes('0x1234');
-    expect(bytes).toEqual(new Uint8Array([0x12, 0x34]));
-  });
-
-  it('handles hex without 0x prefix', () => {
-    const bytes = hexToBytes('abcd');
-    expect(bytes).toEqual(new Uint8Array([0xab, 0xcd]));
-  });
-});
-
-describe('bytesToHex', () => {
-  it('converts bytes to hex string', () => {
-    const hex = bytesToHex(new Uint8Array([0x12, 0x34, 0xab, 0xcd]));
-    expect(hex).toBe('0x1234abcd');
-  });
-
-  it('pads single digit bytes', () => {
-    const hex = bytesToHex(new Uint8Array([0x01, 0x02]));
-    expect(hex).toBe('0x0102');
-  });
-
-  it('roundtrips correctly', () => {
-    const original = '0x1234567890abcdef';
-    const bytes = hexToBytes(original);
-    const result = bytesToHex(bytes);
-    expect(result).toBe(original);
   });
 });
 

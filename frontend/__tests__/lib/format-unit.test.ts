@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formatCompactInteger, formatCompactRatio } from '@/lib/exact-integer';
-import { formatCkbCompact, formatCompactCkbDelta } from '@/lib/utils';
+import { formatCkbCompact } from '@/lib/utils';
 import { formatTick } from '@/lib/chart-ticks';
 import { percentFigure, percentOf, withUnit } from '@/lib/format-unit';
 
@@ -17,7 +17,6 @@ describe('compact numbers: one form (CH-14)', () => {
     expect(formatCompactInteger('123456', 'count')).toBe('123.46k');
     expect(formatCompactRatio(BigInt(1234567), BigInt(1000))).toBe('1.23k');
     expect(formatCkbCompact(BigInt('12345600000000')).value).toBe('123.46k');
-    expect(formatCompactCkbDelta('-1234.5').compact).toBe('1.23k');
   });
 
   it('keeps M, B and T for the larger magnitudes', () => {
@@ -36,17 +35,6 @@ describe('compact numbers: one form (CH-14)', () => {
     expect(formatCkbCompact(ckb('999999999995')).value).toBe('1.00T');
     expect(formatCkbCompact(BigInt('99999500000')).value).toBe('1.00k'); // 999.995 CKB
     expect(formatCkbCompact(BigInt('99999400000')).value).toBe('999.99'); // 999.994 CKB
-    for (const [delta, compact] of [
-      ['-999994', '999.99k'],
-      ['-999995', '1.00M'],
-      ['-999999995', '1.00B'],
-      ['999995', '1.00M'],
-      ['-999.995', '1.00k'],
-      ['-0.99995', '1.00'], // the 4-decimal form below 1 CKB rounds to 1.0000: one CKB at two
-      ['-0.99994', '0.9999'],
-    ] as const)
-      expect(formatCompactCkbDelta(delta).compact).toBe(compact);
-    expect(formatCompactCkbDelta('-999995').direction).toBe('down');
   });
 });
 

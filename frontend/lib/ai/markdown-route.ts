@@ -2,8 +2,6 @@ import { CHART_ROUTES, PAGE_ROUTES, matchPageRoute } from '@/lib/ai/page-registr
 
 export const CHART_PAGE_SLUGS = Object.keys(CHART_ROUTES) as (keyof typeof CHART_ROUTES)[];
 
-export type ChartPageSlug = (typeof CHART_PAGE_SLUGS)[number];
-
 export type ParsedMarkdownPage =
   | { kind: 'home'; pathname: '/' }
   | { kind: 'activities_list'; pathname: '/activities' }

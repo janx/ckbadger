@@ -54,8 +54,6 @@ const TEXT_GRADE: PaletteKey[] = [
   'cell-data',
   'data-framing',
   'board-link',
-  'tier-btc-ink',
-  'tier-pure-ink',
   // Lane E2 round 3 (ruling): an ELF region's hue paints the hex digits of its bytes on the cell
   // page, so each is text grade, also on the evidence tier's ground (below). The program headers
   // are the header a step lighter by night and a step darker by day (round 4's ruling).

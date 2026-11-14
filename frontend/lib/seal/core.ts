@@ -27,14 +27,6 @@ export const TAU = Math.PI * 2;
 export const RIMS = ['round', 'oct', 'mallow6', 'caltrop8', 'scallop12'] as const;
 export type RimName = (typeof RIMS)[number];
 
-export const RIM_LABEL: Readonly<Record<RimName, readonly [string, string]>> = {
-  round: ['plain', '圆口'],
-  oct: ['eight-sided', '八方'],
-  mallow6: ['mallow mouth', '葵口'],
-  caltrop8: ['caltrop flower', '菱花'],
-  scallop12: ['flower mouth', '花口'],
-};
-
 /** The least a rim's radius comes to, over its greatest. */
 export const RIM_MIN = 0.915;
 

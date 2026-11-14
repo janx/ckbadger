@@ -1,11 +1,6 @@
 /** Units and consensus targets for the homepage network charts. */
 import { formatScaledInteger } from '@/lib/exact-integer';
 
-export interface HashRateUnit {
-  suffix: string;
-  divisor: number;
-}
-
 export function exactHashRateUnit(maxHashesPerSecond: bigint): { suffix: string; divisor: bigint } {
   if (maxHashesPerSecond < BigInt(0)) throw new Error('hash rate is negative');
   for (const [suffix, divisor] of [
@@ -19,29 +14,6 @@ export function exactHashRateUnit(maxHashesPerSecond: bigint): { suffix: string;
     if (maxHashesPerSecond >= divisor) return { suffix, divisor };
   }
   return { suffix: 'H/s', divisor: BigInt(1) };
-}
-
-const HASH_RATE_UNITS: HashRateUnit[] = [
-  { suffix: 'EH/s', divisor: 1e18 },
-  { suffix: 'PH/s', divisor: 1e15 },
-  { suffix: 'TH/s', divisor: 1e12 },
-  { suffix: 'GH/s', divisor: 1e9 },
-  { suffix: 'MH/s', divisor: 1e6 },
-  { suffix: 'KH/s', divisor: 1e3 },
-];
-
-/**
- * The unit a series of hash rates in H/s reads best in: the largest unit its maximum is at least
- * one of (mainnet PH/s, a testnet far less). `/charts/hash-rate` reports H/s; no conversion of
- * the values happens here beyond dividing by the chosen unit.
- */
-export function hashRateUnit(maxHashesPerSecond: number): HashRateUnit {
-  if (!Number.isFinite(maxHashesPerSecond) || maxHashesPerSecond < 0) {
-    throw new Error(`hash rate ${maxHashesPerSecond} is not a non-negative number of H/s`);
-  }
-  return (
-    HASH_RATE_UNITS.find((u) => maxHashesPerSecond >= u.divisor) ?? { suffix: 'H/s', divisor: 1 }
-  );
 }
 
 export interface OrphanRateTarget {
@@ -80,10 +52,4 @@ export function formatOrphanRateTarget(target: OrphanRateTarget | undefined | nu
     /\.?0+$/,
     ''
   );
-}
-
-/** A percentage with at most two decimals and no trailing zeros: `2.5`, `2.64`, `3`. */
-export function formatPercentShort(percent: number): string {
-  if (!Number.isFinite(percent)) throw new Error(`percentage ${percent} is not finite`);
-  return percent.toFixed(2).replace(/\.?0+$/, '');
 }

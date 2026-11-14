@@ -390,17 +390,6 @@ function profileAllowedForRoute(page: ParsedRawPage, profile: RawProfile): boole
   return routeProfiles(page.kind).includes(profile);
 }
 
-function buildErrorBody(meta: RawMeta, error: RawRenderError): RenderRawOutput['body'] {
-  return {
-    meta,
-    error: {
-      code: error.code,
-      message: error.message,
-      details: error.details,
-    },
-  };
-}
-
 function getCkbRpcUrl(): string {
   return resolveCkbRpcUrl();
 }
@@ -965,22 +954,4 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
     const mapped = mapApiErrorToRawError(error);
     throw mapped;
   }
-}
-
-export function buildRawErrorResponse(
-  pathname: string,
-  profile: string | null,
-  origin: string,
-  pageType: ParsedRawPage['kind'],
-  error: RawRenderError
-): RenderRawOutput {
-  const fallbackProfile =
-    profile && (RAW_PROFILES as readonly string[]).includes(profile)
-      ? (profile as RawProfile)
-      : DEFAULT_PROFILE;
-  const meta = buildMeta(pathname, fallbackProfile, pageType, origin);
-  return {
-    status: error.status,
-    body: buildErrorBody(meta, error),
-  };
 }
