@@ -55,7 +55,8 @@ describe('a secondary figure says what it reads (CH-05)', () => {
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     const reading = await screen.findByRole('group', { name: 'Common knowledge reading' });
-    expect(reading).toHaveTextContent(/^largest, 100.*1k CKB75,000,000CKB$/);
+    // The unit after a no-break space (re-pinned for CH-14).
+    expect(reading).toHaveTextContent(/^largest, 100.*1k CKB75,000,000 CKB$/);
     expect(reading).not.toHaveTextContent('1,048,617');
     // The bucket in the axis' words (re-pinned for CH-12: was the API's '100-1k CKB').
     expect(lastChart('Common knowledge').reading).toEqual({
@@ -77,7 +78,7 @@ describe('a secondary figure says what it reads (CH-05)', () => {
     render(<ChartDetail slug="total-deposit" />);
     const reading = await screen.findByRole('group', { name: 'Current depositors reading' });
     expect(within(reading).getByText('2026-11-13')).toBeInTheDocument();
-    expect(reading).toHaveTextContent('16,590depositors');
+    expect(reading).toHaveTextContent('16,590 depositors');
   });
 
   it('dates the HODL wave holder count', async () => {
@@ -98,6 +99,6 @@ describe('a secondary figure says what it reads (CH-05)', () => {
     render(<ChartDetail slug="hodl-wave" />);
     const reading = await screen.findByRole('group', { name: 'Holder count reading' });
     expect(within(reading).getByText('2026-11-13')).toBeInTheDocument();
-    expect(reading).toHaveTextContent('367,704holders');
+    expect(reading).toHaveTextContent('367,704 holders');
   });
 });

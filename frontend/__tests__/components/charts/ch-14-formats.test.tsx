@@ -81,7 +81,7 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     );
     render(<ChartDetail slug="average-block-time" />);
     const readings = await screen.findByRole('group', { name: 'Block time readings' });
-    expect(readings).toHaveTextContent('2026-11-13 10.43 s');
+    expect(readings).toHaveTextContent('2026-11-1310.43 s');
     expect(document.body).not.toHaveTextContent(/\d (seconds|hours)\b/);
   });
 
@@ -126,7 +126,7 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     });
     render(<ChartDetail slug="uncle-rate" />);
     const readings = await screen.findByRole('group', { name: 'Uncle rate readings' });
-    expect(readings).toHaveTextContent('2026-11-13 2.55%');
+    expect(readings).toHaveTextContent('2026-11-132.55%');
     expect(screen.getByText('Last change').nextElementSibling).toHaveTextContent('+0.05%');
   });
 });

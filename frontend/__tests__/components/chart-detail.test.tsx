@@ -109,8 +109,9 @@ describe('shared chart detail', () => {
     expect(
       await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
     ).toBeInTheDocument();
-    // The head rounds a rate like the board (9.01); the exact value is its hover title.
-    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01PH/s');
+    // The head rounds a rate like the board (9.01); the exact value is its hover title. Re-pinned
+    // for CH-14: the unit bound to its figure by a no-break space.
+    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01 PH/s');
     expect(screen.getByText('/charts/hash-rate')).toBeInTheDocument();
     // R-10 (CH-27): a dated block chart's evidence names the blocks of its latest day, exactly.
     expect(api.getBlocksByDay).toHaveBeenCalledWith(response.data.at(-1)!.date);
@@ -139,7 +140,7 @@ describe('shared chart detail', () => {
     });
     render(<ChartDetail slug="hash-rate" />);
     const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
-    expect(readings).toHaveTextContent('2024-02-101,234.57PH/s');
+    expect(readings).toHaveTextContent('2024-02-101,234.57 PH/s');
     expect(screen.getByTitle('1,234.567890123456789 PH/s')).toBeInTheDocument();
     expect(screen.getByText('+1,233.57 PH/s')).toBeInTheDocument();
   });
@@ -265,8 +266,9 @@ describe('shared chart detail', () => {
     vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
     render(<ChartDetail slug="hash-rate" />);
     const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
-    expect(readings).toHaveTextContent('2026-10-2991.34PH/s');
-    expect(readings).toHaveTextContent('peak, 2022-06-01465.31PH/s');
+    // Re-pinned for CH-14: each figure's unit after a no-break space.
+    expect(readings).toHaveTextContent('2026-10-2991.34 PH/s');
+    expect(readings).toHaveTextContent('peak, 2022-06-01465.31 PH/s');
     // The exact values stay one hover away.
     expect(screen.getByTitle('465.31129244471372 PH/s')).toBeInTheDocument();
   });
@@ -390,7 +392,8 @@ describe('shared chart detail', () => {
     });
     render(<ChartDetail slug="epoch-time-length" />);
     const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
-    expect(readings).toHaveTextContent('#15,2024.29hours');
+    // Re-pinned for CH-14: the SI symbol h, after a no-break space (was '4.29hours').
+    expect(readings).toHaveTextContent('#15,2024.29 h');
     const props = lastChart('Epoch length') as { formatLabel: (label: string) => string };
     expect(props.formatLabel('15202')).toBe('epoch #15,202');
   });

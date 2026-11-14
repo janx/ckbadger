@@ -6,6 +6,21 @@
  */
 import { MINUS, formatTick, stepDecimals } from '@/lib/chart-ticks';
 
+/**
+ * What follows a number to name its unit (CH-14): a percentage takes its sign with no space
+ * (`24.79%`), any other unit follows `space` (`10.43 s`); a display figure passes a no-break
+ * space so its unit never wraps away from it. No unit, nothing.
+ */
+export function unitAfter(unit: string, space = ' '): string {
+  if (unit === '') return '';
+  return unit === '%' ? '%' : `${space}${unit}`;
+}
+
+/** A value with its unit, in the one form: `24.79%`, `10.43 s`, `16,826 transactions` (CH-14). */
+export function withUnit(value: string, unit: string): string {
+  return `${value}${unitAfter(unit)}`;
+}
+
 /** A window between two dates: `2026-11-07 → 2026-11-13` (CH-03). */
 export function formatDateWindow(from: string, to: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))

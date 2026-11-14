@@ -13,7 +13,7 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { niceStep, stepDecimals } from '@/lib/chart-ticks';
-import { cellSizeBucketLabel, formatDateWindow } from '@/components/charts/chart-format';
+import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/components/charts/chart-format';
 import { formatCount } from '@/lib/format-count';
 import {
   ACTIVITY_KIND_COLORS,
@@ -211,7 +211,7 @@ function exactDelta(a: string, b: string, context: string): string {
 }
 
 /** Units whose readouts are rates or durations: the design shows them at two decimals. */
-const RATE_UNITS = new Set(['%', 'PH/s', 'P', 'hours', 'seconds']);
+const RATE_UNITS = new Set(['%', 'PH/s', 'P', 'h', 's']);
 /** Units that count discrete things; an exact whole count is shown without decimals. */
 const COUNT_UNITS = new Set([
   'activities',
@@ -715,7 +715,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
         key: entry.key,
         label: entry.label,
         color: entry.color,
-        value: `${share(entry.key)} %`,
+        value: withUnit(share(entry.key), '%'),
       })),
     };
     model.headline = {
@@ -726,8 +726,8 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   } else {
     const legendValue = (key: string) =>
       definition.slug === 'common-knowledge-composition'
-        ? `${shareOf(last.values[key], total(last), `${definition.slug} ${key}`)} %`
-        : `${summary(last.values[key], definition.unit)} ${definition.unit}`;
+        ? withUnit(shareOf(last.values[key], total(last), `${definition.slug} ${key}`), '%')
+        : withUnit(summary(last.values[key], definition.unit), definition.unit);
     model.card = {
       points,
       series,
@@ -1206,7 +1206,7 @@ export function chartModel(definition: ChartDefinition, payload: ChartPayload): 
     model.facts = [{ label: 'Consensus target', value: `${numerator} / ${denominator} blocks` }];
     // The target as a percentage of blocks: exact, at the rate units' two decimals (CH-12).
     const percent = formatScaledInteger(BigInt(numerator) * BigInt(100), BigInt(denominator), 2);
-    model.referenceLines = [{ value: Number(percent), label: `target ${percent} %` }];
+    model.referenceLines = [{ value: Number(percent), label: withUnit(`target ${percent}`, '%') }];
   }
   return model;
 }

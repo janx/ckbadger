@@ -62,15 +62,16 @@ describe('chart detail key (C#4)', () => {
     expect(items.map((item) => item.querySelector('[data-swatch]') !== null)).toEqual(
       bands.map(() => true)
     );
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(items.map((item) => item.textContent)).toEqual([
-      '24h5.00 %',
-      '1d-1w10.00 %',
-      '1w-1m15.00 %',
-      '1m-3m10.00 %',
-      '3m-6m10.00 %',
-      '6m-1y15.00 %',
-      '1y-3y20.00 %',
-      '> 3y15.00 %',
+      '24h5.00%',
+      '1d-1w10.00%',
+      '1w-1m15.00%',
+      '1m-3m10.00%',
+      '3m-6m10.00%',
+      '6m-1y15.00%',
+      '1y-3y20.00%',
+      '> 3y15.00%',
     ]);
     // each swatch is its band's colour on the plot
     const swatches = items.map(

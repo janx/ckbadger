@@ -39,8 +39,9 @@ describe('KnowledgeSizePage with the real chart', () => {
     expect(screen.getByRole('status', { name: 'Net knowledge flow readout' })).toHaveTextContent(
       '2026-02-19 · -30 CKB/day'
     );
+    // The unit after a no-break space (re-pinned for CH-14).
     expect(screen.getByRole('group', { name: 'Net knowledge flow reading' })).toHaveTextContent(
-      '2026-02-19-30CKB/day'
+      '2026-02-19-30 CKB/day'
     );
     // Re-pinned for CH-06: the one dim line says what the flow counts in plain words.
     expect(container).toHaveTextContent(

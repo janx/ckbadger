@@ -30,7 +30,7 @@ import {
   type SubChart,
 } from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
-import { chartAxisFormat } from '@/components/charts/chart-format';
+import { chartAxisFormat, unitAfter, withUnit } from '@/components/charts/chart-format';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
@@ -142,15 +142,16 @@ function Reading({
   quiet?: boolean;
 }) {
   return (
-    <div className="flex flex-col items-end" title={`${formatChartExact(raw, unit)} ${unit}`}>
+    <div className="flex flex-col items-end" title={withUnit(formatChartExact(raw, unit), unit)}>
       <span className="text-text-dim text-meta">{label}</span>
-      <span className="flex items-baseline gap-1">
+      <span className="flex items-baseline">
         <span
           className={`text-hero font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
         >
           {formatChartHover(raw, unit)}
         </span>
-        <span className="text-text-dim text-meta">{unit}</span>
+        {/* One form per quantity (CH-14): 2.55%, 10.43 s — the unit never wraps away. */}
+        <span className="text-text-dim text-meta whitespace-pre">{unitAfter(unit, '\u00a0')}</span>
       </span>
     </div>
   );
@@ -346,7 +347,7 @@ function DetailBody({
       ? [
           {
             label: 'Last change',
-            value: `${formatChartHover(model.delta, model.unit)} ${model.unit}`,
+            value: withUnit(formatChartHover(model.delta, model.unit), model.unit),
           },
         ]
       : []),

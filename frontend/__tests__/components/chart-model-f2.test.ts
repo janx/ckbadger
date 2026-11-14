@@ -116,12 +116,13 @@ describe('Charts index encodings (F2 charts)', () => {
   it('heads knowledge by kind with the leading share and lists every kind in a legend (CH-07)', () => {
     const model = chartModel(def('common-knowledge-composition'), composition);
     expect(model.headline).toEqual({ pre: 'nervos dao', display: '60.00', unit: '%' });
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'Nervos DAO 60.00 %',
-      'Plain CKB 20.00 %',
-      'Tokens 10.00 %',
-      'Objects 8.00 %',
-      'Other scripts 2.00 %',
+      'Nervos DAO 60.00%',
+      'Plain CKB 20.00%',
+      'Tokens 10.00%',
+      'Objects 8.00%',
+      'Other scripts 2.00%',
     ]);
   });
 
@@ -170,12 +171,12 @@ describe('Charts index encodings (F2 charts)', () => {
       ],
     });
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'Script calls 80.00 %',
-      'CKB transfers 10.00 %',
-      'Tokens 3.00 %',
-      'Objects 4.00 %',
-      'Identities 1.00 %',
-      'Nervos DAO 2.00 %',
+      'Script calls 80.00%',
+      'CKB transfers 10.00%',
+      'Tokens 3.00%',
+      'Objects 4.00%',
+      'Identities 1.00%',
+      'Nervos DAO 2.00%',
     ]);
     expect(model.headline).toEqual({ pre: 'script calls', display: '80.00', unit: '%' });
   });
@@ -286,7 +287,8 @@ describe('Charts index encodings (F2 charts)', () => {
       data: [{ date: '2026-10-29', value: '0.0257' }],
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
-    expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50 %' }]);
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50%' }]);
     const inflation = chartModel(def('inflation-rate'), {
       title: 'Inflation',
       yAxisLabel: 'Nominal',

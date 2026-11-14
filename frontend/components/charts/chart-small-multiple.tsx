@@ -5,7 +5,7 @@ import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ClassMark } from '@/components/ui/class-mark';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
-import { chartAxisFormat } from '@/components/charts/chart-format';
+import { chartAxisFormat, unitAfter, withUnit } from '@/components/charts/chart-format';
 import {
   axisStyle,
   axisTicks,
@@ -115,7 +115,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         {model?.latest && headline && (
           <div
             className="ml-auto min-w-0 text-right"
-            title={`${model.latest.label}: ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`}
+            title={`${model.latest.label}: ${withUnit(formatChartExact(model.latest.raw, model.unit), model.unit)}`}
           >
             <div className="text-text-dim text-meta whitespace-nowrap">{headline.pre}</div>
             <div
@@ -123,14 +123,14 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
               aria-label={`${definition.title} current readout`}
               className="min-w-0 overflow-x-auto"
             >
-              <div className="flex w-max min-w-full items-baseline justify-end gap-1">
+              <div className="flex w-max min-w-full items-baseline justify-end">
                 <span className="text-text-bright text-hero whitespace-nowrap font-medium tabular-nums">
                   {headline.display}
                 </span>
-                {/* The unit is in the subtitle, as on the board; only a percentage keeps its sign. */}
-                {headline.unit === '%' && (
-                  <span className="text-text-dim text-meta whitespace-nowrap">%</span>
-                )}
+                {/* Every card figure carries its unit, in the one form (CH-14): 2.55%, 10.43 s. */}
+                <span className="text-text-dim text-meta whitespace-pre">
+                  {unitAfter(headline.unit, '\u00a0')}
+                </span>
               </div>
             </div>
           </div>

@@ -37,8 +37,9 @@ describe('shared Chart encodings for the charts boards', () => {
         formatValue={(v) => v}
       />
     );
-    expect(text(container)).toContain('100 %');
-    expect(text(container)).not.toContain('150 %');
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    expect(text(container)).toContain('100%');
+    expect(text(container)).not.toContain('150%');
   });
 
   it('draws a dashed reference line at a target value, inside the axis (CH-12)', () => {
@@ -56,8 +57,8 @@ describe('shared Chart encodings for the charts boards', () => {
     const line = container.querySelector('[data-reference-line="target 4 %"] line')!;
     expect(line.getAttribute('stroke-dasharray')).toBe('3 3');
     expect(text(container)).toContain('target 4 %');
-    // The axis grows to hold the target even though no point reaches it.
-    expect(text(container).some((t) => t === '4 %')).toBe(true);
+    // The axis grows to hold the target even though no point reaches it. Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    expect(text(container).some((t) => t === '4%')).toBe(true);
   });
 
   it('keys a target line above the plot, clear of the data and the hardfork names (C#16)', () => {

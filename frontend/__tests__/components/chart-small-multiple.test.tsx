@@ -38,8 +38,10 @@ describe('ChartSmallMultiple', () => {
     // The card headline is the design's two-decimal readout (CH-02: "91.34"); the exact value stays
     // in the title above. Like the board, the unit lives in the short subtitle ("daily, PH/s"), so
     // the headline is the bare number (visual pass: units squeezed the titles to three lines).
+    // Re-pinned for CH-14 (UI review 2026-11-14): every card figure carries its unit, bound to it
+    // by a no-break space (was the bare number, the unit only in the subtitle).
     const readout = screen.getByRole('group', { name: 'Hash rate current readout' });
-    expect(readout).toHaveTextContent(/^900\.72$/);
+    expect(readout.textContent).toBe('900.72\u00a0PH/s');
     expect(readout).toHaveClass('overflow-x-auto');
     expect(screen.getByText('900.72')).toHaveClass('whitespace-nowrap');
     expect(screen.getByText('daily, PH/s')).toBeInTheDocument();
@@ -110,7 +112,9 @@ describe('ChartSmallMultiple', () => {
     // 7 of 28 CKB of knowledge: the leader's exact share, named above it.
     expect(readout).toHaveTextContent('25.00%');
     expect(readout.parentElement).toHaveTextContent(/^top0/);
-    expect(screen.getByText('%')).toHaveClass('whitespace-nowrap');
+    // Re-pinned for CH-14: the sign against its figure, never wrapped away from it.
+    expect(screen.getByText('%')).toHaveClass('whitespace-pre');
+    expect(readout.textContent).toBe('25.00%');
     expect(screen.getByText('share of knowledge, top 5')).toBeInTheDocument();
   });
 
@@ -188,12 +192,13 @@ describe('ChartSmallMultiple', () => {
     );
     const legend = await screen.findByRole('list', { name: 'Knowledge by kind legend' });
     const items = [...legend.querySelectorAll('li')];
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(items.map((item) => item.textContent)).toEqual([
-      'Nervos DAO60.00 %',
-      'Plain CKB20.00 %',
-      'Tokens10.00 %',
-      'Objects8.00 %',
-      'Other scripts2.00 %',
+      'Nervos DAO60.00%',
+      'Plain CKB20.00%',
+      'Tokens10.00%',
+      'Objects8.00%',
+      'Other scripts2.00%',
     ]);
     expect(items[0].querySelector('span[aria-hidden]')).toHaveStyle({
       backgroundColor: 'var(--c-gold)',

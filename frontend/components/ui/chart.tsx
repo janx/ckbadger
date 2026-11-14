@@ -14,6 +14,7 @@ import {
 } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
+import { unitAfter, withUnit } from '@/components/charts/chart-format';
 
 export interface ChartPoint {
   label: string;
@@ -253,8 +254,8 @@ export function chartValueAxis({
       : null;
   const tickLabel = (value: number, step: number) =>
     yScale === 'log'
-      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
-      : `${formatAxis(value, step)} ${unit}`;
+      ? withUnit(formatAxis(10 ** value, 10 ** step), unit)
+      : withUnit(formatAxis(value, step), unit);
   const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
   return { values, plotValues, ticks, tickLabel, labels };
 }
@@ -499,7 +500,7 @@ export function Chart({
                       </span>
                     )}
                     {formatValue(selected.values[s.key])}
-                    <span className="text-text-dim text-meta"> {unit}</span>
+                    <span className="text-text-dim text-meta">{unitAfter(unit)}</span>
                   </span>
                 ))}
             </span>
@@ -516,7 +517,8 @@ export function Chart({
                 <div className="flex flex-wrap justify-between gap-2">
                   <span>{p.label}</span>
                   <span className="tabular-nums">
-                    {formatValue(p.values[series[0].key])} {unit}
+                    {formatValue(p.values[series[0].key])}
+                    {unitAfter(unit)}
                   </span>
                 </div>
                 <div
@@ -880,7 +882,7 @@ export function Chart({
                     const shown = formatValue(data[activeIndex].values[s.key]);
                     if (typeof shown !== 'string' && typeof shown !== 'number')
                       throw new Error(`${title}: an in-plot reading needs a text value`);
-                    return `${series.length > 1 ? `${s.label} ` : ''}${shown} ${unit}`;
+                    return `${series.length > 1 ? `${s.label} ` : ''}${withUnit(String(shown), unit)}`;
                   });
                   const head = formatLabel(data[activeIndex].label);
                   const boxWidth = Math.max(head.length, ...rows.map((r) => r.length)) * 6.6 + 20;
@@ -967,7 +969,8 @@ export function Chart({
                       <Fragment key={s.key}>
                         {' · '}
                         {series.length > 1 && `${s.label} `}
-                        {formatValue(selected.values[s.key])} {unit}
+                        {formatValue(selected.values[s.key])}
+                        {unitAfter(unit)}
                       </Fragment>
                     ))}
               </>
@@ -991,7 +994,7 @@ export function Chart({
               {selected && (
                 <span className="text-text-bright whitespace-nowrap tabular-nums">
                   {formatValue(selected.values[s.key])}
-                  <span className="text-text-dim text-meta"> {unit}</span>
+                  <span className="text-text-dim text-meta">{unitAfter(unit)}</span>
                 </span>
               )}
             </li>
@@ -1002,7 +1005,7 @@ export function Chart({
       {!pinnedReadout && (
         <span className="sr-only" aria-live="polite">
           {activeIndex !== null && selected
-            ? `${selected.label}: ${series.map((s) => `${s.label} ${selected.values[s.key]} ${unit}`).join(', ')}`
+            ? `${selected.label}: ${series.map((s) => `${s.label} ${withUnit(selected.values[s.key], unit)}`).join(', ')}`
             : ''}
         </span>
       )}
