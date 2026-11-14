@@ -11,9 +11,12 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatUtc8Date } from '@/lib/utils';
+
 import { retryTransientOnly } from '@/lib/query-client';
 import { hexBytes } from '@/lib/hex-bytes';
+import { formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 const short = (value: string, head = 10, tail = 6) =>
   value.length > head + tail + 1 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
@@ -45,19 +48,19 @@ export function ClusterCellEvidence({
         <dt className="text-text-dim">{cell.isLive ? 'live cell' : 'cell'}</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`} title={cell.txHash}>
-            {short(cell.txHash, 8, 4)}
+            <NoBreak>{short(cell.txHash, 8, 4)}</NoBreak>
             <OutpointIndex index={cell.outputIndex} />
           </AppLink>{' '}
           · created in{' '}
           <AppLink href={`/blocks/${cell.blockNumber}`}>
             {formatBlockNumber(cell.blockNumber)}
           </AppLink>{' '}
-          · {formatUtc8Date(cell.timestamp)}
+          · <Utc8Date timestamp={cell.timestamp} />
         </dd>
         <dt className="text-text-dim">held by</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
-            {short(cell.ownerAddress, 12, 6)}
+            <NoBreak>{short(cell.ownerAddress, 12, 6)}</NoBreak>
           </AppLink>{' '}
           · {cell.lockName ?? 'Unregistered lock'}
         </dd>
@@ -238,8 +241,8 @@ export function MnftClassEvidence({
             <dt className="text-text-dim">issuer</dt>
             <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               {issuerDetail.name ?? 'Unnamed issuer'} ·{' '}
-              {issuerDetail.classCount.toLocaleString('en-US')} classes ·{' '}
-              {issuerDetail.setCount.toLocaleString('en-US')} sets
+              {formatCount(issuerDetail.classCount, 'class', 'classes')} ·{' '}
+              {formatCount(issuerDetail.setCount, 'set')}
             </dd>
           </>
         )}

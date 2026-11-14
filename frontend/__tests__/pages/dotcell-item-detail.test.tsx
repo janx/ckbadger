@@ -15,7 +15,7 @@ it('routes only an actual name 404 to exact endpoint evidence', async () => {
   expect(
     await screen.findByText('/assets/identities/dotcell/items/alice.cell')
   ).toBeInTheDocument();
-  expect(screen.getByText('no identity at this address.')).toBeInTheDocument();
+  expect(screen.getByText('no identity with this id.')).toBeInTheDocument();
 });
 // Visual finish V8: the page loads as the shared detail skeleton, not the asset shell with a
 // "Loading .cell name…" line.
@@ -267,7 +267,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   expect(
     await screen.findByRole('heading', {
       level: 1,
-      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+      name: "no identity with this id. the local index was asked; it holds none. honey badger don't care.",
     })
   ).toBeInTheDocument();
   expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();

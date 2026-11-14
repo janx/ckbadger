@@ -444,7 +444,7 @@ describe('Transactions pool view', () => {
       expect(phoneSeal).not.toHaveClass('-my-[3px]');
       expectBefore(phoneSeal, within(card).getByTitle(ids[i].hash));
     });
-    expect(cards[1]).toHaveTextContent('0 → 1 cells');
+    expect(cards[1]).toHaveTextContent('0 → 1 cell');
   });
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
@@ -583,7 +583,7 @@ describe('Transactions pool view', () => {
       [
         'figures',
         'fee 0.00012345 CKB',
-        '54,623 shannon/KB · 2 → 3 cells · 226 B · 1,709,221 cycles',
+        '54,623 shannon/KB · 2 → 3\u00a0cells · 226 B · 1,709,221 cycles',
       ],
     ]);
   });

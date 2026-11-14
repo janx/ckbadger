@@ -170,7 +170,7 @@ describe('Network board (F2 charts)', () => {
     expect(panel).toHaveTextContent('peer12200fce0b…a2d1b5');
     expect(panel).not.toHaveTextContent(map.points[0].peerId);
     expect(panel).toHaveTextContent(
-      'to this nodeconnected for 1 h 2 m · ping 42 ms · this node dialled it (as of 08:00:00 UTC+8)'
+      'to this nodeconnected for 1h 2m · ping 42 ms · this node dialled it (as of 08:00:00 UTC+8)'
     );
     expect(panel).toHaveTextContent('in address booksof 3 peers in round #97');
   });
@@ -234,7 +234,7 @@ describe('Network board (F2 charts)', () => {
   it('shows the never-verified peers as an unlocated strip under the map (CH-51)', async () => {
     server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
     render(wrap(<NetworkMapView neverVerified={115} />));
-    const strip = await screen.findByRole('img', { name: '115 peers only heard of' });
+    const strip = await screen.findByRole('img', { name: '115\u00a0peers only heard of' });
     expect(strip.querySelectorAll('[data-unlocated]')).toHaveLength(115);
     expect(
       screen.getByText(
@@ -307,7 +307,7 @@ describe('Network board (F2 charts)', () => {
     render(wrap(<NetworkDistributions />));
     // Phase 5 (B11): the list runs on every verified node it counts.
     expect(
-      await screen.findByRole('heading', { name: 'Which software they run 7 nodes' })
+      await screen.findByRole('heading', { name: 'Which software they run 7\u00a0nodes' })
     ).toBeInTheDocument();
     expect(screen.getByText('0.204.0')).toBeInTheDocument();
     expect(screen.queryByText('Countries')).toBeNull();

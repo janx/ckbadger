@@ -16,6 +16,19 @@ describe('LockKind (R-2)', () => {
     expect(screen.getByText('0x9b9b9b...9b9b')).toBeInTheDocument();
   });
 
+  // U-15 (UI review 2026-11-14): "Lock kind unavailable" told the reader an internal state. A lock
+  // the registry does not name is named by what is known: the word "lock" and its code hash,
+  // shortened, linking to the script page of that code hash; one unit that never breaks inside.
+  it('names an unregistered lock "lock <code hash>", the hash a link to its script page', () => {
+    const { container } = render(<LockKind lockKind={null} lockCodeHash={CODE} />);
+    const kind = container.querySelector('[data-lock-kind]') as HTMLElement;
+    expect(kind).toHaveTextContent(/^lock 0x9b9b9b\.\.\.9b9b$/);
+    const link = screen.getByRole('link', { name: '0x9b9b9b...9b9b' });
+    expect(link).toHaveAttribute('href', expect.stringMatching(new RegExp(`/script/${CODE}$`)));
+    expect(link).toHaveAttribute('title', CODE);
+    expect(kind).toHaveClass('whitespace-nowrap');
+  });
+
   it('keeps its dim one-line form by default and takes a row chip’s classes (table-rows L2-4)', () => {
     const { rerender } = render(<LockKind lockKind="JoyID" lockCodeHash={CODE} />);
     expect(screen.getByText('JoyID')).toHaveClass('text-text-dim', 'whitespace-nowrap');

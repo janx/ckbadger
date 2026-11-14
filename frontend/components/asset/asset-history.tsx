@@ -14,7 +14,10 @@ import { exactUnsignedInteger, formatExactDecimal, formatScaledInteger } from '@
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 const DAY = 86400000;
+/** The weekly noun for one (the one plural rule, U-15). */
+const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
 /** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
 export const HISTORY_PLOT_HEIGHT = 280;
 export interface AssetHistoryProps {
@@ -268,11 +271,11 @@ export function AssetHistory({
   const weekText =
     weeklyUnavailable ??
     (week
-      ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
+      ? `Week of ${week.weekStart}: ${formatCount(week.count, WEEKLY_ONE[weeklyNoun], weeklyNoun)}`
       : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
         // complete yet; it names the latest complete week instead of nothing.
         selectedDate === null && weekly.length > 0
-        ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
+        ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${formatCount(weekly[weekly.length - 1].count, WEEKLY_ONE[weeklyNoun], weeklyNoun)}`
         : 'No completed weekly total for this day');
   const readoutItems: ReactNode[] = point
     ? [
@@ -403,14 +406,10 @@ export function AssetHistory({
           <div
             aria-live="polite"
             aria-label="History readout"
-            className="border-row-rule text-small mt-2 flex flex-wrap gap-y-1 border-t pt-2"
+            className="border-row-rule text-small mt-2 border-t pt-2"
           >
-            {readoutItems.map((item, i) => (
-              <span key={i}>
-                {i > 0 && <span className="text-text-dim whitespace-pre"> · </span>}
-                {item}
-              </span>
-            ))}
+            {/* PB-23: one separated list, so a wrapped item never opens its line with a "·" */}
+            <Dotted className="gap-y-1" parts={readoutItems} />
           </div>
         </>
       ) : (

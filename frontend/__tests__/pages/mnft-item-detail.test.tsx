@@ -238,7 +238,7 @@ describe('MnftItemDetailPage', () => {
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: "no object at this address. the local index was asked; it holds none. honey badger don't care.",
+        name: "no object with this id. the local index was asked; it holds none. honey badger don't care.",
       })
     ).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once
@@ -302,7 +302,9 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId={id} />);
     await screen.findByRole('region', { name: 'Raw item evidence' });
     expect(screen.getByText('Burned')).toBeInTheDocument();
-    expect(screen.getAllByText('No live cell')).toHaveLength(2);
+    // the owner field says 'No live owner', as every object's owner field does (U-15)
+    expect(screen.getByText('No live owner')).toBeInTheDocument();
+    expect(screen.getAllByText('No live cell')).toHaveLength(1);
     expect(screen.getByRole('link', { name: 'Consumed in transaction →' })).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })

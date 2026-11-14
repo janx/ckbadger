@@ -511,7 +511,7 @@ describe('NetworkTrends', () => {
     expect(rows).toHaveLength(4);
     expect(phoneLines(rows[0]).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['day', 'head', '2025-07-01', '22'],
-      ['leader', 'body', 'US 12', '2 labels'],
+      ['leader', 'body', 'US 12', '2\u00a0labels'],
       ['labels', 'quiet', 'US 12 · DE 10', null],
     ]);
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([

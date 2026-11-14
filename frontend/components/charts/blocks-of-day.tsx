@@ -5,6 +5,7 @@ import Link from '@/components/ui/link';
 import { api, ApiRequestError } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { readErrorText } from '@/lib/read-error';
+import { countNoun } from '@/lib/format-count';
 
 /**
  * Round 3 (contracts R-B · R-10, CH-27): a block chart's evidence for one UTC+8 day — the first
@@ -42,7 +43,7 @@ export function BlocksOfDay({ date }: { date: string }) {
       </Link>
       <span className="text-text-dim">
         {' '}
-        · {blocksCount.toLocaleString('en-US')} {blocksCount === 1 ? 'block' : 'blocks'}
+        · {blocksCount.toLocaleString('en-US')} {countNoun(blocksCount, 'block', 'blocks')}
         {complete ? '' : ', so far: the day is not over'}
       </span>
     </span>

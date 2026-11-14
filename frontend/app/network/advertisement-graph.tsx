@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { truncateHash } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -63,14 +65,14 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
                 title={edge.advertiserPeerId}
                 className="text-text text-small whitespace-nowrap"
               >
-                {truncateHash(edge.advertiserPeerId)}
+                <NoBreak>{truncateHash(edge.advertiserPeerId)}</NoBreak>
               </span>
               <span className="text-text-dim text-meta">named</span>
               <span
                 title={edge.targetPeerId}
                 className="text-body text-text-bright whitespace-nowrap leading-[18px]"
               >
-                {truncateHash(edge.targetPeerId)}
+                <NoBreak>{truncateHash(edge.targetPeerId)}</NoBreak>
               </span>
               <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}
@@ -86,8 +88,8 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
           className="text-jade text-meta mt-3 underline underline-offset-2"
         >
           {showAll
-            ? `Show first ${FIRST_OBSERVATIONS} observations`
-            : `Show all ${data.edges.length.toLocaleString()} observations`}
+            ? `Show first ${formatCount(FIRST_OBSERVATIONS, 'observation')}`
+            : `Show all ${formatCount(data.edges.length, 'observation')}`}
         </button>
       )}
     </div>

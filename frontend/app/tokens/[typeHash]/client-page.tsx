@@ -19,6 +19,9 @@ import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
 import { formatCkbAmount, truncateHash } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { NoBreak } from '@/components/ui/no-break';
+import { Dotted } from '@/components/ui/phone-row';
+import { formatCount } from '@/lib/format-count';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -51,8 +54,6 @@ function provenanceText(metadata: Token['metadata']): string {
     ? `${source}. Its Unique Cell on chain says ${said}.`
     : `${source}; its Unique Cell on chain says the same.`;
 }
-const PLURAL = (n: number, one: string, many: string) =>
-  `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
 export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   const token = useQuery({ queryKey: ['token', typeHash], queryFn: () => api.getToken(typeHash) });
@@ -149,7 +150,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         <>
           <span className="text-body">
             {formatStandard(t.standard)} ·{' '}
-            {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
+            {t.decimals === null ? 'Decimals unknown' : formatCount(t.decimals, 'decimal')}
             {t.name && t.name !== t.symbol && <> · {t.name}</>}
           </span>{' '}
           {/* C7: the type hash the rail listed names the token under its title, as an id does. */}
@@ -227,10 +228,12 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
                       <Hash hash={other.typeScriptHash} copyable={false} className="text-small" />
                     </AppLink>
-                    , <AssetCount value={other.holdersCount} /> holders
+                    , {formatCount(other.holdersCount, 'holder')}
                   </span>
                 ))}
-                {`. Tell them apart by type hash; this one is ${truncateHash(t.typeScriptHash, 10, 4).replace('...', '…')}.`}
+                . Tell them apart by type hash; this one is{' '}
+                {/* U-16: the shortened type hash is one unit */}
+                <NoBreak>{truncateHash(t.typeScriptHash, 10, 4).replace('...', '…')}</NoBreak>.
               </p>
             )
           )}
@@ -242,12 +245,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             {
               label: 'Supply',
               value: <AssetAmount amount={t.totalSupply} decimals={t.decimals} />,
-              note: (
-                <>
-                  {t.symbol && <>{t.symbol} · </>}
-                  {maximum}
-                </>
-              ),
+              note: [t.symbol, maximum],
             },
             {
               label: 'Holders',
@@ -283,7 +281,10 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 <span title={NOT_ESTABLISHED_ISSUER}>Not established</span>
               ),
               note: t.issuer
-                ? `${t.issuer.lockKind ?? 'Lock kind unavailable'} · owner lock proven by token script`
+                ? [
+                    t.issuer.lockKind ?? 'Lock kind unavailable',
+                    'owner lock proven by token script',
+                  ]
                 : undefined,
             },
             {
@@ -399,17 +400,17 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               }
               footnote={
                 // F2 objects (IV-17): the board's line, singular and plural as they come.
-                <>
-                  {PLURAL(history.data.mintCount, 'mint', 'mints')} ·{' '}
-                  {PLURAL(history.data.burnCount, 'burn', 'burns')} ·{' '}
-                  {PLURAL(history.data.transfersCount, 'transfer', 'transfers')}
-                  {held !== null && occupied !== null && occupied > BigInt(0) && (
-                    <>
-                      {' '}
-                      · <HMultiplierReading held={held} occupied={occupied} />
-                    </>
-                  )}
-                </>
+                // PA-25: one separated list
+                <Dotted
+                  parts={[
+                    formatCount(history.data.mintCount, 'mint'),
+                    formatCount(history.data.burnCount, 'burn'),
+                    formatCount(history.data.transfersCount, 'transfer'),
+                    held !== null && occupied !== null && occupied > BigInt(0) && (
+                      <HMultiplierReading held={held} occupied={occupied} />
+                    ),
+                  ]}
+                />
               }
               token={{ symbol: t.symbol, decimals: t.decimals }}
             />

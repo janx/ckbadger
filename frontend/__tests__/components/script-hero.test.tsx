@@ -29,7 +29,9 @@ describe('the scripts pages’ display figure (CkbFigure)', () => {
   });
 
   it('keeps the unit with the figure in the hero block too', () => {
-    render(<HeroFigure label="CKB under these scripts" shannons={FIGURE} companion="in 3 cells" />);
+    render(
+      <HeroFigure label="CKB under these scripts" shannons={FIGURE} companion={['in 3 cells']} />
+    );
     const unit = screen.getByText('CKB');
     expect(unit.closest('.whitespace-nowrap')).toHaveTextContent(/^49,890,081,314\.93777532 CKB$/);
   });

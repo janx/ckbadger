@@ -116,7 +116,7 @@ describe('FiberChannelBoard', () => {
     expect(within(hero).getByText('capacity')).toHaveClass('w-fit');
     // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
     const lede = within(hero).getByText(
-      'Force-closed 8 d 3 h after it opened; settled after 6 epochs.'
+      'Force-closed 8d 3h after it opened; settled after 6 epochs.'
     );
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
@@ -153,7 +153,7 @@ describe('FiberChannelBoard', () => {
       'ckb1qzda0c…ppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1qzda0c…5eyy6y 62.00000351 CKB.'
     );
     expect(summary).toHaveTextContent(
-      '8 d 3 h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
+      '8d 3h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
     );
     expect(tier2).toHaveTextContent(
       'The chain never sees a Fiber payment, only the split when the channel opens and the split when it closes. Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'
@@ -174,7 +174,7 @@ describe('FiberChannelBoard', () => {
     const { container } = render(<FiberChannelBoard channel={channel} />);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByTestId('channel-summary')).toHaveTextContent(
-      /^8 d 3 h later the channel was closed without a joint signature/
+      /^8d 3h later the channel was closed without a joint signature/
     );
   });
 
@@ -241,10 +241,10 @@ describe('FiberChannelBoard', () => {
       'three steps'
     );
     expect(
-      screen.getByRole('img', { name: /^Opened, force-closed 8 d 3 h later/ })
+      screen.getByRole('img', { name: /^Opened, force-closed 8d 3h later/ })
     ).toBeInTheDocument();
     expect(screen.getByTestId('step-1')).toHaveTextContent(
-      `1 · Open ${channel.fundingTxHash} | → step 2, 8 d 3 h later`
+      `1 · Open ${channel.fundingTxHash} | → step 2, 8d 3h later`
     );
     expect(screen.getByTestId('step-1')).toHaveAttribute('data-carries', '0');
     expect(screen.getByTestId('step-2')).toHaveTextContent(

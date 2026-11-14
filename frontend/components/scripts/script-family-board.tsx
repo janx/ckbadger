@@ -1,6 +1,8 @@
 'use client';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -133,7 +135,7 @@ export function ScriptSummarySentence({
           {' '}
           Its code is upgradable: it has been replaced{' '}
           <span className="text-text-bright">{formatCount(lineage.length - 1, 'time')}</span>, last
-          on {formatUtc8Date(last.timestamp)}, and its code cell now sits under{' '}
+          on <Utc8Date timestamp={last.timestamp} />, and its code cell now sits under{' '}
           {holderSentence(last.custody)}.
         </>
       )}
@@ -173,15 +175,15 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
     <HeroFigure
       label="CKB in its cells"
       shannons={capacity}
-      companion={
+      companion={[
         <>
           in{' '}
           <a href="#its-cells" className="hover:text-text-bright hover:underline">
-            {family.liveCellsCount.toLocaleString('en-US')} live cells
+            {formatCount(family.liveCellsCount, 'live cell')}
           </a>
-          {share && ` · ${share} occupied`}
-        </>
-      }
+        </>,
+        share && `${share} occupied`,
+      ]}
     />
   );
 }
@@ -209,15 +211,18 @@ export function ScriptHeroMetrics({
         <HeroMetric
           label="Code"
           note={
-            code === 'upgradable' && last && lineage!.length > 1
-              ? `last replaced ${formatUtc8Date(last.timestamp)}`
-              : undefined
+            code === 'upgradable' && last && lineage!.length > 1 ? (
+              <>
+                last replaced <Utc8Date timestamp={last.timestamp} />
+              </>
+            ) : undefined
           }
-        >
-          {code === 'immutable'
-            ? 'Immutable'
-            : `Upgradable · ${formatCount(family.versionsCount, 'version')}`}
-        </HeroMetric>
+          parts={
+            code === 'immutable'
+              ? ['Immutable']
+              : ['Upgradable', formatCount(family.versionsCount, 'version')]
+          }
+        />
       )}
       {last && (
         <HeroMetric
@@ -228,7 +233,8 @@ export function ScriptHeroMetrics({
             href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
             className="hover:text-jade"
           >
-            {holderName(last.custody)}
+            {/* the holder's kind and its key are one unit (U-16) */}
+            <NoBreak>{holderName(last.custody)}</NoBreak>
           </Link>
         </HeroMetric>
       )}
@@ -243,12 +249,12 @@ export function ScriptHeroMetrics({
                 title={deployment.codeCellTxHash}
                 className="hover:text-jade"
               >
-                {shortHex(deployment.codeCellTxHash, 6, 6)}
+                <NoBreak>{shortHex(deployment.codeCellTxHash, 6, 6)}</NoBreak>
               </Link>
             </>
           }
         >
-          {formatUtc8Date(deployment.deployedAt)}
+          <Utc8Date timestamp={deployment.deployedAt} />
         </HeroMetric>
       )}
       <HeroMetric label="Ever used">{formatCount(family.cellsCount, 'cell')}</HeroMetric>
@@ -738,8 +744,9 @@ export function ScriptCustodyFigure({
       </ol>
       {handovers.map((handover) => (
         <p key={handover.day} className="text-text-dim text-meta mt-2.5">
-          ● kept across the handover on {handover.day}: {handover.common} of {handover.total} keys ·
-          ○ replaced: {handover.total - handover.common} of {handover.total}
+          ● kept across the handover on {handover.day}: {handover.common} of{' '}
+          {formatCount(handover.total, 'key')} · ○ replaced: {handover.total - handover.common} of{' '}
+          {handover.total}
         </p>
       ))}
       <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">

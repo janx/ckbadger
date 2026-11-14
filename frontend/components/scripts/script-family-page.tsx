@@ -53,6 +53,8 @@ import {
 } from '@/lib/script-lineage';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { useFromMd } from '@/hooks/useFromMd';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 /** One code cell of a version, as its own `/cells` request resolved (or failed). */
 export interface CodeCellState {
@@ -294,7 +296,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
           href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`}
           className="text-text hover:text-jade"
         >
-          {shortTx(first.codeCellTxHash)}
+          <NoBreak>{shortTx(first.codeCellTxHash)}</NoBreak>
           <OutpointIndex index={first.codeCellOutputIndex} />
         </Link>
         {live.length > 1 && <span className="text-text-dim"> +{live.length - 1}</span>}
@@ -327,7 +329,11 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
       key: 'codeHash',
       label: 'code hash',
       minWidth: 118,
-      render: (r) => <span className="whitespace-nowrap">{shortTx(r.referenceHash)}</span>,
+      render: (r) => (
+        <span className="whitespace-nowrap">
+          <NoBreak>{shortTx(r.referenceHash)}</NoBreak>
+        </span>
+      ),
     },
     {
       key: 'cells',
@@ -510,7 +516,9 @@ export function ScriptFamilyPage({
       href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`}
       className="text-text hover:text-jade hover:underline"
     >
-      {shortHex(d.codeCellTxHash, 8, 6)}:{d.codeCellOutputIndex}
+      <NoBreak>
+        {shortHex(d.codeCellTxHash, 8, 6)}:{d.codeCellOutputIndex}
+      </NoBreak>
     </Link>
   );
   /** A code cell's fate: live, or consumed — by the version that replaced it when one did. */
@@ -658,7 +666,9 @@ export function ScriptFamilyPage({
       render: (row) => {
         const lead = leadOf(row);
         return lead ? (
-          <span className="tabular-nums">{formatUtc8Date(lead.deployedAt)}</span>
+          <span className="tabular-nums">
+            <Utc8Date timestamp={lead.deployedAt} />
+          </span>
         ) : (
           <span className="text-text-dim">—</span>
         );
@@ -699,7 +709,9 @@ export function ScriptFamilyPage({
               href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
               className="text-text-dim hover:text-jade truncate"
             >
-              {shortHex(lead.codeCellTxHash, 6, 4)}:{lead.codeCellOutputIndex}
+              <NoBreak>
+                {shortHex(lead.codeCellTxHash, 6, 4)}:{lead.codeCellOutputIndex}
+              </NoBreak>
             </Link>
             {more.length > 0 && (
               <RowTag title={more.map(outpointKey).join(', ')}>+{more.length}</RowTag>
@@ -766,7 +778,7 @@ export function ScriptFamilyPage({
         row.version.deployments.length ? (
           row.version.deployments.map((d) => (
             <span key={outpointKey(d)} className="block">
-              {formatUtc8Date(d.deployedAt)}
+              <Utc8Date timestamp={d.deployedAt} />
               {d.createdAtBlock !== undefined && (
                 <span className="text-meta block">{blockLink(d.createdAtBlock)}</span>
               )}
@@ -860,8 +872,10 @@ export function ScriptFamilyPage({
                 {row.current && <span className="text-text"> current</span>}{' '}
                 {first ? (
                   <>
-                    <span className="text-text">{formatUtc8Date(first.deployedAt)}</span> ·{' '}
-                    {outpointLink(first)}
+                    <span className="text-text">
+                      <Utc8Date timestamp={first.deployedAt} />
+                    </span>{' '}
+                    · {outpointLink(first)}
                   </>
                 ) : (
                   <span className="text-text-dim">no deployment observed</span>
@@ -885,7 +899,9 @@ export function ScriptFamilyPage({
             key: `again-${outpointKey(d)}`,
             tone: 'quiet' as const,
             left: joined([
-              <>deployed again {formatUtc8Date(d.deployedAt)}</>,
+              <>
+                deployed again <Utc8Date timestamp={d.deployedAt} />
+              </>,
               outpointLink(d),
               ...detail(d),
             ]),
@@ -899,8 +915,8 @@ export function ScriptFamilyPage({
   const roleCrumb =
     family.scriptKind === 'lock' ? 'Locks' : family.scriptKind === 'type' ? 'Types' : null;
   const binaries = typeReference
-    ? `one type id, ${shortHex(typeReference, 8, 6)}, ${rows.length} binaries`
-    : `${rows.length} binaries`;
+    ? `one type id, ${shortHex(typeReference, 8, 6)}, ${formatCount(rows.length, 'binary', 'binaries')}`
+    : formatCount(rows.length, 'binary', 'binaries');
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
@@ -976,7 +992,7 @@ export function ScriptFamilyPage({
                   onActive={setActive}
                 />
               ) : (
-                <p className="text-text-dim text-small mt-[18px] py-6">No capacity history yet</p>
+                <p className="text-text-dim text-small mt-[18px] py-6">No capacity history.</p>
               )}
             </section>
             {!chartLoading && !chartError && chart?.data.length ? (
@@ -1085,7 +1101,9 @@ export function ScriptFamilyPage({
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                           className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
                         >
-                          {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+                          <NoBreak>
+                            {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+                          </NoBreak>
                         </Link>
                       ),
                     },
@@ -1154,7 +1172,9 @@ export function ScriptFamilyPage({
                         href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                         className="text-text hover:text-jade"
                       >
-                        {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+                        <NoBreak>
+                          {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+                        </NoBreak>
                       </Link>
                       <div>
                         <CellOwner cell={cell} /> · <AlsoGuardedBy cell={cell} />

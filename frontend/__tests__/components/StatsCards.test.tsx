@@ -109,7 +109,7 @@ describe('StatsCards', () => {
     render(<StatsCards />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('BULK SYNCING...')).toBeInTheDocument();
+      expect(screen.getByText('BULK SYNCING…')).toBeInTheDocument();
     });
 
     expect(screen.getByText('1.2K')).toBeInTheDocument();
@@ -162,7 +162,7 @@ describe('StatsCards', () => {
       expect(screen.getByText('LATEST BLOCK')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText('BULK SYNCING...')).not.toBeInTheDocument();
+    expect(screen.queryByText('BULK SYNCING…')).not.toBeInTheDocument();
     expect(screen.queryByText(/Elapsed:/)).not.toBeInTheDocument();
   });
 });

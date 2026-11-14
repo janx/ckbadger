@@ -1,5 +1,6 @@
 import { hexBytes } from '@/lib/hex-bytes';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { formatCount } from '@/lib/format-count';
 /** A compact sixteen-lane gel: every nibble is drawn in its actual hexadecimal lane. */
 export function DnaStrip({
   dna,
@@ -18,7 +19,7 @@ export function DnaStrip({
   return (
     <svg
       role="img"
-      aria-label={`${label}: ${bytes.length} bytes, ${bytes.join('')}`}
+      aria-label={`${label}: ${formatCount(bytes.length, 'byte')}, ${bytes.join('')}`}
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}

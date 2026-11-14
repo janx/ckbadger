@@ -141,7 +141,7 @@ describe('Scripts list against the Scripts board', () => {
     const row = (name: string) =>
       within(table).getByRole('link', { name }).closest('tr') as HTMLElement;
     const joyCode = within(row('JoyID')).getByTestId('script-code-class');
-    expect(joyCode.textContent).toBe('upgradable · 5 versions');
+    expect(joyCode.textContent).toBe('upgradable · 5\u00a0versions');
     expect(joyCode.getAttribute('title')).toContain('by a multisig');
     expect(within(row('Default Lock')).getByTestId('script-code-class').textContent).toBe(
       'immutable'
@@ -506,7 +506,7 @@ describe('Scripts list phone row (board L6)', () => {
       {
         key: 'code',
         tone: 'body',
-        left: 'lock·Upgradable · 5 versions· by a multisig · since 2023-10-07',
+        left: 'lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
         right: '161,049 live · of 2,707,778 · 4.19% occupied',
       },
       {
@@ -559,7 +559,7 @@ describe('Scripts list phone row (board L6)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       [
         'identity',
-        'JoyID · lock·Upgradable · 5 versions· by a multisig · since 2023-10-07',
+        'JoyID · lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
         '456,002,179.57000000 CKB',
       ],
       [

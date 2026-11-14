@@ -43,7 +43,7 @@ function useDistributions() {
 function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
-  if (top.length === 0) return <p className="text-text-dim text-small">No data yet</p>;
+  if (top.length === 0) return <p className="text-text-dim text-small">No data.</p>;
   return (
     <div className="flex max-w-[720px] flex-col gap-1">
       {top.map((it, i) => (
@@ -136,7 +136,8 @@ export function HostingBar() {
   if (total !== data.verifiedRetained)
     return (
       <p role="alert" className="text-negative text-small">
-        Hosting networks cover {total} peers, not the {data.verifiedRetained} verified.
+        Hosting networks cover {formatCount(total, 'peer')}, not the {data.verifiedRetained}{' '}
+        verified.
       </p>
     );
   const ranked = [...byOrg.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));

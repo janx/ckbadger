@@ -83,14 +83,14 @@ describe('positionSentence', () => {
         { from: 930, to: 932 },
         { from: 932, to: 934 },
       ])
-    ).toBe('committed what #930 proposed, proposed what #934 committed, and included 1 uncle');
+    ).toBe('committed what #930 proposed, proposed what #934 committed, and included 1\u00a0uncle');
   });
   it('says what is missing instead of inventing a link', () => {
     expect(positionSentence({ number: 5, proposalsCount: 0, unclesCount: 0 }, [])).toBe(
       'committed no proposed transactions, proposed nothing, and included no uncle'
     );
     expect(positionSentence({ number: 5, proposalsCount: 3, unclesCount: 2 }, [])).toBe(
-      'committed no proposed transactions, proposed 3 transactions, none committed yet, and included 2 uncles'
+      'committed no proposed transactions, proposed 3\u00a0transactions, none committed yet, and included 2\u00a0uncles'
     );
   });
 });
@@ -188,7 +188,7 @@ describe('BlockTransactionsTable', () => {
     expect(phoneLines(user).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '10x111111...111111', 'proposed in #5 +2'],
       ['amounts', '0.00000100 CKB', 'fee 0.00030000 CKB'],
-      ['figures', '2 → 1 cells', '300 B · 1,000 cycles'],
+      ['figures', '2 → 1\u00a0cell', '300 B · 1,000 cycles'],
     ]);
     expect(phoneLines(base)[0].right).toBe('proposed in cellbase');
     expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
@@ -204,7 +204,7 @@ describe('BlockTransactionsTable', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '10x111111...111111', '0.00000100 CKB'],
       // Consistency plan C4: a zero fee is "0 CKB" (was "0.00000000 CKB").
-      ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1 cells · 300 B · 1,000 cycles'],
+      ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1\u00a0cell · 300 B · 1,000 cycles'],
     ]);
   });
 });

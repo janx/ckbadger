@@ -19,7 +19,7 @@ import {
 } from '@/lib/api';
 import { FIBER_STATE_WORDS, epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
@@ -524,7 +524,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             title="On chain"
             args={
               channel.state === 'open' || channel.state === 'forceClosed'
-                ? `${STEP_WORDS[steps.length]} step${steps.length === 1 ? '' : 's'} so far`
+                ? `${STEP_WORDS[steps.length]} ${countNoun(steps.length, 'step')} so far`
                 : `${STEP_WORDS[steps.length]} steps`
             }
           >
@@ -561,7 +561,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                     <div className="text-small flex flex-col gap-3">
                       <div>
                         <div className="text-text-dim">
-                          Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
+                          Fiber Funding Lock · args,{' '}
+                          {formatCount(argsBytes(evidence.funding.lockArgs), 'byte')}
                         </div>
                         <div className="text-text-bright break-all">
                           {evidence.funding.lockArgs}
@@ -580,7 +581,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                       {tracked ? (
                         <div>
                           <div className="text-text-dim mb-1">
-                            Fiber Commitment Lock · args, {argsBytes(tracked.lockArgs)} bytes ·{' '}
+                            Fiber Commitment Lock · args,{' '}
+                            {formatCount(argsBytes(tracked.lockArgs), 'byte')} ·{' '}
                             {tracked.lockFormat}
                           </div>
                           <Grid>

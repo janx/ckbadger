@@ -22,7 +22,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo, formatUtc8DateTime, cn } from '@/lib/utils';
+import { formatTimeAgo, cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -32,6 +32,8 @@ import {
   previousChainDay,
   totalActivities,
 } from '@/lib/activity-stats';
+import { formatCount } from '@/lib/format-count';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 type TransactionKind =
   | 'all'
@@ -136,7 +138,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       {BigInt(tx.feeRate).toLocaleString('en-US')} shannon/KB
     </span>,
     <span key="cells" className="whitespace-nowrap">
-      {poolConsumed(tx)} → {tx.outputsCount} cells
+      {poolConsumed(tx)} → {formatCount(tx.outputsCount, 'cell')}
     </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize.toLocaleString('en-US')} B
@@ -582,7 +584,7 @@ export default function TransactionsPage() {
                     <Link
                       key={tx.hash}
                       href={`/tx/${tx.hash}`}
-                      title={`${tx.hash}: ${tx.txSize} bytes, ${tx.feeRate} shannon/KB`}
+                      title={`${tx.hash}: ${formatCount(tx.txSize, 'byte')}, ${tx.feeRate} shannon/KB`}
                       data-pool-status={tx.status}
                       className={cn('block', POOL_SQUARE[tx.status])}
                       style={{
@@ -607,9 +609,10 @@ export default function TransactionsPage() {
                     <>
                       {' '}
                       · newest seen{' '}
-                      <time title={formatTimeAgo(poolHead.data.summary.newestSeenAt)}>
-                        {formatUtc8DateTime(poolHead.data.summary.newestSeenAt)}
-                      </time>
+                      <Utc8DateTime
+                        timestamp={poolHead.data.summary.newestSeenAt}
+                        title={formatTimeAgo(poolHead.data.summary.newestSeenAt)}
+                      />
                     </>
                   )}
                 </span>

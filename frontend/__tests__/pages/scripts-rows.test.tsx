@@ -219,7 +219,7 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(code('JoyID')).toHaveClass('text-text-dim');
     expect(code('JoyID')).toHaveAttribute(
       'title',
-      'upgradable · 5 versions · by a multisig · since 2023-10-07'
+      'upgradable · 5\u00a0versions · by a multisig · since 2023-10-07'
     );
     expect(code('.bit Lock')).toHaveTextContent(/^upgradable · 34 versions$/);
     expect(code('Default Lock')).toHaveTextContent(/^immutable$/);
@@ -297,7 +297,7 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     const t = await table();
     expect(rowOf(t, 'JoyID')).toHaveAttribute(
       'title',
-      'JoyID · lock · An universal Account Protocol for Web3 Mass-adoption. · upgradable · 5 versions · by a multisig · since 2023-10-07 · 161,008 live of 2,707,977 cells ever · 454,352,694.86181731 CKB · 19,093,577.00000000 occupied (4.20%)'
+      'JoyID · lock · An universal Account Protocol for Web3 Mass-adoption. · upgradable · 5\u00a0versions · by a multisig · since 2023-10-07 · 161,008 live of 2,707,977 cells ever · 454,352,694.86181731 CKB · 19,093,577.00000000 occupied (4.20%)'
     );
     expect(rowOf(t, 'Default Lock')).toHaveAttribute(
       'title',

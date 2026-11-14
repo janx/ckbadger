@@ -71,7 +71,7 @@ describe('Uncle detail page', () => {
         el.closest('.error-facts')
       )
     ).toBe(true);
-    expect(screen.getByText('no uncle at this address.')).toBeInTheDocument();
+    expect(screen.getByText('no uncle at this block and index.')).toBeInTheDocument();
   });
 
   it('refuses decoded DAO fields that disagree with the raw header bytes', async () => {

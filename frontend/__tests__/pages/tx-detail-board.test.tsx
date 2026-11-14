@@ -413,8 +413,12 @@ describe('Transaction board, tier 1', () => {
     // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
     // the copy button keeps its own classes
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const hash = within(idLine).getByText(TX_HASH);
-    expect(hash.className).toBe('min-w-0');
+    // the lead's ruling a: the hash is the plate's PlateHash, one line or two halves, never a
+    // scroller (re-pinned: it was a bare span, 'min-w-0'); still no size or ink of its own
+    const hash = idLine.querySelector('[data-plate-hash]') as HTMLElement;
+    expect(hash).toHaveAttribute('title', TX_HASH);
+    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
+    expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
     expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
       'text-text-dim',
@@ -455,8 +459,12 @@ describe('Transaction board, tier 1', () => {
     expect(gap).toContainElement(seam!);
     expect(created).toHaveAttribute('data-sheet', 'created');
     expect(canvas).not.toHaveTextContent(/capacity pool/i);
-    expect(within(consumed).getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
-    expect(within(created).getByRole('heading', { name: '1 cell created' })).toBeInTheDocument();
+    expect(
+      within(consumed).getByRole('heading', { name: '1\u00a0cell consumed' })
+    ).toBeInTheDocument();
+    expect(
+      within(created).getByRole('heading', { name: '1\u00a0cell created' })
+    ).toBeInTheDocument();
     // the totals are the API's inputsCapacity and outputsCapacity, exact
     expect(consumed.querySelector('[data-sheet-total]')).toHaveTextContent(/^555(\.0+)? CKB$/);
     expect(created.querySelector('[data-sheet-total]')).toHaveTextContent(/^554\.99935881 CKB$/);
@@ -478,9 +486,9 @@ describe('Transaction board, tier 1', () => {
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
     ).toEqual([
-      '1 cell became 1.',
+      '1\u00a0cell became 1.',
       '0.00064119 ckb to the miner.',
-      'common knowledge grew by 26 bytes.',
+      'common knowledge grew by 26\u00a0bytes.',
     ]);
     expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
     expect(container.querySelectorAll('.comment')).toHaveLength(1);
@@ -668,7 +676,7 @@ describe('Transaction board, tier 2', () => {
     render(<TransactionDetailPage />);
     expect(
       await screen.findByRole('img', {
-        name: 'Proposed in block 99, committed 2 blocks later in 101; the commit window is 2 to 10 blocks',
+        name: 'Proposed in block 99, committed 2\u00a0blocks later in 101; the commit window is 2 to 10 blocks',
       })
     ).toBeInTheDocument();
     expect(await screen.findByTestId('tx-capacity-equation')).toHaveTextContent(
@@ -836,8 +844,8 @@ describe('Transaction variants (D4)', () => {
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
     ).toEqual([
-      '1 cell from the block reward; none consumed.',
-      'common knowledge grew by 61 bytes.',
+      '1\u00a0cell from the block reward; none consumed.',
+      'common knowledge grew by 61\u00a0bytes.',
     ]);
     expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();

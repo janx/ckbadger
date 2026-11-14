@@ -10,6 +10,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
+import { NoBreak } from '@/components/ui/no-break';
 
 export interface FiberStepBox {
   head: ReactNode;
@@ -84,7 +85,7 @@ export function FiberChannelStep({
           style={inkStyle(BOARD_INKS.link)}
           title={txHash}
         >
-          {short(txHash)}
+          <NoBreak>{short(txHash)}</NoBreak>
         </Link>
         {' · '}
         <Link href={`/blocks/${blockNumber}`} className="hover:text-jade">

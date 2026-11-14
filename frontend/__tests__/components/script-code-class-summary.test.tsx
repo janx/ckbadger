@@ -68,7 +68,7 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
     expect(container.querySelector('[data-code-class-segment]')).toBeNull();
     const sentence = screen.getByTestId('code-class-sentence');
     expect(sentence.textContent).toMatch(
-      /^Of the 49,794,300,000(\.0+)? CKB under these 36 lock scripts, /
+      /^Of the 49,794,300,000(\.0+)? CKB under these 36\slock scripts, /
     );
     expect(sentence.textContent).toContain('96.5% runs code no one can change');
     expect(sentence.textContent).toContain('3.47% runs code a multisig can replace');
@@ -77,7 +77,7 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
     expect(within(legend).getAllByRole('listitem')).toHaveLength(3);
     expect(within(legend).getByText(/a multisig can replace/i)).toBeInTheDocument();
     expect(legend.textContent).toContain('1,727,000,000');
-    expect(legend.textContent).toContain('18 scripts');
+    expect(legend.textContent).toContain('18\u00a0scripts');
   });
 });
 
@@ -101,8 +101,8 @@ describe('ScriptCodeClassSummary · visual pass (R2b-b familyCount, D6, 390 px)'
   it('counts scripts per class from familyCount, in the sentence and the legend (SC-L3)', () => {
     render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
     const sentence = screen.getByTestId('code-class-sentence').textContent!;
-    expect(sentence).toContain('3.47% runs code a multisig can replace (18 scripts)');
-    expect(sentence).toContain('0.075% runs code a single key can replace (7 scripts)');
+    expect(sentence).toContain('3.47% runs code a multisig can replace (18\u00a0scripts)');
+    expect(sentence).toContain('0.075% runs code a single key can replace (7\u00a0scripts)');
     const legend = screen.getByRole('list', { name: 'Code classes' });
     expect(legend).toHaveTextContent('· 18 scripts');
     expect(legend).toHaveTextContent('· 36 scripts');

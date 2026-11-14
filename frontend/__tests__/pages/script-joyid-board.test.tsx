@@ -92,7 +92,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
-    expect(summary).toContain('it has been replaced 4 times, last on 2025-11-21');
+    expect(summary).toContain('it has been replaced 4\u00a0times, last on 2025-11-21');
     expect(summary).toContain('now sits under a multisig that has never signed');
     // The former facts rail: its figures are the hero's figure, companion and metric row.
     expect(screen.queryByRole('complementary', { name: 'Script facts' })).toBeNull();
@@ -111,6 +111,38 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     const deployer = within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' });
     expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
     expect(deployer).toHaveAttribute('title', DEPLOY);
+  });
+
+  // U-16, PA-05 (UI review 2026-11-14): the figures row broke its units on a phone and in a 300 px
+  // column ("deployed in 0xe2fb19…" / "73ff5c", "2019-" / "11-16", "78,647,937" / "cells") and
+  // left a "·" at a line's end. Each unit is whole; a note's dot goes with the note.
+  it('keeps every unit of the figures row whole, a note’s dot with its note (U-16, PA-05)', async () => {
+    await renderJoyid();
+    const hero = screen.getByRole('region', { name: 'JoyID' });
+    const metrics = within(hero.parentElement!).getByLabelText('Script figures');
+    const whole = (el: Element) =>
+      expect(el.closest('[data-nobreak], .whitespace-nowrap')).not.toBeNull();
+    // the deployment's shortened hash, the first day, the replacement day, the holder's name
+    whole(
+      within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' }).firstElementChild ??
+        within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' })
+    );
+    whole(within(metrics).getByText('2023-10-07'));
+    whole(within(metrics).getByText('2025-11-21'));
+    whole(within(metrics).getByText('multisig 0x6598…d696'));
+    // the count and its noun, one unit; "Upgradable" and its versions, two items of one list
+    expect(metrics.textContent).toContain('2,707,778\u00a0cells');
+    expect(metrics.textContent).toContain('5\u00a0versions');
+    // every dot belongs to the item after it (the one separated list): none is loose text
+    const loose = [...metrics.querySelectorAll('*')].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !(el as Element).hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose.map((n) => n.textContent)).toEqual([]);
   });
 
   it('draws History with occupied in jade, a separate occupied panel and the version days in the plot (SC-S2, SC-S3, L1-3 ruling)', async () => {
@@ -171,7 +203,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     expect(segments[0].title.match(/0x[0-9a-f]{40}/g)).toHaveLength(6);
     expect(segments[1].title).toContain(
-      'kept 2 of 5 keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+      'kept 2 of 5\u00a0keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
     );
     expect(screen.getByRole('status', { name: 'Code cell holder reading' })).toHaveTextContent(
       '3 holders · 5 versions · 2 handovers'
@@ -528,7 +560,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     ]);
     for (const t of terms) {
       expect(t).toHaveClass('text-meta', 'text-text-dim');
-      expect(t.nextElementSibling).toHaveClass('text-section', 'text-text-bright');
+      // PA-25 (re-pinned): the value is the first item of the metric's separated list
+      expect(t.nextElementSibling!.querySelector('.text-section')).toHaveClass('text-text-bright');
       expect(t.parentElement!.children).toHaveLength(2);
     }
     expect(metrics).toHaveClass('grid-cols-2', 'lg:grid-cols-4');

@@ -121,9 +121,9 @@ describe('NotFoundPage', () => {
     // the index was asked, so the verse says so; the finding names the alternative
     const h1 = screen.getByRole('heading', {
       level: 1,
-      name: "no transaction at this address. the local index was asked; it holds none. honey badger don't care.",
+      name: "no transaction with this hash. the local index was asked; it holds none. honey badger don't care.",
     });
-    expect(verseLines(h1)[0]).toBe('no transaction at this address.');
+    expect(verseLines(h1)[0]).toBe('no transaction with this hash.');
     expect(screen.queryByText(/the chain was not asked/)).toBeNull();
     expect(screen.getByText('/transactions/0xabc')).toBeInTheDocument();
     // U-18: what was asked, its answer and what /search said, in one line
@@ -170,14 +170,14 @@ describe('NotFoundPage', () => {
       `checked /transactions/${short}/detail → 404 · /search: no block has this hash either`
     );
     expect(document.querySelector('.error-facts')).not.toHaveTextContent(HASH);
-    // only the id breaks anywhere; the words of the line wrap between words
+    // the words of the line wrap between words; the shortened id is one unit (U-16, re-pinned:
+    // it broke anywhere, "0x" / "36528a03...742ce54b")
     const id = within(lines[0]).getByText(short);
-    expect(id).toHaveClass('break-all');
-    expect(lines[0].querySelectorAll('.break-all')).toHaveLength(1);
-    expect(lines[0]).not.toHaveClass('break-all');
+    expect(id).toHaveAttribute('data-nobreak');
+    expect(lines[0].querySelectorAll('.break-all')).toHaveLength(0);
     // nothing answered: the same verse as an entity known as something else
     expect(verseLines(screen.getByRole('heading', { level: 1 }))).toEqual([
-      'no transaction at this address.',
+      'no transaction with this hash.',
       'the local index was asked; it holds none.',
       "honey badger don't care.",
     ]);
@@ -212,7 +212,7 @@ describe('NotFoundPage', () => {
       'checked /transactions/0xffffffff...ffffffff → 404 · the /search check could not complete: search unavailable'
     );
     // the words of the line wrap between words; only the id breaks anywhere
-    expect(within(lines[0]).getByText('0xffffffff...ffffffff')).toHaveClass('break-all');
+    expect(within(lines[0]).getByText('0xffffffff...ffffffff')).toHaveAttribute('data-nobreak');
     expect(lines[0]).not.toHaveClass('break-all');
     expect(lines[0]).toHaveClass('[overflow-wrap:anywhere]');
   });
@@ -283,6 +283,28 @@ describe('NotFoundPage', () => {
     ]);
   });
 
+  // U-15 (UI review 2026-11-14): "no transaction at this address." — a transaction has a hash, not
+  // an address. Each kind's first line names its id as it is; an address keeps "at this address".
+  it('names each kind’s id honestly in the first line, an address alone "at this address"', () => {
+    const first = (kind: Parameters<typeof notAnIdVerse>[0]) =>
+      entityVerse({ kind, identifier: 'x', checkedEndpoint: '/x' })[0];
+    expect(first('block')).toBe('no block with this number or hash.');
+    expect(first('uncle')).toBe('no uncle at this block and index.');
+    expect(first('transaction')).toBe('no transaction with this hash.');
+    expect(first('cell')).toBe('no cell at this out point.');
+    expect(first('address')).toBe('nothing at this address.');
+    expect(first('script')).toBe('no script with this code hash.');
+    expect(first('script-family')).toBe('no script with this name.');
+    expect(first('token')).toBe('no token with this type hash.');
+    expect(first('object')).toBe('no object with this id.');
+    expect(first('collection')).toBe('no collection with this id.');
+    expect(first('identity')).toBe('no identity with this id.');
+    expect(first('class')).toBe('no class with this id.');
+    expect(first('cluster')).toBe('no cluster with this id.');
+    expect(first('fork')).toBe('no fork at this height and orphan.');
+    expect(first('fiber-channel')).toBe('no fiber channel with this id.');
+  });
+
   it('an entity’s verse: its kind in words, the index asked, and the meme last — never the route’s second line', () => {
     expect(
       entityVerse({
@@ -291,12 +313,12 @@ describe('NotFoundPage', () => {
         checkedEndpoint: '/fiber/channels/0x01',
       })
     ).toEqual([
-      'no fiber channel at this address.',
+      'no fiber channel with this id.',
       'the local index was asked; it holds none.',
       "honey badger don't care.",
     ]);
     expect(entityVerse({ kind: 'block', identifier: '1', checkedEndpoint: '/blocks/1' })[0]).toBe(
-      'no block at this address.'
+      'no block with this number or hash.'
     );
     expect(
       entityVerse({ kind: 'script-family', identifier: 'x', checkedEndpoint: '/x' })

@@ -46,6 +46,8 @@ import {
 } from '@/lib/dob-pattern';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
@@ -136,8 +138,8 @@ export function DnaParagraph({
   // Set in the object page's "in words" Prose: the paragraph carries no classes of its own.
   return (
     <p>
-      The object’s traits are not stored as text. It carries {bytes} bytes of DNA, and the
-      collection’s decoder reads each gene to express a trait.
+      The object’s traits are not stored as text. It carries {formatCount(bytes, 'byte')} of DNA,
+      and the collection’s decoder reads each gene to express a trait.
       {pointer
         ? ` Its ${pointer} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
         : ''}
@@ -196,7 +198,7 @@ export function ObjectGeneticsView({
         <PromptHeading
           id="h-dna"
           command="DNA"
-          args={`${layout.bytes.length} bytes · ${geneNames.length} gene${geneNames.length === 1 ? '' : 's'}${evidence.number !== null ? ` · number ${evidence.number}` : ''}`}
+          args={`${formatCount(layout.bytes.length, 'byte')} · ${formatCount(geneNames.length, 'gene')}${evidence.number !== null ? ` · number ${evidence.number}` : ''}`}
         />
         {cached.status === 'pending' && (
           <p role="status" className="text-text-dim">
@@ -228,7 +230,7 @@ export function ObjectGeneticsView({
         </GelPlate>
         {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
         <p data-role="caption" className="text-text text-body max-w-[640px]">
-          Its traits are read from {words.bytes} bytes of DNA
+          Its traits are read from {formatCount(words.bytes, 'byte')} of DNA
           {words.pointer
             ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
             : ''}
@@ -336,7 +338,7 @@ export function ObjectGeneticsEvidence({
       {dnaHex !== null && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
-            All {layout ? count(layout.bytes.length) : ''} bytes of DNA as hex
+            All {layout ? formatCount(layout.bytes.length, 'byte') : 'bytes'} of DNA as hex
           </summary>
           <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
             {dnaHex}
@@ -348,7 +350,7 @@ export function ObjectGeneticsEvidence({
           {decoded.media.map((m) => (
             <li key={`${m.hash}:${m.step ?? 'x'}`} className="break-all">
               <span className="text-text">
-                {m.mediaType} · {m.size.toLocaleString('en-US')} bytes
+                {m.mediaType} · {formatCount(m.size, 'byte')}
                 {m.step !== null ? ` · step ${m.step + 1}` : ''}
                 {m.role ? ` · ${m.role}` : ''}
               </span>{' '}
@@ -419,7 +421,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
                 short: count(n),
                 color: 'var(--c-ink-quiet)',
                 quiet: true,
-                title: `${span(part.start, n)} · no gene reads ${n === 1 ? 'it' : 'them'}`,
+                title: `${span(part.start, n)} · no gene reads ${countNoun(n, 'it', 'them')}`,
               };
             const g = byKey.get(part.key)!;
             return {
@@ -746,12 +748,12 @@ function PatternReading({
           {
             title: 'Each object',
             body: dna
-              ? `${count(dna.length)} bytes of DNA in its cell data.`
+              ? `${formatCount(dna.length, 'byte')} of DNA in its cell data.`
               : 'its DNA, in its cell data.',
           },
           {
             title: 'The pattern',
-            body: `stored in this cluster’s description: ${count(genes.length)} gene${genes.length === 1 ? '' : 's'}, each a byte range and a rule.`,
+            body: `stored in this cluster’s description: ${count(genes.length)} ${countNoun(genes.length, 'gene')}, each a byte range and a rule.`,
           },
           { title: steps.length > 1 ? 'The decoders' : 'The decoder', body: null },
         ].map((tile, i) => (
@@ -773,7 +775,7 @@ function PatternReading({
                     {steps.length > 1 && <span className="text-text">{step.step + 1}. </span>}
                     by {step.decoderReference.type}{' '}
                     <span title={step.decoderReference.hash}>
-                      {shortHash(step.decoderReference.hash)}
+                      <NoBreak>{shortHash(step.decoderReference.hash)}</NoBreak>
                     </span>
                     {step.decoderBinaryHash ? (
                       step.decoderBinaryHash === step.decoderReference.hash ? (
@@ -793,7 +795,7 @@ function PatternReading({
                             href={`/script/${step.decoderBinaryHash}`}
                             title={step.decoderBinaryHash}
                           >
-                            {shortHash(step.decoderBinaryHash)}
+                            <NoBreak>{shortHash(step.decoderBinaryHash)}</NoBreak>
                           </AppLink>
                         </>
                       )
@@ -840,7 +842,7 @@ function PatternReading({
                   short: count(n),
                   color: 'var(--c-ink-quiet)',
                   quiet: true,
-                  title: `${span} · no gene reads ${n === 1 ? 'it' : 'them'}`,
+                  title: `${span} · no gene reads ${countNoun(n, 'it', 'them')}`,
                 };
               const gene = byKey.get(part.key)!.gene;
               return {
@@ -863,7 +865,7 @@ function PatternReading({
           <ReadoutRow
             label="DNA ruler readout"
             pinned={readout.showingPin}
-            idle={`${count(extent)} bytes of DNA · ${count(genes.length)} gene${genes.length === 1 ? '' : 's'}`}
+            idle={`${formatCount(extent, 'byte')} of DNA · ${formatCount(genes.length, 'gene')}`}
           >
             {readout.active === null
               ? null
@@ -900,7 +902,7 @@ function PatternReading({
       {folded && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
-            All {count(genes.length)} genes, one row each
+            All {formatCount(genes.length, 'gene')}, one row each
           </summary>
           <div className="mt-2">
             {geneTable(
@@ -928,7 +930,7 @@ function PatternReading({
                 {`${sample.id.slice(0, 10)}…${sample.id.slice(-4)}`}
               </AppLink>
             </span>
-            {dna && <span>{count(dna.length)} bytes</span>}
+            {dna && <span>{formatCount(dna.length, 'byte')}</span>}
           </div>
           {sample.decodeStatus !== 'decoded' ? (
             <p className="text-text-dim text-small mt-2">

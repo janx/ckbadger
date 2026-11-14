@@ -363,10 +363,14 @@ describe('Block board · first tier', () => {
     // C10 round 2: the id line in the plate's one quiet voice, the hash taking it (it was text-body
     // in the text ink); its click-to-copy, the block's copy control, stays as it was
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const hash = within(idLine).getByText(block.hash);
-    expect(hash.parentElement).toBe(idLine);
-    expect(hash.className).toBe('font-mono hover-lit cursor-pointer transition-colors');
-    expect(hash).toHaveAttribute('title', 'Click to copy');
+    // The lead's ruling a (re-pinned): the plate's id line is never a scroller; the full hash is
+    // the plate's PlateHash, one line where the line holds it, else two halves; click to copy as
+    // before, the whole hash its title.
+    const hash = idLine.querySelector('[data-plate-hash]') as HTMLElement;
+    expect(hash).not.toBeNull();
+    expect(hash.textContent).toBe(block.hash);
+    expect(hash).toHaveAttribute('title', block.hash);
+    expect(idLine.querySelector('.overflow-x-auto')).toBeNull();
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);

@@ -20,7 +20,7 @@ describe('Fiber channel entity error routing', () => {
       )
     );
     render(<FiberChannelDetailPage />);
-    expect(await screen.findByText('no fiber channel at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no fiber channel with this id.')).toBeInTheDocument();
     // U-18: the checked endpoint stands in the facts, the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/fiber/channels/${truncateHash(id)}`
@@ -38,6 +38,6 @@ describe('Fiber channel entity error routing', () => {
     );
     render(<FiberChannelDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('channel index mismatch');
-    expect(screen.queryByText('no fiber channel at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no fiber channel with this id.')).not.toBeInTheDocument();
   });
 });

@@ -109,8 +109,8 @@ describe('WhatMoved, the ribbon form', () => {
     expect(screen.getByText('tap or hover a party or an asset')).toBeInTheDocument();
     const groups = within(frame).getAllByRole('group');
     expect(groups.map((g) => g.getAttribute('data-flow'))).toEqual([`object:${NERVAPE}`, 'ckb']);
-    expect(groups[0]).toHaveAccessibleName('Nervape Suit from 1 party to 1 party');
-    expect(groups[1]).toHaveAccessibleName('CKB from 2 parties to 2 parties');
+    expect(groups[0]).toHaveAccessibleName('Nervape Suit from 1\u00a0party to 1\u00a0party');
+    expect(groups[1]).toHaveAccessibleName('CKB from 2\u00a0parties to 2\u00a0parties');
   });
 
   it('names the object on its plate with its composition and id, and the party on each side', () => {
@@ -145,9 +145,10 @@ describe('WhatMoved, the ribbon form', () => {
         e.getAttribute('data-weight'),
         e.textContent,
       ]);
+    // U-15 (re-pinned): a lock the registry does not name is 'lock <code hash>'
     expect(ends(from)).toEqual([
       ['party', '14', 'ckb1qrgq...ay02wnJoyID638.00008888 CKB'],
-      ['party', '10', 'ckb1qrgq...sp7v9m0x9bd7e0...cce8432.00000000 CKB'],
+      ['party', '10', 'ckb1qrgq...sp7v9mlock 0x9bd7e0...cce8432.00000000 CKB'],
     ]);
     expect(ends(to)).toEqual([
       ['party', '22', 'ckb1qrgq...ct4hxvJoyID1,070.00000000 CKB'],
@@ -233,11 +234,11 @@ describe('WhatMoved, the ribbon form', () => {
     const [token] = screen.getAllByRole('group');
     const from = token.querySelector('[data-flow-side="from"]')!;
     expect(from.querySelectorAll('[data-flow-end="party"]')).toHaveLength(5);
-    const more = within(from as HTMLElement).getByRole('button', { name: /4 more parties/ });
+    const more = within(from as HTMLElement).getByRole('button', { name: /4\smore parties/ });
     expect(more).toHaveTextContent('4 more parties expand');
     // the four folded give 95 + 94 + 93 + 92 raw units = 0.00000374 RGB++ at 8 decimals
     expect(more).toHaveTextContent('0.00000374 RGB++');
-    expect(token).toHaveAccessibleName('RGB++ from 6 parties to 1 party');
+    expect(token).toHaveAccessibleName('RGB++ from 6\u00a0parties to 1\u00a0party');
     fireEvent.click(more);
     expect(from.querySelectorAll('[data-flow-end="party"]')).toHaveLength(9);
     expect(from.querySelector('[data-flow-end="more"]')).toBeNull();

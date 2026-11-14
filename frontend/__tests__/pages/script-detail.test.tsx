@@ -593,7 +593,7 @@ describe('ScriptDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /^Could not read this script: family endpoint 500$/
     );
-    expect(screen.queryByText(/no script family at this address/)).toBeNull();
+    expect(screen.queryByText(/no script with this name/)).toBeNull();
   });
 
   it('distinguishes named script HTTP 404 from not found', async () => {
@@ -604,7 +604,7 @@ describe('ScriptDetailPage', () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(
       await screen.findByRole('heading', {
-        name: "no script family at this address. the local index was asked; it holds none. honey badger don't care.",
+        name: "no script with this name. the local index was asked; it holds none. honey badger don't care.",
       })
     ).toBeInTheDocument();
     expect((await screen.findAllByText('/scripts/SECP256K1_BLAKE160')).length).toBeGreaterThan(0);
@@ -635,7 +635,7 @@ describe('ScriptDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not read this script: reference missing'
     );
-    expect(screen.queryByText('no script at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no script with this code hash.')).not.toBeInTheDocument();
   });
 
   it('marks deprecated family and versions without calling them unlabeled', async () => {

@@ -67,19 +67,23 @@ describe('history chart captions (CH-04)', () => {
     render(<ChartDetail slug="most-utilized-scripts" />);
     await screen.findByRole('img', { name: 'Owned live capacity' });
     expect(lastChart('Occupied common knowledge').subtitle).toBe(
-      'CKB occupied, by script · 1,234 days'
+      'CKB occupied, by script · 1,234\u00a0days'
     );
-    expect(lastChart('Owned live capacity').subtitle).toBe('CKB owned, by script · 1,234 days');
-    expect(screen.getByRole('heading', { name: 'Owned live capacity 1,234 days' })).toBeTruthy();
+    expect(lastChart('Owned live capacity').subtitle).toBe(
+      'CKB owned, by script · 1,234\u00a0days'
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Owned live capacity 1,234\u00a0days' })
+    ).toBeTruthy();
   });
 
   it('captions the Assets history charts by asset', async () => {
     render(<ChartDetail slug="most-utilized-assets" />);
     await screen.findByRole('img', { name: 'Owned live capacity' });
     expect(lastChart('Occupied common knowledge').subtitle).toBe(
-      'CKB occupied, by asset · 1,234 days'
+      'CKB occupied, by asset · 1,234\u00a0days'
     );
-    expect(lastChart('Owned live capacity').subtitle).toBe('CKB owned, by asset · 1,234 days');
+    expect(lastChart('Owned live capacity').subtitle).toBe('CKB owned, by asset · 1,234\u00a0days');
   });
 
   it('keeps the API words out of tier 1', async () => {

@@ -21,6 +21,7 @@ import { Header } from '@/components/layout/header';
 import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { Wordmark } from '@/components/layout/wordmark';
+import { NoBreak } from '@/components/ui/no-break';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
@@ -163,8 +164,9 @@ function TipSeal() {
         </Suspense>
       </div>
       <p data-seal-caption="" className="text-text-dim text-meta m-0 mt-8 min-w-0">
-        behind: the seal of the newest block, <BlockLink number={block.number} /> ·{' '}
-        <span className="break-all">{truncateHash(block.hash)}</span>
+        behind: the seal of the newest block, <BlockLink number={block.number} />{' '}
+        {/* U-16: the shortened hash is one unit, and the dot goes with it to a new line */}
+        <NoBreak>· {truncateHash(block.hash)}</NoBreak>
       </p>
     </>
   );

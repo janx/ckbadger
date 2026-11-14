@@ -35,7 +35,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
             data-testid="sync-banner-live"
             className="bg-jade h-2 w-2 animate-pulse rounded-full"
           />
-          <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING...</span>
+          <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING…</span>
         </div>
         <span className="text-gold-dim text-body font-mono">
           <TerminalNumber value={syncStatus.progress.toFixed(1)} glowIntensity="subtle" />% (

@@ -180,7 +180,8 @@ describe('option A: the headline line', () => {
     const details = [...head(container).querySelectorAll('[data-role="detail"]')].map(
       (e) => e.textContent
     );
-    expect(details).toEqual(['CKBFS', 'lock Nervape Shadow Lock']);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
     expect(
       within(head(container)).getByRole('link', { name: 'Nervape Shadow Lock' })
     ).toHaveAttribute('title', `Nervape Shadow Lock(0x0131da${'00'.repeat(28)}5d74)`);
@@ -206,7 +207,8 @@ describe('option A: the headline line', () => {
       />
     );
     const detail = head(container).querySelector('[data-role="detail"]') as HTMLElement;
-    expect(detail).toHaveTextContent(/^lock \.bit Lock ×2$/);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(detail).toHaveTextContent(/^· lock \.bit Lock ×2$/);
     expect(within(detail).getAllByRole('link')).toHaveLength(1);
     expect(within(detail).getByRole('link', { name: '.bit Lock' })).toHaveAttribute(
       'title',
@@ -313,7 +315,7 @@ describe('option A: every participant, one line each (D1)', () => {
   it('keeps the over-six fold: the five largest and "+N participants" that opens the rest', () => {
     const { container } = render(<ActivityRow activity={feedSamples.eightParties} />);
     expect(lines(container)).toHaveLength(5);
-    fireEvent.click(within(container).getByRole('button', { name: '+3 participants' }));
+    fireEvent.click(within(container).getByRole('button', { name: '+3\u00a0participants' }));
     expect(lines(container)).toHaveLength(8);
   });
 
@@ -366,7 +368,8 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     expect(head(container)).not.toHaveTextContent('deposited at');
     expect(within(head(container)).queryByRole('button')).toBeNull();
     const total = head(container).querySelector('[data-role="protocol-total"]') as HTMLElement;
-    expect(total).toHaveAttribute('title', '132,600.00000000 CKB, the sum of 51 deposits');
+    // U-16 (re-pinned): the count and its noun, one unit
+    expect(total).toHaveAttribute('title', '132,600.00000000 CKB, the sum of 51\u00a0deposits');
   });
 
   it('folds the list by default and opens one deposit per 18 px line, folding back with "fewer ↑"', () => {

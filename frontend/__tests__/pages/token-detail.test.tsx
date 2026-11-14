@@ -140,7 +140,7 @@ describe('TokenDetailPage', () => {
       new ApiRequestError(404, 'not_found', 'token absent')
     );
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText('no token at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no token with this type hash.')).toBeInTheDocument();
     // U-18: the facts name the checked endpoint with the id shortened, once
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
       `/tokens/${truncateHash(hash)}`
@@ -165,7 +165,7 @@ describe('TokenDetailPage', () => {
     );
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('token index mismatch');
-    expect(screen.queryByText('no token at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
   });
 
   it('keeps the token visible and names the distribution endpoint when that secondary read fails', async () => {
@@ -177,7 +177,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       `Could not load holder distribution from /tokens/${hash}/distribution: API error: 404 - distribution unavailable`
     );
-    expect(screen.queryByText('no token at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
   });
   it('consumes unmodified router responses across history, distribution, holders and full transactions', async () => {
     const p = tokenProducer;
@@ -319,6 +319,32 @@ describe('TokenDetailPage', () => {
       'href',
       `/mainnet/tx/${other}`
     );
+  });
+  // U-16, PB-05 (UI review 2026-11-14): the same-symbol note broke this token's shortened type hash
+  // at its ellipsis ("this one is 0x797bfd0b…" / "4080."); the metrics row left a "·" at a line's
+  // end ("644,078.845914 · USDC ·") and opened one ("· 3.82% occupied").
+  it('keeps the note’s shortened ids whole and every metric note’s dot with its note (U-16, PA-25)', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
+      issuer: { lockHash: other, address: null, lockKind: 'JoyID' },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    const note = await screen.findByText(/Another token also calls itself/);
+    const self = within(note).getByText(`${hash.slice(0, 10)}…${hash.slice(-4)}`);
+    expect(self.closest('[data-nobreak]')).not.toBeNull();
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    // every dot of the metrics row belongs to the item after it: none is loose text
+    const loose = [...metrics.querySelectorAll('*')].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !el.hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose.map((n) => n.textContent)).toEqual([]);
+    expect(metrics).toHaveTextContent('JoyID · owner lock proven by token script');
   });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));

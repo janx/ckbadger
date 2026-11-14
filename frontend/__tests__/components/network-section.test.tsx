@@ -302,7 +302,7 @@ describe('NetworkSection', () => {
     );
     render(<NetworkSection />);
     const fig = figure('home-transactions');
-    expect(await within(fig).findByText('No transactions yet')).toBeInTheDocument();
+    expect(await within(fig).findByText('No transactions.')).toBeInTheDocument();
     expect(within(fig).queryByRole('alert')).not.toBeInTheDocument();
   });
 

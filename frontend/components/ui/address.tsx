@@ -1,6 +1,7 @@
 'use client';
 
 import Link from '@/components/ui/link';
+import { NoBreak } from '@/components/ui/no-break';
 import { cn } from '@/lib/utils';
 
 interface AddressProps {
@@ -18,10 +19,10 @@ export function Address({
   endChars = 8,
   className,
 }: AddressProps) {
-  const displayAddress =
-    truncate && address.length > startChars + endChars
-      ? `${address.slice(0, startChars)}...${address.slice(-endChars)}`
-      : address;
+  const shortened = truncate && address.length > startChars + endChars;
+  const displayAddress = shortened
+    ? `${address.slice(0, startChars)}...${address.slice(-endChars)}`
+    : address;
 
   return (
     <Link
@@ -33,7 +34,8 @@ export function Address({
       )}
       title={address}
     >
-      {displayAddress}
+      {/* U-16: a shortened address is one unit; it never breaks at its ellipsis. */}
+      {shortened ? <NoBreak>{displayAddress}</NoBreak> : displayAddress}
     </Link>
   );
 }

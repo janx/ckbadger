@@ -55,11 +55,10 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(api.getForkAt).toHaveBeenCalledWith(10, '17404795');
     // Consistency plan C1: the tab names the page.
     await waitFor(() => expect(document.title).toBe('#10 · 17404795 · fork · CKBadger'));
-    expect(
-      screen.getByText(
-        '1 block deep · detected 2025-08-01 06:13:20 UTC+8 · this node switched once'
-      )
-    ).toBeInTheDocument();
+    // U-16 (re-pinned): the detection time is one unit of its own, inside the line
+    expect(screen.getByText(/block deep/)).toHaveTextContent(
+      '1 block deep · detected 2025-08-01 06:13:20 UTC+8 · this node switched once'
+    );
     expect(screen.queryByText(/Fork event #1754000000000/)).toBeNull();
     expect(
       within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByRole('link', {
@@ -152,7 +151,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(phoneLines(dropped).map((l) => l.key)).toEqual(['identity', 'miner', 'fate']);
     expect(phoneLines(dropped)[0].left).toMatch(/^#11′ 0x/);
     expect(phoneLines(dropped)[1].left).toMatch(/^miner /);
-    expect(phoneLines(dropped)[1].right).toMatch(/^\d+ txs?$/);
+    expect(phoneLines(dropped)[1].right).toMatch(/^\d+\u00a0txs?$/);
     const txs = screen.getAllByTestId('fork-tx-row-mobile');
     const orphanHash = unincludedFixture.orphanedTransactions[1].hash;
     const orphan = txs.find((row) => row.textContent!.includes(orphanHash))!;
@@ -184,9 +183,45 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       'href',
       '/mainnet/blocks/12'
     );
-    expect(
-      within(tier2).getByText(`${uncleFixture.orphanedBlocks[0].hash} · #11`)
-    ).toBeInTheDocument();
+    // U-16 (re-pinned): the uncle's hash and number are two items of one list, the hash one token
+    const uncleHash = within(tier2)
+      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
+      .find((e) => e.closest('[data-dotted]'));
+    expect(uncleHash!.closest('[data-dotted]')).toHaveTextContent(
+      `${uncleFixture.orphanedBlocks[0].hash} · #11`
+    );
+  });
+
+  // U-16, PB-05 (UI review 2026-11-14): tier 2's full hashes wrapped across two lines in the middle
+  // ("0xcd29f0b0…8402a67d72b4b3fb5" / "bfaece30ba50b3"); a full hash is one token, whole on its
+  // line or scrolled in its own box. U-15: "miner witness unavailable" was an internal state.
+  it('writes tier 2’s full hashes as one line each and says "not recorded" for a missing miner (U-16, U-15)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    const event = uncleFixture.event;
+    for (const hash of [
+      event.forkPointHash,
+      event.firstOrphanHash!,
+      event.oldTipHash,
+      event.newTipHash,
+      uncleFixture.orphanedBlocks[0].hash,
+    ]) {
+      for (const full of within(tier2).getAllByText(hash)) {
+        expect(full).toHaveAttribute('data-full-value');
+        expect(full).toHaveClass('whitespace-nowrap', 'overflow-x-auto', 'max-w-full');
+        expect(full.closest('.break-all')).toBeNull();
+      }
+    }
+    // the uncle's number follows its hash as the next item of one list, never a loose "·"
+    const uncle = within(tier2)
+      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
+      .map((e) => e.closest('[data-dotted]'))
+      .find(Boolean);
+    expect(uncle).toHaveTextContent(`${uncleFixture.orphanedBlocks[0].hash} · #11`);
+    expect(within(tier2).getByText('not recorded')).toBeInTheDocument();
+    expect(tier2).not.toHaveTextContent('miner witness unavailable');
   });
 
   it('keeps the originally adopted branch distinct from a block that came back', async () => {

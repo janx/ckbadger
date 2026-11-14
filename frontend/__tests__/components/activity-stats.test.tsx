@@ -124,7 +124,7 @@ describe('ActivityStats', () => {
       '/mainnet/scripts/Bitcoin%20SPV%20Type%20Lock'
     );
     expect(
-      within(scripts).getByRole('link', { name: 'By script, share of 11,300 calls' })
+      within(scripts).getByRole('link', { name: 'By script, share of 11,300\u00a0calls' })
     ).toHaveAttribute('href', '/mainnet/charts/most-utilized-scripts');
     // No donuts and no placeholder.
     expect(screen.queryByText(/Hover for details/)).not.toBeInTheDocument();

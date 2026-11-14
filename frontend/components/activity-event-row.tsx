@@ -32,6 +32,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { AssetClass } from '@/lib/design-tokens';
+import { NoBreak } from '@/components/ui/no-break';
 
 /** A row that is not a pool row sits in a block; an absent number is a contract violation. */
 function committedActivityBlock(activity: { blockNumber: number | null; txHash: string }): number {
@@ -241,7 +242,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
             className="text-lavender-dim hover:text-lavender text-small font-mono transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            {truncateHash(item.objectId, 8, 6)}
+            <NoBreak>{truncateHash(item.objectId, 8, 6)}</NoBreak>
           </Link>
         ),
       };
@@ -261,7 +262,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
             className="text-text-bright decoration-aqua/35 text-small font-mono underline underline-offset-[3px] transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            {truncateHash(item.identityId, 8, 6)}
+            <NoBreak>{truncateHash(item.identityId, 8, 6)}</NoBreak>
           </Link>
         ),
       };
@@ -618,7 +619,7 @@ export function ActivityEventGroup({
         <div className="flex items-center justify-between gap-2">
           <div className="text-small flex items-center gap-1.5 font-mono">
             <Link href={txLink} className="text-text hover:text-jade transition-colors">
-              {truncateHash(activity.txHash, 8, 6)}
+              <NoBreak>{truncateHash(activity.txHash, 8, 6)}</NoBreak>
             </Link>
             <span className="text-text-dim">{'\u00B7'}</span>
             {position}
@@ -654,7 +655,7 @@ export function ActivityEventGroup({
             {i === 0 ? (
               <div className="text-small flex items-center gap-1.5 font-mono">
                 <Link href={txLink} className="text-text hover:text-jade transition-colors">
-                  {truncateHash(activity.txHash, 8, 6)}
+                  <NoBreak>{truncateHash(activity.txHash, 8, 6)}</NoBreak>
                 </Link>
                 <span className="text-text-dim">{'\u00B7'}</span>
                 {position}
@@ -720,7 +721,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
-          {item.delta} {truncateHash(item.objectId, 8, 6)}
+          {item.delta} <NoBreak>{truncateHash(item.objectId, 8, 6)}</NoBreak>
         </Link>
       );
     }
@@ -733,7 +734,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
-          {item.delta} {truncateHash(item.identityId, 8, 6)}
+          {item.delta} <NoBreak>{truncateHash(item.identityId, 8, 6)}</NoBreak>
         </Link>
       );
     }
@@ -908,7 +909,10 @@ export function ExactCkb({
   shannons: bigint;
   signed?: boolean;
   tone?: 'sign' | 'plain';
-  /** Allow a line break before the decimal or unit, preserving every digit. */
+  /**
+   * Allow a line break before the decimal, preserving every digit. The unit stays with the last
+   * digits: a number never parts from its unit (U-16).
+   */
   wrap?: boolean;
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
@@ -946,8 +950,8 @@ export function ExactCkb({
         <span data-ghost className="text-text-ghost">
           {parts.ghost}
         </span>
+        {unitEl}
       </span>
-      {unitEl}
     </span>
   );
 }
@@ -1013,7 +1017,7 @@ export function ItemDeltaFact({
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              {truncateHash(item.objectId, 8, 4)}
+              <NoBreak>{truncateHash(item.objectId, 8, 4)}</NoBreak>
             </Link>
           </span>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
@@ -1034,7 +1038,7 @@ export function ItemDeltaFact({
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              {truncateHash(item.identityId, 8, 4)}
+              <NoBreak>{truncateHash(item.identityId, 8, 4)}</NoBreak>
             </Link>
           </span>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
@@ -1077,7 +1081,9 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              {truncateHash(hash, 10, 4)}:{index}
+              <NoBreak>
+                {truncateHash(hash, 10, 4)}:{index}
+              </NoBreak>
             </Link>
           </>
         ),
@@ -1141,7 +1147,7 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
       kind: 'other',
       node: (
         <span className="text-copper" title={meta.btcTxid}>
-          Bitcoin tx {truncateHash(meta.btcTxid, 8, 6)}
+          Bitcoin tx <NoBreak>{truncateHash(meta.btcTxid, 8, 6)}</NoBreak>
           {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
         </span>
       ),
@@ -1151,24 +1157,4 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
 
 export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
   return protocolActionNoteFacts(pa).map((f) => f.node);
-}
-
-/** Parts joined with a dim middle dot. */
-export function DotJoined({ parts }: { parts: React.ReactNode[] }) {
-  return (
-    <>
-      {parts.map((part, i) => (
-        <Fragment key={i}>
-          {i > 0 && <span className="text-text-dim">{' \u00B7 '}</span>}
-          {part}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
-/** A protocol action's metadata as one quiet line, or nothing when it carries none. */
-export function ProtocolActionNote({ pa }: { pa: ActivityProtocolAction }) {
-  const parts = protocolActionNoteParts(pa);
-  return parts.length === 0 ? null : <DotJoined parts={parts} />;
 }

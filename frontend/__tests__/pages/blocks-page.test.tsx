@@ -162,7 +162,7 @@ describe('BlocksPage', () => {
 
     expect(screen.getByRole('table', { name: 'Latest blocks' })).toHaveTextContent('0.00012345');
     expect(
-      screen.getAllByRole('img', { name: /Cellbase, 1 user transactions/ }).length
+      screen.getAllByRole('img', { name: /Cellbase, 1\suser transaction\b/ }).length
     ).toBeGreaterThan(0);
     expect(screen.queryByText('Browse all blocks on the CKB network')).not.toBeInTheDocument();
     expect(screen.getByText('Blocks')).toBeInTheDocument();
@@ -214,7 +214,7 @@ describe('BlocksPage · the genesis row', () => {
     render(<BlocksPage />);
     const cards = await screen.findAllByTestId('block-row-mobile');
     const lines = phoneLines(cards[2]).map((l) => [l.key, l.left, l.right]);
-    expect(lines[0]).toEqual(['identity', '#0', expect.stringMatching(/^2 txs · .+ ago$/)]);
+    expect(lines[0]).toEqual(['identity', '#0', expect.stringMatching(/^2\stxs · .+ ago$/)]);
     expect(lines[1]).toEqual(['miner', 'miner Genesis', 'fees 0 CKB']);
     expect(lines[2][1]).toMatch(/· 1,236,271 B, 1,235,678 B overhead · 0 cycles · Genesis$/);
   });
@@ -330,7 +330,7 @@ describe('BlocksPage · Blocks v3 board', () => {
   it('draws one gold dot per proposal (BA-03)', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
-    const glyph = within(table).getByRole('img', { name: /4 proposals/ });
+    const glyph = within(table).getByRole('img', { name: /4\sproposals/ });
     expect(glyph.querySelectorAll('[data-proposal-dot]')).toHaveLength(4);
   });
 
@@ -538,13 +538,13 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(screen.queryByRole('table')).toBeNull();
       expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
         // the head line: what every reader comes for, the height, the transactions and the age
-        ['identity', '#20,828,894', expect.stringMatching(/^5 txs · \d+[smhd] ago$/)],
+        ['identity', '#20,828,894', expect.stringMatching(/^5\stxs · \d+[smhd] ago$/)],
         ['miner', 'miner ckb1...93hhsj', 'fees 0.05060000 CKB'],
         [
           'figures',
           // Every desktop column: hash, the proposals (consensus detail, after the hash that
           // starts every row's line), size with its overhead, cycles, the reward.
-          '0x0000...d2de · 4 proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
+          '0x0000...d2de · 4\u00a0proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
           null,
         ],
       ]);
@@ -583,15 +583,16 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [head, , figures] = phoneLines(cards[0]);
-      expect([head.left, head.right]).toEqual(['#20,987,284', '999 txs · 59m ago']);
+      expect([head.left, head.right]).toEqual(['#20,987,284', '999\u00a0txs · 59m ago']);
       // the consensus detail stands with the quiet figures, after the hash, each count unbroken
-      expect(figures.left).toMatch(/^0x5e5e\.\.\.5e5e · 12 proposals · 1 uncle · /);
+      expect(figures.left).toMatch(/^0x5e5e\.\.\.5e5e · 12\sproposals · 1\suncle · /);
       const quiet = cards[0].querySelector('[data-line="figures"]') as HTMLElement;
-      for (const count of ['12 proposals', '1 uncle'])
-        expect(within(quiet).getByText(count)).toHaveClass('whitespace-nowrap');
+      // U-16 (re-pinned): each count and its noun are one unit, a no-break space between them
+      for (const count of ['12\u00a0proposals', '1\u00a0uncle'])
+        expect(quiet.textContent).toContain(count);
       // a block with neither writes neither
       const [plainHead, , plainFigures] = phoneLines(cards[1]);
-      expect(plainHead.right).toMatch(/^1 tx · \d+[smhd] ago$/);
+      expect(plainHead.right).toMatch(/^1\stx · \d+[smhd] ago$/);
       expect(plainFigures.left).not.toMatch(/proposal|uncle/);
       // the worst realistic head: 85.8 + 12 + 17 × 7.2 = 220.2 px, inside 294 (and 324)
       const headWidth = (left: string, right: string) =>
@@ -601,9 +602,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       // the right part holds 27 characters at 360 and 31 at 390; the old head of this block was 42
       expect(Math.floor((294 - chars(11, 13) - 12) / chars(1, 12))).toBe(27);
       expect(Math.floor((324 - chars(11, 13) - 12) / chars(1, 12))).toBe(31);
-      expect(headWidth(head.left, '999 txs · 12 proposals · 1 uncle · 59m ago')).toBeGreaterThan(
-        324
-      );
+      expect(
+        headWidth(head.left, '999\u00a0txs · 12\u00a0proposals · 1\u00a0uncle · 59m ago')
+      ).toBeGreaterThan(324);
     });
 
     // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)

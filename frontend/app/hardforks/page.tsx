@@ -14,6 +14,7 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import { formatCount } from '@/lib/format-count';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -51,14 +52,14 @@ function editionStory(event: Edition, timeline: Timeline, tipMs: number | null):
       .sort((a, b) => a.timestampMs - b.timestampMs)[0];
     return `Added CKB-VM version 1 and the hash type data1 to pin it.${
       first
-        ? ` The first known script pinned with data1 came ${Math.floor((first.timestampMs - since) / DAY_MS).toLocaleString()} days later: ${first.versionName}.`
+        ? ` The first known script pinned with data1 came ${formatCount(Math.floor((first.timestampMs - since) / DAY_MS), 'day')} later: ${first.versionName}.`
         : ''
     }`;
   }
   if (event.id === 'meepo-2024')
     return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. ${
       data2.knownVersions === 0
-        ? `No script CKBadger knows uses data2 yet${tipMs === null ? '' : `, ${Math.floor((tipMs - since) / DAY_MS).toLocaleString()} days on`}.`
+        ? `No script CKBadger knows uses data2 yet${tipMs === null ? '' : `, ${formatCount(Math.floor((tipMs - since) / DAY_MS), 'day')} on`}.`
         : `${data2.knownVersions.toLocaleString()} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.`
     }`;
   return event.summary;

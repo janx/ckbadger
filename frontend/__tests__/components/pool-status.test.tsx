@@ -32,6 +32,18 @@ describe('TimeInPool', () => {
     render(<TimeInPool since={fiveMinutesAgo} />);
     expect(screen.getByText(/in pool for 5m/)).toBeInTheDocument();
   });
+
+  // The lead's follow-up: the pool's wait was a second relative-age rule with a Math.max(0, …)
+  // clamp, so a pending-since time further ahead than consensus allows read "in pool for 0s". It
+  // takes format-age's one form and that form's treatment of a time ahead of this device's clock.
+  it('reads its wait in the one age form, and says when this device’s clock is behind', () => {
+    const { rerender } = render(<TimeInPool since={new Date(Date.now() + 2_000).toISOString()} />);
+    // within the 15 s consensus allows: no age yet
+    expect(screen.getByText('in pool for 0s')).toBeInTheDocument();
+    rerender(<TimeInPool since={new Date(Date.now() + 60_000).toISOString()} />);
+    expect(screen.getByText("this device's clock is behind")).toBeInTheDocument();
+    expect(screen.queryByText(/in pool for/)).toBeNull();
+  });
 });
 
 describe('PoolInterpretationNotice', () => {

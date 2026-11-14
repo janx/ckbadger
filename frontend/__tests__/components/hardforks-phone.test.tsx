@@ -66,10 +66,10 @@ describe('the VM lanes on a phone (PB-02)', () => {
   it('gives each lane its label and count a line no edition rule crosses', () => {
     const svg = mount(358);
     const heads = [
-      ['type · the newest VM', '1,765,012 · 60 versions'],
-      ['data1 · pinned to VM1', '97,771 · 19 versions'],
+      ['type · the newest VM', '1,765,012 · 60\u00a0versions'],
+      ['data1 · pinned to VM1', '97,771 · 19\u00a0versions'],
       ['data2 · pinned to VM2', '0 · no known script yet'],
-      ['data · pinned to VM0', '472 · 1 version'],
+      ['data · pinned to VM0', '472 · 1\u00a0version'],
     ];
     const rules = [...svg.querySelectorAll('line[data-edition]')];
     expect(rules.length).toBeGreaterThan(0);
@@ -94,8 +94,8 @@ describe('the VM lanes on a phone (PB-02)', () => {
 
   it('counts one version in the singular', () => {
     const svg = mount(358);
-    expect(textNode(svg, '472 · 1 version')).toBeDefined();
-    expect(textNode(svg, '472 · 1 versions')).toBeUndefined();
+    expect(textNode(svg, '472 · 1\u00a0version')).toBeDefined();
+    expect(textNode(svg, '472 · 1\u00a0versions')).toBeUndefined();
   });
 });
 

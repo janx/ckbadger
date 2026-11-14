@@ -6,14 +6,13 @@ import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
-import { SealedHead } from '@/components/ui/page-seal';
+import { PlateHash, SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   ActivityReadError,
-  DotJoined,
   ExactCkb,
   activityClassMark,
   activityHeadline,
@@ -59,7 +58,7 @@ import {
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { cn, truncateHash, formatUtc8DateTime } from '@/lib/utils';
+import { cn, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatAgeTwoUnits } from '@/lib/format-age';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
@@ -78,9 +77,11 @@ import { BlockLink } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 import type { SealState } from '@/lib/seal/stones';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
-  loading: () => <p className="text-text-dim text-small">Loading graph section...</p>,
+  loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
 });
 const POLL_MS = 3000;
 function provisional(tx: TransactionDetail | undefined): boolean {
@@ -109,7 +110,7 @@ function indexParam(value: string | null): number | null {
   return Number(value);
 }
 function PendingValue() {
-  return <span className="text-text-dim">pending...</span>;
+  return <span className="text-text-dim">pending…</span>;
 }
 /** The registry's name for a code hash, or null when it has none. */
 function registeredName(lookup: ScriptLookupResponse | undefined, codeHash: string) {
@@ -193,7 +194,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             className="text-text-bright hover:text-jade"
           >
             {item.collection?.name ? `${item.collection.name} ` : 'Object '}
-            {truncateHash(item.objectId, 6, 4)}
+            <NoBreak>{truncateHash(item.objectId, 6, 4)}</NoBreak>
           </Link>
         </>
       );
@@ -217,7 +218,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             href={getIdentityItemDetailHref(item.standard, item.identityId)}
             className="text-text-bright hover:text-jade"
           >
-            {formatStandard(item.standard)} {truncateHash(item.identityId, 6, 4)}
+            {formatStandard(item.standard)} <NoBreak>{truncateHash(item.identityId, 6, 4)}</NoBreak>
           </Link>
         </>
       );
@@ -314,10 +315,16 @@ function TxSummary({
         activity.protocolActions.map((pa, i) => (
           <Fragment key={i}>
             {readable(activity.txHash, () => {
+              // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
               const parts = protocolActionNoteParts(pa);
               return parts.length ? (
                 <>
-                  <DotJoined parts={parts} />
+                  {parts.map((part, j) => (
+                    <Fragment key={j}>
+                      {j > 0 && ', '}
+                      {part}
+                    </Fragment>
+                  ))}
                   {'. '}
                 </>
               ) : null;
@@ -569,7 +576,9 @@ function DepRow({
         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
         className="text-text-bright decoration-aqua/35 min-w-0 self-start underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
       >
-        {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
+        <NoBreak>
+          {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
+        </NoBreak>
       </Link>
       <span className="text-text-dim">
         {serves.length > 0 ? (
@@ -590,7 +599,10 @@ function DepRow({
             return (
               <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
                 <Link href={`/cell/${cell.txHash}-${cell.index}`} className="hover:text-jade">
-                  ↳ {truncateHash(cell.txHash, 10, 6)}:{cell.index}
+                  ↳{' '}
+                  <NoBreak>
+                    {truncateHash(cell.txHash, 10, 6)}:{cell.index}
+                  </NoBreak>
                 </Link>
                 {memberServes.length > 0
                   ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
@@ -940,7 +952,9 @@ export default function TransactionDetailPage() {
                 href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
                 className="hover:text-jade"
               >
-                {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
+                <NoBreak>
+                  {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
+                </NoBreak>
               </Link>{' '}
               · not run here
             </span>
@@ -951,7 +965,7 @@ export default function TransactionDetailPage() {
       ) : depsError ? (
         <span className="text-text-dim">cell deps unreadable</span>
       ) : !deps ? (
-        <span className="text-text-dim">Resolving code...</span>
+        <span className="text-text-dim">Resolving code…</span>
       ) : codeDeps.length === 0 ? (
         <span className="text-text-dim">No matching dep</span>
       ) : (
@@ -965,7 +979,9 @@ export default function TransactionDetailPage() {
               href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
               className="text-text-dim hover:text-jade"
             >
-              {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
+              <NoBreak>
+                {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
+              </NoBreak>
             </Link>
           </span>
         ))
@@ -1053,7 +1069,7 @@ export default function TransactionDetailPage() {
     activityError ? (
       <span className="text-text-dim">unreadable without the transaction&rsquo;s activity</span>
     ) : (
-      <span className="text-text-dim">Reading...</span>
+      <span className="text-text-dim">Reading…</span>
     )
   ) : (
     readable(hash, () => {
@@ -1206,7 +1222,7 @@ export default function TransactionDetailPage() {
             }}
           />
         ) : (
-          <p className="text-text-dim py-4">Loading graph...</p>
+          <p className="text-text-dim py-4">Loading graph…</p>
         )}
       </details>
       <details>
@@ -1245,7 +1261,7 @@ export default function TransactionDetailPage() {
             // its own classes
             identity={
               <div className="flex min-w-0 items-center gap-0.5">
-                <span className="min-w-0">{tx.hash}</span>
+                <PlateHash hash={tx.hash} />
                 <CopyHash hash={tx.hash} />
               </div>
             }
@@ -1292,7 +1308,9 @@ export default function TransactionDetailPage() {
                   <time
                     dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}
                   >
-                    {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
+                    <NoBreak>
+                      {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
+                    </NoBreak>
                     <span className="text-text-dim text-small block">
                       {formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'))}
                     </span>
@@ -1339,7 +1357,7 @@ export default function TransactionDetailPage() {
               <div className="flex flex-col gap-0.5">
                 <dt className="text-text-dim text-small">Pending since</dt>
                 <dd>
-                  {formatUtc8DateTime(tx.pendingSince)}
+                  <Utc8DateTime timestamp={tx.pendingSince} />
                   <span className="text-text-dim text-small block">
                     {formatAgeTwoUnits(tx.pendingSince)}
                   </span>
@@ -1562,7 +1580,7 @@ export default function TransactionDetailPage() {
                   />
                 ))
               ) : (
-                <p className="text-text-dim py-3">Resolving cell deps...</p>
+                <p className="text-text-dim py-3">Resolving cell deps…</p>
               )}
             </div>
             {headerDeps.length > 0 && (
@@ -1583,7 +1601,9 @@ export default function TransactionDetailPage() {
                         {formatBlockNumber(h.blockNumber)}
                       </Link>
                     )}
-                    <span className="text-text-dim">{truncateHash(h.blockHash, 10, 6)}</span>
+                    <span className="text-text-dim">
+                      <NoBreak>{truncateHash(h.blockHash, 10, 6)}</NoBreak>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1690,7 +1710,7 @@ export default function TransactionDetailPage() {
               {hasCycles && cycles !== null ? (
                 cycles.toLocaleString('en-US')
               ) : isPaused ? null : isCalculating ? (
-                'Calculating...'
+                'Calculating…'
               ) : hasFailed ? (
                 'Calculation failed'
               ) : isProvisional ? (

@@ -8,7 +8,7 @@ describe('ProposalRuler (TX-17)', () => {
       <ProposalRuler proposedIn={20801531} committedIn={20801533} window={{ close: 2, far: 10 }} />
     );
     const svg = screen.getByRole('img', {
-      name: 'Proposed in block 20,801,531, committed 2 blocks later in 20,801,533; the commit window is 2 to 10 blocks',
+      name: 'Proposed in block 20,801,531, committed 2\u00a0blocks later in 20,801,533; the commit window is 2 to 10 blocks',
     });
     // One tick per block of the window's far edge, a gold dot at the proposal, a jade square at
     // the commit two steps (48 px of 240) along, and the window line from +2 to +10.

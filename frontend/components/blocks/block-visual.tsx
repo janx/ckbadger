@@ -2,6 +2,7 @@ import { AlignedBar } from '@/components/ui/aligned-bar';
 import { niceTicks } from '@/lib/chart-ticks';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
+import { formatCount } from '@/lib/format-count';
 
 const PROPOSAL_COLOR = CLASS_COLORS.dao;
 const GLYPH_WIDTH = 112;
@@ -38,7 +39,7 @@ export function BlockContents({
   const dotsFrom = 14 + shown.length * 13;
   const dotRoom = Math.floor((GLYPH_WIDTH - dotsFrom - 2 * DOT_R) / DOT_STEP) + 1;
   const dots = Math.min(proposalsCount, Math.max(dotRoom, 0));
-  const label = `Cellbase, ${userSizes.length} user transactions, ${proposalsCount} proposals, ${unclesCount} uncles`;
+  const label = `Cellbase, ${formatCount(userSizes.length, 'user transaction')}, ${formatCount(proposalsCount, 'proposal')}, ${formatCount(unclesCount, 'uncle')}`;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5" title={label}>
       <span data-contents-line className="inline-flex items-center gap-2 whitespace-nowrap">

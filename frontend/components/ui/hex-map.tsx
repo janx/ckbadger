@@ -13,6 +13,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { fade } from '@/lib/palette';
 import { cn } from '@/lib/utils';
+import { formatCount, countNoun } from '@/lib/format-count';
 export type HexField = ByteRange & { color?: string };
 
 export interface HexMapProps {
@@ -123,7 +124,7 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
       <ReadoutRow
         label={`${subject} byte readout`}
         pinned={readout.showingPin}
-        idle={`${bytes.length} bytes · inspect a field or byte`}
+        idle={`${formatCount(bytes.length, 'byte')} · inspect a field or byte`}
       >
         {selected ? selected.description : null}
       </ReadoutRow>
@@ -171,7 +172,7 @@ function HexScaleMap({
         short: fmt(n),
         color: 'var(--c-ink-quiet)',
         quiet: true,
-        title: `${span} · no field describes ${n === 1 ? 'this byte' : 'these bytes'}`,
+        title: `${span} · no field describes ${countNoun(n, 'this byte', 'these bytes')}`,
       };
     const owners = piece.ids.map((id) => byId.get(id)!);
     const owner = owners.reduce((a, b) => (b.length < a.length ? b : a));

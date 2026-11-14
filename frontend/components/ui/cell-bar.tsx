@@ -1,5 +1,6 @@
 import { CELL_COLORS, FREE_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { formatCount } from '@/lib/format-count';
 
 export interface CellAnatomy {
   lock: string;
@@ -38,7 +39,7 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
           <span
             key={p.key}
             data-part={p.key}
-            title={`${p.key}: ${p.value} bytes`}
+            title={`${p.key}: ${formatCount(p.value, 'byte')}`}
             style={{
               width: `${(Number(p.value) / Number(total)) * 100}%`,
               backgroundColor: CELL_COLORS[p.key],
@@ -56,7 +57,7 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
             <span
               key={p.key}
               data-part-legend={p.key}
-              title={`${p.key}: ${p.value} bytes`}
+              title={`${p.key}: ${formatCount(p.value, 'byte')}`}
               className="inline-flex items-center gap-1.5"
             >
               <span
@@ -94,7 +95,7 @@ function freeBar(
     <span
       role="img"
       data-free-shannons={free.toString()}
-      aria-label={`${subject}: ${total} occupied bytes of ${shannons} shannons; capacity ${parts[0].value}, lock ${parts[1].value}, type ${parts[2].value}, data ${parts[3].value} bytes`}
+      aria-label={`${subject}: ${total} occupied bytes of ${shannons} shannons; capacity ${parts[0].value}, lock ${parts[1].value}, type ${parts[2].value}, data ${formatCount(parts[3].value, 'byte')}`}
       className={`flex h-2 w-full overflow-hidden rounded-sm ${className ?? ''}`}
       style={{ backgroundColor: FREE_CAPACITY_COLOR }}
     >

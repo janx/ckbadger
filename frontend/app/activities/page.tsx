@@ -11,6 +11,8 @@ import {
   nonCellbaseCount,
   previousChainDay,
 } from '@/lib/activity-stats';
+import { countNoun } from '@/lib/format-count';
+import { NoBreak } from '@/components/ui/no-break';
 
 export default function ActivitiesPage() {
   const { data, error } = useQuery({
@@ -46,10 +48,13 @@ export default function ActivitiesPage() {
             <p className="text-text text-body">
               <span className="text-text-bright">{count.toLocaleString('en-US')}</span> yesterday
               (UTC+8) ·{' '}
-              <span className="text-text-bright">
-                {summary.uniqueAddressCount.toLocaleString('en-US')}
-              </span>{' '}
-              addresses took part
+              <NoBreak>
+                <span className="text-text-bright">
+                  {summary.uniqueAddressCount.toLocaleString('en-US')}
+                </span>{' '}
+                {countNoun(summary.uniqueAddressCount, 'address', 'addresses')}
+              </NoBreak>{' '}
+              took part
             </p>
           ) : error || txStatsError ? (
             <p role="alert" className="text-text-dim text-small">

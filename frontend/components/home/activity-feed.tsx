@@ -10,6 +10,7 @@ import { useFreshKeys } from '@/hooks/useFreshKeys';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { api, type Transaction } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { countNoun } from '@/lib/format-count';
 
 /** The feed always shows this many rows: no inner scroll, no row cut mid-way. */
 export const FEED_ROWS = 8;
@@ -158,7 +159,7 @@ function FeedList<T>({
   );
 }
 
-const plural = (n: number, noun: string) => `${noun}${n === 1 ? '' : 's'}`;
+const plural = (n: number, noun: string) => countNoun(n, noun);
 
 function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
   // Cross-highlight with the transaction pipeline (hovered or pinned there, or hovered here).
