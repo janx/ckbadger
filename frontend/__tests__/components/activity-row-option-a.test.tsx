@@ -268,6 +268,16 @@ describe('option A: every participant, one line each (D1)', () => {
 
   // Material pass v2 (move 5): the lock kind is dim small caps after the address, not a chip —
   // boxes stay on controls.
+  // UI review 2026-11-14 (U-08, ruling R4): "occupied ±N" is a figure; the dim ink at 60 % read
+  // 2.7:1 by night and 2.5:1 by day. It is the dim ink itself, never thinned.
+  it('writes "occupied ±N" in the dim ink, not the dim ink thinned', () => {
+    const { container } = render(<ActivityRow activity={transfer} />);
+    const occupied = container.querySelector('[data-role="occupied"]') as HTMLElement;
+    expect(occupied).toHaveTextContent(/^occupied [+−]/);
+    expect(occupied).toHaveClass('text-meta', 'text-text-dim');
+    expect([...occupied.classList].filter((c) => c.includes('/'))).toEqual([]);
+  });
+
   it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind in small caps', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
     for (const line of lines(container)) {

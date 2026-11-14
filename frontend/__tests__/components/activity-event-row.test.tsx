@@ -754,6 +754,25 @@ describe('ExactCkb', () => {
     expect(unit).toHaveClass('text-text-dim', 'text-meta');
   });
 
+  // UI review 2026-11-14 (U-08, ruling R4): a value that IS zero is a datum ("fee 0 CKB"), so it
+  // is the dim ink; the ghost is only for the padding zeros of a non-zero amount.
+  it('draws a datum zero in the dim ink and only the padding zeros of a non-zero amount ghost', () => {
+    const { container } = render(
+      <>
+        <ExactCkb shannons={BigInt(0)} signed={false} tone="plain" />
+        <ExactCkb shannons={BigInt(100000000)} signed={false} tone="plain" />
+      </>
+    );
+    const [zero, one] = [...container.querySelectorAll('[data-ckb-amount]')];
+    const datum = zero.querySelector('[data-zero]');
+    expect(datum).toHaveTextContent(/^0$/);
+    expect(datum).toHaveClass('text-text-dim');
+    expect(zero.querySelector('.text-text-ghost')).toBeNull();
+    const padding = one.querySelector('[data-ghost]');
+    expect(padding).toHaveTextContent(/^\.00000000$/);
+    expect(padding).toHaveClass('text-text-ghost');
+  });
+
   // Rubbing × Song print, phase 5 (T4): a sentence that names an amount the page draws (the
   // transaction comment's fee) takes its digits from exactCkbText; it must read as ExactCkb does.
   it('prints the same digits as exactCkbText, signed or not, zero included', () => {
