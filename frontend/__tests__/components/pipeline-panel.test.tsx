@@ -668,8 +668,9 @@ describe('PipelinePanel static render', () => {
     expect(win.getAttribute('d')?.match(/M/g)).toHaveLength(8);
     expect(win.style.getPropertyValue('stroke')).toBe(tok('gold'));
     expect(win).toHaveAttribute('stroke-width', '1.5');
+    // re-pinned with lane E2's follow-up: an in-window number is the gold's bright step on its tile
     for (const el of svg.querySelectorAll('[data-block-number]')) {
-      expect(el).not.toHaveClass('fill-gold');
+      expect(el).not.toHaveClass('fill-warning-bright');
     }
   });
 
@@ -1372,8 +1373,9 @@ describe('PipelinePanel interactions', () => {
       const n = c.block.number;
       const number = card(svg, n).querySelector('[data-block-number]');
       const inside = inWindow(n, T + 1, snapshot.consensus);
-      if (inside) expect(number).toHaveClass('fill-gold');
-      else expect(number).not.toHaveClass('fill-gold');
+      // re-pinned with lane E2's follow-up: the gold's bright step, 4.5:1 on the tile by day
+      if (inside) expect(number).toHaveClass('fill-warning-bright');
+      else expect(number).not.toHaveClass('fill-warning-bright');
       expect(dimOfCard(svg, n)).toBe(inside ? 'false' : 'true');
     }
     expect(svg.querySelector('[data-next] > [data-dim]')).toHaveAttribute('data-dim', 'false');
@@ -1388,8 +1390,13 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
       windowLabel(T + 1, T, snapshot.consensus)
     );
-    expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass('fill-gold');
-    expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass('fill-gold');
+    // re-pinned with lane E2's follow-up: the gold's bright step on the tile
+    expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass(
+      'fill-warning-bright'
+    );
+    expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass(
+      'fill-warning-bright'
+    );
   });
 
   it('anchors the window on a hovered block and steps back the blocks outside it', async () => {
@@ -2103,8 +2110,9 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       columnWindowMarksPath(ruler)
     );
     expect(svg.querySelector('[data-window-label]')).toBeNull();
+    // re-pinned with lane E2's follow-up: the gold's bright step on the tile
     const gold = (n: number) =>
-      card(svg, n).querySelector('[data-block-number]')?.classList.contains('fill-gold');
+      card(svg, n).querySelector('[data-block-number]')?.classList.contains('fill-warning-bright');
     expect([T, T - 1, T - 2, T - 3].map(gold)).toEqual([false, true, true, true]);
   });
 

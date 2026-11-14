@@ -168,12 +168,12 @@ export function ColumnBlock({
                 x={chipCount.x}
                 y={chipCount.y}
                 textAnchor="end"
-                className={T10}
+                className={T10B}
               >{`+${card.chipOverflow}`}</text>
             </g>
           )}
           {card.hidden > 0 && (
-            <text data-count x={count.x} y={count.y} textAnchor="end" className={T10}>
+            <text data-count x={count.x} y={count.y} textAnchor="end" className={T10B}>
               {`+${card.hidden}`}
             </text>
           )}

@@ -2,7 +2,7 @@
 
 import { TILE_FILL, ageOpacity, chipPaint, tok } from '@/lib/pipeline/encoding';
 import { G, tail4, type SceneCard } from '@/lib/pipeline/layout';
-import { T10, T11C, T11G } from '@/components/pipeline/svg-text';
+import { T10, T10B, T11C, T11G } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 
 export type DimLevel = 'false' | 'true' | 'soft';
@@ -122,7 +122,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
                 x={card.w - G.padX}
                 y={G.sepY - 1}
                 textAnchor="end"
-                className={T10}
+                className={T10B}
               >{`+${card.chipOverflow}`}</text>
             </g>
           )}
@@ -132,7 +132,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
               x={card.w - G.padX}
               y={G.chainY + 3.5}
               textAnchor="end"
-              className={T10}
+              className={T10B}
             >{`+${card.hidden}`}</text>
           )}
         </g>
