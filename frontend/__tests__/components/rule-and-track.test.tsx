@@ -6,7 +6,10 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { ShareBar } from '@/components/ui/share-bar';
 import { AlignedBar } from '@/components/ui/aligned-bar';
 import { BlockPosition } from '@/components/blocks/block-position';
-import { FREE_CAPACITY_COLOR } from '@/lib/design-tokens';
+import { FORK_COLORS, FREE_CAPACITY_COLOR } from '@/lib/design-tokens';
+import { CHART_GRID_COLOR } from '@/lib/chart-colors';
+import { Chart } from '@/components/ui/chart';
+import { BarChart } from '@/components/home/mini-chart';
 import { color } from '@/lib/palette';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
@@ -126,6 +129,54 @@ describe('a horizontal rule in the content is a row rule (R5, DY-01)', () => {
         short.push(`${path}: ${edges.length} edges listed, ${found.length} found`);
     }
     expect(short).toEqual([]);
+  });
+});
+
+// Ruling 4c: a chart's gridline is a rule on the ruled paper — in the hair it is one more ruled
+// line by day (1.09:1). Every chart grid (and the forks chart's base line) is the row-rule key,
+// the hair by night as before.
+describe('chart gridlines are rules (R5, ruling 4c)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('names the row-rule key as the charts’ grid colour', () => {
+    expect(CHART_GRID_COLOR).toBe(color('row-rule'));
+    expect(FORK_COLORS.grid).toBe(color('row-rule'));
+    expect(FORK_COLORS.axis).toBe(color('row-rule'));
+  });
+
+  it('draws the shared chart’s and the home mini charts’ grids in the row-rule ink', () => {
+    stubChartWidth(480);
+    const { container } = render(
+      <>
+        <Chart
+          title="Hash rate"
+          subtitle="daily"
+          data={[
+            { label: '2026-10-28', values: { rate: '1' } },
+            { label: '2026-10-29', values: { rate: '3' } },
+          ]}
+          series={[{ key: 'rate', label: 'Hash rate', color: color('jade') }]}
+          unit="PH/s"
+          formatValue={(v) => v}
+        />
+        <BarChart
+          bars={[{ label: '09:00', value: 610, state: 'highlight' }]}
+          ariaLabel="Bars"
+          formatValue={String}
+        />
+      </>
+    );
+    const strokes = [...container.querySelectorAll('line')]
+      .filter(
+        (l) => l.getAttribute('y1') === l.getAttribute('y2') && !l.getAttribute('stroke-dasharray')
+      )
+      .map((l) => l.getAttribute('stroke'));
+    expect(strokes.length).toBeGreaterThan(2);
+    expect(strokes).not.toContain('var(--c-base-border-subtle)');
+    expect(container.querySelector('[data-role="grid"]')).toHaveAttribute(
+      'stroke',
+      color('row-rule')
+    );
   });
 });
 
