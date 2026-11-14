@@ -254,11 +254,8 @@ describe('copy gates (U-15)', () => {
     '${denominator} blocks',
     '${formatScaledInteger(years, per, 2)} years',
     "${formatChartExact(leader.value, 'blocks')} blocks · ",
-    // a developer's message for a missing witness, and the scripts rows' hover titles ("N live of
-    // M cells ever", or "unavailable cells ever" when the API states no count)
+    // a developer's message for a missing witness
     '${witness.index} bytes',
-    '${countText(script.cellsCount)} cells ever',
-    '${countText(s.cellsCount)} cells ever',
     // a name before its noun in an accessible name: a holdings label's objects, a gene's variants
     '${label} objects held here',
     '${lane.gene} variants',
