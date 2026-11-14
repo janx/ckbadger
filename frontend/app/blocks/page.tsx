@@ -392,14 +392,14 @@ function reward(block: Block) {
  * device's clock is behind" (29 characters), drops it under the height, whole. With the counts it
  * read "4 txs · 1 proposal · 13s ago" (28) and dropped at 360 while its neighbours did not.
  *
- * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 292 px beside the
- * stone: the content width, 358 and 326, less the block stone's 34; 12 px, 7.2 px a character, the
- * unit 11 px, 6.6): "miner ckb1…93hhsj" (17 characters, 122.4 px, the tight address at 4…6), the
- * 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15, 108) and " CKB" (26.4), make
- * 268.8 px, 23.2 to spare at 360; a fee of 100–999 CKB makes 283.2. At 8…6, "miner ckb1qzda…93hhsj"
- * (151.2 px), it was 297.6 and the fee dropped under the miner at 360. A fee from 1,000 CKB at 360
- * (the separator: 297.6), from 1,000,000 CKB at 390, or a long pool name drops the fees under the
- * miner whole, right-aligned (PhoneRow's rule).
+ * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 294 px beside the
+ * stone: 390 and 360 less the two 16 px gutters and the block stone's 34; 12 px, 7.2 px a
+ * character, the unit 11 px, 6.6): "miner ckb1…93hhsj" (17 characters, 122.4 px, the tight address
+ * at 4…6), the 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15, 108) and " CKB"
+ * (26.4), make 268.8 px, 25.2 to spare at 360; a fee of 100–999 CKB makes 283.2. At 8…6, "miner
+ * ckb1qzda…93hhsj" (151.2 px), it was 297.6 and the fee dropped under the miner at 360. A fee from
+ * 1,000 CKB at 360 (the separator: 297.6), from 1,000,000 CKB at 390, or a long pool name drops the
+ * fees under the miner whole, right-aligned (PhoneRow's rule).
  */
 function BlockPhoneRow({ block }: { block: Block }) {
   return (
