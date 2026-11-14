@@ -16,6 +16,7 @@ import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
 import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
+import { LockKind } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
 import { formatCkbAmount, truncateHash } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
@@ -280,9 +281,17 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               ) : (
                 <span title={NOT_ESTABLISHED_ISSUER}>Not established</span>
               ),
+              // U-15: a lock the registry does not name reads "lock <code hash>"; a lock that is
+              // not indexed has no kind to write, so the note is the proof alone.
               note: t.issuer
                 ? [
-                    t.issuer.lockKind ?? 'Lock kind unavailable',
+                    t.issuer.lockCodeHash !== null && (
+                      <LockKind
+                        lockKind={t.issuer.lockKind}
+                        lockCodeHash={t.issuer.lockCodeHash}
+                        className="text-text-dim text-small"
+                      />
+                    ),
                     'owner lock proven by token script',
                   ]
                 : undefined,

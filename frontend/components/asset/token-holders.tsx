@@ -24,7 +24,8 @@ import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
-import { RowTag } from '@/components/ui/row-tag';
+import { rowTagClass } from '@/components/ui/row-tag';
+import { LockKind } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatTick } from '@/lib/chart-ticks';
@@ -270,17 +271,18 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         label: 'Lock',
         minWidth: 116,
         // A flex line holds the chip at its own 18 px, so the row stays 41 px; a long lock kind
-        // ends in an ellipsis, whole in the chip's and the row's hover.
-        render: (h) => {
-          const kind = h.lockKind ?? 'Lock kind unavailable';
-          return (
-            <span className="flex min-w-0">
-              <RowTag title={kind} className="min-w-0 truncate">
-                {kind}
-              </RowTag>
-            </span>
-          );
-        },
+        // ends in an ellipsis, whole in the row's hover (the chip's hover is the code hash).
+        // U-15: a lock the registry does not name reads "lock <code hash>", as on the collection
+        // holders.
+        render: (h) => (
+          <span className="flex min-w-0">
+            <LockKind
+              lockKind={h.lockKind}
+              lockCodeHash={h.lockCodeHash}
+              className={rowTagClass('default', 'min-w-0 truncate')}
+            />
+          </span>
+        ),
       },
       {
         key: 'balance',
@@ -327,7 +329,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     [
       `#${rank(h)}`,
       h.address ?? h.lockScriptHash,
-      h.lockKind ?? 'lock kind unavailable',
+      h.lockCodeHash === null ? 'lock not indexed' : (h.lockKind ?? h.lockCodeHash),
       `${formatTokenBalanceWithRawMarker(h.balance, decimals)}${symbol ? ` ${symbol}` : ''}`,
       `${holderShare(h).text} of supply`,
     ].join(' · ');
@@ -365,7 +367,14 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                       />
                     </AppLink>
                   }
-                  lock={h.lockKind ?? 'Lock kind unavailable'}
+                  lock={
+                    // In the row's own dim small ink, as the kind was written before U-15.
+                    <LockKind
+                      lockKind={h.lockKind}
+                      lockCodeHash={h.lockCodeHash}
+                      className="text-text-dim text-small"
+                    />
+                  }
                   amount={<AssetAmount amount={h.balance} decimals={decimals} />}
                   share={share.text}
                   bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}

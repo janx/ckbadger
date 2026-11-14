@@ -1,6 +1,8 @@
 /** Unchanged real create_router JSON from api_token_redesign.rs / api_inventory_summary.rs.
  * Captured 2026-10-27. Synthetic persisted fixtures establish producer-consumer shape;
- * these are not observations of a running mainnet store. */
+ * these are not observations of a running mainnet store. U-15 (lane A4b): the issuer, holder and
+ * supply-event rows gain `lockCodeHash` as the producer now writes it (null: the fixture indexes
+ * no lock script, so its addresses are null too). */
 import type {
   Token,
   TokenHistory,
@@ -301,6 +303,7 @@ export const tokenProducer = {
         amount: '10',
         blockNumber: 2,
         kind: 'burn',
+        lockCodeHash: null,
         lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
         lockKind: null,
         supplyAfter: '90',
@@ -314,6 +317,7 @@ export const tokenProducer = {
         amount: '100',
         blockNumber: 0,
         kind: 'mint',
+        lockCodeHash: null,
         lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
         lockKind: null,
         supplyAfter: '100',
@@ -337,6 +341,7 @@ export const tokenProducer = {
       {
         address: null,
         balance: '90',
+        lockCodeHash: null,
         lockKind: null,
         lockScriptHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
       },
@@ -357,6 +362,7 @@ export const tokenProducer = {
     iconUrl: null,
     issuer: {
       address: null,
+      lockCodeHash: null,
       lockHash: '0x7373737373737373737373737373737373737373737373737373737373737373',
       lockKind: null,
     },

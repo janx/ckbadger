@@ -125,6 +125,7 @@ const event = (i: number, kind: 'mint' | 'burn') => ({
   supplyAfter: '1000000000000',
   lockHash: other,
   address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+  lockCodeHash: `0x${'9b'.repeat(32)}`,
   lockKind: 'JoyID',
 });
 describe('Token board (F2 objects)', () => {
@@ -358,7 +359,12 @@ describe('Token board (F2 objects)', () => {
     const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' + 'x'.repeat(40);
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
-      issuer: { lockHash: other, address, lockKind: 'Default Lock' },
+      issuer: {
+        lockHash: other,
+        address,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'Default Lock',
+      },
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/the lock hash of the owner that can mint/);

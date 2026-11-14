@@ -283,7 +283,12 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
-      issuer: { lockHash: other, address: null, lockKind: 'JoyID' },
+      issuer: {
+        lockHash: other,
+        address: null,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'JoyID',
+      },
     });
     vi.mocked(api.getTokenSupplyEvents).mockResolvedValue({
       ...empty,
@@ -300,6 +305,7 @@ describe('TokenDetailPage', () => {
           supplyAfter: '1000000000000',
           lockHash: other,
           address: null,
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
           lockKind: 'JoyID',
         },
       ],
@@ -327,7 +333,12 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
-      issuer: { lockHash: other, address: null, lockKind: 'JoyID' },
+      issuer: {
+        lockHash: other,
+        address: null,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'JoyID',
+      },
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/Another token also calls itself/);
@@ -346,11 +357,50 @@ describe('TokenDetailPage', () => {
     expect(loose.map((n) => n.textContent)).toEqual([]);
     expect(metrics).toHaveTextContent('JoyID · owner lock proven by token script');
   });
+  // U-15 / lane A4b (UI review 2026-11-14): an issuer whose lock the scripts registry does not name
+  // read "Lock kind unavailable · owner lock proven by token script"; the answer now carries the
+  // lock's code hash, and the note names the lock by it, linked to that code hash's script page.
+  it('names an unregistered issuer lock by its code hash, a link to its script page (U-15)', async () => {
+    const unregistered = `0x${'43'.repeat(32)}`;
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+        lockCodeHash: unregistered,
+        lockKind: null,
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveTextContent('lock 0x434343...4343 · owner lock proven by token script');
+    expect(within(metrics).getByRole('link', { name: '0x434343...4343' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/script/${unregistered}$`))
+    );
+    expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+  it('writes no lock kind for an issuer lock that is not indexed (U-15)', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: { lockHash: other, address: null, lockCodeHash: null, lockKind: null },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    // the issuer's lock hash, then the note with no empty part before it
+    expect(metrics).toHaveTextContent(/\.\.\.343434 · owner lock proven by token script/);
+    expect(metrics.querySelector('[data-lock-kind]')).toBeNull();
+    expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));
     vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
       ...empty,
-      data: [{ lockScriptHash: hash, address: null, balance: '1', lockKind: null }],
+      data: [
+        { lockScriptHash: hash, address: null, balance: '1', lockCodeHash: null, lockKind: null },
+      ],
       total: 2,
       totalSupply: '2',
       anchor: null,
