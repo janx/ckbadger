@@ -1818,3 +1818,73 @@ async fn token_holders_carry_each_lock_code_hash() {
     assert!(not_indexed_row["lockCodeHash"].is_null(), "{json}");
     assert!(not_indexed_row["address"].is_null(), "{json}");
 }
+
+// ── A4b review: a party whose lock has no address form ──────────────────────
+//
+// Lock args are unbounded on chain; an RFC-0021 full address is not (bech32m
+// stops at 1023 characters, about 599 bytes of args). Such a lock is a valid
+// owner the API names by its lock hash, code hash and kind, with a null
+// address — never a 500 that leaves a token's holder list unreadable past it.
+
+#[tokio::test]
+async fn token_holders_page_through_a_holder_whose_lock_has_no_address_form() {
+    let store = test_store();
+    let type_hash = vec![0x7D; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+    let named = [0x44u8; 32];
+    let unaddressable = [0x88u8; 32];
+    let unnamed = [0x55u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    seed_unaddressable_lock(&store, &unaddressable);
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, balance) in [(named, 900u128), (unaddressable, 500), (unnamed, 100)] {
+        batch.put_token_holder(&type_hash, &lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, &lock_hash, balance);
+        batch.put_addr_token_by_balance(&lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let path = format!("/tokens/0x{}/holders?limit=1", hex::encode(&type_hash));
+
+    let (status, first) = get_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+    let (status, second) = get_json(&app, &format!("{path}&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let holder = &second["data"][0];
+    assert_eq!(
+        holder["lockScriptHash"],
+        format!("0x{}", hex::encode(unaddressable))
+    );
+    assert!(holder["address"].is_null(), "{second}");
+    assert_eq!(holder["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{second}");
+    assert_eq!(holder["lockKind"], "SECP256K1/blake160", "{second}");
+    // The holder after it is reachable.
+    let cursor = second["nextCursor"].as_str().unwrap().to_string();
+    let (status, third) = get_json(&app, &format!("{path}&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{third}");
+    assert_eq!(
+        third["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(unnamed))
+    );
+}
+
+#[tokio::test]
+async fn token_issuer_whose_lock_has_no_address_form_is_named_by_its_lock() {
+    let store = test_store();
+    let owner = [0x88u8; 32];
+    seed_unaddressable_lock(&store, &owner);
+    let mut token = placeholder_token_without_metadata();
+    token.type_args = owner.to_vec();
+    store.put_token_direct(&[0x89; 32], &token).unwrap();
+
+    let (status, json) = token_detail(store, &[0x89; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let issuer = &json["issuer"];
+    assert_eq!(issuer["lockHash"], format!("0x{}", hex::encode(owner)));
+    assert!(issuer["address"].is_null(), "{json}");
+    assert_eq!(issuer["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(issuer["lockKind"], "SECP256K1/blake160", "{json}");
+}

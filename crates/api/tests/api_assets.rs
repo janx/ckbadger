@@ -6233,6 +6233,115 @@ async fn collection_holder_rows_carry_registry_lock_kind() {
     }
 }
 
+/// A4b review: a holder whose lock has no address form (args longer than an
+/// RFC-0021 full address can carry; lock args are unbounded on chain) is a
+/// valid owner. Every collection source names it by its lock hash, code hash
+/// and kind with a null address, and pages past it; it is never a 500 that
+/// leaves the holder list unreadable from that holder on.
+#[tokio::test]
+async fn collection_holders_page_through_a_holder_whose_lock_has_no_address_form() {
+    let store = test_store();
+    let class_id = [0x6cu8; 24];
+    let cluster_id = [0x6du8; 32];
+    let dotbit = ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
+    let dotcell = ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION;
+    let named = [0x44u8; 32];
+    let unaddressable = [0x88u8; 32];
+    let unnamed = [0x55u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    seed_unaddressable_lock(&store, &unaddressable);
+    let ranked = [(named, 3), (unaddressable, 2), (unnamed, 1)];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            name: Some("Long args".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 6,
+            live_count: 6,
+            holders_count: 3,
+            activities_count: 0,
+            ..Default::default()
+        },
+    );
+    for (collection, standard) in [
+        (dotbit, IdentityStandard::DotBit),
+        (dotcell, IdentityStandard::DotCell),
+    ] {
+        batch.put_identity_collection_aggregate(
+            &collection,
+            &IdentityCollectionAggregate {
+                name: None,
+                standard,
+                total_count: 6,
+                live_count: 6,
+                holders_count: 3,
+                activities_count: 0,
+            },
+        );
+    }
+    for (holder, count) in ranked {
+        batch.put_mnft_collection_owner_count(&class_id, &holder, count);
+        batch.put_cluster_owner_count(&cluster_id, &holder, count);
+        batch.put_identity_owner_count(&dotbit, &holder, count);
+        // `.cell` names its owner by the first 20 bytes of the lock hash.
+        batch.put_identity_owner20_count(&dotcell, &holder[..20], count);
+    }
+    batch.commit().unwrap();
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(named.to_vec()),
+                name: Some("Long args Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x33; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        format!("/assets/objects/0x{}/holders", hex::encode(class_id)),
+        format!("/spore/clusters/0x{}/holders", hex::encode(cluster_id)),
+        "/assets/identities/dotbit/holders".to_string(),
+        "/assets/identities/dotcell/holders".to_string(),
+    ] {
+        let (status, first) = get_json(&app, &format!("{path}?limit=1")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_string();
+        let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {second}");
+        let holder = &second["data"][0];
+        assert_eq!(
+            holder["lockScriptHash"],
+            format!("0x{}", hex::encode(unaddressable)),
+            "{path}: {second}"
+        );
+        assert!(holder["address"].is_null(), "{path}: {second}");
+        assert_eq!(
+            holder["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH,
+            "{path}: {second}"
+        );
+        assert_eq!(holder["lockKind"], "SECP256K1/blake160", "{path}: {second}");
+        // The holder after it is reachable.
+        let cursor = second["nextCursor"].as_str().unwrap().to_string();
+        let (status, third) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {third}");
+        assert_eq!(
+            third["data"][0]["lockScriptHash"],
+            format!("0x{}", hex::encode(unnamed)),
+            "{path}: {third}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn mnft_class_insights_serve_real_holder_distribution_and_weekly_rows() {
     let (store, class_id) = mnft_insights_fixture(6);
