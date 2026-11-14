@@ -372,9 +372,12 @@ describe('HardforksPage', () => {
       status: 'upcoming' as const,
       activationBlock: null,
     });
+    // the card's story, the paragraph after its date line
+    const story = (card: HTMLElement) => within(card).getByText(/^Added CKB-VM/).textContent;
     const noDayClaim = (card: HTMLElement) => {
-      expect(card.textContent).not.toMatch(/days? (on|later)/);
-      expect(card.textContent).not.toMatch(/-\d/);
+      expect(story(card)).not.toMatch(/days? (on|later)/);
+      // a minus sign before a number (a date's hyphens follow a digit)
+      expect(story(card)).not.toMatch(/(^|\D)-\d/);
     };
     const alwaysSuccess = (timestampMs: number) => ({
       ...producerDeployments.scriptDeployments[0],
@@ -398,8 +401,8 @@ describe('HardforksPage', () => {
         });
         render(<HardforksPage />);
         const meepo = await screen.findByRole('article', { name: 'CKB Edition Meepo upcoming' });
-        expect(meepo).toHaveTextContent(
-          /^.*No script CKBadger knows uses data2 yet\. The index has not reached this edition yet\./
+        expect(story(meepo)).toBe(
+          'Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. No script CKBadger knows uses data2 yet. The index has not reached this edition yet.'
         );
         noDayClaim(meepo);
         expect(
@@ -420,7 +423,7 @@ describe('HardforksPage', () => {
       });
       render(<HardforksPage />);
       const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana upcoming' });
-      expect(mirana).toHaveTextContent(
+      expect(story(mirana)).toBe(
         'Added CKB-VM version 1 and the hash type data1 to pin it. The first known script pinned with data1, AlwaysSuccess, was deployed before it, on 2020-01-01. The index has not reached this edition yet.'
       );
       noDayClaim(mirana);
@@ -435,8 +438,8 @@ describe('HardforksPage', () => {
       });
       render(<HardforksPage />);
       const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana activated' });
-      expect(mirana).toHaveTextContent(
-        /data1 to pin it\. The first known script pinned with data1, AlwaysSuccess, was deployed before it, on 2020-01-01\.$/
+      expect(story(mirana)).toBe(
+        'Added CKB-VM version 1 and the hash type data1 to pin it. The first known script pinned with data1, AlwaysSuccess, was deployed before it, on 2020-01-01.'
       );
       noDayClaim(mirana);
     });
@@ -450,11 +453,13 @@ describe('HardforksPage', () => {
       });
       render(<HardforksPage />);
       const meepo = await screen.findByRole('article', { name: 'CKB Edition Meepo activated' });
-      expect(meepo).toHaveTextContent(/No script CKBadger knows uses data2 yet\.$/);
+      expect(story(meepo)).toBe(
+        'Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. No script CKBadger knows uses data2 yet.'
+      );
       noDayClaim(meepo);
       const mirana = screen.getByRole('article', { name: 'CKB Edition Mirana activated' });
-      expect(mirana).toHaveTextContent(
-        'The first known script pinned with data1 came the same day: AlwaysSuccess.'
+      expect(story(mirana)).toBe(
+        'Added CKB-VM version 1 and the hash type data1 to pin it. The first known script pinned with data1 came the same day: AlwaysSuccess.'
       );
       noDayClaim(mirana);
     });

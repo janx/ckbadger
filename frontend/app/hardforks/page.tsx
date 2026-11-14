@@ -11,7 +11,7 @@ import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { LANE_ORDER, VmLaneTimeline, dayStartMs } from '@/components/hardforks/vm-lane-timeline';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatExactDecimal } from '@/lib/exact-integer';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { formatCount } from '@/lib/format-count';
@@ -37,32 +37,60 @@ const RFC_TEXT: Record<string, string> = {
 const DAY_MS = 86_400_000;
 
 /**
+ * The whole days from an edition's activation day (its start, UTC+8) to a later moment: a count of
+ * one or more, or null when less than a day lies between them, the moment the same day or before
+ * it. A story writes "N days later" / "N days on" only from a count, so it never writes a zero or
+ * negative one (A4 review 1: a store still syncing has its tip before an edition).
+ */
+function wholeDaysAfter(since: number, ms: number): number | null {
+  return ms - since >= DAY_MS ? Math.floor((ms - since) / DAY_MS) : null;
+}
+
+/** The sentence an edition's card closes with while the index's tip is before its epoch. */
+const NOT_REACHED = 'The index has not reached this edition yet.';
+
+/**
  * What each edition changed for scripts, in plain words (CH-42), with the registry's facts: the
  * first script registered under data1 and how long data2 has waited (R2b-b `hashTypes`, R11).
  * Hierarchy v3 (H3): at most two sentences; that type-hash scripts moved to the new VM, and what
- * the Spawn syscalls do, are tier 2's (`HowHashTypePicksAVm`).
+ * the Spawn syscalls do, are tier 2's (`HowHashTypePicksAVm`). An edition the index has not reached
+ * (its `status`, the tip's epoch against the activation epoch) counts no days to the tip and says
+ * so; a data1 script deployed before Mirana is dated, not counted back.
  */
 function editionStory(event: Edition, timeline: Timeline, tipMs: number | null): string {
   const data2 = timeline.hashTypeLanes!.find((lane) => lane.hashType === 'data2');
   if (!data2) throw new Error('hardfork timeline has no data2 lane');
   const since = dayStartMs(event.activationDate);
+  const reached = event.status === 'activated';
+  const notReached = reached ? '' : ` ${NOT_REACHED}`;
   if (event.id === 'mirana-2021') {
     const first = timeline.scriptDeployments
       .filter((deployment) => deployment.hashTypes!.includes('data1'))
       .sort((a, b) => a.timestampMs - b.timestampMs)[0];
     return `Added CKB-VM version 1 and the hash type data1 to pin it.${
-      first
-        ? ` The first known script pinned with data1 came ${formatCount(Math.floor((first.timestampMs - since) / DAY_MS), 'day')} later: ${first.versionName}.`
-        : ''
-    }`;
+      first ? ` ${firstData1(first, since)}` : ''
+    }${notReached}`;
   }
-  if (event.id === 'meepo-2024')
-    return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. ${
-      data2.knownVersions === 0
-        ? `No script CKBadger knows uses data2 yet${tipMs === null ? '' : `, ${formatCount(Math.floor((tipMs - since) / DAY_MS), 'day')} on`}.`
-        : `${data2.knownVersions.toLocaleString()} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.`
-    }`;
+  if (event.id === 'meepo-2024') {
+    if (data2.knownVersions > 0)
+      return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. ${data2.knownVersions.toLocaleString()} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.${notReached}`;
+    // reached: the tip is at or past the activation epoch, so the days on are the tip's
+    const daysOn = reached && tipMs !== null ? wholeDaysAfter(since, tipMs) : null;
+    return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. No script CKBadger knows uses data2 yet${
+      daysOn === null ? '' : `, ${formatCount(daysOn, 'day')} on`
+    }.${notReached}`;
+  }
   return event.summary;
+}
+
+/** The first script registered under data1: how long after Mirana's day it came, or its date. */
+function firstData1(first: Timeline['scriptDeployments'][number], since: number): string {
+  if (first.timestampMs < since)
+    return `The first known script pinned with data1, ${first.versionName}, was deployed before it, on ${formatUtc8Date(first.timestampMs)}.`;
+  const days = wholeDaysAfter(since, first.timestampMs);
+  return `The first known script pinned with data1 came ${
+    days === null ? 'the same day' : `${formatCount(days, 'day')} later`
+  }: ${first.versionName}.`;
 }
 
 function joinWords(items: readonly string[]): string {
