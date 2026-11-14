@@ -675,6 +675,50 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
     });
 
+    // The lead's ruling (B3 follow-up, 2026-11-14): the miner line is the model of every phone row,
+    // who at the left and one labelled figure at the right, and it holds one line at 360. With the
+    // tight address at 8…6 an unnamed miner and a fee below 10 CKB were 297.6 px against the 292 px
+    // left after the stone at 360, so the fee dropped under the miner. The budget, from the row's
+    // own constants: the content width (docs/RESPONSIVE_LAYOUT.md: 326 at 360, 358 at 390) less the
+    // block stone's footprint (ROW_SEAL.block: 26 + 8 = 34) is 292 and 324 px; the line is
+    // body-tone text-small (12 px, 7.2 px a character), PhoneRow's gap-x-3 is 12 px, and the fee's
+    // " CKB" is text-meta (11 px, 6.6 a character). The widest fee measured is 999.99999999 CKB,
+    // eight decimals always; from 1,000 CKB the separator adds a character and the fee drops under
+    // the miner whole (PhoneRow's rule). jsdom cannot measure: the characters are the measure.
+    describe('holds the miner and the fee on one line after the stone (budget)', () => {
+      const FONT = { line: 12, unit: 11 }; // text-small, text-meta (lib/type-scale.ts)
+      const GAP = 12; // PhoneRow: gap-x-3
+      const CONTENT = { 360: 326, 390: 358 } as const; // docs/RESPONSIVE_LAYOUT.md
+      const room = (viewport: 360 | 390) => CONTENT[viewport] - ROW_SEAL.block.footprint;
+      const lineWidth = (left: string, right: string) =>
+        chars(left.length, FONT.line) +
+        GAP +
+        chars(right.length - ' CKB'.length, FONT.line) +
+        chars(' CKB'.length, FONT.unit);
+      for (const viewport of [360, 390] as const)
+        it(`at ${viewport} px: "miner <tight address>" and "fees 999.99999999 CKB" fit ${room(viewport)} px`, async () => {
+          atContainerWidth(CONTENT[viewport]);
+          vi.mocked(api.getBlocks).mockResolvedValue({
+            ...page,
+            data: [{ ...page.data[0], minerPool: null, totalFees: '99999999999' }],
+          });
+          render(<BlocksPage />);
+          const [card] = await screen.findAllByTestId('block-row-mobile');
+          const line = phoneLines(card)[1];
+          expect(line.key).toBe('miner');
+          expect(line.right).toBe('fees 999.99999999 CKB');
+          // the budget first: the line as the row writes it, against the room after the stone
+          expect(lineWidth(line.left, line.right!)).toBeLessThanOrEqual(room(viewport));
+          // "miner ckb1…93hhsj" (17 characters, 122.4 px) + 12 + "fees 999.99999999" (17, 122.4)
+          // + " CKB" (26.4) = 283.2 px: 8.8 to spare in 292 at 360, 40.8 in 324 at 390. At 8…6,
+          // "miner ckb1qzda…93hhsj" (21, 151.2) made it 312 px, 20 over at 360.
+          expect(line.left).toBe('miner ckb1…93hhsj');
+          expect(lineWidth(line.left, line.right!)).toBeCloseTo(283.2, 6);
+          // the first fee wider than the budget at 360 is 1,000 CKB: 297.6 px
+          expect(lineWidth(line.left, 'fees 1,000.00000000 CKB')).toBeGreaterThan(room(360));
+        });
+    });
+
     // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own
     // column, before the height; the height is still the row's link. Seals by kind: the column
     // is the 26 px stone and its 8 px gap.
