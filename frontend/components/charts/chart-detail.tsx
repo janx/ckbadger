@@ -76,39 +76,51 @@ export function chartHardforkMarkers(
   });
 }
 
+/**
+ * A ranking, one row per entry (CH-03): the rank, the entry's name or shortened address as its
+ * link, and its value at the row's right end — one line where the width holds it, else the value
+ * under the name, still at the right. A miner known only by its lock hash is said once, under it.
+ */
 function RankedDetail({ model, definition }: { model: ChartModel; definition: ChartDefinition }) {
+  const rows = model.rankedRows ?? [];
   return (
-    <ol className="max-w-3xl space-y-3" aria-label={`${definition.title} ranking`}>
-      {model.rankedRows?.map((row, index) => {
-        const width = row.share === '—' ? 0 : Number(row.share.slice(0, -1));
-        if (!Number.isFinite(width) || width < 0 || width > 100)
-          throw new Error(`${definition.slug}: invalid share ${row.share}`);
-        return (
-          <li key={`${row.label}:${index}`} className="min-w-0">
-            <div className="text-small flex min-w-0 flex-wrap items-baseline justify-between gap-x-4">
-              <span className="text-text-bright min-w-0 break-all">
-                {index + 1}.{' '}
-                {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
-                {row.href ? (
-                  <Link href={row.href} className="text-jade hover:underline">
-                    {row.label}
-                  </Link>
-                ) : (
-                  row.label
-                )}
-                {row.identity && <span className="text-text-dim ml-2">({row.identity})</span>}
-              </span>
-              <span className="shrink-0 tabular-nums">
-                {formatChartExact(row.value, model.unit)} {model.unit} · {row.share}
-              </span>
-            </div>
-            <div className="bg-base-elevated mt-1 h-1 rounded">
-              <div className="bg-jade h-1 rounded" style={{ width: `${width}%` }} />
-            </div>
-          </li>
-        );
-      })}
-    </ol>
+    <div className="max-w-3xl">
+      <ol className="space-y-3" aria-label={`${definition.title} ranking`}>
+        {rows.map((row, index) => {
+          const width = row.share === '—' ? 0 : Number(row.share.slice(0, -1));
+          if (!Number.isFinite(width) || width < 0 || width > 100)
+            throw new Error(`${definition.slug}: invalid share ${row.share}`);
+          return (
+            <li key={`${row.label}:${index}`} className="min-w-0">
+              <div className="text-small flex min-w-0 flex-wrap items-baseline gap-x-4">
+                <span className="text-text-bright min-w-0 break-words">
+                  {index + 1}.{' '}
+                  {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
+                  {row.href ? (
+                    <Link href={row.href} title={row.title} className="text-jade hover:underline">
+                      {row.label}
+                    </Link>
+                  ) : (
+                    row.label
+                  )}
+                </span>
+                <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
+                  {formatChartExact(row.value, model.unit)} {model.unit} · {row.share}
+                </span>
+              </div>
+              <div className="bg-base-elevated mt-1 h-1 rounded">
+                <div className="bg-jade h-1 rounded" style={{ width: `${width}%` }} />
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      {rows.some((row) => row.lockHashOnly) && (
+        <p className="text-text-dim text-small mt-4">
+          A row beginning 0x is a miner known only by its lock hash.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -292,6 +304,17 @@ function DetailBody({
     </div>
   );
   const facts = [
+    // A named leader is the bright part of its value, never broken (CH-03, CH-18).
+    ...(model.facts ?? []).map((fact) => ({
+      label: fact.label,
+      value: fact.name ? (
+        <>
+          <span className="whitespace-nowrap">{fact.name}</span> · {fact.value}
+        </>
+      ) : (
+        fact.value
+      ),
+    })),
     ...(model.latest && model.summaryLabel
       ? [
           {

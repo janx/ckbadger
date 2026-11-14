@@ -191,6 +191,8 @@ describe('shared chart detail', () => {
   });
 
   // CH-04 (round 2): the fact names the miner in the card's head…tail form; the link keeps it all.
+  // Re-pinned for CH-03 (UI review 2026-11-14): the fact's label is "Leading miner" and the name
+  // its bright value; the ranking's link is the short form too, the full address its title.
   it('names the leading miner in short form in the fact while retaining its address link', async () => {
     const address = `ckb1${'qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj'}`;
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
@@ -210,16 +212,18 @@ describe('shared chart detail', () => {
       toDate: '2026-10-27',
     });
     render(<ChartDetail slug="miner-address-distribution" />);
-    const label = await screen.findByText('Leading miner: ckb1qzda0c…93hhsj (62.7931%)');
+    const label = await screen.findByText('Leading miner');
+    expect(label.nextElementSibling).toHaveTextContent(
+      'ckb1qzda0c…93hhsj · 41,743 blocks · 62.79%'
+    );
     // A ranked chart counts no points: its command has no args (phase 5, D10).
     const heading = screen.getByRole('heading', { name: 'Distribution' });
     expect(heading.children).toHaveLength(1);
     expect(label).toHaveClass('min-w-0', 'break-words');
     expect(label.parentElement).toHaveClass('grid-cols-1');
-    expect(screen.getByRole('link', { name: address })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${address}`
-    );
+    const link = screen.getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
+    expect(link).toHaveAttribute('title', address);
   });
 
   // --- F2 charts group: the ChartDetail board ---

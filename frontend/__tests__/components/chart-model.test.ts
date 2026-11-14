@@ -246,13 +246,21 @@ describe('29 chart variants', () => {
       'ckb1qzda0c…cccccc',
       'Others',
     ]);
-    // 1,123 of 66,477 blocks, floored at four decimals like the API's own percentages.
-    expect(preview.rows.at(-1)?.share).toBe('1.6893%');
+    // 1,123 of 66,477 blocks at two decimals, the one share form (re-pinned for CH-03 / CH-14:
+    // was floored at the API's four decimals, 1.6893%).
+    expect(preview.rows.at(-1)?.share).toBe('1.69%');
     expect(preview.rows[0].title).toBe(rows[0].address);
-    expect(preview.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
-    // The detail fact names the miner in the same short form; the ranking links the full one (CH-04).
-    expect(model.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
-    expect(model.rankedRows?.[0].label).toBe(rows[0].address);
+    // The detail names the miner in the same short form as a fact and as its ranked row; the full
+    // address is the row's link title (re-pinned for CH-03: the row printed all 97 characters).
+    expect(model.facts?.[0]).toEqual({
+      label: 'Leading miner',
+      name: 'ckb1qzda0c…93hhsj',
+      value: '41,743 blocks · 0.00%',
+    });
+    expect(model.rankedRows?.[0]).toMatchObject({
+      label: 'ckb1qzda0c…93hhsj',
+      title: rows[0].address,
+    });
   });
 
   it('summarises nominal APC at its single current sample and rejects a missing one (CH-03)', () => {
@@ -433,7 +441,8 @@ describe('29 chart variants', () => {
     expect(script.summaryLabel).toContain('Alpha');
     const miner = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, miners);
     expect(miner.latest?.display).toBe('50');
-    expect(miner.summaryLabel).toContain('50%');
+    // Re-pinned for CH-03: the leader is a named fact at the one share form.
+    expect(miner.facts?.[0].value).toContain('50.00%');
     const uncle = chartModel(CHART_BY_SLUG.get('uncle-rate')!, {
       ...simple,
       orphanRateTarget: { numerator: 1, denominator: 40 },
@@ -524,14 +533,20 @@ describe('29 chart variants', () => {
         },
       ],
     });
+    // Re-pinned for CH-03: no bracketed kind word; a lock-hash miner is marked for the one note.
     expect(model.rankedRows?.[0]).toMatchObject({
       href: '/address/ckb1resolved',
-      identity: 'Address',
+      title: 'ckb1resolved',
     });
+    expect(model.rankedRows?.[0].lockHashOnly).toBeUndefined();
     expect(model.rankedRows?.[1]).toMatchObject({
       href: `/address/${'b'.repeat(64)}`,
-      identity: 'Lock hash',
+      label: `0x${'b'.repeat(8)}…${'b'.repeat(6)}`,
+      lockHashOnly: true,
     });
-    expect(model.coverage).toContain('2026-07-23–2026-07-29');
+    expect(model.facts).toContainEqual({
+      label: 'Window',
+      value: '2026-07-23 → 2026-07-29 · 10 blocks',
+    });
   });
 });

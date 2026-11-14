@@ -13,6 +13,8 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { niceStep } from '@/lib/chart-ticks';
+import { formatDateWindow } from '@/components/charts/chart-format';
+import { formatCount } from '@/lib/format-count';
 import {
   ACTIVITY_KIND_COLORS,
   CLASS_COLORS,
@@ -47,6 +49,13 @@ export interface ChartLegendEntry {
   value: string;
 }
 
+export interface ChartFact {
+  label: string;
+  /** A named leader (a miner, a script), written first and never broken (CH-03, CH-18). */
+  name?: string;
+  value: string;
+}
+
 export interface ChartModel {
   title: string;
   points: ChartPoint[];
@@ -63,7 +72,10 @@ export interface ChartModel {
     value: string;
     share: string;
     href?: string;
-    identity?: string;
+    /** The full identity a shortened label stands for, as the link's hover title (CH-03). */
+    title?: string;
+    /** A miner known only by its lock hash: the ranking says so once, under the list (CH-03). */
+    lockHashOnly?: boolean;
     assetClass?: AssetClass;
   }[];
   /** Card preview of a ranking: the top five plus an exact "Others" for every remaining rank. */
@@ -83,6 +95,11 @@ export interface ChartModel {
   today?: ChartPoint | null;
   contextFacts?: { label: string; value: string }[];
   coverage?: string;
+  /**
+   * Facts under the lede that the head figure does not say (CH-18): a leader's `name` is the bright
+   * part of the value, kept on one line (CH-03).
+   */
+  facts?: ChartFact[];
   // --- F2 charts group ---
   /** The card's headline; `null` when the source has no reading to head it (a model's today). */
   headline?: ChartHeadline | null;
@@ -1011,39 +1028,43 @@ function minerRows(
     if (!Number.isSafeInteger(miner.blocksMined) || miner.blocksMined < 0)
       throw new Error(`${definition.slug}: invalid blocksMined for ${miner.minerLockHash}`);
     exactDecimalRatio(miner.percentage, `${definition.slug} percentage`);
-    const label = miner.minerName ?? miner.address ?? miner.minerLockHash;
+    const identity = miner.address ?? miner.minerLockHash;
+    // A miner is its pool's name, else its address shortened like the card's (CH-03, CH-04); a
+    // miner with no recorded address is its lock hash, said once under the ranking.
+    const label = miner.minerName ?? shortRankLabel(identity);
     return {
       row: {
         label,
         value: String(miner.blocksMined),
-        share: `${miner.percentage}%`,
+        // Two decimals, every other share's form; the API's four are the row's hover (CH-14).
+        share: `${summary(miner.percentage, '%')}%`,
         href: miner.address
           ? `/address/${miner.address}`
           : `/address/${miner.minerLockHash.replace(/^0x/, '')}`,
-        identity: miner.address ? 'Address' : 'Lock hash',
+        title: identity,
+        ...(miner.address ? {} : { lockHashOnly: true }),
       },
-      shortLabel: miner.minerName ?? shortRankLabel(label),
       blocks: BigInt(miner.blocksMined),
     };
   });
   const rankedRows = miners.map((miner) => miner.row);
-  // The API floors each percentage at four decimals; the remainder follows the same rule.
-  const floorPercent4 = (blocks: bigint) => {
-    const scaled = (blocks * BigInt(1_000_000)) / BigInt(payload.totalBlocks);
-    return `${scaled / BigInt(10_000)}.${(scaled % BigInt(10_000)).toString().padStart(4, '0')}%`;
-  };
+  // The remainder at the same two decimals, from the exact block counts.
+  const percent2 = (blocks: bigint) =>
+    `${formatScaledInteger(blocks * BigInt(100), BigInt(payload.totalBlocks), 2)}%`;
+  const window = formatDateWindow(payload.fromDate, payload.toDate);
+  const leader = miners[0]?.row;
   return {
     title: payload.title,
     points: [],
     series: [],
     unit: 'blocks',
     kind: 'ranked',
-    latest: rankedRows[0]
+    latest: leader
       ? {
-          label: `${payload.fromDate}–${payload.toDate}`,
-          raw: rankedRows[0].value,
+          label: window,
+          raw: leader.value,
           // Grouped like the detail's fact, never a bare 42705 (CH-31).
-          display: formatChartExact(rankedRows[0].value, 'blocks'),
+          display: formatChartExact(leader.value, 'blocks'),
         }
       : null,
     headline: rankedRows[0]
@@ -1054,26 +1075,32 @@ function minerRows(
     rankedPreview: {
       rows: rankedPreviewRows(
         miners.map((miner) => ({
-          label: miner.row.label,
-          shortLabel: miner.shortLabel,
+          label: miner.row.title,
+          shortLabel: miner.row.label,
           amount: miner.blocks,
           share: miner.row.share,
           href: miner.row.href,
         })),
         BigInt(payload.totalBlocks),
-        floorPercent4,
+        percent2,
         definition.slug
       ),
-      summaryLabel: miners[0]
-        ? `Leading miner: ${miners[0].shortLabel} (${miners[0].row.share})`
-        : undefined,
+      summaryLabel: undefined,
     },
-    coverage: `${payload.fromDate}–${payload.toDate} · ${payload.totalBlocks.toLocaleString()} blocks`,
-    // The fact names the miner in the same head…tail form as the card; the ranking links the
-    // full address (CH-04).
-    summaryLabel: miners[0]
-      ? `Leading miner: ${miners[0].shortLabel} (${miners[0].row.share})`
-      : undefined,
+    // The leader by name, in the card's head…tail form, never broken; the window's own total
+    // (CH-03, CH-18).
+    facts: [
+      ...(leader
+        ? [
+            {
+              label: 'Leading miner',
+              name: leader.label,
+              value: `${formatChartExact(leader.value, 'blocks')} blocks · ${leader.share}`,
+            },
+          ]
+        : []),
+      { label: 'Window', value: `${window} · ${formatCount(payload.totalBlocks, 'block')}` },
+    ],
   };
 }
 

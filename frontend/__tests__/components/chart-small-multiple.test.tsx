@@ -141,9 +141,10 @@ describe('ChartSmallMultiple', () => {
       />
     );
     const list = await screen.findByRole('list', { name: 'Miners ranked preview' });
-    expect(list).toHaveTextContent('ckb1qzda0c…93hhsj60.0000%');
+    // Two decimals, the one share form (re-pinned for CH-03 / CH-14: was the API's 60.0000%).
+    expect(list).toHaveTextContent('ckb1qzda0c…93hhsj60.00%');
     expect(screen.queryByText(new RegExp(address))).not.toBeInTheDocument();
-    expect(list).toHaveTextContent('Others40.0000%');
+    expect(list).toHaveTextContent('Others40.00%');
     // Lane L: the miner's short address links to its address page; "Others" is no entity.
     const miner = within(list).getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
     expect(miner).toHaveAttribute('href', `/mainnet/address/${address}`);
