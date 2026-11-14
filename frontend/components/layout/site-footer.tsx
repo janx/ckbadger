@@ -2,6 +2,8 @@
 
 import Link from '@/components/ui/link';
 import { ExternalLink } from '@/components/ui/external-link';
+import { localZone } from '@/lib/clock';
+import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { openKeyboardShortcuts } from '@/lib/search-focus';
 import { cn } from '@/lib/utils';
 
@@ -21,7 +23,8 @@ const LINK = 'text-text hover:text-jade py-1 lowercase transition-colors';
  * status line's key hints are (PA-29: a touch screen has no keys to list). From md it stays: the
  * status line's `? help` names the key but is no control (a hint in a status region, neither
  * focusable nor clickable), and this button is the one way into the help for a pointer, or for a
- * screen reader whose browse mode takes the `?` key.
+ * screen reader whose browse mode takes the `?` key. Below md, where nothing opens the help, the
+ * footer ends on the release and the clock's zone (ReleaseAndZone).
  */
 export function SiteFooter() {
   return (
@@ -54,7 +57,45 @@ export function SiteFooter() {
             Keyboard shortcuts
           </button>
         </nav>
+        <ReleaseAndZone />
       </div>
     </footer>
+  );
+}
+
+/** A token of the row: its "·", then its words, never broken inside. */
+function Token({ name, title, children }: { name: string; title?: string; children: string }) {
+  return (
+    <span data-token={name} className="whitespace-nowrap">
+      <span aria-hidden="true">{'· '}</span>
+      <span data-text="" title={title}>
+        {children}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Below md, the footer's last row (ruling on B4, 2026-11-14): the release and the clock's zone, what
+ * the status line's wide form and the `?` help say from md, so a phone does not lose them. The
+ * release is the status line's (resolveBuildVersion, releaseOf; the whole build string in its
+ * title), the zone the clock's (localZone). Quiet text in the footer's lowercase, on a line of its
+ * own: at 360 the links take two lines (256.0 and 263.2 of 326 px at 7.2 px a character) and this
+ * one, "ckbadger 0.8.2 · asia/shanghai", 216.0. It breaks only between its two tokens (a zone of
+ * more than 28 characters at 360): the row is drawn 2ch to the left in a box that clips it, so the
+ * "·" leading the first token of each line is never seen and the others read "a · b".
+ */
+function ReleaseAndZone() {
+  const build = resolveBuildVersion();
+  return (
+    <p
+      data-testid="footer-about"
+      className="text-text-dim m-0 basis-full overflow-hidden lowercase md:hidden"
+    >
+      <span className="-ml-[2ch] flex flex-wrap gap-x-[1ch]">
+        <Token name="release" title={`ckbadger ${build}`}>{`ckbadger ${releaseOf(build)}`}</Token>
+        <Token name="zone">{localZone()}</Token>
+      </span>
+    </p>
   );
 }
