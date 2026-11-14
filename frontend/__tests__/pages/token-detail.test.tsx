@@ -395,6 +395,30 @@ describe('TokenDetailPage', () => {
     expect(metrics.querySelector('[data-lock-kind]')).toBeNull();
     expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
   });
+  // A4b review: an issuer whose lock has no address form (args longer than an address can carry)
+  // comes with a null address and its lock's code hash and kind: the metrics name it by its lock
+  // hash, linked to the address page that takes a lock hash, and by its lock kind.
+  it('names an issuer whose lock has no address form by its lock hash and kind (A4b review)', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address: null,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'SECP256K1/blake160',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(within(metrics).getByRole('link', { name: /^0x3434/ })).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/address/${other}$`))
+    );
+    expect(metrics).toHaveTextContent(
+      /343434 · SECP256K1\/blake160 · owner lock proven by token script/
+    );
+  });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));
     vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
