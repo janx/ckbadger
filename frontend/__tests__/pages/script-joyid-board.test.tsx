@@ -113,6 +113,38 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(deployer).toHaveAttribute('title', DEPLOY);
   });
 
+  // U-16, PA-05 (UI review 2026-11-14): the figures row broke its units on a phone and in a 300 px
+  // column ("deployed in 0xe2fb19…" / "73ff5c", "2019-" / "11-16", "78,647,937" / "cells") and
+  // left a "·" at a line's end. Each unit is whole; a note's dot goes with the note.
+  it('keeps every unit of the figures row whole, a note’s dot with its note (U-16, PA-05)', async () => {
+    await renderJoyid();
+    const hero = screen.getByRole('region', { name: 'JoyID' });
+    const metrics = within(hero.parentElement!).getByLabelText('Script figures');
+    const whole = (el: Element) =>
+      expect(el.closest('[data-nobreak], .whitespace-nowrap')).not.toBeNull();
+    // the deployment's shortened hash, the first day, the replacement day, the holder's name
+    whole(
+      within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' }).firstElementChild ??
+        within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' })
+    );
+    whole(within(metrics).getByText('2023-10-07'));
+    whole(within(metrics).getByText('2025-11-21'));
+    whole(within(metrics).getByText('multisig 0x6598…d696'));
+    // the count and its noun, one unit; "Upgradable" and its versions, two items of one list
+    expect(metrics.textContent).toContain('2,707,778\u00a0cells');
+    expect(metrics.textContent).toContain('5\u00a0versions');
+    // every dot belongs to the item after it (the one separated list): none is loose text
+    const loose = [...metrics.querySelectorAll('*')].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !(el as Element).hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose.map((n) => n.textContent)).toEqual([]);
+  });
+
   it('draws History with occupied in jade, a separate occupied panel and the version days in the plot (SC-S2, SC-S3, L1-3 ruling)', async () => {
     const { container } = { container: document.body };
     await renderJoyid();

@@ -189,6 +189,36 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     ).toBeInTheDocument();
   });
 
+  // U-16, PB-05 (UI review 2026-11-14): tier 2's full hashes wrapped across two lines in the middle
+  // ("0xcd29f0b0…8402a67d72b4b3fb5" / "bfaece30ba50b3"); a full hash is one token, whole on its
+  // line or scrolled in its own box. U-15: "miner witness unavailable" was an internal state.
+  it('writes tier 2’s full hashes as one line each and says "not recorded" for a missing miner (U-16, U-15)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    const event = uncleFixture.event;
+    for (const hash of [
+      event.forkPointHash,
+      event.firstOrphanHash!,
+      event.oldTipHash,
+      event.newTipHash,
+      uncleFixture.orphanedBlocks[0].hash,
+    ]) {
+      const full = within(tier2).getByText(hash);
+      expect(full).toHaveAttribute('data-full-value');
+      expect(full).toHaveClass('whitespace-nowrap', 'overflow-x-auto', 'max-w-full');
+    }
+    expect(tier2.querySelectorAll('.break-all')).toHaveLength(0);
+    // the uncle's number follows its hash as the next item of one list, never a loose "·"
+    const uncle = within(tier2)
+      .getByText(uncleFixture.orphanedBlocks[0].hash)
+      .closest('[data-dotted]');
+    expect(uncle).toHaveTextContent(`${uncleFixture.orphanedBlocks[0].hash} · #11`);
+    expect(within(tier2).getByText('not recorded')).toBeInTheDocument();
+    expect(tier2).not.toHaveTextContent('miner witness unavailable');
+  });
+
   it('keeps the originally adopted branch distinct from a block that came back', async () => {
     at('10', '028ea506');
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(reentryFixture));

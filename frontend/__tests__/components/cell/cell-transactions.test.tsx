@@ -223,6 +223,27 @@ describe('CellTransactions', () => {
     expect(screen.getAllByText(/Witness #0 · 42 bytes/)).toHaveLength(4);
     expect(screen.getAllByText('123 cycles')).toHaveLength(2);
   });
+  // U-16 (UI review 2026-11-14): a group's code dep wrote its full out point, which wrapped across
+  // two lines in the middle ("0x71a7ba8f…" / "…72e46c:0 (dep_group)"). The dep is a reference
+  // here, so it reads as the transaction page writes it: its kind, then the out point shortened and
+  // linked to its cell, one unit.
+  it('writes a group’s code dep as the transaction page does: its kind and the short out point', async () => {
+    const DEP = `0x${'71a7ba8f'.repeat(8)}`;
+    getTransactionCellDeps.mockResolvedValue([
+      { outPointTxHash: DEP, outPointIndex: 0, depType: 'dep_group', scriptHashes: [LOCK_HASH] },
+    ]);
+    view(liveFixture as unknown as Cell);
+    const short = `${DEP.slice(0, 10)}...${DEP.slice(-6)}:0`;
+    const link = (await screen.findAllByRole('link', { name: short }))[0];
+    expect(link).toHaveAttribute('href', `/mainnet/cell/${DEP}-0`);
+    expect(link.closest('[data-nobreak]')).not.toBeNull();
+    expect(link.parentElement).toHaveTextContent(
+      new RegExp(`^dep group ${short.replace(/[.]/g, '\\.')}$`)
+    );
+    expect(screen.queryByText(new RegExp(DEP))).toBeNull();
+    expect(screen.queryByText(/\(dep_group\)/)).toBeNull();
+  });
+
   it('keeps executed and attached lock groups with the same script hash distinct', async () => {
     const hash = `0x${'77'.repeat(32)}`;
     getTransactionDetail.mockImplementation(async () => {
