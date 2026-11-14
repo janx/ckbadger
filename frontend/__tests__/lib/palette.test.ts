@@ -319,6 +319,16 @@ const FRACTION_INKS = [
   { sign: 'neutral', ink: 'text', fraction: 'text-dim' },
 ] as const;
 
+// Lane E2 round 3: the gold of a word on a pipeline tile is the plain gold by night (the home
+// page's approved look) and the gold's bright step by day, where the gold is 4.15:1 on the tile.
+// One key, two existing values: pinned equal so it can never drift from either.
+describe('the pipeline word gold', () => {
+  it('is the gold by night and the gold’s bright step by day', () => {
+    expect(PALETTE.dark['pipeline-word-gold']).toBe(PALETTE.dark.gold);
+    expect(PALETTE.light['pipeline-word-gold']).toBe(PALETTE.light['gold-bright']);
+  });
+});
+
 describe('the fraction inks (R4, DY-06)', () => {
   // Lane E2: the keys pinned here are the ones the renderers read, HTML and SVG alike.
   it('pins the table every amount renderer reads (AMOUNT_INK), sign by sign', () => {

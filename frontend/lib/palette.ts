@@ -123,6 +123,12 @@ const dark = {
   'pipeline-well': '#0f0d0b',
   /** What a stage hue is mixed toward as cycles rise: lighter at night, inkier by day. */
   'pipeline-step-to': '#f6f2ea',
+  /**
+   * The gold of a word on a pipeline tile (a block number inside the drawn window): the plain gold
+   * by night (6.11:1 on the tile), the gold's bright step by day (5.57:1, where the gold is 4.15:1).
+   * Equal to `gold` here and to `gold-bright` by day, pinned equal in palette.test.ts.
+   */
+  'pipeline-word-gold': '#c9a45c',
   // chrome
   'search-panel': '#0c0a09',
   'search-selected': '#1a1b19',
@@ -267,6 +273,7 @@ const light: Palette = {
   'pipeline-drop-neutral': '#6e6b67',
   'pipeline-well': '#eee8dc',
   'pipeline-step-to': '#1f1b17',
+  'pipeline-word-gold': '#684e0d',
   'search-panel': '#fffdf8',
   'search-selected': '#e6e9e2',
   'search-hover': '#f2f1ea',

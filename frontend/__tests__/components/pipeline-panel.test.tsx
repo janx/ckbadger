@@ -243,7 +243,6 @@ const WORD_INK: Readonly<Record<string, PaletteKey>> = {
   'fill-text': 'text',
   'fill-text-bright': 'text-bright',
   'fill-gold': 'gold',
-  'fill-warning-bright': 'gold-bright',
   'fill-aqua': 'aqua',
 };
 const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'base-elevated'];
@@ -697,9 +696,9 @@ describe('PipelinePanel static render', () => {
     expect(win.getAttribute('d')?.match(/M/g)).toHaveLength(8);
     expect(win.style.getPropertyValue('stroke')).toBe(tok('gold'));
     expect(win).toHaveAttribute('stroke-width', '1.5');
-    // re-pinned with lane E2's follow-up: an in-window number is the gold's bright step on its tile
+    // re-pinned with lane E2 round 3: an in-window number is the pipeline's word gold on its tile
     for (const el of svg.querySelectorAll('[data-block-number]')) {
-      expect(el).not.toHaveClass('fill-warning-bright');
+      expect(el).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
     }
   });
 
@@ -1443,9 +1442,9 @@ describe('PipelinePanel interactions', () => {
       const n = c.block.number;
       const number = card(svg, n).querySelector('[data-block-number]');
       const inside = inWindow(n, T + 1, snapshot.consensus);
-      // re-pinned with lane E2's follow-up: the gold's bright step, 4.5:1 on the tile by day
-      if (inside) expect(number).toHaveClass('fill-warning-bright');
-      else expect(number).not.toHaveClass('fill-warning-bright');
+      // re-pinned with lane E2 round 3: the word gold (gold by night, its bright step by day)
+      if (inside) expect(number).toHaveClass('fill-[var(--pipeline-word-gold)]');
+      else expect(number).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
       expect(dimOfCard(svg, n)).toBe(inside ? 'false' : 'true');
     }
     expect(svg.querySelector('[data-next] > [data-dim]')).toHaveAttribute('data-dim', 'false');
@@ -1460,12 +1459,12 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
       windowLabel(T + 1, T, snapshot.consensus)
     );
-    // re-pinned with lane E2's follow-up: the gold's bright step on the tile
+    // re-pinned with lane E2 round 3: the pipeline's word gold on the tile
     expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass(
-      'fill-warning-bright'
+      'fill-[var(--pipeline-word-gold)]'
     );
     expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass(
-      'fill-warning-bright'
+      'fill-[var(--pipeline-word-gold)]'
     );
   });
 
@@ -2180,9 +2179,11 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       columnWindowMarksPath(ruler)
     );
     expect(svg.querySelector('[data-window-label]')).toBeNull();
-    // re-pinned with lane E2's follow-up: the gold's bright step on the tile
+    // re-pinned with lane E2 round 3: the pipeline's word gold on the tile
     const gold = (n: number) =>
-      card(svg, n).querySelector('[data-block-number]')?.classList.contains('fill-warning-bright');
+      card(svg, n)
+        .querySelector('[data-block-number]')
+        ?.classList.contains('fill-[var(--pipeline-word-gold)]');
     expect([T, T - 1, T - 2, T - 3].map(gold)).toEqual([false, true, true, true]);
   });
 
