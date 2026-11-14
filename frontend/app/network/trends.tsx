@@ -422,6 +422,9 @@ export function NetworkTrends() {
             // U-19 / PB-01: the values in the dim gutter, where no gap band can cover them; the
             // name fits beside it on a 360 px phone.
             plotName="peers per completed UTC+8 day"
+            // U-19 (lane A5): bare whole-number values; the name says "peers" once
+            bareTicks
+            integerTicks
             pinnedReadout={{
               label: 'Peer reading',
               idle: `${last.label}${PEER_SERIES.map(

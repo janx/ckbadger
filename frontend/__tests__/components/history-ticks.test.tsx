@@ -47,7 +47,9 @@ describe.each([1248, 326])('a token history at %i px (U-19, DY-05)', (width) => 
     const units = ['CKB', 'USDC', 'transactions'];
     plots.forEach((plot, i) => {
       const labels = expectTicksInGutter(plot, units[i]);
-      for (const l of labels) expect(l).toMatch(new RegExp(` ${units[i]}$`));
+      // Re-pinned with the lane A5 follow-up: bare values, the unit once in the plot's name.
+      for (const l of labels) expect(l).toMatch(/^−?[\d.,]+[kMB]?$/);
+      expect(plot.querySelector('[data-role="chart-name"]')?.textContent).toContain(units[i]);
     });
     // one time axis, one gutter: the three plots start at one x
     expect(new Set(plots.map(plotLeftOf)).size).toBe(1);

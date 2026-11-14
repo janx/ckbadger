@@ -122,10 +122,11 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(fills).toContain(DATA_COLOR);
     expect(fills).toContain(HELD_CAPACITY_COLOR);
     expect(fills).not.toContain('#58a5b5');
-    // Hierarchy v3: each panel's name is written inside its plot (R13).
+    // Hierarchy v3: each panel's name is written inside its plot (R13). Re-pinned with the lane A5
+    // follow-up (U-19): the ticks are bare, so the occupied panel's name says its unit, CKB.
     expect(
       [...document.querySelectorAll('[data-role="chart-name"]')].map((t) => t.textContent)
-    ).toEqual(['CKB in JoyID cells · occupied and free', "occupied by those cells' own bytes"]);
+    ).toEqual(['CKB in JoyID cells · occupied and free', "CKB occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
