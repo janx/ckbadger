@@ -387,10 +387,17 @@ describe('ConcentrationBar with the group names inside its segments (hierarchy v
       'next 90 · 31.10%',
       'the other 16,541 · 42.70%',
     ]);
-    // The fade is the background's, so the words keep full ink: dark on the strong segments.
+    // The fade is the background's, so the words keep full ink. Re-pinned with DY-03 (UI review
+    // 2026-11-14): the ink is the one the fill's own luminance calls for in the theme (by night the
+    // well's dark ink on the two strong golds, the bright text on the two faint ones), not a class
+    // chosen by the segment's rank.
     expect(segments.map((s) => s.style.opacity)).toEqual(['', '', '', '']);
-    expect(segments[0]).toHaveClass('text-base-bg');
-    expect(segments[3]).toHaveClass('text-text-bright');
+    expect(segments.map((s) => s.style.color)).toEqual([
+      'var(--c-base-void)',
+      'var(--c-base-void)',
+      'var(--c-text-bright)',
+      'var(--c-text-bright)',
+    ]);
     expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
   });
 
