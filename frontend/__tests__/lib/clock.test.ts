@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { clockText, localZone } from '@/lib/clock';
+import { clockText, localZone, zoned } from '@/lib/clock';
 
 describe('the status line clock', () => {
   it('writes local time as HH:MM:SS on the 24-hour clock, zero-padded', () => {
@@ -23,7 +23,9 @@ describe('the status line clock', () => {
         timeZone: timeZone as unknown as string,
       });
       expect(localZone()).toBeNull();
+      expect(zoned('Local time')).toBe('Local time');
       spy.mockRestore();
     }
+    expect(zoned('Local time')).toBe(`Local time, ${localZone()}`);
   });
 });
