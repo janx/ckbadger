@@ -1246,7 +1246,7 @@ function minerRows(
             {
               label: 'Leading miner',
               name: leader.label,
-              value: `${formatChartExact(leader.value, 'blocks')} blocks · ${leader.share}`,
+              value: `${formatCount(Number(leader.value), 'block')} · ${leader.share}`,
             },
           ]
         : []),
