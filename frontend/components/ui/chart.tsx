@@ -927,7 +927,6 @@ export function Chart({
                         y={by}
                         width={boxWidth}
                         height={boxHeight}
-                        rx="6"
                         fill="var(--c-base-surface)"
                         stroke="var(--c-base-border)"
                       />

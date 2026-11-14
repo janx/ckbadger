@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@/__tests__/utils/test-utils';
 import { LineChart } from '@/components/ui/line-chart';
-import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
+import {
+  CHART_PRIMARY_COLOR,
+  CHART_SECONDARY_COLOR,
+  CHART_TOOLTIP_BG,
+  CHART_TOOLTIP_BORDER,
+} from '@/lib/chart-colors';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 describe('LineChart', () => {
   it('draws a negative daily flow and keeps its sign in the hover readout', () => {
@@ -148,6 +154,23 @@ describe('LineChart', () => {
     expect(screen.getByText('1.01K')).toBeInTheDocument();
     expect(screen.getByText('1.01')).toBeInTheDocument();
   });
+  it('draws its hover tooltip in a square-cornered box (U-02, R1)', () => {
+    const { container } = render(
+      <LineChart
+        yAxisLabel="Count"
+        y2AxisLabel="Ratio"
+        data={[{ date: '2026-10-25', value: '1005', value2: '1.005' }]}
+      />
+    );
+    const svg = container.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    const tooltipBox = () => rects(svg).find((r) => r.getAttribute('fill') === CHART_TOOLTIP_BG);
+    expect(tooltipBox()).toBeUndefined();
+    fireEvent.mouseMove(svg, { clientX: 60 });
+    expect(tooltipBox()).toHaveAttribute('stroke', CHART_TOOLTIP_BORDER);
+    expect(roundedRects(svg)).toEqual([]);
+  });
+
   it('renders bars when chartType is bar', () => {
     render(
       <LineChart

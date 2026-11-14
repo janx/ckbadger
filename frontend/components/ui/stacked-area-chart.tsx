@@ -527,7 +527,6 @@ export function StackedAreaChart({
               y={0}
               width={TOOLTIP_WIDTH}
               height={20 + series.length * 14 + (overlayLine ? 14 : 0)}
-              rx={4}
               fill={CHART_TOOLTIP_BG}
               fillOpacity={0.95}
               stroke={CHART_TOOLTIP_BORDER}
