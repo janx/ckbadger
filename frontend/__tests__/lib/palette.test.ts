@@ -390,6 +390,72 @@ describe('the row rule and the bar track (R5, DY-01)', () => {
   });
 });
 
+// Ruling 4b (UI review 2026-11-14): the ground decides its rule. The evidence tier lies on its own
+// ground (`tier2-ground`, the elevated tint at 90 % by day over the sky), where the day row rule and
+// track read 1.24:1 over the ground and 1.14:1 over a ruled line on it. Inside `.tier2-ground` the
+// variables behind `row-rule` and `bar-track` resolve to deeper keys that clear both by 1.25:1;
+// the whole site's rule is not darkened (it would pass the frame border, `base-border`).
+describe('the row rule and the bar track on the tier-2 ground (R5, ruling 4b)', () => {
+  /** A material `rgba(r, g, b, a)` laid over a ground key, as the eye sees it. */
+  function materialOver(theme: (typeof THEMES)[number], value: string, ground: PaletteKey) {
+    const m = value.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
+    if (!m) throw new Error(`${value} is not rgba(r, g, b, a)`);
+    const a = Number(m[4]);
+    const under = hexToRgb(PALETTE[theme][ground]);
+    const ch = (f: string, g: number) =>
+      Math.round(a * Number(f) + (1 - a) * g)
+        .toString(16)
+        .padStart(2, '0');
+    return `#${ch(m[1], under.r)}${ch(m[2], under.g)}${ch(m[3], under.b)}`;
+  }
+  const dayGround = materialOver('light', MATERIALS.light['tier2-ground'], 'base-bg');
+  const scan = MATERIALS.light['scanline-ink'].match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/)!;
+  const dayRuled = (() => {
+    const a = Number(scan[4]);
+    const g = hexToRgb(dayGround);
+    const ch = (f: string, under: number) =>
+      Math.round(a * Number(f) + (1 - a) * under)
+        .toString(16)
+        .padStart(2, '0');
+    return `#${ch(scan[1], g.r)}${ch(scan[2], g.g)}${ch(scan[3], g.b)}`;
+  })();
+
+  it('computes the day tier-2 ground and its ruled line from the palette', () => {
+    expect(dayGround).toBe('#eae3d6');
+    expect(dayRuled).toBe('#e1dacd');
+    // the tier-1 keys fall short there
+    expect(contrastRatio(PALETTE.light['row-rule'], dayRuled)).toBeLessThan(1.25);
+    expect(contrastRatio(PALETTE.light['bar-track'], dayRuled)).toBeLessThan(1.25);
+  });
+
+  it.each(['row-rule-deep', 'bar-track-deep'])(
+    'clears the tier-2 ground and a ruled line on it by 1.25:1 by day: %s',
+    (key) => {
+      const hex = ink('light', key);
+      expect(hex, key).toMatch(HEX);
+      expect(contrastRatio(hex, dayGround), `${key} on the ground`).toBeGreaterThanOrEqual(1.25);
+      expect(contrastRatio(hex, dayRuled), `${key} on a ruled line`).toBeGreaterThanOrEqual(1.25);
+    }
+  );
+
+  it('derives them from the tier-1 keys, darker in OKLCH lightness only (L −0.030)', () => {
+    expect(ink('light', 'row-rule-deep')).toBe('#cbc3b5');
+    expect(ink('light', 'bar-track-deep')).toBe('#cac3b6');
+  });
+
+  it('keeps the tier-1 values by night, where they clear the tier-2 ground by 1.1:1 or more', () => {
+    const nightGround = materialOver('dark', MATERIALS.dark['tier2-ground'], 'base-bg');
+    expect(nightGround).toBe('#100e0b');
+    for (const [deep, flat] of [
+      ['row-rule-deep', 'row-rule'],
+      ['bar-track-deep', 'bar-track'],
+    ] as const) {
+      expect(ink('dark', deep), deep).toBe(PALETTE.dark[flat]);
+      expect(contrastRatio(ink('dark', deep), nightGround), deep).toBeGreaterThanOrEqual(1.1);
+    }
+  });
+});
+
 describe('the palette as CSS', () => {
   it('declares a colour, its channels and the materials per theme', () => {
     const dark = themeDeclarations('dark');

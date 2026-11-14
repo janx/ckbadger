@@ -129,6 +129,16 @@ describe('a horizontal rule in the content is a row rule (R5, DY-01)', () => {
   });
 });
 
+describe('the tier-2 ground decides its rule (R5, ruling 4b)', () => {
+  it('re-points the row rule and the bar track to their deeper keys inside .tier2-ground', () => {
+    const css = readFileSync(join(__dirname, '..', '..', 'app', 'globals.css'), 'utf8');
+    const rule = css.match(/\.tier2-ground\s*\{([^}]*)\}/)![1];
+    for (const key of ['row-rule', 'bar-track'])
+      for (const kind of ['c', 'rgb'])
+        expect(rule, `--${kind}-${key}`).toContain(`--${kind}-${key}: var(--${kind}-${key}-deep);`);
+  });
+});
+
 describe('a bar’s empty track (R5, DY-01)', () => {
   it('lays the share bar and the aligned bar on the bar-track ink', () => {
     const { container } = render(
