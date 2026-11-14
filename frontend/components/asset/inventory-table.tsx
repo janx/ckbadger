@@ -47,7 +47,7 @@ export function AssetAmount({ amount, decimals }: AssetAmountProps) {
           <span data-fraction className={AMOUNT_INK.neutral.fraction}>
             {significant ? `.${significant}` : ''}
           </span>
-          <span className="text-text-ghost">
+          <span data-ghost className="text-text-ghost">
             {significant ? '' : '.'}
             {fraction.slice(significant.length)}
           </span>
