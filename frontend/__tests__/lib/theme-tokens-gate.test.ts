@@ -105,6 +105,62 @@ describe('the hex gate finds what it must, and only that', () => {
     ];
     expect(lines.map(hexColours)).toEqual([[], [], [], [], []]);
   });
+
+  // The review's item F: the widening to 3, 4 and 8 digits (a34f664c) made the gate laxer for six:
+  // main's matcher flagged '#' and six hex digits anywhere, and these passed after it. For six
+  // digits the gate is at least as strict as main's; the context rule is for 3, 4 and 8 alone and
+  // still catches those lengths in these positions.
+  it('flags every place main flagged six digits, and the 3, 4 and 8 digit twins', () => {
+    const six = [
+      "const a = '0 1px 0 #000000';",
+      "const b = 'inset 0 0 0 1px #111111';",
+      "const c = 'drop-shadow(0 0 2px #000000)';",
+      "const d = '#202020 1px solid';",
+      'const e = `${a} #123456`;',
+      '<div className="shadow-[0_0_4px_#2edba3]" />',
+    ];
+    expect(six.map(hexColours)).toEqual([
+      ['#000000'],
+      ['#111111'],
+      ['#000000'],
+      ['#202020'],
+      ['#123456'],
+      ['#2edba3'],
+    ]);
+    const twins = [
+      "const a = '0 1px 0 #000';",
+      "const b = 'inset 0 0 0 1px #1111';",
+      "const c = 'drop-shadow(0 0 2px #00000080)';",
+      "const d = '#202 1px solid';",
+      'const e = `${a} #fff`;',
+      '<div className="shadow-[0_0_4px_#2ed] ring-[#000]" />',
+    ];
+    expect(twins.map(hexColours)).toEqual([
+      ['#000'],
+      ['#1111'],
+      ['#00000080'],
+      ['#202'],
+      ['#fff'],
+      ['#2ed', '#000'],
+    ]);
+  });
+
+  it('flags in the source every six-digit hex main’s matcher flags', () => {
+    const MAIN_HEX = /#[0-9a-fA-F]{6}\b/g;
+    const missed: string[] = [];
+    for (const file of sourceFiles()) {
+      const path = relative(ROOT, file);
+      if (path === PALETTE_FILE) continue;
+      stripComments(readFileSync(file, 'utf8'))
+        .split('\n')
+        .forEach((line, i) => {
+          const found = hexColours(line);
+          for (const m of line.matchAll(MAIN_HEX))
+            if (!found.includes(m[0])) missed.push(`${path}:${i + 1} ${m[0]}`);
+        });
+    }
+    expect(missed).toEqual([]);
+  });
 });
 
 describe('every colour is a theme reference (the light theme)', () => {
