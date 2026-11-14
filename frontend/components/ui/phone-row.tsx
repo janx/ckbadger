@@ -142,7 +142,10 @@ const shownPart = (part: ReactNode) =>
  * after it: a line breaks before the dot, never after it, and a dot is not drawn when its item
  * starts a line.
  *
- * The geometry, in CSS alone: the list is a wrapping flex row that clips what lies left of its box.
+ * The geometry, in CSS alone: the list is a wrapping flex row that clips what lies LEFT of its box
+ * and nothing else (clip-path inset(-1em -100vw -1em 0)): never its right, so a unit wider than
+ * the list shows past its edge, where the page-overflow check sees it, instead of being cut with no
+ * scroll and no error (overflow-hidden cut it). `min-w-0` lets it shrink inside a flex row.
  * Every item after the first hangs its " · " 2ch left of its own text (`pl-[2ch] -indent-[2ch]`)
  * and pulls its box 2ch left (`-ml-[2ch]`). Mid-line the 3ch gap less those 2ch leaves 1ch before
  * the dot ("a · b"); at a line's start the dot lies in the 2ch left of the list's box and is
@@ -222,7 +225,7 @@ export function Dotted({
       <span
         data-dotted=""
         className={cn(
-          'flex min-w-0 flex-wrap items-baseline gap-x-[3ch] overflow-hidden',
+          'flex min-w-0 flex-wrap items-baseline gap-x-[3ch] [clip-path:inset(-1em_-100vw_-1em_0)]',
           className
         )}
       >
