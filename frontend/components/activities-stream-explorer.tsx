@@ -25,6 +25,7 @@ import {
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { useClockTime } from '@/components/ui/utc8-date';
 import { countNoun } from '@/lib/format-count';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
@@ -122,9 +123,11 @@ function toActivityDate(timestamp: string): Date {
   return new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
 }
 
-/** The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone. */
-function getActivityDayLabel(timestamp: string): string {
-  const now = Date.now();
+/**
+ * The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone:
+ * "Today" and "Yesterday" are the reader's, at `now` from the page's one clock (lane E4).
+ */
+function getActivityDayLabel(timestamp: string, now: number): string {
   const day = formatUtc8Date(toActivityDate(timestamp).getTime());
   if (day === formatUtc8Date(now)) return 'Today';
   if (day === previousChainDay(now)) return 'Yesterday';
@@ -325,6 +328,8 @@ export function ActivitiesStreamExplorer({
   totalCount?: number;
 }) {
   useEffect(() => ensureKeyframes(), []);
+  // "Today" and "Yesterday" move on at UTC+8 midnight: the stream renders again when the date does
+  const now = useClockTime((t) => formatUtc8Date(t));
 
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -561,8 +566,8 @@ export function ActivitiesStreamExplorer({
             {visibleItems.map((activity, index) => {
               const key = itemKey(activity);
               const previousLabel =
-                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp) : null;
-              const currentLabel = getActivityDayLabel(activity.timestamp);
+                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp, now) : null;
+              const currentLabel = getActivityDayLabel(activity.timestamp, now);
               const showDayDivider = currentLabel !== previousLabel;
 
               return (

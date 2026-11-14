@@ -8,6 +8,7 @@ import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
+import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
@@ -305,6 +306,43 @@ describe('ActivitiesStreamExplorer', () => {
     ).toBeInTheDocument();
   });
 
+  // Lane E4: a day divider's "Today" / "Yesterday" is relative to the reader's day on the UTC+8
+  // clock, read from the page's one clock: at midnight the dividers move on with no data change
+  // (they were read once per render from the wall clock). The clock stops with the stream.
+  it('moves its day dividers on at UTC+8 midnight with no data change (E4)', async () => {
+    vi.useRealTimers();
+    // 23:59:59 on 2026-11-14 in UTC+8, a whole second
+    vi.useFakeTimers({ now: Date.parse('2026-11-14T15:59:59Z') });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        makeActivity({
+          txHash: '0xlate',
+          timestamp: String(Date.parse('2026-11-14T15:59:40Z')),
+          participants: [makeParticipant({ address: 'ckb1qlate', ckbDelta: '-1' })],
+        }),
+        makeActivity({
+          txHash: '0xeve',
+          timestamp: String(Date.parse('2026-11-13T15:00:00Z')),
+          participants: [makeParticipant({ address: 'ckb1qeve', ckbDelta: '-1' })],
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { unmount } = render(<ActivitiesStreamExplorer />);
+    const dividers = () =>
+      Array.from(document.querySelectorAll('[data-testid^="activity-day-divider"]')).map(
+        (d) => d.textContent
+      );
+    await loadUnderStillClock(() => dividers().length === 2);
+    expect(dividers()).toEqual(['Today', 'Yesterday']);
+    tick(1000);
+    expect(dividers()).toEqual(['Yesterday', 'Nov 13']);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('renders each activity row with tx hash, event rows, and participant lines', async () => {
     const timestamp = String(Date.now() - 23_000);
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
@@ -353,7 +391,7 @@ describe('ActivitiesStreamExplorer', () => {
     // PA-22 (re-pinned): a live feed's row says its age, the full date-time its hover (it was the
     // date, consistency C3, which left a row of seconds ago reading only today's date)
     const evidence = row.querySelector('[data-role="evidence"]') as HTMLElement;
-    expect(within(evidence).getByText(formatTimeAgo(timestamp))).toHaveAttribute(
+    expect(within(evidence).getByText(formatTimeAgo(timestamp, Date.now()))).toHaveAttribute(
       'title',
       formatUtc8DateTime(timestamp)
     );

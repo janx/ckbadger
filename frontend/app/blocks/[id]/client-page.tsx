@@ -35,7 +35,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { ShortId } from '@/components/ui/short-id';
-import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { ClockText, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { PlateHash } from '@/components/ui/page-seal';
 import { percentOf } from '@/lib/format-unit';
 
@@ -723,7 +723,7 @@ export default function BlockDetailPage() {
                     <Utc8DateTime timestamp={block.timestamp} />
                   </dd>
                   <dd className="text-text-dim mt-1">
-                    {formatTimeAgo(block.timestamp)}
+                    <ClockText text={(now) => formatTimeAgo(block.timestamp, now)} />
                     {parentElapsedMs !== null && (
                       <> · {parentElapsedMs / 1000} s after its parent</>
                     )}

@@ -5,6 +5,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { onlineManager } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { render } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 
@@ -552,6 +553,34 @@ describe('BlockDetailPage', () => {
       ).toBeInTheDocument();
     } finally {
       quiet.mockRestore();
+    }
+  });
+
+  // Lane E4: the Time fact's age reads the page's one clock, so it moves with no data change (it
+  // was written once at render and said "20s ago" for as long as the page stood), and the clock
+  // stops with the page.
+  it('moves the Time fact’s age with no data change, and leaves no timer behind (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    try {
+      vi.mocked(api.getBlock).mockResolvedValue({
+        ...mockBlock,
+        timestamp: new Date(T0 - 20_000).toISOString(),
+      });
+      const { unmount } = render(<BlockDetailPage />);
+      const facts = () => screen.queryByRole('complementary', { name: 'Block facts' });
+      await loadUnderStillClock(() => facts() !== null);
+      const age = () => within(facts()!).getByText(/ ago/).textContent;
+      expect(age()).toMatch(/^20s ago · /);
+      tick(1000);
+      expect(age()).toMatch(/^21s ago · /);
+      tick(38_000);
+      expect(age()).toMatch(/^59s ago · /);
+      tick(1000);
+      expect(age()).toMatch(/^1m ago · /);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

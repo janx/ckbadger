@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
+import { useClockText } from '@/components/ui/utc8-date';
 
 /** One status pill for an item page: jade while live, grey once gone (OB-15). */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
@@ -163,7 +164,6 @@ function timeOf(v: ItemCellVersion): number {
  */
 export function itemLifeSentence(
   versions: readonly ItemCellVersion[],
-  now: number,
   verb: 'Minted' | 'Issued' = 'Minted',
   by?: string
 ): string {
@@ -210,6 +210,23 @@ export function itemLifeAges(
   };
   const born = ago(verb.toLowerCase(), first);
   return versions.length > 1 ? `${born} · ${ago('last moved', last)}` : born;
+}
+
+/**
+ * The life sentence with its ages as its hover (lane P), read from the page's one clock, so they
+ * move with no data change (lane E4); the sentence itself names no time.
+ */
+export function ItemLife({
+  versions,
+  verb = 'Minted',
+  by,
+}: {
+  versions: readonly ItemCellVersion[];
+  verb?: 'Minted' | 'Issued';
+  by?: string;
+}) {
+  const ages = useClockText((now) => itemLifeAges(versions, now, verb));
+  return <span title={ages}>{itemLifeSentence(versions, verb, by)}</span>;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──

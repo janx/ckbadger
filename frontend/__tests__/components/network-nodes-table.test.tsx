@@ -6,6 +6,7 @@ import { onTestFinished } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils';
 import { PeersTable } from '@/app/network/nodes-table';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -93,6 +94,50 @@ describe('PeersTable', () => {
     expect(within(evidence).getByText('2 consecutive exhausted rounds')).toBeInTheDocument();
     expect(within(evidence).getByText(/first advertised/)).toHaveTextContent(/last advertised/);
     expect(within(evidence).getByText('Advertised by')).toBeInTheDocument();
+  });
+
+  // Lane E4: every age the table writes (a row's latest evidence, last dial and last verified; the
+  // evidence's observations, aliases, sessions and advertisers) reads the page's one clock, so it
+  // moves with no data change; each was written once at render. However many there are, the page
+  // runs one timer, and none once it is gone.
+  it('moves every age with no data change, on one timer for all of them (E4)', async () => {
+    // the served observations are at 1,751,500,800 s (2025-07-03 00:00 UTC): the clock stands 20 s on
+    vi.useFakeTimers({ now: 1_751_500_820_000 });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { unmount } = render(<PeersTable />);
+    await loadUnderStillClock(() => screen.queryAllByTestId('peer-row').length === 3);
+    const row = screen.getByText(rowId(REACHABLE_PEER_ID)).closest<HTMLElement>('[data-testid]')!;
+    // latest evidence, last dial, last verified
+    expect(within(row).getAllByText('20s ago')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: `Show evidence for ${REACHABLE_PEER_ID}` }));
+    await loadUnderStillClock(() => screen.queryByText('Retained verification') !== null);
+    const evidence = screen.getByTestId('peer-evidence-row');
+    const ages = () => within(evidence).getAllByText(/\b20s ago\b|\b21s ago\b|\b1m ago\b/).length;
+    const shown = ages();
+    expect(shown).toBeGreaterThan(2);
+    expect(evidence).toHaveTextContent(/observed 20s ago/);
+    expect(evidence).toHaveTextContent(/last same-network Identify 20s ago/);
+    // thirteen ages on the table, the three rows' 3 + 2 + 1 and the evidence's 7: one clock, one
+    // timer
+    const readers = (document.body.textContent ?? '').match(
+      /\d+[smhdy] ago|this device's clock is behind/g
+    );
+    expect(readers).toHaveLength(13);
+    expect(vi.getTimerCount()).toBe(1);
+    tick(1000);
+    expect(within(row).getAllByText('21s ago')).toHaveLength(3);
+    expect(evidence).toHaveTextContent(/observed 21s ago/);
+    expect(evidence).toHaveTextContent(/last same-network Identify 21s ago/);
+    expect(evidence).not.toHaveTextContent(/\b20s ago/);
+    tick(39_000);
+    expect(within(row).getAllByText('1m ago')).toHaveLength(3);
+    expect(evidence).toHaveTextContent(/last same-network Identify 1m ago/);
+    expect(ages()).toBe(shown);
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('shows retained Discovery evidence for a verified peer', async () => {

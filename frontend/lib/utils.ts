@@ -20,7 +20,7 @@ export function formatUtc8Date(timestamp: string | number): string {
 }
 
 /** A feed row's relative age in one unit ("5m ago"): format-age's one form (U-15). */
-export function formatTimeAgo(timestamp: string | number | Date, now = Date.now()): string {
+export function formatTimeAgo(timestamp: string | number | Date, now: number): string {
   return formatAgeOneUnit(timestamp, now);
 }
 

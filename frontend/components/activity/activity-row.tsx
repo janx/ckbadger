@@ -1,5 +1,11 @@
 'use client';
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentPropsWithRef,
+  type ReactNode,
+} from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -40,7 +46,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
+import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
@@ -51,8 +57,22 @@ const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transitio
  * historical by nature the row shows the date and the age is here alone; a live list's row says
  * its age (PA-22) and the hover repeats it. A pool row has no block time, so its hover is the hash.
  */
-export function activityRowTitle(hash: string, timestamp: string | null): string {
-  return timestamp === null ? hash : `${hash} · ${formatTimeAgo(timestamp)}`;
+export function activityRowTitle(hash: string, timestamp: string | null, now: number): string {
+  return timestamp === null ? hash : `${hash} · ${formatTimeAgo(timestamp, now)}`;
+}
+
+/**
+ * A row's `<article>` with that hover, its age read from the page's one clock (lane E4), so it
+ * moves with no data change. Only this element renders again as the age moves: the row inside it
+ * is the same element and is not rendered again.
+ */
+export function RowArticle({
+  hash,
+  timestamp,
+  ...article
+}: ComponentPropsWithRef<'article'> & { hash: string; timestamp: string | null }) {
+  const title = useClockText((now) => activityRowTitle(hash, timestamp, now));
+  return <article {...article} title={title} />;
 }
 
 /**
@@ -1034,13 +1054,14 @@ export function ActivityRow({
     ...calls,
   ];
   return (
-    <article
+    <RowArticle
       ref={articleRef}
       data-feed-row={activity.txHash}
       // T7: the hash leaves the visible row; it is the row's hover (and the headline's link).
       // and the age beside it (consistency C3); the row shows the date on a historical list, the
       // age on a live one (PA-22)
-      title={activityRowTitle(activity.txHash, activity.timestamp)}
+      hash={activity.txHash}
+      timestamp={activity.timestamp}
       className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
     >
       <ActivityRowHead
@@ -1078,6 +1099,6 @@ export function ActivityRow({
           notes={participantNotes}
         />
       )}
-    </article>
+    </RowArticle>
   );
 }

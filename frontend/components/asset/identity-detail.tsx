@@ -13,6 +13,7 @@ import { CellVersions } from '@/components/asset/cell-versions';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { TenureBar } from '@/components/ui/tenure-bar';
+import { useClockTime } from '@/components/ui/utc8-date';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   IdentityName,
@@ -110,6 +111,19 @@ function identityState(
   return term.kind === 'term' && now >= term.expiresAt ? 'expired' : 'live';
 }
 
+/**
+ * Everything the page writes from the time (lane E4): whether the term has ended (and lapsed), the
+ * whole days to or since its expiry, and the UTC+8 date of the term bar's now mark. Nothing of the
+ * time is written without a term.
+ */
+function termClock(term: IdentityTerm | null, now: number): string {
+  if (term?.kind !== 'term') return '';
+  const { expiresAt } = term;
+  return [now >= expiresAt, now > expiresAt, termDays(expiresAt, now), formatUtc8Date(now)].join(
+    ' '
+  );
+}
+
 /** "3 years paid · 1 at registration, 2 renewals" — the term bar's caption. */
 function termNote(term: Extract<IdentityTerm, { kind: 'term' }>, kind: IdentityKind) {
   const n = term.renewals.length;
@@ -139,7 +153,6 @@ export function CanonicalIdentityDetail({
   const search = useSearchParams(),
     pathname = usePathname(),
     router = useRouter();
-  const [now] = useState(() => Date.now());
   const feedSubject = FEED_SUBJECT[kind];
   const standard = STANDARD[kind];
   const [initialActivityCursor] = useState(() =>
@@ -173,6 +186,9 @@ export function CanonicalIdentityDetail({
     throw new Error(`${id}: expected ${standard} protocol, got ${protocol.data.kind}`);
   const p = protocol.data as IdentityProtocol | undefined;
   const term = p ? identityTerm(p, { graceEndsAt: dotcell?.graceEndsAt }) : null;
+  // The term's state, its days to or since the expiry and the term bar's now mark read the page's
+  // one clock (lane E4): the page renders again when what it writes from the time changes.
+  const now = useClockTime((t) => termClock(term, t));
   const state = identityState(kind, isLive, term, now, dotcell);
   const parts = identityTitleParts(kind, title, p);
   const subject = parts.full;
