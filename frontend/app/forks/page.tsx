@@ -19,7 +19,7 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import type { ShortSize } from '@/lib/shorten';
-import { BOARD_INKS, FORK_COLORS, inkStyle } from '@/lib/design-tokens';
+import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
   forkEventHref,
@@ -237,9 +237,7 @@ function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactN
   return (
     <span>
       {side(dropped, oldMinerAddress, oldMinerPool, 'witness unavailable')}{' '}
-      <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
-        vs
-      </span>{' '}
+      <span className="text-text-dim">vs</span>{' '}
       {side(
         winner,
         competingMinerAddress,

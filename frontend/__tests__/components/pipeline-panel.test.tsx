@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { act, fireEvent, render as renderPlain } from '@testing-library/react';
@@ -56,6 +58,15 @@ import {
 import { FRESH_MS } from '@/lib/pipeline/motion';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
+import {
+  contrastRatio,
+  hexToRgb,
+  overGround,
+  PALETTE,
+  THEMES,
+  type PaletteKey,
+  type ThemeName,
+} from '@/lib/palette';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const VIEW_W = 1600;
@@ -158,6 +169,166 @@ describe('the tip flares (material pass v2, move 4)', () => {
 const card = (svg: Element, n: number) =>
   svg.querySelector(`[data-card="${blockHash(n)}"]`) as SVGGElement;
 const tile = (svg: Element, n: number) => card(svg, n).querySelector('[data-box]') as SVGElement;
+/**
+ * How strongly `el` is drawn inside its card: the product of the opacities (style and attribute)
+ * of `el` and its ancestors below the card, whose own `opacity` the motion layer owns.
+ */
+const strengthInCard = (el: Element, cardEl: Element) => {
+  let strength = 1;
+  for (let a: Element | null = el; a && a !== cardEl; a = a.parentElement) {
+    const style = (a as SVGElement).style.opacity;
+    if (style !== '') strength *= Number(style);
+    const attr = a.getAttribute('opacity');
+    if (attr !== null) strength *= Number(attr);
+  }
+  return strength;
+};
+/**
+ * Lane E2 (ruling R4): "set back" is never an opacity on words. Every card's words (its number,
+ * "uncle", the "+N" counts) are drawn at full strength; its tile keeps the age fade.
+ */
+const expectWordsAtFullStrength = (svg: Element) => {
+  const cards = [...svg.querySelectorAll('[data-card]')];
+  // the tip and at least three blocks behind it, each a step further back
+  expect(cards.length).toBeGreaterThan(3);
+  const words = cards.flatMap((c, i) => [...c.querySelectorAll('text')].map((t) => ({ c, i, t })));
+  expect(words.length).toBeGreaterThanOrEqual(cards.length);
+  expect(
+    words
+      .filter(({ c, t }) => strengthInCard(t, c) !== 1)
+      .map(({ c, i, t }) => `card ${i} "${t.textContent}" at ${strengthInCard(t, c)}`)
+  ).toEqual([]);
+  cards.forEach((c, i) => {
+    expect(strengthInCard(c.querySelector('[data-box]')!, c)).toBeCloseTo(ageOpacity(i), 6);
+    // the words let the pointer through to the tile, the uncle box or the dot beneath
+    expect(c.querySelector('[data-words]')).toHaveAttribute('pointer-events', 'none');
+  });
+};
+
+// ---- Lane E2 follow-up, ruling 2: every word the pipeline writes reads at 4.5:1 on its ground ----
+const GLOBALS_CSS = readFileSync(join(__dirname, '..', '..', 'app', 'globals.css'), 'utf8');
+/** The palette key a CSS variable resolves to in app/globals.css (`pipeline-elevated` → `base-elevated`). */
+function paletteKeyOfVar(name: string): PaletteKey {
+  let current = name;
+  for (let hop = 0; hop < 6; hop++) {
+    if (current.startsWith('c-')) return current.slice(2) as PaletteKey;
+    const m = new RegExp(`--${current}:\\s*var\\(--([a-z0-9-]+)\\)\\s*;`).exec(GLOBALS_CSS);
+    if (!m) throw new Error(`globals.css: --${current} is not a variable reference`);
+    current = m[1];
+  }
+  throw new Error(`globals.css: --${name} does not reach a palette key`);
+}
+/** `over` at `a` laid over `under` (two hexes), as overGround lays a key over a ground. */
+function mixHex(under: string, over: string, a: number): string {
+  const [u, o] = [hexToRgb(under), hexToRgb(over)];
+  const ch = (x: number, y: number) =>
+    Math.round(a * y + (1 - a) * x)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(u.r, o.r)}${ch(u.g, o.g)}${ch(u.b, o.b)}`;
+}
+/** A fill as the canvas writes it, a `var(--…)` or an sRGB `color-mix` of two, as a hex. */
+function fillHex(theme: ThemeName, fill: string): string {
+  const v = /^var\(--([a-z0-9-]+)\)$/.exec(fill);
+  if (v) return PALETTE[theme][paletteKeyOfVar(v[1])];
+  const m = /^color-mix\(in srgb, (var\(--[a-z0-9-]+\)) ([\d.]+)%, (var\(--[a-z0-9-]+\))\)$/.exec(
+    fill
+  );
+  if (m) return mixHex(fillHex(theme, m[3]), fillHex(theme, m[1]), Number(m[2]) / 100);
+  throw new Error(`pipeline fill "${fill}" is not a palette reference`);
+}
+/** The word inks of the canvas, by their fill class. */
+const WORD_INK: Readonly<Record<string, PaletteKey>> = {
+  'fill-text-dim': 'text-dim',
+  'fill-text': 'text',
+  'fill-text-bright': 'text-bright',
+  'fill-gold': 'gold',
+  'fill-aqua': 'aqua',
+};
+const PAGE_GROUNDS: PaletteKey[] = ['base-void', 'base-bg', 'base-surface', 'base-elevated'];
+/** The age fade's two ends: the tip, and tip − 7 on (pinned in pipeline-encoding.test.ts). */
+const AGES = [ageOpacity(0), ageOpacity(7)];
+/** A word's ink: its fill class, a named ink or a pipeline token (`fill-[var(--pipeline-…)]`). */
+function wordInk(word: Element, svg: Element): PaletteKey {
+  for (let a: Element | null = word; a && a !== svg; a = a.parentElement) {
+    const cls = [...a.classList].find((c) => c.startsWith('fill-'));
+    if (!cls) continue;
+    const token = /^fill-\[var\(--([a-z0-9-]+)\)\]$/.exec(cls);
+    if (token) return paletteKeyOfVar(token[1]);
+    const key = WORD_INK[cls];
+    if (!key) throw new Error(`pipeline word "${word.textContent}" in unknown ink ${cls}`);
+    return key;
+  }
+  throw new Error(`pipeline word "${word.textContent}" has no fill class`);
+}
+
+/**
+ * Every word the canvas writes, its ink (its fill class), and the composite it stands on, over
+ * each page ground the glass panel can show through: a block's tile or an uncle box on it, at the
+ * tip's strength and at the age fade's floor (a block passes through every age, and the contrast
+ * is least at one end), NEXT's half-strength box, a pool's well, or the page itself. One line per
+ * ground, ink and theme under 4.5:1, with its worst ratio.
+ */
+function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
+  const styleFill = (el: Element) => (el as SVGElement).style.getPropertyValue('fill');
+  const alphaOf = (el: Element) => Number(el.getAttribute('fill-opacity') ?? '1');
+  const groundOf = (
+    word: Element
+  ): { kind: string; hexes: (theme: ThemeName, page: PaletteKey) => string[] } => {
+    const card = word.closest('[data-card]');
+    if (card) {
+      const label = word.closest('[data-uncle-label]');
+      if (label) {
+        const rect = card.querySelector(
+          `[data-uncle="${label.getAttribute('data-uncle-label')}"] rect`
+        ) as Element;
+        return {
+          kind: 'an uncle box',
+          hexes: (t, p) => AGES.map((a) => mixHex(PALETTE[t][p], fillHex(t, styleFill(rect)), a)),
+        };
+      }
+      const box = card.querySelector('[data-box]') as Element;
+      return {
+        kind: 'a tile',
+        hexes: (t, p) =>
+          AGES.map((a) => mixHex(PALETTE[t][p], fillHex(t, styleFill(box)), a * alphaOf(box))),
+      };
+    }
+    const next = word.closest('[data-next]');
+    if (next) {
+      const box = next.querySelector('[data-box]') as Element;
+      const key = paletteKeyOfVar(/^var\(--([a-z0-9-]+)\)$/.exec(styleFill(box))![1]);
+      return { kind: "NEXT's box", hexes: (t, p) => [overGround(t, key, alphaOf(box), p)] };
+    }
+    const pool = word.closest('[data-pool-card]');
+    if (pool && (form === 'column' || word.closest('[data-pool-status]'))) {
+      const tray = pool.querySelector('[data-tray]') as Element;
+      return { kind: 'a well', hexes: (t) => [fillHex(t, styleFill(tray))] };
+    }
+    return { kind: 'the page', hexes: (t, p) => [PALETTE[t][p]] };
+  };
+  const words = [...svg.querySelectorAll('text, tspan')].filter((el) =>
+    [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim() !== '')
+  );
+  expect(words.length).toBeGreaterThan(4);
+  const worst = new Map<string, { ratio: number; example: string }>();
+  for (const word of words) {
+    const ink = wordInk(word, svg);
+    const ground = groundOf(word);
+    for (const theme of THEMES)
+      for (const page of PAGE_GROUNDS) {
+        const ratio = Math.min(
+          ...ground.hexes(theme, page).map((hex) => contrastRatio(PALETTE[theme][ink], hex))
+        );
+        if (ratio >= 4.5) continue;
+        const key = `${form}: ${ink} on ${ground.kind} (${theme})`;
+        const seen = worst.get(key);
+        if (!seen || ratio < seen.ratio)
+          worst.set(key, { ratio, example: word.textContent!.trim() });
+      }
+  }
+  return [...worst].map(([key, w]) => `${key}, "${w.example}": ${w.ratio.toFixed(2)}`);
+}
 const path = (svg: Element, name: string) =>
   svg.querySelector(`[data-path="${name}"]`) as SVGPathElement;
 
@@ -235,8 +406,11 @@ describe('PipelinePanel static render', () => {
     const host = card(svg, T - 1);
     const uncle = host.querySelector('[data-uncle="0"]') as SVGGElement;
     expect(uncle).not.toBeNull();
-    // Just the word: the uncle's number is in its tooltip.
-    expect([...uncle.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
+    // Just the word: the uncle's number is in its tooltip. Re-pinned with lane E2 (R4): the word
+    // sits in the card's words group, at full strength, over the box the age fade steps back.
+    const label = host.querySelector('[data-words] [data-uncle-label="0"]') as SVGGElement;
+    expect([...label.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
+    expect(uncle.querySelectorAll('text')).toHaveLength(0);
     const box = uncle.querySelector('rect') as SVGRectElement;
     expect(box).not.toHaveAttribute('stroke-dasharray');
     expect(box.style.getPropertyValue('stroke')).toBe('');
@@ -282,7 +456,8 @@ describe('PipelinePanel static render', () => {
     expect(scene.cards.some((c) => c.hidden === 0)).toBe(true);
     for (const c of scene.cards) {
       const el = card(svg, c.block.number);
-      const header = [...el.querySelectorAll(':scope > [data-age] > [data-dim] > text')].map(
+      // re-pinned with lane E2 (R4): the header's words sit in the card's words group
+      const header = [...el.querySelectorAll(':scope > [data-dim] > [data-words] > text')].map(
         (t) => t.textContent
       );
       expect(header).toEqual(
@@ -339,7 +514,9 @@ describe('PipelinePanel static render', () => {
     const cards = [...svg.querySelectorAll('[data-card]')] as SVGGElement[];
     expect(cards.length).toBeGreaterThan(8);
     cards.forEach((c, i) => {
-      const age = c.querySelector(':scope > [data-age]') as SVGGElement;
+      // re-pinned with lane E2 (R4): the age group holds the card's shapes, inside the hover's
+      // step-back group; the words are its sibling (see the next test)
+      const age = c.querySelector(':scope > [data-dim] > [data-age]') as SVGGElement;
       expect(age).toHaveAttribute('data-age', String(i));
       expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);
       // The outer group's opacity attribute belongs to the motion layer (fade in / retire).
@@ -350,6 +527,61 @@ describe('PipelinePanel static render', () => {
       0.4,
       6
     );
+  });
+
+  it('keeps an older block’s words at full strength while its shapes step back (R4, lane E2)', async () => {
+    expectWordsAtFullStrength(await renderPanel());
+  });
+
+  // Lane E2 follow-up, ruling 2: a tile is a ground of its own, so its words are chosen for it.
+  // With the window drawn (its gold numbers and label), and once with no pool (the well's word).
+  it('writes every word at 4.5:1 on what it stands on, in both themes (R4, lane E2)', async () => {
+    const svg = await renderPanel();
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    expect(svg.querySelector('[data-window-label]')).not.toBeNull();
+    const failures = wordInkFailures(svg, 'row');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(failures).toEqual([]);
+  });
+
+  // Lane E2 round 3 (the lead's correction): the in-window number keeps the plain gold by night,
+  // the home page's approved look (6.11:1 on the tile, already fine); only by day, where the plain
+  // gold is 4.15:1 on the tile, it takes the gold's bright step, so it reads at 4.5:1 there.
+  it('keeps an in-window number the plain gold by night, and at 4.5:1 on its tile by day', async () => {
+    const svg = await renderPanel();
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    const consensus = buildPipelineSnapshot().consensus;
+    const inside = [...svg.querySelectorAll('[data-card]')].filter((c) =>
+      inWindow(Number(c.getAttribute('data-number')), T, consensus)
+    );
+    expect(inside.length).toBeGreaterThan(0);
+    const short: string[] = [];
+    for (const c of inside) {
+      const number = c.querySelector('[data-block-number]') as Element;
+      const ink = wordInk(number, svg);
+      expect(PALETTE.dark[ink], `night ink of ${number.textContent}`).toBe(PALETTE.dark.gold);
+      const tile = fillHex('light', (c.querySelector('[data-box]') as SVGElement).style.fill);
+      for (const page of PAGE_GROUNDS)
+        for (const a of AGES) {
+          const ratio = contrastRatio(PALETTE.light[ink], mixHex(PALETTE.light[page], tile, a));
+          if (ratio < 4.5) short.push(`${number.textContent} at ${a} on ${page}: ${ratio}`);
+        }
+    }
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(short).toEqual([]);
+  });
+
+  it('writes the well’s and NEXT’s "unavailable" at 4.5:1 when the pool tip differs', async () => {
+    const svg = await renderPanel({
+      ...buildPipelineSnapshot(),
+      status: 'poolTipMismatch',
+      poolTip: { number: T + 1, hash: blockHash(T + 1) },
+      pool: null,
+      next: null,
+    });
+    expect(svg.querySelector('[data-pool-status]')).not.toBeNull();
+    expect(svg.querySelector('[data-next-column]')).not.toBeNull();
+    expect(wordInkFailures(svg, 'row')).toEqual([]);
   });
 
   it('draws the pool as two wells: no stroke, the stage name in its colour and its total', async () => {
@@ -464,8 +696,9 @@ describe('PipelinePanel static render', () => {
     expect(win.getAttribute('d')?.match(/M/g)).toHaveLength(8);
     expect(win.style.getPropertyValue('stroke')).toBe(tok('gold'));
     expect(win).toHaveAttribute('stroke-width', '1.5');
+    // re-pinned with lane E2 round 3: an in-window number is the pipeline's word gold on its tile
     for (const el of svg.querySelectorAll('[data-block-number]')) {
-      expect(el).not.toHaveClass('fill-gold');
+      expect(el).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
     }
   });
 
@@ -772,6 +1005,47 @@ describe('PipelineCanvas motion', () => {
     expect(box).toHaveAttribute('fill-opacity', '1');
   });
 
+  // Lane E2 follow-up, item 3: the chips' "+N" left `data-chips` for the card's words; an entrance
+  // is motion, not a resting state, so it enters with its dots (the same opacity, step for step)
+  // and stands at full strength once the block is solid.
+  it('lets a landing block’s chip count enter with its dots, then stand at full strength', () => {
+    const pool = s1.pool as NonNullable<PipelineSnapshot['pool']>;
+    const extra = Array.from({ length: 40 }, (_, i) => ({
+      ...pool.pending[0],
+      hash: poolTxHash(`x${i}`),
+    }));
+    const many: PipelineSnapshot = {
+      ...s1,
+      pool: {
+        ...pool,
+        pending: [...pool.pending, ...extra],
+        pendingTotal: pool.pendingTotal + extra.length,
+      },
+    };
+    const landed = mineNext(many, { commit: [w0], propose: extra.map((x) => x.hash) });
+    const tr = diffSnapshots(many, landed);
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={many} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={landed} />);
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    const chips = landing.querySelector('[data-chips]') as SVGGElement;
+    const label = landing.querySelector('[data-chips-label]') as SVGGElement;
+    expect(label).not.toBeNull();
+    // Dashed: the dots at 0.2, and their count with them.
+    expect(chips).toHaveAttribute('opacity', '0.200');
+    expect(label).toHaveAttribute('opacity', '0.200');
+    // Solidifying (from contact − 80 ms over 420 ms): the count follows the dots.
+    at(tr.contact + 100);
+    const mid = Number(chips.getAttribute('opacity'));
+    expect(mid).toBeGreaterThan(0.2);
+    expect(mid).toBeLessThan(1);
+    expect(label.getAttribute('opacity')).toBe(chips.getAttribute('opacity'));
+    // Solid: both at rest, at full strength.
+    at(600);
+    expect(chips).not.toHaveAttribute('opacity');
+    expect(label).not.toHaveAttribute('opacity');
+  });
+
   it('outlines a highlighted tile while the motion layer is painting it', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
@@ -1054,8 +1328,9 @@ describe('PipelinePanel interactions', () => {
   });
 
   const tooltip = () => screen.getByTestId('pipeline-tooltip');
+  // re-pinned with lane E2 (R4): the hover's step-back group now holds the age group and the words
   const dimOfCard = (svg: Element, n: number) =>
-    card(svg, n).querySelector(':scope > [data-age] > [data-dim]')?.getAttribute('data-dim');
+    card(svg, n).querySelector(':scope > [data-dim]')?.getAttribute('data-dim');
   /** Hover NEXT's header row (no tx or proposal under the pointer). */
   const hoverNext = (svg: Element) =>
     fireEvent.pointerMove(svg.querySelector('[data-next] [data-box]') as Element, {
@@ -1167,8 +1442,9 @@ describe('PipelinePanel interactions', () => {
       const n = c.block.number;
       const number = card(svg, n).querySelector('[data-block-number]');
       const inside = inWindow(n, T + 1, snapshot.consensus);
-      if (inside) expect(number).toHaveClass('fill-gold');
-      else expect(number).not.toHaveClass('fill-gold');
+      // re-pinned with lane E2 round 3: the word gold (gold by night, its bright step by day)
+      if (inside) expect(number).toHaveClass('fill-[var(--pipeline-word-gold)]');
+      else expect(number).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
       expect(dimOfCard(svg, n)).toBe(inside ? 'false' : 'true');
     }
     expect(svg.querySelector('[data-next] > [data-dim]')).toHaveAttribute('data-dim', 'false');
@@ -1183,8 +1459,13 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
       windowLabel(T + 1, T, snapshot.consensus)
     );
-    expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass('fill-gold');
-    expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass('fill-gold');
+    // re-pinned with lane E2 round 3: the pipeline's word gold on the tile
+    expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass(
+      'fill-[var(--pipeline-word-gold)]'
+    );
+    expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass(
+      'fill-[var(--pipeline-word-gold)]'
+    );
   });
 
   it('anchors the window on a hovered block and steps back the blocks outside it', async () => {
@@ -1792,7 +2073,8 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       // re-pinned with ruling R1 (U-02): the tile is square
       expect(t).not.toHaveAttribute('rx');
       expect(t).toHaveAttribute('stroke-opacity', '0');
-      const age = el.querySelector(':scope > [data-age]') as SVGGElement;
+      // re-pinned with lane E2 (R4): the age group holds the row's shapes, not its words
+      const age = el.querySelector(':scope > [data-dim] > [data-age]') as SVGGElement;
       expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);
       const num = el.querySelector('[data-block-number]') as SVGTextElement;
       expect(num.textContent).toBe(tail4(c.block.number));
@@ -1806,10 +2088,36 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       Number(d.getAttribute('cx'))
     );
     expect(dots.map((x) => tip.x + x)).toEqual([60, 68, 76]);
-    // T−1's uncle sits at the end of its line, "uncle" and its two dots.
-    const uncle = card(svg, T - 1).querySelector('[data-uncle="0"]') as SVGGElement;
+    // T−1's uncle sits at the end of its line, "uncle" and its two dots (re-pinned with lane E2:
+    // the word sits in the row's words group, over the box).
+    const uncle = card(svg, T - 1).querySelector('[data-uncle-label="0"]') as SVGGElement;
     expect([...uncle.querySelectorAll('text')].map((x) => x.textContent)).toEqual(['uncle']);
+    expect(card(svg, T - 1).querySelector('[data-uncle="0"] rect')).not.toBeNull();
     expect(card(svg, T - 1).querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
+  });
+
+  it('keeps an older row’s words at full strength while its shapes step back (R4, lane E2)', async () => {
+    expectWordsAtFullStrength(await renderPanel(quiet));
+  });
+
+  it('writes every word of a row at 4.5:1 on what it stands on, in both themes (R4, lane E2)', async () => {
+    const svg = await renderPanel(quiet);
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
+    const failures = wordInkFailures(svg, 'column');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(failures).toEqual([]);
+  });
+
+  it('writes the well’s and NEXT’s "unavailable" of a row at 4.5:1 when the pool tip differs', async () => {
+    const svg = await renderPanel({
+      ...quiet,
+      status: 'poolTipMismatch',
+      poolTip: { number: T + 1, hash: blockHash(T + 1) },
+      pool: null,
+      next: null,
+    });
+    expect(svg.querySelector('[data-pool-status]')).not.toBeNull();
+    expect(wordInkFailures(svg, 'column')).toEqual([]);
   });
 
   it('runs the chain at x 28 through the gaps, with the window tick and the gold tail of the board', async () => {
@@ -1871,8 +2179,11 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       columnWindowMarksPath(ruler)
     );
     expect(svg.querySelector('[data-window-label]')).toBeNull();
+    // re-pinned with lane E2 round 3: the pipeline's word gold on the tile
     const gold = (n: number) =>
-      card(svg, n).querySelector('[data-block-number]')?.classList.contains('fill-gold');
+      card(svg, n)
+        .querySelector('[data-block-number]')
+        ?.classList.contains('fill-[var(--pipeline-word-gold)]');
     expect([T, T - 1, T - 2, T - 3].map(gold)).toEqual([false, true, true, true]);
   });
 

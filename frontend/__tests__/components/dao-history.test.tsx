@@ -284,6 +284,36 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     );
   });
 
+  // Lane E2 (ruling R4): the SVG twin of the HTML fractions. The end label's digits after the point
+  // are the sign's fraction ink as a fill at full strength (AMOUNT_INK), never the amount's ink at
+  // fill-opacity .7, which put the cinnabar at 2.91–3.16:1 by night and the celadon at 2.79–3.12:1
+  // by day.
+  it('draws the weekly end label’s fraction in its sign’s fraction ink, never at a fill opacity', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const endOf = (value: string) => {
+      const data = deposited.data.map((p, i) => (i === 154 ? { ...p, value } : p));
+      const { container, unmount } = render(
+        <Picture deposited={{ ...deposited, data }} ratio={ratio} />
+      );
+      const end = container.querySelector('[data-panel="weekly"] [data-role="end-label"]')!;
+      const tspans = [...end.querySelectorAll('tspan')].map((t) => ({
+        text: t.textContent,
+        fill: t.getAttribute('fill'),
+        fillOpacity: t.getAttribute('fill-opacity'),
+      }));
+      unmount();
+      return tspans;
+    };
+    // the last week starts at 101,180 CKB: −12.34567891, then +10.25
+    expect(endOf('101167.65432109')).toEqual([
+      { text: '.34', fill: 'var(--c-rouge-dim)', fillOpacity: null },
+    ]);
+    expect(endOf('101190.25')).toEqual([
+      { text: '.25', fill: 'var(--c-jade-dim)', fillOpacity: null },
+    ]);
+  });
+
   it('refuses a deposit history with a missing day', () => {
     const { deposited, ratio } = series();
     const gap = { ...deposited, data: deposited.data.filter((_, i) => i !== 9) };

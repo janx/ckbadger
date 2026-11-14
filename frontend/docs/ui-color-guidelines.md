@@ -58,7 +58,8 @@ Use the following hierarchy in `frontend/app` and `frontend/components`:
 
 4. `Padding and decoration` (never a word, never a figure)
 
-- `text-text-ghost`
+- `text-text-ghost`; for marks and rules also the quiet slate (`ink-quiet`) and the muted ink
+  (`ink-muted`), both under text grade
 
 ### The ghost ink
 
@@ -70,6 +71,14 @@ arrow between two tiles, a rule). It never carries information. A section headin
 information: they are the dim ink. A link inside a note names no ink of its own: it keeps the
 note's dim and takes the page's link hover (`a:hover`).
 
+The rule is about what an ink is used for, not its name: the quiet slate (`ink-quiet`, 2.3–2.7:1
+by night, 2.7–3.3:1 by day) and the muted ink (`ink-muted`, pinned at 3:1 as a mark's ink) are
+under text grade too. Like the ghost they draw marks — a rule, a tick, a swatch, a frame, the
+separator between two names (↔, →) — and never a word or a figure: an offset, a date, a day label,
+a caption, a framing byte's hex, "vs", a dash that stands for "none" are the dim ink. Where a quiet
+ink used to set two kinds of bytes apart (framing from fields, padding from sections), the dim ink
+against the other's own tone does it, both readable. The gate refuses all three on words.
+
 A value that **is** zero is a datum, not padding: "fee 0 CKB", a zero balance, a tier with 0
 objects, an empty filter's "0" are the dim ink. Only the padding zeros of a non-zero number are
 ghost (`ExactCkb` marks its datum zero `data-zero`, its padding `data-ghost`).
@@ -79,6 +88,19 @@ a named key at 4.5:1 (`jade-dim`, `aqua-dim`, `lavender-dim`, `gold-dim`, `text-
 `__tests__/lib/ink-gate.test.ts` fails on the ghost, an alpha-thinned ink or an element faded by
 `opacity-*` below 1 outside its allowlist, each site there with its reason (padding zeros,
 decoration, a linked highlight while the reader points, a mark with no word, a disabled control).
+
+The same rules hold for SVG text and inline styles. A word in SVG takes its ink as a `fill` at full
+strength: never a `fillOpacity`, `opacity` or `strokeOpacity` below 1 on a `<text>` / `<tspan>` or
+on a group that holds one, never a style `opacity` below 1 on an element that holds words, and
+never the ghost as its `fill` or `color` (`var(--c-text-ghost)`, `color('text-ghost')`) — a chart's
+tick label, a legend and a caption are figures and words, so the dim ink. A shape's alpha (a bar,
+a dot, an area, a line) is its strength, not an ink, and stays. The gate reads the JSX as well as
+the classes: an element faded or painted in the ghost by an attribute or a style fails it when it
+holds words (SVG text, or JSX text among its children), outside the allowlist of pointer states.
+
+A thing that steps back with time fades its shapes, never its words: the pipeline's older blocks
+fade their tile, uncle boxes, dots and squares by age, while their number, "uncle" and "+N" stay at
+full strength in their own inks.
 
 ### Set back
 
@@ -104,6 +126,11 @@ the amount's sign at body contrast — never the sign's ink at an opacity (78 % 
 | positive | `text-positive` | `text-jade-dim`  |
 | negative | `text-negative` | `text-rouge-dim` |
 | neutral  | `text-text`     | `text-text-dim`  |
+
+SVG text reads the same table: each sign's `fractionKey` (`jade-dim`, `rouge-dim`, `text-dim`) is
+the palette key of its fraction class, drawn as `fill={color(AMOUNT_INK[sign].fractionKey)}` on
+the fraction's `<tspan>` (the DAO history's weekly end label), never the sign's ink at
+`fillOpacity`.
 
 A display figure's decimals (the DAO deposit, a Fiber channel's capacity, a script's CKB) take
 their own dim step at the hero size; their padding zeros are the ghost.
@@ -167,6 +194,11 @@ hand per node, and never the dim ink or an opacity on a fill: every word on one 
 one ink. `__tests__/lib/fill-ink.test.ts`, `segment-ink.test.tsx` and `icicle-ink.test.tsx` pin
 every labelled fill at 4.5:1 in both themes.
 
+A pipeline tile (elevated with 7 % jade) is a ground of its own, and its words are chosen for it:
+its labels ("+N") take the text ink, one step up from the dim, and a block number inside the drawn
+window the gold's bright step (more ink by day), so each reads at 4.5:1 on the tile at every age;
+`pipeline-panel.test.tsx` computes every word the canvas writes against what it stands on.
+
 ### The display figure
 
 A topic page's one display figure (40 px, `text-display`) is **gold** on the DAO page (the DAO's
@@ -214,6 +246,7 @@ lightness only (lighter by night, darker by day) until it clears that ratio on a
 | `row-tag-accent-edge`, `reward-secondary`               | celadon into bg                         | 36 %; 58 % (day 50 %)                                                                                                                                                                                                              |
 | `code-fixed-fill`, `code-unspendable-fill`              | the inks                                | mix text dim 0.3, mix dim ghost 0.4 / mix dim ghost 0.8, mix ghost line 0.75                                                                                                                                                       |
 | `elf-*`                                                 | framing, celadon, moss, gold, lotus     | header = framing; program headers framing L +0.07; rodata mix celadon moss 0.55; eh-frame rodata C ×0.4; data gold L +0.06 C ×0.75; meta lotus L +0.06 C ×0.8 (day: the day accents, lighter)                                      |
+| `elf-*`, text grade                                     | the row above                           | ≥ 4.5 also on the tier-2 ground (night clears): day rodata `#3b7047` (4.40 → 4.53), eh-frame `#576a5a` (3.96 → 4.51), data `#7c6126` (4.15 → 4.53), meta `#695c9a` (3.81 → 4.53); program headers short (ruling pending)           |
 | `gel-*`                                                 | copper, celadon                         | overlay warm white / ink; band text the deepest well / surface; btc copper pale, copper, jade-bright (day jade-dim); pure neon-white, jade-bright, jade (day jade-dim, jade, jade-bright)                                          |
 | `tier-btc-*`                                            | moss, gold                              | ink moss C ×0.75 ≥ 4.5, lit L +0.07 (day −0.06); edges moss 36 / 52 % on bg (45 / 62 %); wash gold 28 % (30 %)                                                                                                                     |
 | `tier-pure-*`                                           | celadon                                 | ink jade L −0.04 ≥ 4.5 (day jade), lit jade-bright; edges 34 / 50 % (38 / 55 %); wash 16 % (20 %)                                                                                                                                  |
@@ -266,6 +299,7 @@ calc(0.45 * var(--m-glow)))`), out by day.
 - The ghost ink only on padding zeros and decoration; a zero that is a datum is dim
 - Nothing set back with opacity: the `quiet` class, the seal at full strength in its state's ink
 - No ink thinned with `/<n>`; fraction digits from `AMOUNT_INK`
+- No SVG word thinned by `fillOpacity` / `opacity`, none filled with the ghost; ticks are dim
 - A row rule is `border-row-rule`, a bar's track `bg-bar-track`; a tile has its 1 px border
 - Words on a fill take `inkOnFill`; a legend's label is text, its colour on the swatch only
 - Primary numbers are not rendered in dim tones

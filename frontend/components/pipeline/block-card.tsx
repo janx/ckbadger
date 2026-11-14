@@ -2,7 +2,7 @@
 
 import { TILE_FILL, ageOpacity, chipPaint, tok } from '@/lib/pipeline/encoding';
 import { G, tail4, type SceneCard } from '@/lib/pipeline/layout';
-import { T10, T11C, T11G } from '@/components/pipeline/svg-text';
+import { T10, T10B, T11C, T11G } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 
 export type DimLevel = 'false' | 'true' | 'soft';
@@ -22,8 +22,11 @@ interface BlockCardProps {
 /**
  * A mined block as a solid tile, no outline at rest: its number (the chain runs through it), the
  * proposals (dots: short ids, not txs), the uncles it carries, and the transaction field (squares)
- * starting with the cellbase. The age fade is CSS opacity on an inner group, because the motion
- * layer owns the outer group's `opacity` attribute.
+ * starting with the cellbase. Older blocks step back by the age fade, CSS opacity on the group of
+ * the card's shapes (the motion layer owns the outer group's `opacity` attribute); the card's
+ * words (its number, "uncle", the "+N" counts) sit in their own group at full strength in their
+ * own inks, because a word is never set back by opacity (R4). The words let the pointer through,
+ * so a hover reads the tile, the uncle box or the dot beneath them, as before.
  */
 export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }: BlockCardProps) {
   const { block } = card;
@@ -35,8 +38,8 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
       transform={`translate(${card.x},0)`}
       className="cursor-pointer"
     >
-      <g data-age={age} style={{ opacity: ageOpacity(age) }}>
-        <g data-dim={dim}>
+      <g data-dim={dim}>
+        <g data-age={age} style={{ opacity: ageOpacity(age) }}>
           <rect
             data-box
             x={0.5}
@@ -49,14 +52,6 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
             strokeOpacity={highlighted ? 0.7 : 0}
             style={{ fill: TILE_FILL, stroke: tok('jade') }}
           />
-          <text
-            data-block-number
-            x={G.padX}
-            y={G.chainY + 3.5}
-            className={numberInWindow ? T11G : T11C}
-          >
-            {tail4(block.number)}
-          </text>
           <g data-uncles>
             {card.uncles.map((u) => (
               <g key={u.ref.hash} data-uncle={u.index}>
@@ -67,17 +62,6 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
                   height={u.h}
                   style={{ fill: tok('surface') }}
                 />
-                <text x={G.padX + 3} y={u.y + 9} className={T10}>
-                  {u.label}
-                </text>
-                {u.overflow > 0 && (
-                  <text
-                    x={card.w - G.padX - 3}
-                    y={u.y + 9}
-                    textAnchor="end"
-                    className={T10}
-                  >{`+${u.overflow}`}</text>
-                )}
               </g>
             ))}
           </g>
@@ -100,28 +84,55 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
                 />
               );
             })}
-            {card.chipOverflow > 0 && (
-              <text
-                data-chip-overflow
-                x={card.w - G.padX}
-                y={G.sepY - 1}
-                textAnchor="end"
-                className={T10}
-              >{`+${card.chipOverflow}`}</text>
-            )}
           </g>
           <g data-field>
             {card.squares.map((sq) => (
               <TxSquare key={sq.id} sq={sq} on={onIds?.has(sq.id)} />
             ))}
           </g>
+        </g>
+        <g data-words pointerEvents="none">
+          <text
+            data-block-number
+            x={G.padX}
+            y={G.chainY + 3.5}
+            className={numberInWindow ? T11G : T11C}
+          >
+            {tail4(block.number)}
+          </text>
+          {card.uncles.map((u) => (
+            <g key={u.ref.hash} data-uncle-label={u.index}>
+              <text x={G.padX + 3} y={u.y + 9} className={T10}>
+                {u.label}
+              </text>
+              {u.overflow > 0 && (
+                <text
+                  x={card.w - G.padX - 3}
+                  y={u.y + 9}
+                  textAnchor="end"
+                  className={T10}
+                >{`+${u.overflow}`}</text>
+              )}
+            </g>
+          ))}
+          {card.chipOverflow > 0 && (
+            <g data-chips-label>
+              <text
+                data-chip-overflow
+                x={card.w - G.padX}
+                y={G.sepY - 1}
+                textAnchor="end"
+                className={T10B}
+              >{`+${card.chipOverflow}`}</text>
+            </g>
+          )}
           {card.hidden > 0 && (
             <text
               data-count
               x={card.w - G.padX}
               y={G.chainY + 3.5}
               textAnchor="end"
-              className={T10}
+              className={T10B}
             >{`+${card.hidden}`}</text>
           )}
         </g>

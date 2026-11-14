@@ -314,10 +314,10 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             <text x={col.bytes} y={r(ly)} fontSize="11.5" fill={GEL_COLORS.label}>
               {bytesOf(g)} · {g.rule}
             </text>
-            <text x={col.raw} y={r(ly)} fontSize="11.5" fill={g.color} fillOpacity=".85">
+            <text x={col.raw} y={r(ly)} fontSize="11.5" fill={g.color}>
               {shortenHash(g.raw, 'tight')}
             </text>
-            <text x={col.arrow} y={r(ly)} fontSize="12" fill={GEL_COLORS.rulerText}>
+            <text x={col.arrow} y={r(ly)} fontSize="12" fill={GEL_COLORS.arrow}>
               →
             </text>
             <text

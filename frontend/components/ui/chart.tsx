@@ -481,7 +481,10 @@ export function Chart({
   }, []);
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
-  /** An in-plot value (hierarchy v3): ghost ink, from the plot's left edge, above its line. */
+  /**
+   * An in-plot value (hierarchy v3): a figure, so the dim ink (R4), from the plot's left edge,
+   * above its line.
+   */
   const insideTickLabel = (v: number) =>
     ticks && (
       <text
@@ -489,7 +492,7 @@ export function Chart({
         data-role="y-tick"
         x={left + 8}
         y={yTick(v) - 5}
-        fill="var(--c-text-ghost)"
+        fill="var(--c-text-dim)"
         fontSize="11"
       >
         {tickLabel(v, ticks.step)}

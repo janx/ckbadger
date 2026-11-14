@@ -343,13 +343,16 @@ function exactSafeMs(value: string, context: string): number {
   return Number(ms);
 }
 
-/** An exact CKB amount inside SVG text: whole part, then the significant decimals dimmed. */
+/**
+ * An exact CKB amount inside SVG text: whole part, then the significant decimals in the neutral
+ * fraction ink as a fill (`AMOUNT_INK`), at full strength.
+ */
 function SvgCkb({ shannons }: { shannons: bigint }) {
   const parts = splitCkbAmount(shannons);
   return (
     <>
       {parts.integer}
-      <tspan fillOpacity={0.7}>{parts.fraction}</tspan>
+      <tspan fill={color(AMOUNT_INK.neutral.fractionKey)}>{parts.fraction}</tspan>
     </>
   );
 }

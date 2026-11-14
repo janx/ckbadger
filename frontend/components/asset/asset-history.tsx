@@ -8,6 +8,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { LockKind } from '@/components/ui/lock-kind';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
@@ -256,9 +257,13 @@ export function AssetHistory({
               className="text-small"
             />
           </AppLink>
-          <span className="text-text-dim text-meta block">
-            {e.lockKind ?? 'Lock kind unavailable'}
-          </span>
+          {/* U-15: a lock the registry does not name reads "lock <code hash>". */}
+          <LockKind
+            lockKind={e.lockKind}
+            lockCodeHash={e.lockCodeHash}
+            size="row"
+            className="text-text-dim text-meta block"
+          />
         </>
       ),
     },
@@ -471,7 +476,12 @@ export function AssetHistory({
                       className="text-meta"
                     />
                   </AppLink>{' '}
-                  {e.lockKind ?? 'Lock kind unavailable'}
+                  <LockKind
+                    lockKind={e.lockKind}
+                    lockCodeHash={e.lockCodeHash}
+                    size="tight"
+                    className="text-text-dim text-meta"
+                  />
                 </span>
               );
               return (

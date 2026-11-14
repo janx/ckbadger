@@ -1711,3 +1711,110 @@ async fn token_detail_with_fields_but_no_source_is_a_500() {
         "{json}"
     );
 }
+
+// ── U-15 / A4b (UI review 2026-11-14): a token party's lock code hash ──────
+//
+// The token page wrote "Lock kind unavailable" for an issuer, holder or
+// supply-event party whose lock the scripts registry does not name: those
+// answers carried `lockKind` but not the lock's code hash, so the page had
+// nothing to name the lock by. Each now carries `lockCodeHash`, as the
+// collection holders do; null only when the lock script is not indexed (and
+// then so is the address).
+
+#[tokio::test]
+async fn token_issuer_carries_its_lock_code_hash() {
+    let store = test_store();
+    let named = [0x44u8; 32];
+    let unnamed = [0x55u8; 32];
+    let not_indexed = [0x66u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    // Plain xUDT: the 32-byte args are the owner lock hash the script proves.
+    for owner in [named, unnamed, not_indexed] {
+        let mut token = placeholder_token_without_metadata();
+        token.type_args = owner.to_vec();
+        store.put_token_direct(&[owner[0] + 1; 32], &token).unwrap();
+    }
+
+    let (status, json) = token_detail(store.clone(), &[0x45; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["issuer"]["lockHash"],
+        format!("0x{}", hex::encode(named))
+    );
+    assert_eq!(
+        json["issuer"]["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH,
+        "{json}"
+    );
+    assert_eq!(json["issuer"]["lockKind"], "SECP256K1/blake160", "{json}");
+
+    let (status, json) = token_detail(store.clone(), &[0x56; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["issuer"]["lockCodeHash"],
+        unregistered_lock_code_hash_hex(),
+        "an unregistered lock is named by its code hash: {json}"
+    );
+    assert!(json["issuer"]["lockKind"].is_null(), "{json}");
+
+    let (status, json) = token_detail(store, &[0x67; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let issuer = json["issuer"].as_object().unwrap();
+    assert!(issuer.contains_key("lockCodeHash"), "{json}");
+    assert!(issuer["lockCodeHash"].is_null(), "{json}");
+    assert!(issuer["address"].is_null(), "{json}");
+    assert!(issuer["lockKind"].is_null(), "{json}");
+}
+
+#[tokio::test]
+async fn token_holders_carry_each_lock_code_hash() {
+    let store = test_store();
+    let type_hash = vec![0x7F; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+    let named = [0x44u8; 32];
+    let unnamed = [0x55u8; 32];
+    let not_indexed = [0x66u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, balance) in [(named, 900u128), (unnamed, 500), (not_indexed, 100)] {
+        batch.put_token_holder(&type_hash, &lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, &lock_hash, balance);
+        batch.put_addr_token_by_balance(&lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/tokens/0x{}/holders?limit=10", hex::encode(&type_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{json}");
+    assert_eq!(
+        rows[0]["lockScriptHash"],
+        format!("0x{}", hex::encode(named))
+    );
+    assert_eq!(rows[0]["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(rows[0]["lockKind"], "SECP256K1/blake160", "{json}");
+    assert_eq!(
+        rows[1]["lockScriptHash"],
+        format!("0x{}", hex::encode(unnamed))
+    );
+    assert_eq!(
+        rows[1]["lockCodeHash"],
+        unregistered_lock_code_hash_hex(),
+        "an unregistered lock is named by its code hash: {json}"
+    );
+    assert!(rows[1]["lockKind"].is_null(), "{json}");
+    assert_eq!(
+        rows[2]["lockScriptHash"],
+        format!("0x{}", hex::encode(not_indexed))
+    );
+    let not_indexed_row = rows[2].as_object().unwrap();
+    assert!(not_indexed_row.contains_key("lockCodeHash"), "{json}");
+    assert!(not_indexed_row["lockCodeHash"].is_null(), "{json}");
+    assert!(not_indexed_row["address"].is_null(), "{json}");
+}

@@ -7,7 +7,7 @@ import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
-import { DATA_COLOR } from '@/lib/design-tokens';
+import { CELL_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
 
@@ -531,7 +531,9 @@ describe('cell microscope field detail rail (old issue B)', () => {
 
 // Visual finish V11: the dump's inks are theme classes or named inks, no bracket hex.
 describe('cell microscope inks (V11)', () => {
-  it('draws the offsets in the quiet slate and the rail on the theme’s row rule', () => {
+  // Re-pinned with lane E2's follow-up (ruling R4 covers the quiet ink): an offset is a figure, so
+  // the dim ink (4.57:1 or more), no longer the quiet slate (2.31–3.27:1).
+  it('draws the offsets in the dim ink and the rail on the theme’s row rule', () => {
     stubChartWidth(1200);
     render(<CellMicroscope cell={cell} />);
     const box = screen.getByLabelText('Cell bytes');
@@ -540,12 +542,45 @@ describe('cell microscope inks (V11)', () => {
     );
     expect(offsets.length).toBeGreaterThan(0);
     for (const el of offsets) {
-      expect(el).toHaveClass('text-[color:var(--ink)]');
-      expect(el.style.getPropertyValue('--ink')).toBe('var(--c-ink-quiet)');
+      expect(el).toHaveClass('text-text-dim');
+      expect(el.style.getPropertyValue('--ink')).toBe('');
     }
     expect(screen.getByRole('complementary', { name: 'Field detail' })).toHaveClass(
       'border-base-border-subtle'
     );
     expect(document.body.innerHTML).not.toMatch(/(text|bg|border)-\[#/);
+  });
+
+  // Lane E2 follow-up (ruling R4 covers the quiet ink): a framing byte's hex digits and its raw
+  // value in the field detail are figures, in the dim ink (4.57:1 or more), never the quiet slate
+  // (2.31–3.27:1); a field's bytes keep their group's tone, so the two stay apart, both readable.
+  it('writes a framing byte’s hex and its raw value in the dim ink, never the quiet slate', () => {
+    stubChartWidth(1200);
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    const hex = (i: number) => box.querySelector(`[data-byte="output:${i}"]`) as HTMLElement;
+    for (const i of [0, 1, 2, 3]) expect(hex(i).style.color).toBe('var(--c-text-dim)');
+    expect(hex(4).style.color).toBe(CELL_COLORS.lock);
+    fireEvent.mouseOver(hex(0));
+    fireEvent.click(hex(0));
+    const detail = screen.getByRole('complementary', { name: 'Field detail' });
+    const raw = within(detail).getByText('raw').nextElementSibling as HTMLElement;
+    expect(raw).toHaveTextContent('04000000');
+    expect(raw.style.color).toBe('var(--c-text-dim)');
+  });
+
+  // Lane E2 (ruling R4): the ASCII of a byte the cell does not occupy (molecule framing) is a datum,
+  // in the dim ink (≥ 4.57:1), never the ghost (1.64–2.22:1). The fixture's total_size [0, 4) is
+  // framing; its hex bytes keep the part's tone.
+  it('writes the ASCII of a framing byte in the dim ink, never the ghost', () => {
+    stubChartWidth(1200);
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    const ascii = [...box.querySelectorAll<HTMLElement>('[data-part-id]:not([data-byte])')];
+    expect(ascii.length).toBe(10);
+    expect(ascii.map((el) => el.style.color).filter((c) => c.includes('text-ghost'))).toEqual([]);
+    const framing = ascii.slice(0, 4);
+    expect(framing.map((el) => el.textContent)).toEqual(['.', '.', '.', '.']);
+    for (const el of framing) expect(el.style.color).toBe('var(--c-text-dim)');
   });
 });

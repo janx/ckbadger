@@ -390,7 +390,7 @@ export function VmLaneTimeline({
                         y={y + 30}
                         textAnchor="middle"
                         fontSize="10"
-                        fill="var(--c-ink-quiet)"
+                        fill="var(--c-text-dim)"
                       >
                         not valid before {pinnedBy}
                       </text>

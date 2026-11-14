@@ -368,9 +368,10 @@ describe('JoyID script page · visual pass', () => {
     expect(labels.map((l) => l.dataset.upgradeLabel)).toEqual(['2025-08-28', '2025-11-21']);
     expect(labels.map((l) => l.style.left)).toEqual(['60%', '80%']);
     for (const l of labels) {
-      // the quiet slate (#4b5266), a text ink with no theme token (visual finish V11)
-      expect(l).toHaveClass('text-meta', 'text-[color:var(--ink)]');
-      expect(l.style.getPropertyValue('--ink')).toBe('var(--c-ink-quiet)');
+      // re-pinned with lane E2's follow-up (ruling R4 covers the quiet ink): a day label is a
+      // figure, so the dim ink, no longer the quiet slate
+      expect(l).toHaveClass('text-meta', 'text-text-dim');
+      expect(l.style.getPropertyValue('--ink')).toBe('');
     }
     // The first day sits under the plot's name at the left edge: its line, not its label.
     expect(history.querySelector('[data-upgrade-label="2023-10-07"]')).toBeNull();

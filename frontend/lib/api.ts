@@ -1627,6 +1627,9 @@ export interface TokenSupplyEvent {
   supplyAfter: string;
   lockHash: string;
   address: string | null;
+  /** U-15: the party lock's code hash; null only when the lock script is not indexed. */
+  lockCodeHash: string | null;
+  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
   lockKind: string | null;
 }
 export interface TokenDistribution {
@@ -1984,7 +1987,14 @@ interface Token {
   sameSymbolTokens?: { typeScriptHash: string; holdersCount: number }[];
   /** Token detail only; null when neither a label nor a Unique Cell named the token. */
   metadata?: TokenMetadataProvenance | null;
-  issuer: { lockHash: string; address: string | null; lockKind: string | null } | null;
+  issuer: {
+    lockHash: string;
+    address: string | null;
+    /** U-15: the issuer lock's code hash; null only when the lock script is not indexed. */
+    lockCodeHash: string | null;
+    /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+    lockKind: string | null;
+  } | null;
   totalCapacity: string | null;
   totalCommonKnowledgeSize: string | null;
 }
@@ -1993,6 +2003,9 @@ interface TokenHolder {
   lockScriptHash: string;
   address: string | null;
   balance: string;
+  /** U-15: the holder lock's code hash; null only when the lock script is not indexed. */
+  lockCodeHash: string | null;
+  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
   lockKind: string | null;
 }
 

@@ -242,6 +242,7 @@ describe('Asset history', () => {
               supplyAfter: '13',
               lockHash: '0xbb',
               address: null,
+              lockCodeHash: null,
               lockKind: null,
             },
           ],
@@ -277,6 +278,7 @@ describe('Asset history', () => {
                 supplyAfter: '1200000000',
                 lockHash: `0x${'bb'.repeat(32)}`,
                 address: null,
+                lockCodeHash: `0x${'9b'.repeat(32)}`,
                 lockKind: 'JoyID',
               },
             ],
@@ -296,6 +298,92 @@ describe('Asset history', () => {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
     }
+  });
+  // U-15 / lane A4b (UI review 2026-11-14): a mint's or burn's party whose lock the scripts registry
+  // does not name read "Lock kind unavailable"; the event now carries the lock's code hash, and the
+  // party is named by it, "lock 0x43434343…434343", linked to that code hash's script page. A
+  // registered lock reads as before; a lock not indexed shows no kind. U-09 (re-pinned): the code
+  // hash takes the size of the form it is drawn in, row in the table and tight in the phone row.
+  describe('names a supply-event party’s unregistered lock by its code hash (U-15)', () => {
+    const unregistered = `0x${'43'.repeat(32)}`;
+    const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
+    const event = (
+      i: number,
+      kind: 'mint' | 'burn',
+      lockCodeHash: string | null,
+      lockKind: string | null
+    ) => ({
+      txHash: `0x${String(i).repeat(64)}`,
+      blockNumber: 10 + i,
+      txIndex: 0,
+      transferSequence: 0,
+      timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+      kind,
+      amount: '1',
+      supplyAfter: '13',
+      lockHash: `0x${String(i).repeat(64)}`,
+      address:
+        lockCodeHash === null
+          ? null
+          : `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${String(i).repeat(8)}`,
+      lockCodeHash,
+      lockKind,
+    });
+    const rows = [
+      event(1, 'mint', unregistered, null),
+      event(2, 'burn', `0x${'9b'.repeat(32)}`, 'JoyID'),
+      event(3, 'mint', null, null),
+    ];
+    const mount = () => {
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 0 }}
+          supplyEvents={{ total: 3, rows }}
+        />
+      );
+      fireEvent.click(screen.getByText('Every change to the supply (3)'));
+    };
+
+    it('in the table', () => {
+      mount();
+      const table = screen.getByRole('table', { name: 'Mints and burns' });
+      const [, unnamed, named, notIndexed] = within(table).getAllByRole('row');
+      expect(unnamed.querySelector('[data-lock-kind]')).toHaveTextContent(
+        /^lock 0x43434343…434343$/
+      );
+      expect(within(unnamed).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
+        'href',
+        scriptPage
+      );
+      expect(within(named).getByText('JoyID')).toHaveClass('text-text-dim', 'text-meta', 'block');
+      expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+      expect(table).not.toHaveTextContent(/lock kind unavailable/i);
+    });
+
+    it('in the phone row at 358 px', () => {
+      atContainerWidth(358);
+      try {
+        mount();
+        const [unnamed, named, notIndexed] = screen.getAllByTestId('supply-event-row-mobile');
+        expect(phoneLines(unnamed)[2].right).toMatch(/^to ckb1qzda…111111 lock 0x4343…4343$/);
+        expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
+          'href',
+          scriptPage
+        );
+        expect(phoneLines(named)[2].right).toMatch(/^from ckb1qzda…222222 JoyID$/);
+        expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+        for (const row of [unnamed, named, notIndexed])
+          expect(row).not.toHaveTextContent(/lock kind unavailable/i);
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      }
+    });
   });
   it('names what the weekly totals count and says when only the newest supply events are listed', () => {
     stubChartWidth(358);
@@ -321,6 +409,7 @@ describe('Asset history', () => {
               supplyAfter: '13',
               lockHash: '0xbb',
               address: null,
+              lockCodeHash: null,
               lockKind: null,
             },
           ],

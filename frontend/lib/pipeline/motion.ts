@@ -957,10 +957,11 @@ export class SceneMotion {
     );
     if (solid < 0.5) box.setAttribute('stroke-dasharray', '3 2');
     else box.removeAttribute('stroke-dasharray');
-    const chips = n.el.querySelector('[data-chips]');
-    if (chips) {
-      if (solid >= 1) chips.removeAttribute('opacity');
-      else chips.setAttribute('opacity', (0.2 + 0.8 * solid).toFixed(3));
+    // The dots enter as the block solidifies, and their "+N" (in the card's words group) with
+    // them: an entrance, which ends at full strength (R4: no word is faded at rest).
+    for (const el of n.el.querySelectorAll('[data-chips], [data-chips-label]')) {
+      if (solid >= 1) el.removeAttribute('opacity');
+      else el.setAttribute('opacity', (0.2 + 0.8 * solid).toFixed(3));
     }
   }
 
