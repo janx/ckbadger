@@ -549,7 +549,8 @@ describe('Transaction board, tier 2', () => {
   it('lights a witness, its groups and their dep, and dims everything unrelated (TX-14)', async () => {
     render(<TransactionDetailPage />);
     const w0 = await screen.findByTestId('tx-witness-item-0');
-    await screen.findAllByText(/supplies code for/);
+    // the cell deps have resolved (PA-12 re-pinned this wait: the rows no longer say "supplies")
+    await waitFor(() => expect(document.querySelector('#tx-dep-0')).not.toBeNull());
     fireEvent.mouseEnter(w0);
     expect(w0).toHaveAttribute('data-lit', 'true');
     expect(screen.getByTestId('tx-witness-item-1')).toHaveClass('opacity-25');
@@ -596,16 +597,14 @@ describe('Transaction board, tier 2', () => {
       if (!el) throw new Error('no dep row yet');
       return el as HTMLElement;
     });
-    expect(dep0).toHaveTextContent('dep group');
-    expect(dep0).toHaveTextContent('supplies code for Default Lock');
+    // PA-12 re-pinned the wording: one statement led by the dep kind (was "supplies code for X"
+    // beside "for X").
+    expect(dep0).toHaveTextContent('dep group for Default Lock');
     expect(dep0).toHaveTextContent('↳ 0xmember:0 · Default Lock code, 52,048 B');
     expect(dep0).toHaveTextContent('↳ 0xother:1 · 1,048,576 B no script here names');
-    expect(document.querySelector('#tx-dep-1')).toHaveTextContent(
-      'supplies code for Spore · 76,752 B'
-    );
+    expect(document.querySelector('#tx-dep-1')).toHaveTextContent('code for Spore · 76,752 B');
     const dep2 = document.querySelector('#tx-dep-2') as HTMLElement;
-    expect(dep2).toHaveTextContent('code of Default Lock · 122,552 B');
-    expect(dep2).toHaveTextContent('not run here');
+    expect(dep2).toHaveTextContent('code of Default Lock, not run here · 122,552 B');
     expect(dep2).not.toHaveTextContent('dep_group');
     fireEvent.mouseEnter(dep2);
     expect(

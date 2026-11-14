@@ -517,7 +517,12 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
   );
 }
 
-/** One cell dep (TX-15): its out point, what it supplies code for, and its members. */
+/**
+ * One cell dep (TX-15): its out point, then one statement led by the kind of dep — what it supplies
+ * code for ("code for Spore · 76,752 B", "dep group for Default Lock"), or whose code it holds and
+ * that it does not run here — then a dep group's members. PA-12: the statement is said once, at
+ * every width (it was a left "supplies code for X" beside a right "for X").
+ */
 function DepRow({
   dep,
   index,
@@ -542,6 +547,7 @@ function DepRow({
     dep.depType === 'code'
       ? ` · ${size(required(dep.resolvedCells[0], dep.outPointTxHash, 'code dep cell').codeSize)}`
       : '';
+  const kind = dep.depType === 'dep_group' ? 'dep group' : 'code';
   return (
     <div
       id={`tx-dep-${index}`}
@@ -552,31 +558,31 @@ function DepRow({
       onFocus={() => onHover({ t: 'dep', index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated text-small -mx-1.5 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
+        'border-base-elevated text-small -mx-1.5 flex flex-col gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
     >
       <Link
         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
-        className="text-text-bright decoration-aqua/35 min-w-0 underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
+        className="text-text-bright decoration-aqua/35 min-w-0 self-start underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
       >
         {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
       </Link>
-      <span className="text-text-dim">{dep.depType === 'dep_group' ? 'dep group' : 'code'}</span>
       <span className="text-text-dim">
-        {serves.length > 0
-          ? `supplies code for ${serves.join(', ')}`
-          : attached.length > 0
-            ? `code of ${attached.join(', ')}`
-            : 'no script here runs it'}
+        {serves.length > 0 ? (
+          <>
+            {kind} for <span className="text-text">{serves.join(', ')}</span>
+          </>
+        ) : attached.length > 0 ? (
+          `${kind} of ${attached.join(', ')}, not run here`
+        ) : (
+          `${kind}, not run here`
+        )}
         {codeSize}
       </span>
-      <span className={serves.length > 0 ? 'text-text' : 'text-text-dim'}>
-        {serves.length > 0 ? `for ${serves.join(', ')}` : 'not run here'}
-      </span>
       {dep.depType === 'dep_group' && (
-        <div className="col-span-2 space-y-1 pl-3 pt-1">
+        <div className="space-y-1 pl-3 pt-1">
           {dep.resolvedCells.map((cell) => {
             const memberServes = names([...cell.scriptHashes, ...cell.outputLockScriptHashes]);
             return (
