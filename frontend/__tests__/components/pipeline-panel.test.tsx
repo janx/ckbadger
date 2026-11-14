@@ -158,6 +158,41 @@ describe('the tip flares (material pass v2, move 4)', () => {
 const card = (svg: Element, n: number) =>
   svg.querySelector(`[data-card="${blockHash(n)}"]`) as SVGGElement;
 const tile = (svg: Element, n: number) => card(svg, n).querySelector('[data-box]') as SVGElement;
+/**
+ * How strongly `el` is drawn inside its card: the product of the opacities (style and attribute)
+ * of `el` and its ancestors below the card, whose own `opacity` the motion layer owns.
+ */
+const strengthInCard = (el: Element, cardEl: Element) => {
+  let strength = 1;
+  for (let a: Element | null = el; a && a !== cardEl; a = a.parentElement) {
+    const style = (a as SVGElement).style.opacity;
+    if (style !== '') strength *= Number(style);
+    const attr = a.getAttribute('opacity');
+    if (attr !== null) strength *= Number(attr);
+  }
+  return strength;
+};
+/**
+ * Lane E2 (ruling R4): "set back" is never an opacity on words. Every card's words (its number,
+ * "uncle", the "+N" counts) are drawn at full strength; its tile keeps the age fade.
+ */
+const expectWordsAtFullStrength = (svg: Element) => {
+  const cards = [...svg.querySelectorAll('[data-card]')];
+  // the tip and at least three blocks behind it, each a step further back
+  expect(cards.length).toBeGreaterThan(3);
+  const words = cards.flatMap((c, i) => [...c.querySelectorAll('text')].map((t) => ({ c, i, t })));
+  expect(words.length).toBeGreaterThanOrEqual(cards.length);
+  expect(
+    words
+      .filter(({ c, t }) => strengthInCard(t, c) !== 1)
+      .map(({ c, i, t }) => `card ${i} "${t.textContent}" at ${strengthInCard(t, c)}`)
+  ).toEqual([]);
+  cards.forEach((c, i) => {
+    expect(strengthInCard(c.querySelector('[data-box]')!, c)).toBeCloseTo(ageOpacity(i), 6);
+    // the words let the pointer through to the tile, the uncle box or the dot beneath
+    expect(c.querySelector('[data-words]')).toHaveAttribute('pointer-events', 'none');
+  });
+};
 const path = (svg: Element, name: string) =>
   svg.querySelector(`[data-path="${name}"]`) as SVGPathElement;
 
@@ -235,8 +270,11 @@ describe('PipelinePanel static render', () => {
     const host = card(svg, T - 1);
     const uncle = host.querySelector('[data-uncle="0"]') as SVGGElement;
     expect(uncle).not.toBeNull();
-    // Just the word: the uncle's number is in its tooltip.
-    expect([...uncle.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
+    // Just the word: the uncle's number is in its tooltip. Re-pinned with lane E2 (R4): the word
+    // sits in the card's words group, at full strength, over the box the age fade steps back.
+    const label = host.querySelector('[data-words] [data-uncle-label="0"]') as SVGGElement;
+    expect([...label.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
+    expect(uncle.querySelectorAll('text')).toHaveLength(0);
     const box = uncle.querySelector('rect') as SVGRectElement;
     expect(box).not.toHaveAttribute('stroke-dasharray');
     expect(box.style.getPropertyValue('stroke')).toBe('');
@@ -282,7 +320,8 @@ describe('PipelinePanel static render', () => {
     expect(scene.cards.some((c) => c.hidden === 0)).toBe(true);
     for (const c of scene.cards) {
       const el = card(svg, c.block.number);
-      const header = [...el.querySelectorAll(':scope > [data-age] > [data-dim] > text')].map(
+      // re-pinned with lane E2 (R4): the header's words sit in the card's words group
+      const header = [...el.querySelectorAll(':scope > [data-dim] > [data-words] > text')].map(
         (t) => t.textContent
       );
       expect(header).toEqual(
@@ -339,7 +378,9 @@ describe('PipelinePanel static render', () => {
     const cards = [...svg.querySelectorAll('[data-card]')] as SVGGElement[];
     expect(cards.length).toBeGreaterThan(8);
     cards.forEach((c, i) => {
-      const age = c.querySelector(':scope > [data-age]') as SVGGElement;
+      // re-pinned with lane E2 (R4): the age group holds the card's shapes, inside the hover's
+      // step-back group; the words are its sibling (see the next test)
+      const age = c.querySelector(':scope > [data-dim] > [data-age]') as SVGGElement;
       expect(age).toHaveAttribute('data-age', String(i));
       expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);
       // The outer group's opacity attribute belongs to the motion layer (fade in / retire).
@@ -350,6 +391,10 @@ describe('PipelinePanel static render', () => {
       0.4,
       6
     );
+  });
+
+  it('keeps an older block’s words at full strength while its shapes step back (R4, lane E2)', async () => {
+    expectWordsAtFullStrength(await renderPanel());
   });
 
   it('draws the pool as two wells: no stroke, the stage name in its colour and its total', async () => {
@@ -1054,8 +1099,9 @@ describe('PipelinePanel interactions', () => {
   });
 
   const tooltip = () => screen.getByTestId('pipeline-tooltip');
+  // re-pinned with lane E2 (R4): the hover's step-back group now holds the age group and the words
   const dimOfCard = (svg: Element, n: number) =>
-    card(svg, n).querySelector(':scope > [data-age] > [data-dim]')?.getAttribute('data-dim');
+    card(svg, n).querySelector(':scope > [data-dim]')?.getAttribute('data-dim');
   /** Hover NEXT's header row (no tx or proposal under the pointer). */
   const hoverNext = (svg: Element) =>
     fireEvent.pointerMove(svg.querySelector('[data-next] [data-box]') as Element, {
@@ -1792,7 +1838,8 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       // re-pinned with ruling R1 (U-02): the tile is square
       expect(t).not.toHaveAttribute('rx');
       expect(t).toHaveAttribute('stroke-opacity', '0');
-      const age = el.querySelector(':scope > [data-age]') as SVGGElement;
+      // re-pinned with lane E2 (R4): the age group holds the row's shapes, not its words
+      const age = el.querySelector(':scope > [data-dim] > [data-age]') as SVGGElement;
       expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);
       const num = el.querySelector('[data-block-number]') as SVGTextElement;
       expect(num.textContent).toBe(tail4(c.block.number));
@@ -1806,10 +1853,16 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       Number(d.getAttribute('cx'))
     );
     expect(dots.map((x) => tip.x + x)).toEqual([60, 68, 76]);
-    // T−1's uncle sits at the end of its line, "uncle" and its two dots.
-    const uncle = card(svg, T - 1).querySelector('[data-uncle="0"]') as SVGGElement;
+    // T−1's uncle sits at the end of its line, "uncle" and its two dots (re-pinned with lane E2:
+    // the word sits in the row's words group, over the box).
+    const uncle = card(svg, T - 1).querySelector('[data-uncle-label="0"]') as SVGGElement;
     expect([...uncle.querySelectorAll('text')].map((x) => x.textContent)).toEqual(['uncle']);
+    expect(card(svg, T - 1).querySelector('[data-uncle="0"] rect')).not.toBeNull();
     expect(card(svg, T - 1).querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
+  });
+
+  it('keeps an older row’s words at full strength while its shapes step back (R4, lane E2)', async () => {
+    expectWordsAtFullStrength(await renderPanel(quiet));
   });
 
   it('runs the chain at x 28 through the gaps, with the window tick and the gold tail of the board', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AMOUNT_INK } from '@/components/activity-event-row';
 import {
   alpha,
   color,
@@ -301,6 +302,13 @@ const FRACTION_INKS = [
 ] as const;
 
 describe('the fraction inks (R4, DY-06)', () => {
+  // Lane E2: the keys pinned here are the ones the renderers read, HTML and SVG alike.
+  it('pins the table every amount renderer reads (AMOUNT_INK), sign by sign', () => {
+    expect(
+      Object.fromEntries(Object.entries(AMOUNT_INK).map(([sign, ink]) => [sign, ink.fractionKey]))
+    ).toEqual(Object.fromEntries(FRACTION_INKS.map((f) => [f.sign, f.fraction])));
+  });
+
   it('reads every sign’s fraction ink at body contrast on every ground, in both themes', () => {
     const short: string[] = [];
     for (const theme of THEMES)

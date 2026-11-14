@@ -10,6 +10,7 @@ import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/c
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { color } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
 
@@ -555,7 +556,9 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
                 >
                   {end.sign}
                   {end.integer}
-                  <tspan fillOpacity={0.7}>{end.fraction}</tspan>
+                  <tspan fill={color(AMOUNT_INK[amountSign(end.sign)].fractionKey)}>
+                    {end.fraction}
+                  </tspan>
                 </EndLabel>
               )}
               {active !== null && (

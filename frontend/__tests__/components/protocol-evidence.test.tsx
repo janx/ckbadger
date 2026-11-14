@@ -165,6 +165,28 @@ describe('protocol byte evidence', () => {
     expect(container.querySelectorAll('[data-segment]')).toHaveLength(0);
   });
 
+  // Lane E2 (ruling R4): a zero-length field's ink (the ghost) marks its 4 px sliver, the top rule
+  // and the tint, a mark with no word. The part has no bytes, so it writes no label, and its reading
+  // writes no hex word; the field's name is written in the detail's own inks, never the ghost.
+  it('draws a zero-length field’s sliver in the ghost and writes no word in it', () => {
+    const withEmpty = [...fields, { name: 'Mutant ID', start: 4, end: 4, valueHex: '0x' }];
+    const { container } = render(
+      <ProtocolEvidence title="DID cell data" dataHex="0x01aabbcc" fields={withEmpty} />
+    );
+    const sliver = container.querySelector('[data-target="field-2"]') as HTMLElement;
+    expect(sliver.getAttribute('style')).toContain('border-top: 2px solid var(--c-text-ghost)');
+    expect(sliver).toHaveTextContent(/^$/);
+    fireEvent.click(sliver);
+    const detail = screen.getByRole('complementary', { name: 'DID cell data field detail' });
+    expect(detail).toHaveAttribute('data-detail', 'field-2');
+    expect(within(detail).getByText('Mutant ID').closest('.text-text-bright')).not.toBeNull();
+    const inGhost = /(?:^|;\s*)color: var\(--c-text-ghost\)/;
+    const ghostWords = [...container.querySelectorAll<HTMLElement>('*')].filter(
+      (el) => inGhost.test(el.getAttribute('style') ?? '') && el.textContent
+    );
+    expect(ghostWords.map((el) => el.outerHTML)).toEqual([]);
+  });
+
   it.each([
     { name: 'negative', start: -1, end: 1, valueHex: '01' },
     { name: 'reverse', start: 2, end: 1, valueHex: '' },

@@ -64,6 +64,23 @@ describe('SequencingGel (Object board, OB-7)', () => {
     expect(container.querySelector('[data-gene="Note"]')!.textContent).toContain('empty');
   });
 
+  // Lane E2 (ruling R4): the raw bytes beside a gene are words in the gene's own ink at full
+  // strength; at fill-opacity .85 the copper read 3.92:1, the indigo 4.24:1 and the dim 3.77:1 on
+  // the day page (4.12:1 the dim by night), each ≥ 4.57:1 at full strength.
+  it('draws each gene’s raw bytes in the gene ink at full strength, no word thinned at rest', () => {
+    const { container } = render(
+      <SequencingGel layout={layout} subject="Nervape 3x" active={null} onActive={() => {}} />
+    );
+    const texts = [...container.querySelectorAll('[data-gene="prev.bg"] text')];
+    const raw = texts.find((t) => t.textContent === 'a9461795…e0')!;
+    expect(raw).toHaveAttribute('fill', BITCOIN_COLORS.copper);
+    expect(raw).not.toHaveAttribute('fill-opacity');
+    const thinned = [...container.querySelectorAll('text, tspan')].filter(
+      (t) => t.hasAttribute('fill-opacity') || t.hasAttribute('opacity')
+    );
+    expect(thinned.map((t) => t.textContent)).toEqual([]);
+  });
+
   it('dims everything but the hovered gene and reports the gene up (three-way hover)', () => {
     const onActive = vi.fn();
     const { container, rerender } = render(

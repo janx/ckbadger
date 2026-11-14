@@ -193,7 +193,7 @@ const HexRows = memo(function HexRows({
         <span
           key={b}
           data-part-id={part.id}
-          style={{ color: part.occupied ? part.tone : 'var(--c-text-ghost)' }}
+          style={{ color: part.occupied ? part.tone : 'var(--c-text-dim)' }}
         >
           {ch}
         </span>

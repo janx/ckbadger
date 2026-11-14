@@ -548,4 +548,19 @@ describe('cell microscope inks (V11)', () => {
     );
     expect(document.body.innerHTML).not.toMatch(/(text|bg|border)-\[#/);
   });
+
+  // Lane E2 (ruling R4): the ASCII of a byte the cell does not occupy (molecule framing) is a datum,
+  // in the dim ink (≥ 4.57:1), never the ghost (1.64–2.22:1). The fixture's total_size [0, 4) is
+  // framing; its hex bytes keep the part's tone.
+  it('writes the ASCII of a framing byte in the dim ink, never the ghost', () => {
+    stubChartWidth(1200);
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    const ascii = [...box.querySelectorAll<HTMLElement>('[data-part-id]:not([data-byte])')];
+    expect(ascii.length).toBe(10);
+    expect(ascii.map((el) => el.style.color).filter((c) => c.includes('text-ghost'))).toEqual([]);
+    const framing = ascii.slice(0, 4);
+    expect(framing.map((el) => el.textContent)).toEqual(['.', '.', '.', '.']);
+    for (const el of framing) expect(el.style.color).toBe('var(--c-text-dim)');
+  });
 });
