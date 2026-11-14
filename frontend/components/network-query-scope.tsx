@@ -5,7 +5,6 @@ import { NetworkInitializingBanner } from '@/components/ui/network-initializing-
 import { DerivePendingBanner, StoreCatchingUpBanner } from '@/components/ui/store-state-banner';
 import { WarmupPendingBanner } from '@/components/ui/warmup-pending-banner';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
-import { useRecentBlocksStore } from '@/hooks/useRecentBlocksStore';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { createAppQueryClient } from '@/lib/query-client';
 
@@ -14,10 +13,6 @@ function ScopedQueryClient({ children }: { children: ReactNode }) {
   useEffect(
     () => () => {
       queryClient.clear();
-      // The recent-blocks 24h series is a module-global store fed by this
-      // network's API + realtime stream, so the per-network query cache reset
-      // does not cover it: clear it with the scope it belongs to.
-      useRecentBlocksStore.getState().reset();
       // Realtime block/transaction snapshots are module-global too. Reset them
       // at this keyed boundary even on routes that never mount useRealtimeData.
       useRealtimeStore.getState().reset();
