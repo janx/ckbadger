@@ -15,14 +15,15 @@ interface SearchBarProps {
   variant?: 'default' | 'compact' | 'home';
 }
 
-const SEARCH_PLACEHOLDER = 'Search block / tx / address / cell ...';
+/** The boards' placeholder (lib.js `header()`, U-01): lowercase, as a command is typed; no dots. */
+const SEARCH_PLACEHOLDER = 'search block / tx / address / cell';
 /**
  * Below md (PA-04): the header's field is what its row leaves, 180 px at 360 (326 px of content
  * less the 90 px wordmark, the 40 px menu button and two 8 px gaps), 140 px of it text after the
- * 28 px prompt and the 12 px right padding. The full placeholder (38 characters at 13 px, 296.4
- * px) was cut mid-word there; this one is 10 (78 px).
+ * 28 px prompt and the 12 px right padding. The full placeholder (34 characters at 13 px, 265.2
+ * px) is cut mid-word there; this one is 6 (46.8 px).
  */
-const SEARCH_PLACEHOLDER_PHONE = 'Search ...';
+const SEARCH_PLACEHOLDER_PHONE = 'search';
 
 /**
  * Where the field's block cursor sits (Midnight, continued, move 4): the caret's index in the
@@ -159,8 +160,10 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
   const showShortcutHints = isHome || isCompact;
-  // The typed text starts after the ">" prompt; the cursor track spans the same text box. The
-  // keys' room on the right is kept only where they are drawn, from md (PA-04).
+  // The typed text starts after the prompt square at the boards' 9 px gap (`.search`): the
+  // square's left (12 px, 16 px in the home field and from sm in the default one) + its 7 px + 9
+  // = 28 px (`left-7`, `pl-7`), 32 px (`left-8`, `pl-8`). The cursor track spans the same text
+  // box. The keys' room on the right is kept only where they are drawn, from md (PA-04).
   const textInset = isHome
     ? 'left-8 right-20 md:right-28'
     : isCompact
@@ -199,8 +202,9 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             onKeyDown={handleKeyDown}
             placeholder={fromMd ? SEARCH_PLACEHOLDER : SEARCH_PLACEHOLDER_PHONE}
             className={cn(
-              // Midnight, continued (move 4): the field is a prompt — a jade ">" before the text,
-              // a block cursor after it while focused (the native caret is hidden under it), and
+              // Midnight, continued (move 4): the field is a prompt — the cinnabar square before
+              // the text (U-01; a jade ">" before it), a block cursor after it while focused (the
+              // native caret is hidden under it), and
               // a jade-tinted border with a soft ring on focus. The "/" key hint stays. The
               // compact and default fields are wells (material pass v2, move 2: `.well`, dark
               // glass inset, the board's 6 px corners); the home hero field keeps its approved
@@ -217,16 +221,16 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                   : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
             )}
           />
+          {/* The prompt (U-01, the boards' `.search .sq`): the 7 px cinnabar square, centred on
+              the field's height, as every command line on the site begins. */}
           <span
             aria-hidden="true"
             data-testid="search-prompt"
             className={cn(
-              'text-jade pointer-events-none absolute inset-y-0 flex items-center font-mono',
+              'search-square pointer-events-none absolute top-1/2 -translate-y-1/2',
               isHome ? 'left-4' : isCompact ? 'left-3' : 'left-3 sm:left-4'
             )}
-          >
-            &gt;
-          </span>
+          />
           {isInputFocused && (
             <span
               aria-hidden="true"
