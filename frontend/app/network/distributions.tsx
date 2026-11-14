@@ -5,11 +5,11 @@ import { api, LabelCount } from '@/lib/api';
 import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
-import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount } from '@/lib/format-count';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { TopicSection } from '@/app/network/topic-section';
+import { percentOf } from '@/lib/format-unit';
 
 const TOP_N = 8;
 /**
@@ -177,7 +177,7 @@ function HostingSection({
     100,
     'hosting networks'
   );
-  const share = (count: number) => `${formatPercent(BigInt(count), BigInt(total))}%`;
+  const share = (count: number) => percentOf(BigInt(count), BigInt(total));
   /** The words a segment holds: name and share, else the share alone, else none. */
   const inside = (org: string, count: number, i: number): string => {
     if (width === null) return '';

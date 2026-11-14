@@ -226,7 +226,7 @@ describe('29 chart variants', () => {
       usedShare: zero,
       capacityShare: zero,
     });
-    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—' }]);
+    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—', width: 0 }]);
     const single = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       ...miners,
       totalBlocks: 50,
@@ -266,7 +266,9 @@ describe('29 chart variants', () => {
     expect(model.facts?.[0]).toEqual({
       label: 'Leading miner',
       name: 'ckb1qzda0c…93hhsj',
-      value: '41,743 blocks · 0.00%',
+      // the review's item I (re-pinned): the share is the miner's blocks in the window's, 41,743 of
+      // 66,477 (the fixture's API percentage, '0', was a placeholder the model read before)
+      value: '41,743 blocks · 62.79%',
     });
     expect(model.rankedRows?.[0]).toMatchObject({
       label: 'ckb1qzda0c…93hhsj',
@@ -549,7 +551,8 @@ describe('29 chart variants', () => {
     const model = at([999_999, 1]);
     expect(model.rankedRows?.map((row) => row.share)).toEqual(['>99.99%', '<0.01%']);
     expect(model.headline).toMatchObject({ display: '>99.99', unit: '%' });
-    expect(model.facts?.[0].value).toBe('999,999\u00a0blocks · >99.99%');
+    // the leading miner's fact ends on the same share (its count's form is the review's item C)
+    expect(model.facts?.[0].value).toMatch(/ · >99\.99%$/);
     expect(at([600_000, 400_000]).rankedRows?.map((row) => row.share)).toEqual([
       '60.00%',
       '40.00%',

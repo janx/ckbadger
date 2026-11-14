@@ -28,6 +28,7 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
+import { percentOf } from '@/lib/format-unit';
 /** The supply-event route always reports its total; a page without one is a contract break. */
 function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
@@ -315,7 +316,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span
                     title={`occupied ${formatCkbAmount(occupied).full} CKB · free ${formatCkbAmount(held - occupied).full} CKB`}
                   >
-                    {formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied
+                    {percentOf(occupied, held)} occupied
                   </span>
                 ) : undefined,
             },

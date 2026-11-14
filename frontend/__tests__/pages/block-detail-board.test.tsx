@@ -530,7 +530,8 @@ describe('Block board · second tier', () => {
     );
     const bar = within(section).getByRole('img', { name: /^Reward shares:/ });
     expect(bar).toHaveAccessibleName(
-      'Reward shares: primary issuance 95.19%, secondary issuance 4.80%, committed fees 0.00%, proposal fees 0.00%'
+      // the review's item I (re-pinned): fees above nothing read <0.01%, never a false 0.00%
+      'Reward shares: primary issuance 95.19%, secondary issuance 4.80%, committed fees <0.01%, proposal fees <0.01%'
     );
     const parts = bar.querySelectorAll('[data-reward-part]');
     expect(parts).toHaveLength(4);

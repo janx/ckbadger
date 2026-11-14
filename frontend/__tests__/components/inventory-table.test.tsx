@@ -77,7 +77,7 @@ describe('Inventory rows', () => {
     // Table-rows L2-1: the row shows 2 dp; every digit and the standard are in its title.
     expect(row).toHaveAttribute(
       'title',
-      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.0%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
+      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
     );
     expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent('1.00');
     expect(table).not.toHaveTextContent('xUDT');
@@ -267,7 +267,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.8%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
+      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.75%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
     );
   });
 });
@@ -366,7 +366,7 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.0%) · H-mult. ×1.00`
+      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.00%) · H-mult. ×1.00`
     );
   });
 });
@@ -445,7 +445,7 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.3%)'
+      'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.25%)'
     );
   });
 });
@@ -503,7 +503,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
         'figures',
         'quiet',
         // Every digit of the supply, the CKB held and occupied with its exact share.
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.0%)',
+        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
         null,
       ],
     ]);
@@ -518,7 +518,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'T Token · xUDT', '2 holders'],
       [
         'figures',
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.0%)',
+        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
         '4 transfers · 0 in 24 h · ×1.6393442625',
       ],
     ]);
@@ -535,7 +535,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       [
         'figures',
         expect.stringMatching(
-          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.0%\) · ×1\.6393442625 · 0xabab/
+          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
         ),
         null,
       ],
@@ -564,7 +564,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '.bit', '5 live'],
       ['activity', '9 ever registered · 2 holders', null],
-      ['figures', '100.00000001 CKB held · 61 occupied (61.0%)', null],
+      ['figures', '100.00000001 CKB held · 61 occupied (61.00%)', null],
     ]);
   });
 });

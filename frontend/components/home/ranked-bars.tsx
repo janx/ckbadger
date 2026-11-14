@@ -2,13 +2,15 @@
 
 import Link from '@/components/ui/link';
 import { formatShare } from '@/lib/activity-stats';
+import { formatPercent } from '@/lib/ckb-decimal';
 import { cn } from '@/lib/utils';
 
 export interface RankedRow {
   key: string;
   label: string;
-  /** count / total, in [0, 1]. */
-  share: number;
+  /** The row's count and the total it is a share of: the bar and the percentage read both. */
+  count: number;
+  total: number;
   /** Where the row leads, if anywhere. */
   href?: string;
 }
@@ -66,11 +68,13 @@ export function RankedBars({
                 <span
                   data-role="share-fill"
                   className="bg-jade h-1.5 min-w-[2px]"
-                  style={{ width: `${(row.share * 100).toFixed(2)}%` }}
+                  style={{
+                    width: `${formatPercent(BigInt(row.count), BigInt(row.total), 2)}%`,
+                  }}
                 />
               </span>
               <span className="text-text-bright text-right tabular-nums">
-                {formatShare(row.share)}
+                {formatShare(row.count, row.total)}
               </span>
             </>
           );

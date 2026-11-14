@@ -47,8 +47,8 @@ describe('script code evidence', () => {
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
     expect(sentence).toContain('18,014,398,509.48198600');
-    expect(sentence).toContain('50.0% runs code no one can change');
-    expect(sentence).toContain('50.0% sits under code marked "holder lock not recognised"');
+    expect(sentence).toContain('50.00% runs code no one can change');
+    expect(sentence).toContain('50.00% sits under code marked "holder lock not recognised"');
     expect(screen.getByText('Holder lock not recognised')).toBeInTheDocument();
     expect(
       screen.getByRole('img', { name: 'CKB under lock scripts by who can change their code' })
@@ -71,8 +71,8 @@ describe('script code evidence', () => {
       />
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('55.6% runs code no one can change');
-    expect(sentence).toContain('44.4% runs code a single key can replace');
+    expect(sentence).toContain('55.56% runs code no one can change');
+    expect(sentence).toContain('44.44% runs code a single key can replace');
     expect(detailFixture.history.every((marker) => marker.indexedDay === '2024-01-02')).toBe(true);
   });
 

@@ -30,6 +30,7 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatTick } from '@/lib/chart-ticks';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -79,8 +80,7 @@ export function TokenDistributionView({
   }, 0);
   if (bucketBalance !== total || bucketHolders !== d.holdersCount)
     throw new Error('Token distribution buckets do not equal totals');
-  const share = (amount: bigint) =>
-    total === BigInt(0) ? '—' : `${formatScaledInteger(amount * BigInt(100), total, 2)}%`;
+  const share = (amount: bigint) => (total === BigInt(0) ? '—' : percentOf(amount, total));
   const holderScale = resourceScale(d.buckets.map((b) => b.holdersCount));
   const columns: ListColumn<TokenDistribution['buckets'][number]>[] = wordHeads([
     {
@@ -227,7 +227,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     if (amount > total) throw new Error('Holder balance exceeds same-response supply');
     if (total === BigInt(0)) return { text: '—', hundredths: 0 };
     const hundredths = Number(formatScaledInteger(amount * BigInt(10000), total, 0));
-    return { text: `${formatScaledInteger(amount * BigInt(100), total, 2)}%`, hundredths };
+    return { text: percentOf(amount, total), hundredths };
   };
   // Board L5 on the row rules (table-rows L2-4): rank and address bright, the lock a tag, the
   // amount to 2 dp and the share as an 8 px bar on the page's scale — 552 px of minimums, so the

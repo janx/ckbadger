@@ -45,6 +45,7 @@ import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -504,7 +505,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 coll.liveCount > 0 &&
                 (coll.composition.tier === 'btc_ckb' || coll.composition.tier === 'pure_ckb') && (
                   <div
-                    aria-label={`${formatPercent(BigInt(onchain), BigInt(coll.liveCount))}% fully on-chain`}
+                    aria-label={`${percentOf(BigInt(onchain), BigInt(coll.liveCount))} fully on-chain`}
                     role="img"
                     className="bg-bar-track h-2 overflow-hidden rounded"
                   >

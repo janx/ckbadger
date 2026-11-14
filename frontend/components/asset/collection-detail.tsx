@@ -36,7 +36,7 @@ import { Address } from '@/components/ui/address';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
@@ -54,6 +54,7 @@ import { IdentityPositioning, type IdentityStandard } from '@/components/identit
 import { retryTransientOnly } from '@/lib/query-client';
 import { Dotted } from '@/components/ui/phone-row';
 import { NoBreak } from '@/components/ui/no-break';
+import { percentOf } from '@/lib/format-unit';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -392,7 +393,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ),
       note:
         held !== null && occupied !== null && held > BigInt(0)
-          ? `${formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied`
+          ? `${percentOf(occupied, held)} occupied`
           : undefined,
     },
   ];

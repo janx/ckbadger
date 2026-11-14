@@ -166,7 +166,7 @@ describe('Scripts list against the Scripts board', () => {
     const godRow = within(table)
       .getByRole('link', { name: 'Godwoken Custodian Lock' })
       .closest('tr') as HTMLElement;
-    expect(godRow.textContent).toContain('0.0001%');
+    expect(godRow.textContent).toContain('<0.01%');
     expect(godRow.textContent).not.toContain('0.00%');
   });
 
@@ -374,7 +374,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // 96.5 % of 1,376 px holds its words; 3.47 % and 0.075 % do not, and stay empty (R12: no
     // exact amounts inside the bar).
     expect(segments.map((s) => s.textContent)).toEqual([
-      'Immutable · pinned by data hash 96.5%',
+      'Immutable · pinned by data hash 96.46%',
       '',
       '',
     ]);
@@ -390,9 +390,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
         .getAllByRole('listitem')
         .map((li) => li.textContent)
     ).toEqual([
-      'Immutable · pinned by data hash 96.5%',
+      'Immutable · pinned by data hash 96.46%',
       'A multisig can replace 3.47%',
-      'One key can replace 0.075%',
+      'One key can replace 0.07%',
     ]);
     for (const share of within(legend).getAllByText(/%$/)) expect(share).toHaveClass('text-text');
     expect(legend.textContent).not.toMatch(/\d\.\d{8}/);

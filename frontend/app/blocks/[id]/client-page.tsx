@@ -27,7 +27,7 @@ import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction 
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
-import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { formatCompactInteger } from '@/lib/exact-integer';
 import { formatTimeAgo, formatUtc8Time } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -36,6 +36,7 @@ import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epo
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { PlateHash } from '@/components/ui/page-seal';
+import { percentOf } from '@/lib/format-unit';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -364,7 +365,7 @@ export default function BlockDetailPage() {
                     )}
                   </dd>
                   <dd className="text-text-dim mt-1">
-                    {formatPercent(BigInt(block.size), BigInt(block.maxBlockBytes))}% of{' '}
+                    {percentOf(BigInt(block.size), BigInt(block.maxBlockBytes))} of{' '}
                     {block.maxBlockBytes.toLocaleString('en-US')} · overhead{' '}
                     {block.overheadSize.toLocaleString('en-US')} · transactions{' '}
                     {block.userTransactionsSize.toLocaleString('en-US')}
@@ -387,7 +388,7 @@ export default function BlockDetailPage() {
                   </dd>
                   {block.cycles !== null && (
                     <dd className="text-text-dim mt-1">
-                      {formatPercent(BigInt(block.cycles), BigInt(block.maxBlockCycles))}% of{' '}
+                      {percentOf(BigInt(block.cycles), BigInt(block.maxBlockCycles))} of{' '}
                       {BigInt(block.maxBlockCycles).toLocaleString('en-US')}
                     </dd>
                   )}

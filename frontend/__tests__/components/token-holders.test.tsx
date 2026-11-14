@@ -39,7 +39,8 @@ describe('Token distribution', () => {
     expect(screen.getByRole('table', { name: 'Holders by balance' })).toHaveTextContent(
       '1 and above'
     );
-    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder 100.00%/);
+    // the review's item I (re-pinned): a share below the whole reads >99.99%, never 100.00%
+    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder >99\.99%/);
     rerender(
       <TokenDistributionView
         distribution={{ ...distribution, unit: 'raw', decimals: null }}
@@ -96,7 +97,7 @@ describe('Token distribution', () => {
     });
     expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 40) });
     expect(above).toHaveTextContent('5');
-    expect(above).toHaveTextContent('100.00%');
+    expect(above).toHaveTextContent('>99.99%');
   });
   it('names a bucket that starts at 0 and has no upper bound "0 and above" (L2-4)', () => {
     // It used to print "Under " with no bound after it.
@@ -434,7 +435,7 @@ describe('Holders by balance phone row', () => {
     const rows = screen.getAllByTestId('holder-bucket-row-mobile');
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['range', '1 and above', '1 holder'],
-      ['share', '', '100.00% of supply'],
+      ['share', '', '>99.99% of supply'],
     ]);
   });
 });

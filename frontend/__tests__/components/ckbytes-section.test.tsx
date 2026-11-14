@@ -223,7 +223,8 @@ describe('CkbytesSection', () => {
       daoFree: '0',
     });
     render(<CkbytesSection />);
-    const bar = await screen.findByRole('img', { name: /Knowledge 0\.00 percent/ });
+    // the review's item I (re-pinned): a share above nothing reads <0.01, never a false 0.00
+    const bar = await screen.findByRole('img', { name: /Knowledge <0\.01 percent/ });
     const knowledge = bar.querySelector('[data-segment="knowledge"]') as HTMLElement;
     const free = bar.querySelector('[data-segment="free"]') as HTMLElement;
     expect(Number.parseFloat(knowledge.style.width)).toBeGreaterThan(0);

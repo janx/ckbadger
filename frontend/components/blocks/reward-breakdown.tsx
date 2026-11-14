@@ -6,10 +6,10 @@ import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import type { Block, BlockProposalFees } from '@/lib/api';
 import { REWARD_COLORS } from '@/lib/design-tokens';
-import { formatScaledInteger } from '@/lib/exact-integer';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { percentFigure } from '@/lib/format-unit';
 
 type RewardBlock = Pick<
   Block,
@@ -126,8 +126,7 @@ export function RewardBreakdown({
     committed: `of ${plainCkb(fees)} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
     proposal: <SentenceNodes parts={proposalNote(proposalFees, proposalFeesError)} />,
   };
-  const share = (value: bigint) =>
-    total === BigInt(0) ? '0.00' : formatScaledInteger(value * BigInt(100), total, 2);
+  const share = (value: bigint) => (total === BigInt(0) ? '0.00' : percentFigure(value, total));
   return (
     <div className="text-small space-y-3">
       <div data-testid="reward-total" className="text-text-bright text-body font-medium">

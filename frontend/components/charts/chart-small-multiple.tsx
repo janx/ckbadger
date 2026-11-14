@@ -18,13 +18,11 @@ import {
   type ChartModel,
 } from '@/components/charts/chart-model';
 
-function shareWidth(share: string, title: string): number {
-  if (share === '—') return 0;
-  if (!share.endsWith('%')) throw new Error(`${title}: share missing %: ${share}`);
-  const width = Number(share.slice(0, -1));
-  if (!Number.isFinite(width) || width < 0 || width > 100)
-    throw new Error(`${title}: invalid share ${share}`);
-  return width;
+/** A preview bar's width: the model's, from the exact parts (never the printed share). */
+function shareWidth(row: { width: number; label: string }, title: string): number {
+  if (!Number.isFinite(row.width) || row.width < 0 || row.width > 100)
+    throw new Error(`${title}: invalid share width ${row.width} for ${row.label}`);
+  return row.width;
 }
 
 /** Top five ranks plus the exact remainder as "Others", both computed by the chart model. */
@@ -55,7 +53,7 @@ function RankedPreview({ model }: { model: ChartModel }) {
           <div className="bg-bar-track mt-1 h-1 rounded">
             <div
               className="bg-jade h-1 rounded"
-              style={{ width: `${shareWidth(row.share, model.title)}%` }}
+              style={{ width: `${shareWidth(row, model.title)}%` }}
             />
           </div>
         </li>

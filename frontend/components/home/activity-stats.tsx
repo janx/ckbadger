@@ -90,14 +90,16 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   const rows: RankedRow[] = scripts.top.map((r) => ({
     key: r.key,
     label: r.label,
-    share: r.share,
+    count: r.count,
+    total: scripts.total,
     href: getScriptDetailHref({ name: r.name, codeHash: r.codeHash }),
   }));
   if (scripts.others) {
     rows.push({
       key: 'others',
       label: `${scripts.others.scripts} ${countNoun(scripts.others.scripts, 'other')}`,
-      share: scripts.others.share,
+      count: scripts.others.count,
+      total: scripts.total,
     });
   }
   return {
@@ -108,7 +110,8 @@ function summaryView(s: ActivitySummary24h): SummaryView {
     types: activityTypeShares(s).map((r) => ({
       key: r.key,
       label: r.label,
-      share: r.share,
+      count: r.count,
+      total: totalActivities(s),
       href: TYPE_BREAKDOWN,
     })),
     scripts: rows,
