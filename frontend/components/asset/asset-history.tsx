@@ -32,6 +32,8 @@ export interface AssetHistoryProps {
   footnote?: ReactNode;
   /** Paging controls for the supply events; replaces the "newest N are listed" note. */
   supplyPager?: ReactNode;
+  /** PB-12: the page's class, whose colour its weekly bars are drawn in. */
+  assetClass: 'tokens' | 'objects' | 'identities';
 }
 /** A small colour swatch for the readout (Token board), the same ink as its chart. */
 function Swatch({ color }: { color: string }) {
@@ -65,7 +67,10 @@ export function AssetHistory({
   supplyEvents,
   footnote,
   supplyPager,
+  assetClass,
 }: AssetHistoryProps) {
+  if (token && assetClass !== 'tokens')
+    throw new Error(`A token's history is drawn in the token class, not ${assetClass}`);
   const [range, setRange] = useState<'1W' | '1M' | '1Y' | 'All'>('All');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const end = time(completeThrough),
@@ -161,7 +166,7 @@ export function AssetHistory({
             {
               key: 'count',
               label: weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions',
-              assetClass: token ? 'tokens' : 'objects',
+              assetClass,
             },
           ],
           unit: weeklyNoun,

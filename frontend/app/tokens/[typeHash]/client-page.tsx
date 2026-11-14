@@ -371,6 +371,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               }))}
               weeklyNoun="transactions"
               completeThrough={history.data.completeThrough}
+              assetClass="tokens"
               supplyEvents={
                 supplyEvents.data
                   ? { rows: supplyEvents.data.data, total: supplyEventsTotal(supplyEvents.data) }

@@ -17,6 +17,7 @@ const history: AssetCapacityHistory = {
 it('preserves single shannons, complete-day cutoff and shared capacity/transfer range', () => {
   render(
     <CapacityHistory
+      assetClass="objects"
       subject="Collection"
       history={history}
       weekly={[
@@ -45,6 +46,7 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   expect(() =>
     render(
       <CapacityHistory
+        assetClass="objects"
         subject="Broken"
         history={{ ...history, completeThrough: '2023-11-13' }}
         weekly={[]}
@@ -54,6 +56,7 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   expect(() =>
     render(
       <CapacityHistory
+        assetClass="objects"
         subject="Broken"
         history={{ ...history, data: [{ date: '2023-11-01', values: { unused: '1' } }] }}
         weekly={[]}
@@ -71,6 +74,7 @@ it.each([928, 358])(
     try {
       render(
         <CapacityHistory
+          assetClass="objects"
           subject="Producer collection"
           history={clusterCapacityHistoryProducer}
           weekly={[]}
@@ -98,6 +102,7 @@ it.each([928, 358])(
 it('says why a collection has no weekly transfers instead of drawing an empty chart (OB-K2)', () => {
   render(
     <CapacityHistory
+      assetClass="objects"
       subject="Identity collection"
       history={history}
       weekly={{ unavailable: 'Weekly transfer totals are not indexed for identity collections' }}

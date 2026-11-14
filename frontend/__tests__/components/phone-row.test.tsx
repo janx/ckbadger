@@ -97,7 +97,9 @@ describe('Share bar (ruling R7: the rounded maximum of the list, no clamp)', () 
     expect(shareBarWidth(0, 1)).toBe('0%');
     expect(() => shareBarWidth(11, 10)).toThrow('is not on the scale 10');
     expect(() => shareBarWidth(1, 0)).toThrow('invalid scale 0');
-    const { container } = render(<ShareBar value={232} scale={1000} track={120} />);
+    const { container } = render(
+      <ShareBar value={232} scale={1000} track={120} color="var(--c-token)" />
+    );
     const track = container.firstElementChild as HTMLElement;
     expect(track.style.width).toBe('120px');
     expect((track.firstElementChild as HTMLElement).style.width).toBe('23.2%');

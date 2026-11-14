@@ -22,6 +22,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 it('reads the latest complete week by default instead of "No completed weekly total" (OB-C6)', () => {
   render(
     <AssetHistory
+      assetClass="objects"
       daily={[
         { date: '2026-10-27', capacity: '100', occupiedCapacity: '60' },
         { date: '2026-10-29', capacity: '100', occupiedCapacity: '60' },

@@ -13,6 +13,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="tokens"
           weeklyNoun="transfers"
           daily={daily.map((day, i) => ({ ...day, supply: String(i + 1) }))}
           weekly={[]}
@@ -41,6 +42,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="tokens"
           weeklyNoun="transactions"
           daily={daily}
           weekly={[{ weekStart: '2024-01-01', count: 8000 }]}
@@ -72,6 +74,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[]}
@@ -103,6 +106,7 @@ describe('Asset history', () => {
     try {
       const { container } = render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[{ weekStart: '2024-01-01', count: 3 }]}
@@ -141,6 +145,7 @@ describe('Asset history', () => {
       for (const token of [undefined, { symbol: 'T', decimals: 0 }]) {
         const { unmount } = render(
           <AssetHistory
+            assetClass={token ? 'tokens' : 'objects'}
             weeklyNoun="transfers"
             daily={daily}
             weekly={[{ weekStart: '2024-01-01', count: 400 }]}
@@ -179,6 +184,7 @@ describe('Asset history', () => {
   it('keeps exact tier-one readouts, complete-day scope and the actual peak date', () => {
     render(
       <AssetHistory
+        assetClass="tokens"
         weeklyNoun="transfers"
         daily={daily}
         weekly={[{ weekStart: '2024-01-01', count: 3 }]}
@@ -208,6 +214,7 @@ describe('Asset history', () => {
   it('labels supply events in UTC+8 and distinguishes raw block dates from indexed chart days', () => {
     render(
       <AssetHistory
+        assetClass="tokens"
         weeklyNoun="transfers"
         daily={daily}
         weekly={[]}
@@ -242,6 +249,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="tokens"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[]}
@@ -284,6 +292,7 @@ describe('Asset history', () => {
     stubChartWidth(358);
     render(
       <AssetHistory
+        assetClass="tokens"
         weeklyNoun="transactions"
         daily={daily}
         weekly={[{ weekStart: '2024-01-01', count: 3 }]}
@@ -321,12 +330,19 @@ describe('Asset history', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
       render(
-        <AssetHistory weeklyNoun="transfers" daily={[]} weekly={[]} completeThrough="2024-02-31" />
+        <AssetHistory
+          assetClass="objects"
+          weeklyNoun="transfers"
+          daily={[]}
+          weekly={[]}
+          completeThrough="2024-02-31"
+        />
       )
     ).toThrow('Invalid indexed history date');
     expect(() =>
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[{ weekStart: '2024-01-08', count: 0 }]}
@@ -341,6 +357,7 @@ describe('Asset history', () => {
     expect(() =>
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[]}
@@ -351,6 +368,7 @@ describe('Asset history', () => {
     expect(() =>
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={[{ ...daily[0], occupiedCapacity: '10000000002' }]}
           weekly={[]}

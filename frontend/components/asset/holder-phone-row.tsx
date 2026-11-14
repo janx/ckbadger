@@ -38,7 +38,7 @@ export function HolderPhoneRow({
   /** A quiet fact that goes with the holder ("3 deposits"). */
   note?: ReactNode;
   /** The holder's value on the list's scale (the table's), in the class colour. */
-  bar: { value: number; scale: number; color?: string };
+  bar: { value: number; scale: number; color: string };
   /** The scale's end as its axis mark ("60%"): the list's first row carries it over its track. */
   axis?: string;
   wide?: boolean;

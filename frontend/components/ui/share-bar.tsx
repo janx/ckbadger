@@ -50,8 +50,8 @@ export function ShareBar({
 }: {
   value: number;
   scale: number;
-  /** The class colour; omitted, the interactive ink. */
-  color?: string;
+  /** The class colour of the list. */
+  color: string;
   /** The track's fixed width in px. */
   track: number;
   className?: string;
@@ -66,8 +66,8 @@ export function ShareBar({
     >
       <span
         data-share-bar={width}
-        className={cn('block h-full rounded-sm', !color && 'bg-interactive')}
-        style={{ width, minWidth: value > 0 ? 2 : 0, ...(color ? { backgroundColor: color } : {}) }}
+        className="block h-full rounded-sm"
+        style={{ width, minWidth: value > 0 ? 2 : 0, backgroundColor: color }}
       />
     </span>
   );

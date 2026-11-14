@@ -174,6 +174,8 @@ export function CollectionDetail(props: CollectionDetailProps) {
   return <ScopedCollectionDetail key={`${props.kind}:${props.id}`} {...props} />;
 }
 function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
+  // PB-12: the collection's class colour draws its history bars and its holders' bars.
+  const collectionClass = kind === 'identity' ? 'identities' : 'objects';
   const detail = useQuery<ObjectCollection | IdentityCollection>({
     queryKey: [kind === 'identity' ? 'identity-collection' : 'object-collection', id],
     queryFn: () =>
@@ -384,6 +386,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           <CapacityHistory
             history={chart.data}
             subject={title}
+            assetClass={collectionClass}
             weekly={
               insights.data
                 ? insights.data.weeklyActivity
@@ -418,7 +421,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       <CollectionHolders
         queryKey={`${kind}:${id}`}
         distribution={insights.data?.holderDistribution}
-        assetClass={kind === 'identity' ? undefined : ('objects' as const)}
+        assetClass={collectionClass}
         load={(p) =>
           kind === 'spore'
             ? api.getSporeClusterHolders(id, p)
