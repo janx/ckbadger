@@ -105,7 +105,8 @@ describe('ScriptsPage', () => {
 
     render(<ScriptsPage />);
 
-    expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
+    // lowercase, as the header's field (U-01, R2)
+    expect(screen.getByPlaceholderText('search by name or code hash')).toBeInTheDocument();
   });
 
   it('uses server role totals and refetches the filtered family set', async () => {

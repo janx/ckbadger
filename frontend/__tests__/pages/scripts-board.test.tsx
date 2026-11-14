@@ -132,7 +132,7 @@ describe('Scripts list against the Scripts board', () => {
         'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.'
       )
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('search by name or code hash')).toBeInTheDocument();
   });
 
   it('writes the Code column as immutable or upgradable · N versions, by whom in its title (SC-L2, SC-L4, L1-1)', async () => {
