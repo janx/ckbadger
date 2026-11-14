@@ -283,12 +283,15 @@ const light: Palette = {
   'reward-secondary': '#91ada4',
   'code-fixed-fill': '#7a7163',
   'code-unspendable-fill': '#bbb1a0',
+  // An ELF region's hue paints its hex digits on the cell page: text grade on the four grounds and
+  // the tier-2 ground, moved in OKLCH lightness only where short (lane E2 round 3). The program
+  // headers stay short: moved alone they would be the header's twin (awaiting a ruling).
   'elf-header': '#416a7a',
   'elf-program-headers': '#588192',
-  'elf-rodata': '#3d7249',
-  'elf-eh-frame': '#5f7362',
-  'elf-data': '#82672c',
-  'elf-meta': '#7468a7',
+  'elf-rodata': '#3b7047',
+  'elf-eh-frame': '#576a5a',
+  'elf-data': '#7c6126',
+  'elf-meta': '#695c9a',
   'gel-overlay': '#1f1b17',
   'gel-band-text': '#faf7f0',
   'gel-ink-btc-0': '#b78c70',
