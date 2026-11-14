@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import { render } from '../utils/test-utils';
 import { stubChartWidth } from '../utils/chart-width';
 import { expectTier1Budget } from '../utils/hierarchy';
@@ -463,6 +464,29 @@ describe('HardforksPage', () => {
       );
       noDayClaim(mirana);
     });
+  });
+
+  // A1 review fix round 2 (isAwaited, the one test of an awaited read): offline, the timeline's
+  // read is paused, not fetching, so isLoading is false and the page showed nothing under its
+  // title. It keeps its loading line while the read is paused and says nothing false; back online
+  // the page renders.
+  it('keeps its loading line while the read is paused offline, then renders once back online', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    onlineManager.setOnline(false);
+    try {
+      render(<HardforksPage />);
+      expect(await screen.findByText('Loading hardfork timeline…')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText(/has not reached|holds no block header/)).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(
+        await screen.findByRole('article', { name: 'CKB Edition Mirana activated' })
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading hardfork timeline…')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('refuses deployments without their registered hash types', async () => {
