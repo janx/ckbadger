@@ -100,6 +100,9 @@ function emitIntersection(isIntersecting: boolean) {
 
 describe('ActivitiesStreamExplorer', () => {
   beforeEach(() => {
+    // the clock stands still (Date only; timers stay real): a row's age and its expectation read
+    // one time (the lead's addendum 3)
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.clearAllMocks();
     intersectionCallback = null;
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
