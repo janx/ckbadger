@@ -776,7 +776,7 @@ describe('ExactCkb', () => {
       '.00000123',
       '.0003',
     ]);
-    expect(fractions[0]).toHaveClass('text-rouge-fraction');
+    expect(fractions[0]).toHaveClass('text-rouge-dim');
     expect(fractions[1]).toHaveClass('text-jade-dim');
     expect(fractions[2]).toHaveClass('text-text-dim');
     expect(fractions[3]).toHaveClass('text-text-dim');
