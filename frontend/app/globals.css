@@ -806,8 +806,14 @@ svg a:hover {
 }
 
 /* Move 2c — tier-2 ground: the evidence tier sits one step deeper, its ground bleeding through
-   the page gutters (the container's 16 px, 24 px from lg) under the tube. */
+   the page gutters (the container's 16 px, 24 px from lg) under the tube. The ground decides its
+   rule (R5, ruling 4b): inside it the row rule and the bar track resolve to their deeper keys, so
+   every border-row-rule and bg-bar-track in tier 2 clears the darker ground and its ruled lines. */
 .tier2-ground {
+  --c-row-rule: var(--c-row-rule-deep);
+  --rgb-row-rule: var(--rgb-row-rule-deep);
+  --c-bar-track: var(--c-bar-track-deep);
+  --rgb-bar-track: var(--rgb-bar-track-deep);
   background: var(--m-tier2-ground);
   margin-left: -1rem;
   margin-right: -1rem;
