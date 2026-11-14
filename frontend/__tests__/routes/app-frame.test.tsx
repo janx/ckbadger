@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@/__tests__/utils/test-utils';
+import { act, fireEvent, render, screen } from '@/__tests__/utils/test-utils';
 import { createAppRouter } from '@/src/routes/router';
 
 const gates = vi.hoisted(() => {
@@ -145,6 +145,32 @@ describe('the header is part of the frame (visual finish V6)', () => {
         name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
       })
     );
+  });
+
+  // U-20 (UI review 2026-11-14): no skip link. The frame's first focusable element is one, in the
+  // shell's voice, drawn only while it has the focus; it takes the focus to the frame's hold of
+  // the page (the page renders its own <main>, so the frame adds no second one).
+  it('starts with a "skip to content" link that takes the focus to the page (U-20)', async () => {
+    mount('/mainnet/no-such-page');
+    await screen.findByRole('heading', { level: 1 });
+    const focusable = document.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const skip = focusable[0];
+    expect(skip).toBe(screen.getByRole('link', { name: 'skip to content' }));
+    expect(skip).toHaveClass('sr-only', 'focus:not-sr-only');
+    const href = skip.getAttribute('href')!;
+    expect(href).toMatch(/^#./);
+    const target = document.getElementById(href.slice(1))!;
+    expect(target).not.toBeNull();
+    expect(target.tagName).not.toBe('MAIN');
+    expect(target).toHaveAttribute('tabindex', '-1');
+    expect(target).toContainElement(screen.getByRole('main'));
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    fireEvent.click(skip);
+    expect(target).toHaveFocus();
+    // the page's own content, not the header, follows the focus
+    expect(target).not.toContainElement(screen.getByRole('banner'));
   });
 
   it('closes the frame on one status line, after the footer', async () => {
