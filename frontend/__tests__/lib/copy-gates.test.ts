@@ -229,45 +229,138 @@ describe('copy gates (U-15)', () => {
 
   /**
    * Counts whose words are not the noun's count ("${family.name} cells" names a script's cells);
-   * every other count goes through formatCount, so "1 deposit", never "1 deposits".
+   * every other count goes through formatCount, so "1 deposit", never "1 deposits". Each entry is
+   * a site: its file and its expression with the text after it, so the same words in another file
+   * are read again (the review's item C: an entry keyed by its text alone let "1 blocks" through
+   * as "a decimal amount").
    */
-  const NOT_COUNTS = new Set<string>([
-    // a name before its noun, not a count: "Open channels", "CKB in JoyID cells", "mainnet nodes"
-    '${chosen.label} channels',
-    '${chosen.label.toLowerCase()} channels observed.',
-    '{network} nodes',
-    '${label} objects',
-    '${definition.slug} holders at ',
-    '${family.name} cells · occupied and fr',
-    '${family.name} cells',
-    '{family.name} cells name their code b',
-    '{family.name} cells point at their co',
-    '${key} bytes',
-    // a count in words, its noun already chosen by it ("two genes vary", "four steps")
-    '${word} genes vary',
-    '${STEP_WORDS[steps.length]} steps',
-    '${listJoin(coins)} addresses.',
-    '${clipped} weeks cut',
-    "{clipped.length === 1 ? 's' : ''} bytes past its ",
-    // a sum written as its parts ("12 + 40 bytes"), a ratio ("1 / 3 blocks"), a decimal amount
-    '${fmt(dataBytes.length)} bytes',
-    '${denominator} blocks',
-    '${formatScaledInteger(years, per, 2)} years',
-    "${formatChartExact(leader.value, 'blocks')} blocks · ",
-    // a developer's message for a missing witness
-    '${witness.index} bytes',
-    // a name before its noun in an accessible name: a holdings label's objects, a gene's variants
-    '${label} objects held here',
-    '${lane.gene} variants',
-    // a range's far end ("the commit window is 2 to 10 blocks"), never one block
-    '${window.far} blocks',
-  ]);
+  const NOT_COUNTS: readonly { file: string; text: string; why: string }[] = [
+    // a name before its noun, not a count
+    {
+      file: 'app/fiber/channels/client-page.tsx',
+      text: '${chosen.label} channels',
+      why: 'the table is named by its state: "Open channels"',
+    },
+    {
+      file: 'app/fiber/channels/client-page.tsx',
+      text: '${chosen.label.toLowerCase()} channels observed.',
+      why: 'the empty state names the state: "No open channels observed."',
+    },
+    {
+      file: 'app/network/client-page.tsx',
+      text: '{network} nodes',
+      why: 'the network by name: "CKB mainnet nodes"',
+    },
+    {
+      file: 'components/address/address-holdings.tsx',
+      text: '${label} objects',
+      why: 'the holdings label names the class: "Spore objects"',
+    },
+    {
+      file: 'components/address/address-holdings.tsx',
+      text: '${label} objects held here',
+      why: 'an accessible name, the class by name',
+    },
+    {
+      file: 'components/charts/chart-model.ts',
+      text: '${definition.slug} holders at ',
+      why: 'a reading context, the chart by its slug',
+    },
+    {
+      file: 'components/scripts/script-family-board.tsx',
+      text: '${family.name} cells · occupied and fr',
+      why: 'a plot named by its script: "CKB in JoyID cells · occupied and free"',
+    },
+    {
+      file: 'components/scripts/script-family-board.tsx',
+      text: '${family.name} cells',
+      why: 'an axis named by its script: "CKB in JoyID cells"',
+    },
+    {
+      file: 'components/scripts/script-family-board.tsx',
+      text: '{family.name} cells name their code b',
+      why: 'the script by name: "JoyID cells name their code by its data hash"',
+    },
+    {
+      file: 'components/scripts/script-family-board.tsx',
+      text: '{family.name} cells point at their co',
+      why: 'the script by name: "JoyID cells point at their code by its type"',
+    },
+    {
+      file: 'components/ui/cell-bar.tsx',
+      text: '${key} bytes',
+      why: 'a reading context, the part by its key: "capacity bytes"',
+    },
+    {
+      file: 'components/ui/allele-gel.tsx',
+      text: '${lane.gene} variants',
+      why: 'a list named by its gene: "Color variants"',
+    },
+    {
+      file: 'app/tx/[hash]/client-page.tsx',
+      text: '${witness.index} bytes',
+      why: 'a reading context, the witness by its index: "witness 3 bytes" (the witness\'s bytes)',
+    },
+    // a count in words with its verb, the noun chosen by the count ("one gene varies")
+    {
+      file: 'components/asset/collection-objects.tsx',
+      text: '${word} genes vary',
+      why: 'the plural branch of n === 1 ? "gene varies" : "genes vary"; formatCount writes no words',
+    },
+    // the plural branch of a choice that never reaches one
+    {
+      file: 'components/identity/identity-overview.tsx',
+      text: '${listJoin(coins)} addresses.',
+      why: 'two or more coins: none and one have their own sentences',
+    },
+    // a verb's ending, not a count: "Color declares bytes past its 53 bytes"
+    {
+      file: 'components/asset/genetics.tsx',
+      text: "{clipped.length === 1 ? 's' : ''} bytes past its ",
+      why: 'the "s" ends the verb "declare"; the bytes are not counted by it',
+    },
+    // a sum written as its parts, a ratio, a decimal amount, a range's far end
+    {
+      file: 'components/cell/cell-microscope.tsx',
+      text: '${fmt(dataBytes.length)} bytes',
+      why: 'a sum written as its parts, "61 + 0 bytes": the noun counts the sum',
+    },
+    {
+      file: 'components/charts/chart-model.ts',
+      text: '${denominator} blocks',
+      why: 'a ratio, "1 / 40 blocks"',
+    },
+    {
+      file: 'components/charts/chart-model.ts',
+      text: '${formatScaledInteger(years, per, 2)} years',
+      why: 'a decimal amount, "1.50 years" (a whole number of years goes through formatCount)',
+    },
+    {
+      file: 'components/transaction/proposal-ruler.tsx',
+      text: '${window.far} blocks',
+      why: 'a range\'s far end, "the commit window is 2 to 10 blocks", never one block',
+    },
+  ];
+  const isNotACount = (t: Pick<Text, 'file' | 'text'>) =>
+    NOT_COUNTS.some((entry) => entry.file === t.file && entry.text === t.text);
+
+  it('keys an exception by its site: the same words in another file are read again', () => {
+    expect(
+      isNotACount({ file: 'components/charts/chart-model.ts', text: '${denominator} blocks' })
+    ).toBe(true);
+    expect(
+      isNotACount({ file: 'components/dao/dao-board.tsx', text: '${denominator} blocks' })
+    ).toBe(false);
+    // every entry still names a site the scan finds
+    const found = new Set(files.flatMap(handCounts).map((t) => `${t.file} ${t.text}`));
+    expect(NOT_COUNTS.map((e) => `${e.file} ${e.text}`).filter((k) => !found.has(k))).toEqual([]);
+  });
 
   it('writes every count with its noun through the one plural rule (formatCount)', () => {
     const offenders = files
       .flatMap(handCounts)
-      .map(where)
-      .filter((line) => !NOT_COUNTS.has(line.replace(/^[^ ]+ /, '')));
+      .filter((t) => !isNotACount(t))
+      .map(where);
     expect(offenders).toEqual([]);
   });
 
