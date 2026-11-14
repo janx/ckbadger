@@ -236,7 +236,9 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '2026-09', value: '1.5', value2: '3' },
       ],
     });
-    expect(cohort.headline).toEqual({ pre: '2026-09', display: '1.50', unit: '%' });
+    // Re-pinned for CH-19 (UI review 2026-11-14): the newest cohort is the month still filling;
+    // the headline is the last complete cohort, the one before it (was 2026-09).
+    expect(cohort.headline).toEqual({ pre: '2024-06', display: '7.90', unit: '%' });
   });
 
   it('heads ranked cards with the leader share, grouped like every other number (CH-31)', () => {

@@ -12,7 +12,7 @@ import {
   formatExactDecimal,
   formatScaledInteger,
 } from '@/lib/exact-integer';
-import { niceStep, stepDecimals } from '@/lib/chart-ticks';
+import { MINUS, niceStep, stepDecimals } from '@/lib/chart-ticks';
 import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/components/charts/chart-format';
 import { formatCount } from '@/lib/format-count';
 import {
@@ -82,6 +82,32 @@ function withLastReading(sub: SubChart): SubChart {
   return last ? { ...sub, reading: { label: last.label, point: last } } : sub;
 }
 
+/**
+ * The HODL wave's age bands as ranges (CH-14, CH-21): an en dash with spaces, the youngest band
+ * `< 1 d` (the API's "24h" read as a duration among ranges).
+ */
+const SERIES_NAMES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  'hodl-wave': {
+    gt3y: '> 3 y',
+    '1y3y': '1 y – 3 y',
+    '6m1y': '6 m – 1 y',
+    '3m6m': '3 m – 6 m',
+    '1m3m': '1 m – 3 m',
+    '1w1m': '1 w – 1 m',
+    '1d1w': '1 d – 1 w',
+    '24h': '< 1 d',
+  },
+};
+
+/** A stacked series' name: the page's own where it has one (an unknown band fails), else the API's. */
+function seriesName(slug: string, entry: { key: string; label: string }): string {
+  const names = SERIES_NAMES[slug];
+  if (!names) return entry.label;
+  const name = names[entry.key];
+  if (name === undefined) throw new Error(`${slug}: unknown band ${entry.key}`);
+  return name;
+}
+
 /** The point whose `key` value is largest; the first of equals. */
 function largestPoint(points: readonly ChartPoint[], key: string, context: string): ChartPoint {
   if (!points.length) throw new Error(`${context}: no points to read`);
@@ -124,6 +150,8 @@ export interface ChartModel {
     title?: string;
     /** A miner known only by its lock hash: the ranking says so once, under the list (CH-03). */
     lockHashOnly?: boolean;
+    /** The API's remainder past its named ranks: listed last, without a rank number (CH-21). */
+    remainder?: boolean;
     assetClass?: AssetClass;
   }[];
   /** Card preview of a ranking: the top five plus an exact "Others" for every remaining rank. */
@@ -156,6 +184,11 @@ export interface ChartModel {
   yDomain?: readonly [number, number];
   /** Dashed reference values drawn across the plot, e.g. the consensus target (CH-12). */
   referenceLines?: { value: number; label: string }[];
+  /**
+   * The point the head reads when it is not the last: a histogram's most common bucket, the last
+   * complete cohort (CH-19); the chart reads it while idle.
+   */
+  reading?: ChartPoint;
   /** The API's peak of the drawn series, in display units (CH-21); absent where none applies. */
   peak?: { label: string; raw: string } | null;
 }
@@ -237,22 +270,21 @@ export function formatChartReadout(value: string, unit: string): string {
   );
   const negative = numerator < BigInt(0);
   const abs = negative ? -numerator : numerator;
-  const sign = negative ? '-' : plus ? '+' : '';
-  if (RATE_UNITS.has(unit))
-    return `${sign}${formatExactDecimal(formatScaledInteger(abs, denominator, 2), `chart ${unit} readout`)}`;
-  // A whole count under 100,000 reads exactly, grouped, as the Charts board shows it ("16,826").
-  if (
-    COUNT_UNITS.has(unit) &&
-    abs % denominator === BigInt(0) &&
-    abs < denominator * BigInt(100000)
-  )
-    return `${sign}${formatExactDecimal((abs / denominator).toString(), `chart ${unit} readout`)}`;
-  return `${sign}${formatCompactRatio(abs, denominator)}`;
+  const shown = RATE_UNITS.has(unit)
+    ? formatExactDecimal(formatScaledInteger(abs, denominator, 2), `chart ${unit} readout`)
+    : // A whole count under 100,000 reads exactly, grouped, as the Charts board shows it ("16,826").
+      COUNT_UNITS.has(unit) && abs % denominator === BigInt(0) && abs < denominator * BigInt(100000)
+      ? formatExactDecimal((abs / denominator).toString(), `chart ${unit} readout`)
+      : formatCompactRatio(abs, denominator);
+  // A value that rounds to zero has no sign ("0.00", never "-0.00"); a negative one takes the
+  // minus sign (CH-21).
+  const sign = /^[0.,]+[A-Z]?$/.test(shown) ? '' : negative ? MINUS : plus ? '+' : '';
+  return `${sign}${shown}`;
 }
 
-/** The exact chart value, every returned digit, thousands grouped (detail facts and rows). */
+/** The exact chart value, every returned digit, thousands grouped, a negative's minus sign (CH-21). */
 export function formatChartExact(value: string, unit: string): string {
-  return formatExactDecimal(value, `chart ${unit} exact value`);
+  return formatExactDecimal(value, `chart ${unit} exact value`).replace(/^-/, MINUS);
 }
 
 /** Detail-page hover readout: rates at the design's two decimals, every other value exact. */
@@ -312,18 +344,21 @@ function singleChart(
     return { label: pointLabel(point.date), values };
   });
   const currentIndex = timelineMarkers ? timelineCurrentIndex(definition.slug, payload.data) : null;
+  // Two series of one unit are named in the page's words (CH-21); a companion with no names fails.
+  const companionNames = hasSecond && !definition.secondary ? definition.seriesNames : undefined;
+  if (hasSecond && !definition.secondary && !companionNames)
+    throw new Error(`${definition.slug}: a companion series with no names`);
   const series: ChartSeries[] = [
     {
       key: 'primary',
-      label:
-        primaryField === 'value2' ? (payload.y2AxisLabel ?? definition.title) : payload.yAxisLabel,
+      label: companionNames?.primary ?? payload.yAxisLabel,
       color: 'var(--c-jade)',
     },
   ];
   if (hasSecond && !definition.secondary)
     series.push({
       key: 'companion',
-      label: primaryField === 'value2' ? payload.yAxisLabel : (payload.y2AxisLabel ?? 'Companion'),
+      label: companionNames!.companion,
       color: 'var(--c-aqua)',
       // A companion reading of the same unit (real inflation, daily turnover) is dashed (CH-12).
       dashed: true,
@@ -359,7 +394,10 @@ function singleChart(
       : null;
   // A model timeline is summarised at its "today" sample; any other series at its last point.
   const todayPoint = currentIndex === null ? null : points[currentIndex];
-  const summaryPoint = leadingBucket ?? todayPoint ?? last;
+  // The newest cohort is the month the snapshot falls in, still filling; any older cohort is
+  // complete, since a newer one exists. The head reads the last complete cohort (CH-19).
+  const completeCohort = cohorts ? (points.at(-2) ?? null) : null;
+  const summaryPoint = leadingBucket ?? todayPoint ?? completeCohort ?? last;
   const today =
     timelineMarkers && payload.today
       ? {
@@ -403,7 +441,11 @@ function singleChart(
         : undefined,
     latest: summaryPoint
       ? {
-          label: todayPoint ? `year ${summaryPoint.label}` : summaryPoint.label,
+          label: todayPoint
+            ? `year ${summaryPoint.label}`
+            : cohorts && !completeCohort
+              ? `${summaryPoint.label}, so far`
+              : summaryPoint.label,
           raw: summaryPoint.values.primary,
           display: summary(summaryPoint.values.primary, definition.unit),
         }
@@ -415,6 +457,7 @@ function singleChart(
         : last && previous
           ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
           : null,
+    reading: leadingBucket ?? completeCohort ?? undefined,
     projectedAfter: currentIndex ?? undefined,
     today: timelineMarkers ? today : undefined,
     // A bucket histogram's peak is its most common bucket, already the headline; a model has none.
@@ -451,10 +494,10 @@ function singleChart(
     model.headline = { pre: today.label, display: model.latest.display, unit: definition.unit };
   } else if (timelineMarkers) model.headline = null;
   else if (leadingBucket) model.headline = bucketHeadline(definition, points, leadingBucket);
-  else if (cohorts && last)
+  else if (cohorts && model.latest)
     model.headline = {
-      pre: last.label,
-      display: summary(last.values.primary, definition.unit),
+      pre: model.latest.label,
+      display: model.latest.display,
       unit: definition.unit,
     };
   else if (definition.slug === 'epoch-time-length' && last)
@@ -546,7 +589,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   const series: ChartSeries[] = selectedSeries.map((entry, index) =>
     classes
       ? { key: entry.key, label: classes[entry.key].label, color: classes[entry.key].color }
-      : { key: entry.key, label: entry.label, color: ramp[index] }
+      : { key: entry.key, label: seriesName(definition.slug, entry), color: ramp[index] }
   );
   const last = points.at(-1);
   const previous = points.at(-2);
@@ -969,6 +1012,8 @@ function shareRows(
     entry.label === othersKey
       ? {
           label: `Others beyond the top ${named.length}`,
+          // a remainder, not a rank: it is not numbered (CH-21)
+          remainder: true,
           value: entry.value,
           share: share(entry.shannons),
         }
@@ -1375,17 +1420,30 @@ export function formatEpochLabel(label: string, slug: string): string {
 export type AxisStyle = 'date' | 'month' | 'epoch' | 'model-year' | 'bucket';
 
 /** What a chart's points are, counted (CH-04, CH-36): `2,555 days`, `85 cohorts`, `6 buckets`. */
-const POINT_NOUN: Record<AxisStyle, string> = {
+const POINT_NOUN: Record<Exclude<AxisStyle, 'model-year'>, string> = {
   date: 'day',
   month: 'cohort',
   epoch: 'epoch',
-  'model-year': 'model sample',
   bucket: 'bucket',
 };
 
-/** The span a chart draws, in the page's words, grouped: `2,555 days` (CH-04). */
+/**
+ * The span a chart draws, in the page's words, grouped: `2,555 days` (CH-04); a model curve the
+ * years it runs over, `20 years`, not its samples (CH-19).
+ */
 export function chartSpan(points: readonly ChartPoint[], style: AxisStyle): string {
-  return formatCount(points.length, POINT_NOUN[style]);
+  if (style !== 'model-year' || points.length < 2)
+    return style === 'model-year'
+      ? formatCount(0, 'year')
+      : formatCount(points.length, POINT_NOUN[style]);
+  const [fn, fd] = exactDecimalRatio(points[0].label, 'model span start');
+  const [ln, ld] = exactDecimalRatio(points.at(-1)!.label, 'model span end');
+  const years = ln * fd - fn * ld;
+  const per = ld * fd;
+  if (years < BigInt(0)) throw new Error('model span runs backwards');
+  return years % per === BigInt(0)
+    ? formatCount(years / per, 'year')
+    : `${formatScaledInteger(years, per, 2)} years`;
 }
 
 /** How a chart's x labels read (CH-24, CH-35). */

@@ -43,6 +43,11 @@ export interface ChartDefinition {
    */
   secondary?: { unit: string; label: string; caption: string; note: string };
   primaryField?: 'value' | 'value2';
+  /**
+   * The names of a chart's two series of one unit (the API's value and its companion), in the
+   * page's words, never the API's axis labels with their "(%)" (CH-21).
+   */
+  seriesNames?: { primary: string; companion: string };
   /** Four related charts, as on the ChartDetail board (CH-28). */
   related: readonly string[];
 }
@@ -271,6 +276,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Supply and DAO',
     queryKey: 'chart-inflation-rate',
     fetch: api.getInflationRateChart,
+    seriesNames: { primary: 'Nominal inflation', companion: 'Real inflation' },
     related: ['total-supply', 'secondary-issuance', 'nominal-apc', 'total-deposit'],
   },
   {
@@ -437,6 +443,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     queryKey: 'chart-capacity-turnover-ratio',
     fetch: api.getCapacityTurnoverRatioChart,
     primaryField: 'value2',
+    seriesNames: { primary: 'Weekly turnover', companion: 'Daily turnover' },
     related: ['knowledge-size', 'ckb-volume', 'hodl-wave', 'transaction-count'],
   },
   {

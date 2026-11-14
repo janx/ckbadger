@@ -54,8 +54,10 @@ describe('shared Chart encodings for the charts boards', () => {
         formatValue={(v) => v}
       />
     );
+    // Re-pinned for CH-21 (UI review 2026-11-14): the target's dash is 4 3 in the bright ink,
+    // over a knock-out of the same dash; it was a 3 3 dash at 60 % that the data hid.
     const line = container.querySelector('[data-reference-line="target 4 %"] line')!;
-    expect(line.getAttribute('stroke-dasharray')).toBe('3 3');
+    expect(line.getAttribute('stroke-dasharray')).toBe('4 3');
     expect(text(container)).toContain('target 4 %');
     // The axis grows to hold the target even though no point reaches it. Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(text(container).some((t) => t === '4%')).toBe(true);
@@ -77,7 +79,8 @@ describe('shared Chart encodings for the charts boards', () => {
     );
     const key = container.querySelector('[data-reference-key="target 2.50 %"]')!;
     expect(key.querySelector('text')).toHaveTextContent('target 2.50 %');
-    expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('3 3');
+    // The key's sample is the plot's own line (re-pinned for CH-21: was a 3 3 dash).
+    expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('4 3');
     // The plot starts below the key: every grid line and the marker's name are under it.
     const keyY = Number(key.querySelector('text')!.getAttribute('y'));
     const gridYs = [
@@ -612,9 +615,10 @@ describe('chart material (visual finish V13)', () => {
       ];
       expect(grid.length).toBeGreaterThan(1);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
+      // A target keeps its own dash (re-pinned for CH-21: 4 3, was 3 3 like a hardfork's).
       expect(container.querySelector('[data-reference-line="target 4 %"] line')).toHaveAttribute(
         'stroke-dasharray',
-        '3 3'
+        '4 3'
       );
       const marker = [...container.querySelectorAll('svg g')].find(
         (g) => g.querySelector('title')?.textContent === 'Meepo'

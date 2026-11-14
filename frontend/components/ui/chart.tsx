@@ -157,7 +157,24 @@ const X_LABEL_ROW = 12;
 /** The band above the plot that keys its target lines, its label baseline and swatch length. */
 const REFERENCE_KEY_BAND = 14;
 const REFERENCE_KEY_Y = 10;
-const REFERENCE_SWATCH = 14;
+const REFERENCE_SWATCH = 18;
+/**
+ * A target line, drawn alike in the plot and as its key's sample (CH-21): a dash in the bright ink
+ * over a knock-out of the same dash in the page's ground, drawn after the data, so it reads where
+ * a series runs along it; the sample is that line, not a "---" that reads as text.
+ */
+const REFERENCE_DASH = { stroke: 'var(--c-text-bright)', strokeWidth: 1, strokeDasharray: '4 3' };
+const REFERENCE_KNOCKOUT = { ...REFERENCE_DASH, stroke: 'var(--c-base-bg)', strokeWidth: 3 };
+
+/** The target line from `x1` to `x2` at `y`: the knock-out, then the dash. */
+function ReferenceStroke({ x1, x2, y }: { x1: number; x2: number; y: number }) {
+  return (
+    <>
+      <line x1={x1} x2={x2} y1={y} y2={y} {...REFERENCE_KNOCKOUT} />
+      <line x1={x1} x2={x2} y1={y} y2={y} {...REFERENCE_DASH} />
+    </>
+  );
+}
 
 /** Target-line keys laid right to left from the plot's right edge: dashed swatch, then label. */
 function referenceKeys(
@@ -803,26 +820,15 @@ export function Chart({
               )}
               {referenceLines.map((line) => (
                 <g key={line.label} data-reference-line={line.label}>
-                  <line
-                    x1={left}
-                    x2={right}
-                    y1={y(line.value)}
-                    y2={y(line.value)}
-                    stroke="var(--c-text)"
-                    strokeOpacity="0.6"
-                    strokeDasharray="3 3"
-                  />
+                  <ReferenceStroke x1={left} x2={right} y={y(line.value)} />
                 </g>
               ))}
               {referenceKeys(referenceLines, right).map(({ label, swatch, textEnd }) => (
                 <g key={label} data-reference-key={label}>
-                  <line
+                  <ReferenceStroke
                     x1={swatch}
                     x2={swatch + REFERENCE_SWATCH}
-                    y1={REFERENCE_KEY_Y - 3}
-                    y2={REFERENCE_KEY_Y - 3}
-                    stroke="var(--c-text)"
-                    strokeDasharray="3 3"
+                    y={REFERENCE_KEY_Y - 3}
                   />
                   <text
                     x={textEnd}

@@ -115,9 +115,13 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
     ].includes(definition.slug)
   )
     return stacked;
+  // A second value belongs only to a chart that names it (a second unit, or two named series of
+  // one); any other chart takes the value alone (re-pinned for CH-21: an unnamed companion fails,
+  // where it was drawn as "Companion").
+  const single = { ...simple, data: simple.data.map(({ date, value }) => ({ date, value })) };
   if (definition.slug === 'uncle-rate')
-    return { ...simple, orphanRateTarget: { numerator: 1, denominator: 40 } };
-  return simple;
+    return { ...single, orphanRateTarget: { numerator: 1, denominator: 40 } };
+  return definition.secondary || definition.seriesNames ? simple : single;
 }
 
 describe('29 chart variants', () => {
@@ -159,7 +163,8 @@ describe('29 chart variants', () => {
     expect(formatChartReadout('1234', 'transactions')).toBe('1,234');
     expect(formatChartReadout('123456', 'transactions')).toBe('123.46K');
     expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.01B');
-    expect(formatChartReadout('-1234.5', 'CKB')).toBe('-1.23K');
+    // A negative takes the minus sign (re-pinned for CH-21: was the hyphen).
+    expect(formatChartReadout('-1234.5', 'CKB')).toBe('−1.23K');
     // Rates and durations at two decimals, as charts.json shows them (91.34 PH/s, 1.34%).
     expect(formatChartReadout('12.5', '%')).toBe('12.50');
     expect(formatChartReadout('93.685105781336746', 'PH/s')).toBe('93.69');
@@ -453,8 +458,10 @@ describe('29 chart variants', () => {
     expect(miner.latest?.display).toBe('50');
     // Re-pinned for CH-03: the leader is a named fact at the one share form.
     expect(miner.facts?.[0].value).toContain('50.00%');
+    // One value per day, as the API sends it (re-pinned for CH-21: an unnamed companion fails).
     const uncle = chartModel(CHART_BY_SLUG.get('uncle-rate')!, {
       ...simple,
+      data: simple.data.map(({ date, value }) => ({ date, value })),
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
     expect(uncle.facts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);

@@ -99,7 +99,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
             <li key={`${row.label}:${index}`} className="min-w-0">
               <div className="text-small flex min-w-0 flex-wrap items-baseline gap-x-4">
                 <span className="text-text-bright min-w-0 break-words">
-                  {index + 1}.{' '}
+                  {!row.remainder && `${index + 1}. `}
                   {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
                   {row.href ? (
                     <Link href={row.href} title={row.title} className="text-jade hover:underline">
@@ -373,7 +373,8 @@ function DetailBody({
         {/* The command runs on what it draws (rubbing × Song print, phase 5): `full history 1,204
             days`, `distribution 24 buckets`; a ranked chart counts nothing here. */}
         <DetailSection
-          title={distribution ? 'Distribution' : 'Full history'}
+          // A model curve is a model of its years, not a history (CH-19).
+          title={distribution ? 'Distribution' : style === 'model-year' ? 'Model' : 'Full history'}
           args={model.kind !== 'ranked' ? chartSpan(points, style) : undefined}
         >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -450,12 +451,9 @@ function DetailBody({
               hideCaption
               markers={markers}
               projectedAfter={range === 'all' ? model.projectedAfter : undefined}
-              // A histogram reads its most common bucket, a model its today (CH-30, CH-03).
-              reading={
-                style === 'bucket'
-                  ? { label: model.latest.label, values: { primary: model.latest.raw } }
-                  : model.today
-              }
+              // A histogram reads its most common bucket, cohorts the last complete one, a model
+              // its today (CH-30, CH-19, CH-03).
+              reading={model.reading ?? model.today}
               formatValue={(value) => formatChartHover(value, model.unit)}
               // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
               xTicks={axisTicks(points, style, 8, xUnit)}

@@ -63,15 +63,17 @@ describe('chart detail key (C#4)', () => {
       bands.map(() => true)
     );
     // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    // The bands as ranges, the youngest "< 1 d" (re-pinned for CH-14 / CH-21: the API's "24h",
+    // "1d-1w" … "> 3y").
     expect(items.map((item) => item.textContent)).toEqual([
-      '24h5.00%',
-      '1d-1w10.00%',
-      '1w-1m15.00%',
-      '1m-3m10.00%',
-      '3m-6m10.00%',
-      '6m-1y15.00%',
-      '1y-3y20.00%',
-      '> 3y15.00%',
+      '< 1 d5.00%',
+      '1 d – 1 w10.00%',
+      '1 w – 1 m15.00%',
+      '1 m – 3 m10.00%',
+      '3 m – 6 m10.00%',
+      '6 m – 1 y15.00%',
+      '1 y – 3 y20.00%',
+      '> 3 y15.00%',
     ]);
     // each swatch is its band's colour on the plot
     const swatches = items.map(
