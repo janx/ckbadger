@@ -34,6 +34,7 @@ const holder = (n: number, balance: string) => ({
   lockScriptHash: `0x${String(n).repeat(64)}`,
   address: null,
   balance,
+  lockCodeHash: `0x${'9b'.repeat(32)}`,
   lockKind: 'Godwoken Custodian Lock',
 });
 
