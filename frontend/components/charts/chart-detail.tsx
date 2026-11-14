@@ -25,6 +25,7 @@ import {
   formatChartHover,
   formatEpochLabel,
   type ChartModel,
+  type SubChart,
 } from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { api } from '@/lib/api';
@@ -148,6 +149,24 @@ function Reading({
         </span>
         <span className="text-text-dim text-meta">{unit}</span>
       </span>
+    </div>
+  );
+}
+
+/**
+ * The head of a chart under the main one: one dim line saying what it counts (CH-06) and its
+ * figure under the label the page's head figure carries (CH-05).
+ */
+function SubChartHead({ sub }: { sub: SubChart }) {
+  const key = sub.series[0].key;
+  return (
+    <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-x-6 gap-y-2">
+      <p className="text-text-dim text-small min-w-0 max-w-[62ch]">{sub.note}</p>
+      {sub.reading && (
+        <div role="group" aria-label={`${sub.title} reading`}>
+          <Reading label={sub.reading.label} raw={sub.reading.point.values[key]} unit={sub.unit} />
+        </div>
+      )}
     </div>
   );
 }
@@ -458,7 +477,7 @@ function DetailBody({
           // is its own quantity and span, for assistive technology (CH-04, CH-06).
           return (
             <DetailSection key={history.title} title={history.title} args={span}>
-              <p className="text-text-dim text-small mb-3">{history.note}</p>
+              <SubChartHead sub={history} />
               {history.points.length ? (
                 <Chart
                   title={history.title}
@@ -488,9 +507,10 @@ function DetailBody({
             what it counts; its own title and caption are for assistive technology (CH-06). */}
         {model.secondary && model.secondary.points.length > 0 && (
           <DetailSection title={model.secondary.title} args={chartSpan(secondaryPoints, style)}>
-            <p className="text-text-dim text-small mb-3">{model.secondary.note}</p>
+            <SubChartHead sub={model.secondary} />
             <Chart
               title={model.secondary.title}
+              reading={model.secondary.reading?.point}
               subtitle={`${model.secondary.caption} · ${chartSpan(secondaryPoints, style)}`}
               hideCaption
               data={secondaryPoints}
@@ -512,9 +532,10 @@ function DetailBody({
             title={model.dailyFlow.title}
             args={chartSpan(rangePoints(model.dailyFlow.points, range), 'date')}
           >
-            <p className="text-text-dim text-small mb-3">{model.dailyFlow.note}</p>
+            <SubChartHead sub={model.dailyFlow} />
             <Chart
               title={model.dailyFlow.title}
+              reading={model.dailyFlow.reading?.point}
               subtitle={`${model.dailyFlow.caption} · ${chartSpan(rangePoints(model.dailyFlow.points, range), 'date')}`}
               hideCaption
               data={rangePoints(model.dailyFlow.points, range)}

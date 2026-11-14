@@ -68,6 +68,40 @@ export interface SubChart {
   points: ChartPoint[];
   series: ChartSeries[];
   unit: string;
+  /**
+   * Its figure (CH-05): the point it reads, labelled the way the head figure is — the date, the
+   * epoch, the cohort, or a distribution's largest bucket by name. A history keyed by many bands
+   * has none (its legend reads them).
+   */
+  reading?: { label: string; point: ChartPoint };
+}
+
+/** A dated sub-chart read at its last day, the head's date (CH-05). */
+function withLastReading(sub: SubChart): SubChart {
+  const last = sub.points.at(-1);
+  return last ? { ...sub, reading: { label: last.label, point: last } } : sub;
+}
+
+/** The point whose `key` value is largest; the first of equals. */
+function largestPoint(points: readonly ChartPoint[], key: string, context: string): ChartPoint {
+  if (!points.length) throw new Error(`${context}: no points to read`);
+  return points.reduce((best, point) => {
+    const [n, d] = exactSignedDecimalRatio(point.values[key], `${context} ${point.label}`);
+    const [bn, bd] = exactSignedDecimalRatio(best.values[key], `${context} ${best.label}`);
+    return n * bd > bn * d ? point : best;
+  });
+}
+
+/** A sub-chart's figure at the point labelled `label`, written as the head writes it (CH-05). */
+function readingAt(
+  sub: SubChart,
+  label: string,
+  style: AxisStyle,
+  slug: string
+): NonNullable<SubChart['reading']> {
+  const point = sub.points.find((entry) => entry.label === label);
+  if (!point) throw new Error(`${slug}: ${sub.title} has no point at ${label}`);
+  return { label: style === 'epoch' ? `#${formatEpochLabel(label, slug)}` : label, point };
 }
 
 export interface ChartModel {
@@ -318,22 +352,10 @@ function singleChart(
   const bucketDistribution = BUCKET_DISTRIBUTIONS.includes(definition.slug);
   // Cohorts are ordered by first-seen month: the card reads the newest one, not the largest (CH-09).
   const cohorts = definition.slug === 'address-cohort-retention';
-  const leadingBucket = bucketDistribution
-    ? points.reduce<ChartPoint | null>((best, point) => {
-        if (!best) return point;
-        const [currentNumerator, currentDenominator] = exactSignedDecimalRatio(
-          point.values.primary,
-          `${definition.slug} bucket ${point.label}`
-        );
-        const [bestNumerator, bestDenominator] = exactSignedDecimalRatio(
-          best.values.primary,
-          `${definition.slug} bucket ${best.label}`
-        );
-        return currentNumerator * bestDenominator > bestNumerator * currentDenominator
-          ? point
-          : best;
-      }, null)
-    : null;
+  const leadingBucket =
+    bucketDistribution && points.length
+      ? largestPoint(points, 'primary', `${definition.slug} bucket`)
+      : null;
   // A model timeline is summarised at its "today" sample; any other series at its last point.
   const todayPoint = currentIndex === null ? null : points[currentIndex];
   const summaryPoint = leadingBucket ?? todayPoint ?? last;
@@ -412,6 +434,19 @@ function singleChart(
               raw: chartUnitValue(apiPeak.value, definition.scale, `${definition.slug} peak`),
             },
   };
+  // A figure under the main chart reads where the head does, labelled alike; a distribution's
+  // at its own largest bucket, by name, never its last (CH-05).
+  const style = axisStyle(definition);
+  if (secondary?.points.length && summaryPoint)
+    secondary.reading = bucketDistribution
+      ? (() => {
+          const point = largestPoint(secondary.points, 'secondary', `${definition.slug} secondary`);
+          return { label: `largest, ${point.label}`, point };
+        })()
+      : readingAt(secondary, summaryPoint.label, style, definition.slug);
+  const flow = model.dailyFlow;
+  if (flow?.points.length)
+    flow.reading = readingAt(flow, flow.points.at(-1)!.label, 'date', definition.slug);
   // A model timeline's headline is the API's today, at its exact age (CH-03, CH-33).
   if (timelineMarkers && today) {
     model.latest = {
@@ -587,7 +622,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
     unit: definition.unit,
     kind: 'stacked',
     secondary: holderCount
-      ? {
+      ? withLastReading({
           title: 'Holder count',
           caption: 'Holders, per day',
           note: 'Addresses holding a positive balance at the end of each day.',
@@ -603,7 +638,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
               ),
             },
           })),
-        }
+        })
       : undefined,
     latest:
       last && lastTotal !== null
@@ -738,7 +773,7 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
     series: [{ key: 'liveCells', label: 'Live cells', color: DATA_COLOR }],
     unit: definition.unit,
     kind: 'line',
-    secondary: {
+    secondary: withLastReading({
       title: 'Consumed cells, cumulative',
       caption: 'Consumed cells, cumulative',
       note: 'Cells consumed since genesis, counted at the end of each day.',
@@ -748,7 +783,7 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
         label: point.date,
         values: { secondary: read(point, 'deadCells') },
       })),
-    },
+    }),
     latest: last
       ? {
           label: last.label,

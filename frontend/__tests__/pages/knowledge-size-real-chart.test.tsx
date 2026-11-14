@@ -34,7 +34,14 @@ describe('KnowledgeSizePage with the real chart', () => {
     expect(path).toMatch(/^M/);
     expect(path).not.toMatch(/NaN|Infinity/);
     fireEvent.keyDown(svg, { key: 'ArrowLeft' });
-    expect(screen.getByText('-30')).toBeInTheDocument();
+    // Re-pinned for CH-05: the flow's own figure reads -30 at its date too, so the keyboard's
+    // reading is looked for in the chart's readout line.
+    expect(screen.getByRole('status', { name: 'Net knowledge flow readout' })).toHaveTextContent(
+      '2026-02-19 · -30 CKB/day'
+    );
+    expect(screen.getByRole('group', { name: 'Net knowledge flow reading' })).toHaveTextContent(
+      '2026-02-19-30CKB/day'
+    );
     // Re-pinned for CH-06: the one dim line says what the flow counts in plain words.
     expect(container).toHaveTextContent(
       'Occupied CKB gained since the previous day; below zero, CKB freed.'
