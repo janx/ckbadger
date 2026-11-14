@@ -1159,7 +1159,8 @@ function minerRows(
       row: {
         label,
         value: String(miner.blocksMined),
-        // Two decimals, every other share's form; the API's four are the row's hover (CH-14).
+        // Two decimals, every other share's form (CH-14): the API's floored four, rounded half up,
+        // read the same as the exact block ratio at two.
         share: `${summary(miner.percentage, '%')}%`,
         href: miner.address
           ? `/address/${miner.address}`
