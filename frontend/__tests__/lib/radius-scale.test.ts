@@ -26,10 +26,7 @@ import tailwindConfig from '@/tailwind.config';
  */
 
 /** Sites the gate tolerates, as `path:line` → why the element is a round mark whose size is set elsewhere. */
-const ALLOWLIST: Record<string, string> = {
-  'components/activity-breakdown.tsx:81':
-    'the skeleton of a pie chart, a disc standing in for the disc to come (no importer: the cleanup lane removes the file)',
-};
+const ALLOWLIST: Record<string, string> = {};
 
 /** Where the page's classes are written: the directories tailwind.config.ts reads for content. */
 const SCAN_DIRS = ['app', 'components'];
