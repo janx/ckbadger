@@ -79,6 +79,21 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
   }) as typeof window.matchMedia;
 }
 
+// jsdom has no user-agent stylesheet: getComputedStyle gives a span the display '' where a browser
+// gives 'inline', and an accessible name computed from content puts a space around every element
+// that is not inline. A unit that never breaks (NoBreak: a short hash, an out point's `:index`, a
+// date) is a span, inline in a browser, so "0x673e18…55f9:0" reads with no space where a unit
+// ends; here it gets the browser's default display of a span, so the names tests compute read as
+// browsers read them. No component writes a display of its own for a test's sake: a caller's
+// display class wins in the browser (A4 review 2). Scoped to the units, as the other spans' names
+// were pinned under jsdom's default.
+if (typeof document !== 'undefined') {
+  const unitDisplay = document.createElement('style');
+  unitDisplay.dataset.testUserAgent = 'nobreak-display';
+  unitDisplay.textContent = '[data-nobreak] { display: inline; }';
+  document.head.appendChild(unitDisplay);
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
