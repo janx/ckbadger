@@ -35,6 +35,20 @@ describe('ThemeSwitcher (the header menu)', () => {
     expect(button()).toHaveAttribute('aria-expanded', 'true');
   });
 
+  // UI review 2026-11-14 (R4, U-08): the menu's eyebrow and the System row's hint are words, so
+  // they are the dim ink, never the ghost.
+  it('writes the menu eyebrow and the hint in the dim ink', () => {
+    render(<ThemeSwitcher />);
+    fireEvent.click(button(), { detail: 1 });
+    const menu = screen.getByRole('menu', { name: 'Theme' });
+    expect(within(menu).getByText('Theme')).toHaveClass('text-text-dim');
+    render(<ThemeSegments />);
+    const segments = screen.getByTestId('theme-segments');
+    expect(within(segments).getByText('Theme')).toHaveClass('text-text-dim');
+    expect(within(segments).getByText('(dark)')).toHaveClass('text-text-dim');
+    expect(document.body.innerHTML).not.toContain('text-text-ghost');
+  });
+
   it('chooses a theme: stored, applied to <html>, the button renamed, the menu closed', () => {
     render(<ThemeSwitcher />);
     fireEvent.click(button(), { detail: 1 });

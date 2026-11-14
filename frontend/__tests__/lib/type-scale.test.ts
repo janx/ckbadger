@@ -61,10 +61,7 @@ const CSS_ALLOWLIST: Record<string, string> = {
  * R12: every eyebrow (an uppercase label: a tier boundary's, a frame's, a hero figure's) is one
  * size, `text-meta` (ten were `text-small`), as `path:line` → reason for a site that is not.
  */
-const EYEBROW_ALLOWLIST: Record<string, string> = {
-  'components/layout/navbar-dropdown-styles.ts:14':
-    'left for lane B4, which owns components/layout/**; listed in the B2 hand-back',
-};
+const EYEBROW_ALLOWLIST: Record<string, string> = {};
 
 const CSS_FILE = 'app/globals.css';
 /** In order on a line: a rule's opening (its selector), a font size, a rule's end. */

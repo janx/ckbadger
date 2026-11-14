@@ -26,8 +26,6 @@ import { TYPE_SCALE } from '@/lib/type-scale';
 const PADDING = 'padding zeros: the trailing zeros of an amount’s fraction';
 const SEPARATOR = 'decoration: the separator between the crumbs or the parts of a line';
 const ARROW = 'decoration: the aria-hidden arrow between two tiles of a mechanism chain';
-const LEFT_B4 =
-  'left for lane B4, which owns components/layout/**: a menu eyebrow or hint, listed in the B2 hand-back';
 
 /** Per file, in order: the reasons of its sites of one kind. */
 type Allowlist = Readonly<Record<string, readonly string[]>>;
@@ -47,8 +45,6 @@ const GHOST_ALLOWLIST: Allowlist = {
   'components/dao/dao-grows.tsx': [PADDING],
   'components/dao/dao-history.tsx': [PADDING],
   'components/fiber/fiber-channel-board.tsx': [PADDING],
-  'components/layout/network-switcher.tsx': [LEFT_B4],
-  'components/layout/theme-switcher.tsx': [LEFT_B4, LEFT_B4, LEFT_B4],
   'components/scripts/script-family-page.tsx': [SEPARATOR],
   'components/scripts/script-hero.tsx': [PADDING],
   'components/transaction/script-group-matrix.tsx': [ARROW],
@@ -61,7 +57,6 @@ const FORK_ALERT =
 /** `text-<ink>/<n>` sites the gate tolerates. */
 const ALPHA_INK_ALLOWLIST: Allowlist = {
   'components/deep-fork-alert.tsx': [FORK_ALERT, FORK_ALERT, FORK_ALERT, FORK_ALERT, FORK_ALERT],
-  'components/layout/network-switcher.tsx': [LEFT_B4, LEFT_B4],
 };
 
 const LINKED =
