@@ -905,7 +905,7 @@ async fn get_cluster_holders(
             let owner = super::assets::owner_lock(&state.store, lock_hash, &state.ckb_network)?;
             Ok(ClusterHolderResponse {
                 lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
-                address: owner.as_ref().map(|owner| owner.address.clone()),
+                address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
                 item_count: *count,
@@ -1305,7 +1305,7 @@ async fn get_spore(
                 .transpose()
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .flatten()
-                .map(|resolved| resolved.address);
+                .and_then(|resolved| resolved.address);
             // The spore's canonical cell history: the live cell (if any) and
             // the last cell, whose type script names the spore on chain.
             let versions = {

@@ -125,38 +125,50 @@ pub use ckbadger_common::script_to_address;
 /// The address of a lock script, as the chain encodes it.
 ///
 /// The ONE lock → address encoding for every response that names a party.
-/// Every lock script that exists on chain is encodable, so a failure here
-/// means the script (a stored `CF_LOCK_SCRIPTS` row, or a mirrored pool cell)
-/// is corrupt: an error naming the lock hash, never a guessed or fabricated
-/// address.
+/// `Ok(None)`: the script has no address form — its args are longer than an
+/// RFC-0021 full address can carry (bech32m stops at 1023 characters, which
+/// 599 bytes of args fill; lock args are unbounded on chain). That is a fact
+/// about a valid script, told by the encoder's typed length error
+/// ([`ckbadger_common::ScriptAddressError::TooLong`]); the party is then named
+/// by its lock hash and code hash. Any other failure means the script (a
+/// stored `CF_LOCK_SCRIPTS` row, or a mirrored pool cell) is not a CKB script
+/// — an unknown hash_type, a code hash that is not 32 bytes: an error naming
+/// the lock hash, never a guessed or fabricated address.
 pub fn encode_lock_address(
     lock_hash: &[u8],
     code_hash: &[u8],
     hash_type: i16,
     args: &[u8],
     network: &str,
-) -> anyhow::Result<String> {
-    script_to_address(code_hash, hash_type, args, network).map_err(|e| {
-        anyhow::anyhow!(
+) -> anyhow::Result<Option<String>> {
+    match script_to_address(code_hash, hash_type, args, network) {
+        Ok(address) => Ok(Some(address)),
+        Err(ckbadger_common::ScriptAddressError::TooLong { .. }) => Ok(None),
+        Err(e) => Err(anyhow::anyhow!(
             "lock script cannot be encoded as an address: lock_hash=0x{}, hash_type={hash_type}, error={e}",
             hex::encode(lock_hash)
-        )
-    })
+        )),
+    }
 }
 
 /// A lock hash the chain view knows, with its script and address.
 #[derive(Debug, Clone)]
 pub struct ResolvedLockAddress {
     pub entry: ckbadger_store::types::LockScriptEntry,
-    pub address: String,
+    /// `None` when the script has no address form ([`encode_lock_address`]).
+    pub address: Option<String>,
 }
 
 /// Resolve a full lock hash through `CF_LOCK_SCRIPTS`.
 ///
-/// One error semantic for every party resolver: a store read failure is an
-/// error; a lock the store has never seen is `Ok(None)` (reported as
-/// unresolved); a stored script that cannot be encoded is an error
-/// ([`encode_lock_address`]).
+/// One semantic for every party resolver:
+/// - a lock the store has never seen is `Ok(None)` (nothing known: no
+///   address, no code hash, no kind);
+/// - a known script is `Ok(Some(_))` with its entry (code hash, hash_type,
+///   args) and its address, or `address: None` when the script has no
+///   address form;
+/// - a store read failure, or a stored script that is not a CKB script, is
+///   an error naming the lock hash ([`encode_lock_address`]).
 pub fn resolve_lock_address(
     store: &ckbadger_store::CkbadgerStore,
     lock_hash: &[u8],
@@ -202,6 +214,24 @@ mod tests {
                 args: vec![0x11; 20],
             },
         );
+        // A valid lock with 600 bytes of args: no address form (A4b review).
+        batch.put_lock_script(
+            &[0x04; 32],
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type: 1,
+                args: vec![0x11; 600],
+            },
+        );
+        // The same args under a hash_type no CKB script has: still corrupt.
+        batch.put_lock_script(
+            &[0x05; 32],
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type: 9,
+                args: vec![0x11; 600],
+            },
+        );
         batch.commit().unwrap();
 
         let known = resolve_lock_address(&store, &[0x01; 32], "mainnet")
@@ -209,7 +239,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             known.address,
-            script_to_address(&secp, 1, &[0x11; 20], "mainnet").unwrap()
+            Some(script_to_address(&secp, 1, &[0x11; 20], "mainnet").unwrap())
         );
         assert!(resolve_lock_address(&store, &[0x03; 32], "mainnet")
             .unwrap()
@@ -218,6 +248,18 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains(&"02".repeat(32)), "{err}");
+        let unaddressable = resolve_lock_address(&store, &[0x04; 32], "mainnet")
+            .unwrap()
+            .expect("a known script is resolved");
+        assert_eq!(unaddressable.address, None);
+        assert_eq!(unaddressable.entry.code_hash, secp);
+        let err = resolve_lock_address(&store, &[0x05; 32], "mainnet")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&"05".repeat(32)) && err.contains("Unknown hash_type: 9"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -1888,3 +1888,77 @@ async fn token_issuer_whose_lock_has_no_address_form_is_named_by_its_lock() {
     assert_eq!(issuer["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
     assert_eq!(issuer["lockKind"], "SECP256K1/blake160", "{json}");
 }
+
+/// The token transfers and activities resolve their parties through the same
+/// resolver: a lock with no address form is a null address (as before, when
+/// every encoder failure was dropped), and a stored script that is not a CKB
+/// script (hash_type 9) is no longer dropped as if it had no address — it is
+/// an error naming the lock.
+#[tokio::test]
+async fn token_transfers_tell_a_lock_with_no_address_form_from_a_corrupt_one() {
+    let transfer_from = |from: [u8; 32]| {
+        let store = test_store();
+        let type_hash = [0x7B; 32];
+        let mut token = placeholder_token_without_metadata();
+        token.transfers_count = 1;
+        store.put_token_direct(&type_hash, &token).unwrap();
+        seed_unaddressable_lock(&store, &[0x88; 32]);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_lock_script(
+            &[0x99; 32],
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: vec![0x9b; 32],
+                hash_type: 9,
+                args: vec![0x11; 20],
+            },
+        );
+        batch.put_tx_hash_map(&[0xCC; 32], 100, 3);
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &ckbadger_store::types::TokenTransferRecord {
+                tx_hash: vec![0xCC; 32],
+                block_number: 100,
+                from_lock_hash: Some(from.to_vec()),
+                to_lock_hash: vec![0xB1; 32],
+                amount: 5,
+                is_mint: false,
+                is_burn: false,
+                timestamp: 1_700_000_000_000,
+            },
+        );
+        batch.commit().unwrap();
+        (store, format!("0x{}", hex::encode(type_hash)))
+    };
+
+    let (store, token) = transfer_from([0x88; 32]);
+    let app = create_router(test_config(store)).await;
+    for path in ["transfers", "activities"] {
+        let (status, json) = get_json(&app, &format!("/tokens/{token}/{path}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        let row = if path == "transfers" {
+            &json["data"][0]
+        } else {
+            &json["data"][0]["transfers"][0]
+        };
+        assert_eq!(
+            row["fromLockHash"],
+            format!("0x{}", "88".repeat(32)),
+            "{path}: {json}"
+        );
+        assert!(row["fromAddress"].is_null(), "{path}: {json}");
+    }
+
+    let (store, token) = transfer_from([0x99; 32]);
+    let app = create_router(test_config(store)).await;
+    for path in ["transfers", "activities"] {
+        let (status, json) = get_json(&app, &format!("/tokens/{token}/{path}")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains(&"99".repeat(32)) && message.contains("Unknown hash_type: 9"),
+            "{path}: {json}"
+        );
+    }
+}
