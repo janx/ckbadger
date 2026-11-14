@@ -319,7 +319,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             <text x={col.raw} y={r(ly)} fontSize="11.5" fill={g.color}>
               {shortRaw(g.raw)}
             </text>
-            <text x={col.arrow} y={r(ly)} fontSize="12" fill={GEL_COLORS.rulerText}>
+            <text x={col.arrow} y={r(ly)} fontSize="12" fill={GEL_COLORS.arrow}>
               →
             </text>
             <text

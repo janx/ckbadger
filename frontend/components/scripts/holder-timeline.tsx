@@ -7,7 +7,7 @@ import type { ScriptCustodyApi, ScriptFamilyDetail, ScriptHistoryMarkerApi } fro
 import { formatCount } from '@/lib/format-count';
 import { holderName, shortHex, signingText, type CodeHolder } from '@/lib/script-lineage';
 import { cn, formatUtc8Date } from '@/lib/utils';
-import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS } from '@/lib/design-tokens';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -214,10 +214,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
               ...(tick.anchorRight ? { right: `${100 - tick.at}%` } : { left: `${tick.at}%` }),
             }}
           >
-            {tick.versions}{' '}
-            <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
-              {tick.date}
-            </span>
+            {tick.versions} <span className="text-text-dim">{tick.date}</span>
           </span>
         ))}
       </div>

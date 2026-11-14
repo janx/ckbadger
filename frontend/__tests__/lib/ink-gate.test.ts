@@ -146,7 +146,15 @@ const SPARK_GLYPH =
  * attribute or a style, that the gate tolerates.
  */
 const FAINT_INK_ALLOWLIST: Allowlist = {
+  // the quiet slate's ↔ between a channel's two parties
+  'app/fiber/channels/client-page.tsx': [SEPARATOR],
+  // the quiet slate's ↔ between the two parties of a channel
+  'components/fiber/fiber-channel-board.tsx': [SEPARATOR],
   'components/home/mini-chart.tsx': [SPARK_GLYPH],
+  // the quiet slate's aria-hidden → between two holders
+  'components/scripts/script-family-board.tsx': [SEPARATOR],
+  // the quiet slate's → between a gene's raw bytes and its value
+  'components/ui/sequencing-gel.tsx': [SEPARATOR],
 };
 
 interface Site {

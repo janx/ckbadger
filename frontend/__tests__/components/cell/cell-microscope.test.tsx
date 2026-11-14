@@ -531,7 +531,9 @@ describe('cell microscope field detail rail (old issue B)', () => {
 
 // Visual finish V11: the dump's inks are theme classes or named inks, no bracket hex.
 describe('cell microscope inks (V11)', () => {
-  it('draws the offsets in the quiet slate and the rail on the theme’s row rule', () => {
+  // Re-pinned with lane E2's follow-up (ruling R4 covers the quiet ink): an offset is a figure, so
+  // the dim ink (4.57:1 or more), no longer the quiet slate (2.31–3.27:1).
+  it('draws the offsets in the dim ink and the rail on the theme’s row rule', () => {
     stubChartWidth(1200);
     render(<CellMicroscope cell={cell} />);
     const box = screen.getByLabelText('Cell bytes');
@@ -540,8 +542,8 @@ describe('cell microscope inks (V11)', () => {
     );
     expect(offsets.length).toBeGreaterThan(0);
     for (const el of offsets) {
-      expect(el).toHaveClass('text-[color:var(--ink)]');
-      expect(el.style.getPropertyValue('--ink')).toBe('var(--c-ink-quiet)');
+      expect(el).toHaveClass('text-text-dim');
+      expect(el.style.getPropertyValue('--ink')).toBe('');
     }
     expect(screen.getByRole('complementary', { name: 'Field detail' })).toHaveClass(
       'border-base-border-subtle'

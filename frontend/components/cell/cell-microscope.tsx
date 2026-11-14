@@ -37,8 +37,6 @@ export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 
 /** Excerpt ranges align to 24 bytes, which every dump row length (24, 16, 8) divides or fits. */
 const ROW = 24;
-/** Offsets and sizes in the quiet slate, a text ink read by `text-[color:var(--ink)]`. */
-const QUIET = inkStyle(BOARD_INKS.quiet);
 /** The capacity map's gap between parts (`gap-[2px]`). */
 const MAP_GAP = 2;
 /** Data longer than this shows excerpts with "⋯ N bytes … show" rows instead of every byte. */
@@ -203,10 +201,9 @@ const HexRows = memo(function HexRows({
       <div key={`${block}:${r}`} className="flex h-[21px] items-center">
         <span
           className={cn(
-            'shrink-0 select-none text-[color:var(--ink)]',
+            'text-text-dim shrink-0 select-none',
             width === 5 ? 'w-[74px]' : 'w-[62px]'
           )}
-          style={QUIET}
         >
           0x{r.toString(16).padStart(width, '0')}
         </span>
@@ -456,7 +453,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             [
               'raw',
               rawHex(part.block === 'output' ? outBytes : dataBytes, part),
-              part.occupied ? part.tone : 'var(--c-ink-quiet)',
+              part.occupied ? part.tone : 'var(--c-text-dim)',
             ],
             ...(part.value !== null ? [['value', part.value] as [string, ReactNode]] : []),
             [
@@ -652,9 +649,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     style={{ backgroundColor: region.tone }}
                   />
                   {region.label}{' '}
-                  <span className="text-[color:var(--ink)]" style={QUIET}>
-                    {fmt(region.end - region.start)}
-                  </span>
+                  <span className="text-text-dim">{fmt(region.end - region.start)}</span>
                 </span>
               ))}
           </div>
@@ -702,7 +697,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                       style={{ backgroundColor: part.occupied ? part.tone : 'var(--c-text-ghost)' }}
                     />
                     {part.block === 'output' ? part.label.split(' · ').at(-1) : part.label}
-                    <span className="text-meta text-[color:var(--ink)]" style={QUIET}>
+                    <span className="text-meta text-text-dim">
                       [{fmt(part.start)}..{fmt(part.end)})
                     </span>
                   </button>
