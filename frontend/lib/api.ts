@@ -128,7 +128,7 @@ export function isServiceUnavailableError(error: unknown): error is ApiRequestEr
   return candidate.code === 'service_unavailable' && candidate.status === 503;
 }
 
-export { isNotFoundApiError } from '@/lib/api-errors';
+export { isBadRequestApiError, isNotFoundApiError } from '@/lib/api-errors';
 
 interface PaginatedResponse<T> {
   data: T[];
