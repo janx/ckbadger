@@ -94,6 +94,19 @@ The 640–767 band has one content width to design for. Below 640 the container 
   its index, a date, a hyphenated term — never broken inside. A name plate's full hash stands on
   one line where the measured line holds it, else in two halves (`0x` and 32 digits, then the last
   32 indented 2ch), each half one unit, never a scroller.
+- **Formats** (`frontend/lib/shorten.ts`, `frontend/lib/format-unit.ts`; UI review 2026-11-14,
+  U-09, CH-14, PA-22): a shortened id has three sizes, counted in characters of the value as
+  written (`0x` and `ckb1` included) — `head` 12…8 for an h1 or a lede, `row` 10…6 in tables, feeds
+  and tiles, `tight` 6…4 for a hash and 8…6 for an address in a phone row, a chart label or a tile
+  under 200 px; a list with a table and a phone row takes the size of the form it is drawn in. Any
+  other hex id takes the hash's sizes; an out point is its hash and `:N`; a value no longer than
+  its shortened form is written whole. The ellipsis is the one character `…`, never `...`. A
+  renderer takes a size, never a length (gate `__tests__/lib/shorten-gate.test.ts`). A
+  percentage has two decimals and its sign with no space (`24.79%`); a compact count or CKB amount
+  takes a lowercase `k` for thousands, then `M`, `B`, `T`; a physical quantity keeps its SI prefix
+  with its symbol (`PH/s`, `kB`); a figure writes the symbol (`s`, `h`, `d`, `B`), prose the word.
+  A row of a live list (blocks, transactions, activities, the pool) says its age (`20s ago`) with
+  the full date-time in its hover; a list that is historical by nature keeps the date.
 
 ## Check
 

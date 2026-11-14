@@ -377,6 +377,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | TUI              | `crates/tui/src/`                                                                                                                                                                          |
 | Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                                                         |
 | Frontend API     | `frontend/lib/api.ts`                                                                                                                                                                      |
+| Formats          | `frontend/lib/shorten.ts` (an id shortened at one of three sizes, the one ellipsis), `frontend/lib/format-unit.ts` (a number with its unit, the one percentage)                            |
 | Theme / palette  | `frontend/lib/palette.ts` (both themes, one source), `frontend/lib/theme.ts` (preference store), `frontend/components/layout/theme-switcher.tsx`                                           |
 | Shell pieces     | `frontend/components/layout/wordmark.tsx` (the text logo), `status-line.tsx` (the 26 px terminal status line), `prompt-end.tsx` (the page's last prompt), `header.tsx`                     |
 | Prompt headings  | `frontend/components/ui/prompt-heading.tsx` (`■ command args · note`; `DetailSection`, `SectionHeading`, `TerminalPanelHeader` wrap it), `components/ui/comment.tsx` (the `#` voice lines) |
