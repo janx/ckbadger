@@ -2,7 +2,7 @@
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { Chart } from '@/components/ui/chart';
+import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   ScriptCustodyEvidence,
@@ -280,18 +280,24 @@ function historyAxis(
   return { position, upgradeList: [...upgradeDays] };
 }
 
-/** Dashed upgrade lines over a panel, on the plot's x (the plots have no axis gutter). */
+/** Dashed upgrade lines over a panel, on the plot's x: from the plots' value gutter (`left`). */
 function UpgradeLines({
   upgradeList,
   position,
   attribute,
+  left,
 }: {
   upgradeList: readonly [string, number[]][];
   position: (day: string) => number | null;
   attribute: 'data-upgrade-line' | 'data-upgrade-tick';
+  left: number;
 }) {
   return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 right-[10px]">
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-y-0 right-[10px]"
+      style={{ left: `${left}px` }}
+    >
       {upgradeList.map(([day]) => {
         const at = position(day);
         return at === null ? null : (
@@ -324,14 +330,17 @@ function UpgradeLabels({
   position,
   width,
   plotName,
+  left,
 }: {
   upgradeList: readonly [string, number[]][];
   position: (day: string) => number | null;
   width: number | null;
   plotName: string;
+  /** The plots' value gutter: the plot, and these labels, start after it. */
+  left: number;
 }) {
   if (width === null) return null;
-  const plot = width - 10;
+  const plot = width - 10 - left;
   const taken: [number, number][] = [[0, LABEL_PAD * 2 + plotName.length * LABEL_ADVANCE]];
   const placed: { day: string; text: string; at: number; right: boolean }[] = [];
   const days = upgradeList
@@ -351,7 +360,8 @@ function UpgradeLabels({
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none absolute left-0 right-[10px] top-0 h-[28px]"
+      className="pointer-events-none absolute right-[10px] top-0 h-[28px]"
+      style={{ left: `${left}px` }}
     >
       {placed
         .sort((a, b) => a.at - b.at)
@@ -402,10 +412,28 @@ export function ScriptHistoryFigure({
   }));
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
   const plotName = `CKB in ${family.name} cells · occupied and free`;
-  const shared = {
+  const held: ChartValueAxisInput = {
+    title: `CKB in ${family.name} cells`,
     data,
     unit: 'CKB',
-    insideYTicks: true,
+    kind: 'stacked',
+    series: [
+      { key: 'used', label: 'Occupied', color: DATA_COLOR },
+      { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+    ],
+  };
+  const occupied: ChartValueAxisInput = {
+    title: "Occupied by those cells' own bytes",
+    data,
+    unit: 'CKB',
+    kind: 'area',
+    series: [{ key: 'used', label: 'Occupied', color: DATA_COLOR }],
+  };
+  // U-19: the round values sit in one gutter left of both plots, in the dim ink (inside, a spike
+  // crossed them); the upgrade lines and labels start after it, on the plots' x.
+  const plotLeft = alignedPlotLeft([held, occupied]);
+  const shared = {
+    plotLeft,
     hideCaption: true,
     activeIndex: active,
     onActiveIndexChange: onActive,
@@ -413,34 +441,33 @@ export function ScriptHistoryFigure({
   } as const;
   return (
     <div ref={ref} data-testid="script-history" className="relative mt-[18px] min-w-0">
-      <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-line" />
+      <UpgradeLines
+        upgradeList={upgradeList}
+        position={position}
+        attribute="data-upgrade-line"
+        left={plotLeft}
+      />
       <UpgradeLabels
         upgradeList={upgradeList}
         position={position}
         width={width}
         plotName={plotName}
+        left={plotLeft}
       />
       <Chart
         {...shared}
-        title={`CKB in ${family.name} cells`}
+        {...held}
         subtitle="Occupied and free capacity, indexed chain day"
         plotName={plotName}
-        kind="stacked"
         height={300}
-        series={[
-          { key: 'used', label: 'Occupied', color: DATA_COLOR },
-          { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
-        ]}
       />
       <div className="mt-2">
         <Chart
           {...shared}
-          title="Occupied by those cells' own bytes"
+          {...occupied}
           subtitle="Occupied capacity on its own scale"
           plotName="occupied by those cells' own bytes"
-          kind="area"
           height={96}
-          series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
         />
       </div>
     </div>

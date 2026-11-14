@@ -7,7 +7,7 @@ import { DaoBoard } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
-import { expectTicksInGutter } from '@/__tests__/utils/y-ticks';
+import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -971,7 +971,8 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
     expect(chart).toHaveAttribute('height', '200');
     expect(chart.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-      'AR, the accumulated rate · 1.0 at genesis'
+      // Re-pinned with U-19: shorter, so it fits beside the value gutter at 360 px.
+      'accumulated rate (AR) · 1.0 at genesis'
     );
     // the tip AR cut (not rounded) to four places
     expect(chart.querySelector('[data-role="end-label"]')).toHaveTextContent(/^1\.0150$/);
@@ -1381,10 +1382,10 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     const chart = await within(
       screen.getByRole('region', { name: 'How a deposit grows' })
     ).findByRole('img', { name: /^AR by date/ });
-    // Round values inside the plot (hierarchy v3), not in a gutter.
-    const ticks = Array.from(chart.querySelectorAll('[data-role="y-tick"]')).map((t) =>
-      t.textContent!.trim()
-    );
+    // Re-pinned with U-19 (UI review 2026-11-14): the round values sit in the dim gutter, no
+    // longer inside the plot.
+    expect(chart.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+    const ticks = yTickLabels(chart).map((t) => t.textContent!.trim());
     expect(ticks[0]).not.toBe('0');
     // the daily series spans 1.000 … 1.015
     expect(ticks).toContain('1.010');

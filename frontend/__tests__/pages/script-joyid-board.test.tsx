@@ -9,7 +9,7 @@ import { api, type Cell } from '@/lib/api';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
-import { expectTicksInGutter, plotLeftOf } from '@/__tests__/utils/y-ticks';
+import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -455,10 +455,12 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(Number(occupied.getAttribute('height'))).toBeLessThan(
       Number(main.getAttribute('height'))
     );
-    // Values inside the plot from its left edge, no axis column (R13).
-    const ticks = [...main.querySelectorAll('[data-role="y-tick"]')];
+    // Re-pinned with U-19 (UI review 2026-11-14): the values sit in a dim gutter left of the plot,
+    // anchored at their end, no longer inside it from its left edge.
+    expect(main.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+    const ticks = yTickLabels(main);
     expect(ticks.length).toBeGreaterThan(0);
-    for (const t of ticks) expect(t.getAttribute('text-anchor')).not.toBe('end');
+    for (const t of ticks) expect(t.getAttribute('text-anchor')).toBe('end');
   });
 
   // Table-rows L1-3 ruling: no code track between the picture and its reading any more.

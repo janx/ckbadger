@@ -2,6 +2,7 @@ import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils'
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { yTickLabels, plotLeftOf } from '@/__tests__/utils/y-ticks';
 const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
   { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
@@ -52,17 +53,18 @@ describe('Asset history', () => {
       );
       const plots = screen.getAllByRole('img');
       expect(plots).toHaveLength(3);
-      // Lane P (R13, Main.dc.html): the ticks are ghost values written inside each plot from its
-      // left edge, so no gutter can cut them; the longest one still starts inside its chart.
-      const ticks = [...plots[2].querySelectorAll('[data-role="y-tick"]')];
+      // Re-pinned with U-19 (UI review 2026-11-14): the ticks are in one gutter sized from the
+      // longest of the three plots' labels, so it holds "5k transactions" whole.
+      const ticks = yTickLabels(plots[2]);
       expect(ticks.map((t) => t.textContent)).toContain('5k transactions');
+      const left = plotLeftOf(plots[2]);
+      expect(left).toBeGreaterThanOrEqual('5k transactions'.length * 6 + 8);
       for (const tick of ticks) {
-        expect(tick.getAttribute('text-anchor')).toBeNull();
-        expect(Number(tick.getAttribute('x'))).toBe(8);
+        expect(tick.getAttribute('text-anchor')).toBe('end');
+        expect(Number(tick.getAttribute('x'))).toBe(left - 8);
       }
       // The three plots still share one left edge, so their days line up.
-      const lefts = plots.map((plot) => plot.querySelector('line')!.getAttribute('x1'));
-      expect(new Set(lefts).size).toBe(1);
+      expect(new Set(plots.map(plotLeftOf)).size).toBe(1);
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
@@ -82,8 +84,9 @@ describe('Asset history', () => {
         />
       );
       // Lane P: the plot names its inks inside it (Main.dc.html); the readout keys them.
+      // Re-pinned with U-19: a shorter name, so it fits beside the value gutter at 360 px.
       expect(screen.getByRole('img', { name: 'CKB held in its cells, CKB' })).toHaveTextContent(
-        'CKB held in its cells · occupied, free above it'
+        'CKB held · occupied, free'
       );
       const swatches = [
         ...screen.getByLabelText('History readout').querySelectorAll<HTMLElement>('[aria-hidden]'),
@@ -139,7 +142,10 @@ describe('Asset history', () => {
 
   // Lane P (R13, Main.dc.html, measured ~150 px by lane A): the main history plot is the page's
   // picture, at least 280 px tall, its name and round values written inside it in ghost ink.
-  it('draws the main plot 280 px tall with its name and ghost values inside it', () => {
+  // Re-pinned with U-19 (UI review 2026-11-14): the values leave the plot for a dim gutter (they
+  // were ghost values written inside it, under the line and behind the bars); the name stays
+  // inside the plot, after the gutter, short enough to fit a 360 px phone.
+  it('draws the main plot 280 px tall with its name inside it and its values in the gutter', () => {
     stubChartWidth(1248);
     try {
       for (const token of [undefined, { symbol: 'T', decimals: 0 }]) {
@@ -155,24 +161,16 @@ describe('Asset history', () => {
         );
         const main = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
         expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
-        expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-          'CKB held in its cells · occupied, free above it'
-        );
-        // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
-        expect(
-          8 + main.querySelector('[data-role="chart-name"]')!.textContent!.length * 6.6
-        ).toBeLessThanOrEqual(326);
+        const name = main.querySelector('[data-role="chart-name"]')!;
+        expect(name).toHaveTextContent('CKB held · occupied, free');
+        const left = plotLeftOf(main);
+        expect(Number(name.getAttribute('x'))).toBe(left + 8);
         for (const plot of screen.getAllByRole('img')) {
-          const ticks = [...plot.querySelectorAll('[data-role="y-tick"]')];
+          expect(plot.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+          const ticks = yTickLabels(plot);
           expect(ticks.length).toBeGreaterThan(0);
-          for (const tick of ticks) expect(tick).toHaveAttribute('fill', 'var(--c-text-ghost)');
-          // no axis column: no value is written right-aligned left of the plot
-          expect(
-            [...plot.querySelectorAll('text[text-anchor="end"]')].filter(
-              (t) => Number(t.getAttribute('x')) < 200
-            )
-          ).toEqual([]);
-          expect(plot.querySelector('line')).toHaveAttribute('x1', '0');
+          for (const tick of ticks) expect(tick).toHaveAttribute('fill', 'var(--c-text-dim)');
+          expect(plotLeftOf(plot)).toBe(left);
         }
         unmount();
       }

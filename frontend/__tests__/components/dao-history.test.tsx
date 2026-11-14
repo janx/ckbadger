@@ -201,15 +201,17 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
     // A tap on the main plot pins the day it lands on; leaving keeps it.
     const main = container.querySelector('svg[data-panel="deposited"]')!;
-    fireEvent.pointerMove(main, { clientX: 600 });
-    fireEvent.click(main, { clientX: 600 });
+    // Re-pinned with U-19: the plot starts after its 48 px value gutter, so its middle day (77 of
+    // 154) is under x = 48 + 1,152 / 2 = 624, no longer 600.
+    fireEvent.pointerMove(main, { clientX: 624 });
+    fireEvent.click(main, { clientX: 624 });
     fireEvent.pointerLeave(main);
     expect(reading).toHaveTextContent(new RegExp(`^selected ${date(77)} · deposited`));
     // "selected" opens the same row of items, so it shares their line.
     const row = within(reading).getByText(date(77)).parentElement!;
     expect(row).toHaveClass('flex', 'flex-wrap');
     expect(row.firstElementChild).toHaveTextContent(/^selected$/);
-    fireEvent.click(main, { clientX: 600 });
+    fireEvent.click(main, { clientX: 624 });
     expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
   });
 
@@ -297,7 +299,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     ).toHaveTextContent(`since ${date(125)}`);
   });
 
-  it('starts the deposited scale at a round top near the peak and writes its values inside the plot', () => {
+  // Re-pinned with U-19 (UI review 2026-11-14): the values sit in a dim gutter left of the plot
+  // (48 px, the charts' least), anchored at their end, no longer ghost values inside it.
+  it('starts the deposited scale at a round top near the peak and writes its values in a gutter', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
@@ -307,9 +311,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // 101,190 CKB at most: round values up to 150k; 0 is the baseline and 150k the name's band.
     expect(ticks.map((t) => t.textContent)).toEqual(['50k', '100k']);
     for (const t of ticks) {
-      expect(t).toHaveAttribute('x', '8');
-      expect(t).not.toHaveAttribute('text-anchor', 'end');
-      expect(t).toHaveClass('fill-text-ghost');
+      expect(t).toHaveAttribute('x', '40');
+      expect(t).toHaveAttribute('text-anchor', 'end');
+      expect(t).toHaveClass('fill-text-dim');
     }
   });
 });
