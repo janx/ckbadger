@@ -5,6 +5,7 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
 import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
@@ -127,13 +128,17 @@ function cutCkb(shannons: bigint): { sign: string; integer: string; fraction: st
   return { sign: parts.sign, integer: parts.integer, fraction: `.${digits.slice(0, 2)}` };
 }
 
+/** Exact CKB as text: the fraction in the sign's quieter ink (`AMOUNT_INK`), padding zeros ghost. */
 function ExactCkbText({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
   const parts = splitCkbAmount(shannons);
+  const ink = AMOUNT_INK[signed ? amountSign(parts.sign) : 'neutral'];
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {signed ? parts.sign : null}
       {parts.integer}
-      <span className="opacity-70">{parts.fraction}</span>
+      <span data-fraction className={ink.fraction}>
+        {parts.fraction}
+      </span>
       <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
