@@ -385,6 +385,63 @@ describe('Token holders’ shares at the extremes', () => {
   });
 });
 
+// A4b review: a holder whose lock has no address form (args longer than an address can carry;
+// lock args are unbounded on chain) comes with a null address and its lock's code hash and kind.
+// The row names it by its lock hash, linked to the address page that takes a lock hash, and by its
+// lock kind — never "lock not indexed", which is said only when there is no code hash.
+describe('Token holders name a holder whose lock has no address form by its lock (A4b review)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const lockHash = `0x${'88'.repeat(32)}`;
+  const mount = () => {
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      data: [
+        {
+          lockScriptHash: lockHash,
+          address: null,
+          balance: '100',
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockKind: 'SECP256K1/blake160',
+        },
+      ],
+      total: 1,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+      totalSupply: '100',
+      anchor: null,
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+  };
+  const addressPage = expect.stringMatching(new RegExp(`/address/${lockHash}$`));
+
+  it('in the table', async () => {
+    atContainerWidth(1248);
+    mount();
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const [, row] = within(table).getAllByRole('row');
+    expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
+    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
+    expect(row).toHaveAttribute(
+      'title',
+      expect.stringContaining(`${lockHash} · SECP256K1/blake160`)
+    );
+    expect(row.getAttribute('title')).not.toMatch(/not indexed/);
+  });
+
+  it('in the phone row', async () => {
+    atContainerWidth(358);
+    mount();
+    const [row] = await screen.findAllByTestId('holder-row-mobile');
+    expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
+    expect(phoneLines(row)[0].left).toMatch(/ SECP256K1\/blake160$/);
+    expect(row).not.toHaveTextContent(/not indexed/);
+  });
+});
+
 describe('Token holders where the table does not fit (L5)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

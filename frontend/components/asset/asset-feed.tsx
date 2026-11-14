@@ -441,7 +441,7 @@ function RecentAssetFeed({
             )}
           </>
         ) : (
-          <AssetReadState label="recent activity" error={acts.error} loading={acts.isLoading} />
+          <AssetReadState label="recent activity" error={acts.error} read={acts} />
         )}
       </div>
     </section>
@@ -598,7 +598,7 @@ function FullAssetFeed({
           />
         </>
       ) : (
-        <AssetReadState label={tab} error={current.error} loading={current.isLoading} />
+        <AssetReadState label={tab} error={current.error} read={current} />
       )}
     </section>
   );

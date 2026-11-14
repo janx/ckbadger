@@ -109,6 +109,45 @@ describe('Collection holders', () => {
     expect(rows[3]).not.toHaveTextContent(/JoyID|0x4343/);
   });
 
+  // A4b review: a holder whose lock has no address form (args longer than an address can carry)
+  // comes with a null address and its lock's code hash and kind: it is named by its lock hash,
+  // linked to the address page that takes a lock hash, and by its kind — never "lock not indexed".
+  it('names a holder whose lock has no address form by its lock hash and kind (A4b review)', async () => {
+    const unaddressable = {
+      lockScriptHash: `0x${'88'.repeat(32)}`,
+      address: null,
+      itemCount: 2,
+      lockCodeHash: `0x${'9b'.repeat(32)}`,
+      lockKind: 'SECP256K1/blake160',
+    };
+    const addressPage = `/mainnet/address/0x${'88'.repeat(32)}`;
+    const load = vi.fn().mockResolvedValue(page([unaddressable], { total: 1 }));
+    try {
+      atContainerWidth(1248);
+      const { unmount } = render(
+        <CollectionHolders assetClass="objects" load={load} queryKey="no-address" />
+      );
+      const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+      const [, row] = within(table).getAllByRole('row');
+      expect(within(row).getByRole('link')).toHaveAttribute('href', addressPage);
+      expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
+      expect(row).toHaveAttribute(
+        'title',
+        `#1 · 0x${'88'.repeat(32)} · SECP256K1/blake160 · 2 items`
+      );
+      unmount();
+      atContainerWidth(358);
+      render(<CollectionHolders assetClass="objects" load={load} queryKey="no-address-phone" />);
+      const [phone] = await screen.findAllByTestId('holder-row-mobile');
+      expect(within(phone).getByRole('link')).toHaveAttribute('href', addressPage);
+      expect(phone).toHaveTextContent('SECP256K1/blake160');
+      expect(phone).not.toHaveTextContent(/not indexed/);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('uses backend ordering and cursor pages, and resets mode and cursor for a new collection', async () => {
     const load = vi
       .fn()

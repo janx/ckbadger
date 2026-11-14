@@ -2,6 +2,7 @@
 
 import { useState, useMemo, memo } from 'react';
 import type { IdShortening } from '@/components/ui/hex-code';
+import { useCopy } from '@/hooks/useCopy';
 import { ELLIPSIS, shortenHash } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
@@ -94,7 +95,7 @@ export function HexDisplay({
   ...shortening
 }: HexDisplayProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy(value);
   const truncate = shortening.truncate !== false;
 
   // The value at its size (U-09), the `0x` drawn apart in the prefix ink.
@@ -126,17 +127,6 @@ export function HexDisplay({
 
     return result;
   }, [displayValue, groupSize]);
-
-  const handleCopy = async () => {
-    if (!copyable) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  };
 
   const sizeClasses = {
     sm: 'text-small',
@@ -179,7 +169,8 @@ export function HexDisplay({
         copyable && 'cursor-pointer hover:opacity-90',
         className
       )}
-      onClick={handleCopy}
+      // the one copy path (hooks/useCopy): a copy that cannot work shows nothing
+      onClick={copyable ? copy : undefined}
       title={copyable ? `Click to copy: ${value}` : value}
     >
       {prefix && <span className={cn('mr-0.5', prefixColorClasses[color])}>{prefix}</span>}

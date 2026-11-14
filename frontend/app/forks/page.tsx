@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
@@ -378,7 +379,7 @@ export default function ForksPage() {
             }
             figure={data ? uncleRate(data) : undefined}
             picture={
-              overview.isLoading ? (
+              isAwaited(overview) ? (
                 <p role="status" className="text-text-dim text-small">
                   Loading fork history…
                 </p>
@@ -418,7 +419,7 @@ export default function ForksPage() {
               />
               <ShapeKey />
             </div>
-            {events.isLoading && <p role="status">Loading branch switches…</p>}
+            {isAwaited(events) && <p role="status">Loading branch switches…</p>}
             {events.error && (
               <p role="alert" className="text-rouge text-small">
                 Branch switches unavailable: {(events.error as Error).message}

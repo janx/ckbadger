@@ -200,11 +200,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               )}
             </>
           ) : (
-            <AssetReadState
-              error={latest.error}
-              loading={latest.isLoading}
-              label="last token movement"
-            />
+            <AssetReadState error={latest.error} read={latest} label="last token movement" />
           )}
           {t.metadata?.conflict && t.metadata.chain && (
             // F2 objects (IV-26): a relabelled token says what the chain calls it.
@@ -433,7 +429,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             <AssetReadState error={supplyEvents.error} label="supply events" retained />
           </>
         ) : (
-          <AssetReadState error={history.error} loading={history.isLoading} label="token history" />
+          <AssetReadState error={history.error} read={history} label="token history" />
         )}
       </div>
       <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import { render } from '../utils/test-utils';
 import ForkDetailPage from '@/app/forks/[height]/[orphan]/client-page';
 import { api } from '@/lib/api';
@@ -492,5 +493,24 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(screen.getByText('Not an id · 400')).toBeInTheDocument();
     expect(notFound).not.toHaveBeenCalled();
     expect(api.getForkAt).not.toHaveBeenCalled();
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the page drew nothing at all while it waited.
+  it('says it is loading while its read is paused offline, then shows the fork once back online', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    onlineManager.setOnline(false);
+    try {
+      render(<ForkDetailPage />);
+      expect(await screen.findByText('Loading fork evidence…')).toHaveAttribute('role', 'status');
+      expect(api.getForkAt).not.toHaveBeenCalled();
+      act(() => onlineManager.setOnline(true));
+      expect(
+        await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading fork evidence…')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

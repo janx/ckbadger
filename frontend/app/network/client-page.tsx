@@ -2,6 +2,7 @@
 
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -375,15 +376,12 @@ export function NetworkClientPage() {
   // C1: the dashboard has its own hero, not a shared header; every state of the page is this one
   // topic, so the page names the tab (it renders no NotFoundPage).
   useDocumentTitle(NETWORK_TITLE);
-  const {
-    data: summary,
-    isLoading,
-    error,
-  } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'summary'],
     queryFn: api.getNetworkSummary,
     refetchInterval: 30000,
   });
+  const { data: summary, error } = read;
 
   let content: ReactNode;
   if (error) {
@@ -394,7 +392,7 @@ export function NetworkClientPage() {
         </p>
       </DetailLayout>
     );
-  } else if (isLoading || !summary) {
+  } else if (isAwaited(read) || !summary) {
     content = <LoadingSkeleton />;
   } else if (!summary.hasData || !summary.lastRound) {
     content = (

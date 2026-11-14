@@ -1,4 +1,5 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
@@ -342,5 +343,19 @@ describe('ScriptsPage', () => {
     });
 
     expect(screen.queryByText(/data is being prepared/i)).toBeNull();
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('ScriptsPage while its read is paused', () => {
+  it('says it is loading, not "No scripts.", then lists the scripts once back online', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+    const { resume } = renderPaused(<ScriptsPage />);
+    expect(await screen.findByText('Loading scripts…')).toBeInTheDocument();
+    expect(screen.queryByText('No scripts.')).toBeNull();
+    resume();
+    expect((await screen.findAllByText('SECP256K1_BLAKE160')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Loading scripts…')).toBeNull();
   });
 });

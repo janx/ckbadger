@@ -21,6 +21,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
+import { isAwaited } from '@/lib/query-state';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -374,11 +375,7 @@ export default function ScriptDetailPage({
   const [selectedDeploymentOutpoint, setSelectedDeploymentOutpoint] = useState<string | null>(null);
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
-  const {
-    data: namedScriptDetail,
-    isLoading: isNamedScriptDetailLoading,
-    error: namedScriptDetailError,
-  } = useQuery({
+  const namedScriptDetailRead = useQuery({
     queryKey: ['script-family-detail', name],
     queryFn: () => {
       if (!name) throw new Error('script name is required');
@@ -386,11 +383,8 @@ export default function ScriptDetailPage({
     },
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const {
-    data: usage,
-    isLoading: isUsageLoading,
-    error: usageError,
-  } = useQuery({
+  const { data: namedScriptDetail, error: namedScriptDetailError } = namedScriptDetailRead;
+  const usageRead = useQuery({
     queryKey: ['script-usage', name],
     queryFn: () => {
       if (!name) throw new Error('script name is required');
@@ -398,20 +392,14 @@ export default function ScriptDetailPage({
     },
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const {
-    data: familyCapacityChart,
-    isLoading: isFamilyCapacityChartLoading,
-    error: familyCapacityChartError,
-  } = useQuery({
+  const { data: usage, error: usageError } = usageRead;
+  const familyCapacityChartRead = useQuery({
     queryKey: ['script-capacity-chart', 'family', name, capacityRange],
     queryFn: () => api.getScriptCapacityChart(name!, capacityRangeParams ?? undefined),
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const {
-    data: codeHashLookup,
-    isLoading: isCodeHashLookupLoading,
-    error: codeHashLookupError,
-  } = useQuery({
+  const { data: familyCapacityChart, error: familyCapacityChartError } = familyCapacityChartRead;
+  const codeHashLookupRead = useQuery({
     queryKey: ['script-lookup-detail', normalizedCodeHash],
     queryFn: async () => {
       const result = await api.lookupScripts([normalizedCodeHash!]);
@@ -420,6 +408,7 @@ export default function ScriptDetailPage({
     enabled: isCodeHashMode,
     staleTime: Infinity,
   });
+  const { data: codeHashLookup, error: codeHashLookupError } = codeHashLookupRead;
   const codeHashDeploymentQueryHashType = useMemo<ScriptRefHashType | null>(() => {
     if (!isCodeHashMode) {
       return null;
@@ -445,16 +434,13 @@ export default function ScriptDetailPage({
     isCodeHashMode,
     selectedRefHashType,
   ]);
-  const {
-    data: codeHashCodeCells,
-    isLoading: isCodeHashCodeCellsLoading,
-    error: codeHashCodeCellsError,
-  } = useQuery({
+  const codeHashCodeCellsRead = useQuery({
     queryKey: ['script-code-cells-unified', normalizedCodeHash, codeHashDeploymentQueryHashType],
     queryFn: () => api.getCodeCells(normalizedCodeHash!, codeHashDeploymentQueryHashType!),
     enabled: Boolean(isCodeHashMode && normalizedCodeHash && codeHashDeploymentQueryHashType),
     staleTime: Infinity,
   });
+  const { data: codeHashCodeCells, error: codeHashCodeCellsError } = codeHashCodeCellsRead;
   const deployments = useMemo<KnownScript[] | null>(() => {
     if (!isCodeHashMode) {
       if (!namedScriptDetail) {
@@ -811,7 +797,7 @@ export default function ScriptDetailPage({
     selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
       ? selectedVersion.scriptKind
       : undefined;
-  const { data: selectedCapacityChart, isLoading: isSelectedCapacityChartLoading } = useQuery({
+  const selectedCapacityChartRead = useQuery({
     queryKey: [
       'script-capacity-chart',
       'version',
@@ -832,6 +818,7 @@ export default function ScriptDetailPage({
           ),
     enabled: isCodeHashMode && Boolean(selectedVersion),
   });
+  const selectedCapacityChart = selectedCapacityChartRead.data;
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
   // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
   const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
@@ -1022,10 +1009,12 @@ export default function ScriptDetailPage({
     versionCellsCursorState,
     cellReferences,
   ]);
-  const isLoading = isCodeHashMode
-    ? isCodeHashLookupLoading || isCodeHashCodeCellsLoading
-    : isNamedScriptDetailLoading || isUsageLoading;
-  if (isLoading) {
+  // The page waits while its reads are awaited: fetching, or paused (offline, or a hidden tab
+  // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
+  const isAwaiting = isCodeHashMode
+    ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
+    : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
+  if (isAwaiting) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
@@ -1222,7 +1211,7 @@ export default function ScriptDetailPage({
       references: deploymentReferenceHashes(deployment, deploymentLookup?.[deployment.codeHash]),
     };
   });
-  const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => query.isLoading);
+  const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => isAwaited(query));
 
   const handleVersionClick = (versionRow: (typeof versionRows)[number]) => {
     if (selectedVersion?.codeHash !== versionRow.codeHash) {
@@ -1261,7 +1250,7 @@ export default function ScriptDetailPage({
         family={namedScriptDetail}
         deprecated={pageDeprecated}
         chart={familyCapacityChart}
-        chartLoading={isFamilyCapacityChartLoading}
+        chartLoading={isAwaited(familyCapacityChartRead)}
         chartError={familyCapacityChartError}
         capacityRange={capacityRange}
         onCapacityRange={setCapacityRange}
@@ -1662,7 +1651,7 @@ export default function ScriptDetailPage({
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
             <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
-            {(isCodeHashMode ? isSelectedCapacityChartLoading : isFamilyCapacityChartLoading) ? (
+            {isAwaited(isCodeHashMode ? selectedCapacityChartRead : familyCapacityChartRead) ? (
               <p className="text-text-dim text-small py-6">Loading capacity history…</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
               <ScriptCapacityEvidenceChart

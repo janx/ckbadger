@@ -285,7 +285,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         {detail.error ? (
           <ReadFailure what="collection" error={detail.error} />
         ) : (
-          <AssetReadState label="collection" error={null} loading={detail.isLoading} />
+          // the read state asks isAwaited: a read paused offline or between retries is awaited
+          <AssetReadState label="collection" error={null} read={detail} />
         )}
       </AssetDetailShell>
     );
@@ -423,7 +424,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           />
         </>
       ) : (
-        <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
+        <AssetReadState label="capacity history" error={chart.error} read={chart} />
       )}
       {kind !== 'identity' && mints !== undefined && transfers !== undefined && (
         <div className="text-text-dim text-small">
@@ -596,7 +597,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     label="cluster cell"
                     error={protocol.error}
                     retained={!!protocol.data}
-                    loading={protocol.isLoading}
+                    read={protocol}
                   />
                   {protocol.data?.current ? (
                     <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
@@ -641,7 +642,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           label="cluster metadata"
           error={cluster.error}
           retained={!!cluster.data}
-          loading={cluster.isLoading}
+          read={cluster}
         />
       )}
       {kind === 'identity' &&
@@ -669,11 +670,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             />
           </>
         ) : (
-          <AssetReadState
-            label="collection insights"
-            error={insights.error}
-            loading={insights.isLoading}
-          />
+          <AssetReadState label="collection insights" error={insights.error} read={insights} />
         ))}
       {kind === 'object' && <CollectionItems id={id} kind={kind} />}
       {kind === 'identity' && history}
@@ -682,7 +679,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           label="collection insights"
           error={insights.error}
           retained={!!insights.data}
-          loading={insights.isLoading}
+          read={insights}
         />
       )}
       {kind === 'identity' && <CollectionItems id={id} kind={kind} />}
@@ -710,7 +707,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               </dl>
             </>
           ) : (
-            <AssetReadState label="PDS distribution" error={pds.error} loading={pds.isLoading} />
+            <AssetReadState label="PDS distribution" error={pds.error} read={pds} />
           )}
         </section>
       )}

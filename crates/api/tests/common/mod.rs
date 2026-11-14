@@ -732,6 +732,38 @@ pub fn unregistered_lock_code_hash_hex() -> String {
     format!("0x{}", hex::encode(UNREGISTERED_LOCK_CODE_HASH))
 }
 
+/// Lock args one byte longer than an RFC-0021 full address can carry: bech32m
+/// caps a string at 1023 characters, which 599 bytes of args reach exactly
+/// (`ckb` + `1` + 1013 data characters + 6 checksum characters). Lock args are
+/// unbounded on chain, so such a lock is a valid owner with no address form.
+pub const UNADDRESSABLE_LOCK_ARGS_LEN: usize = 600;
+
+/// Seed `lock_hash` as a secp256k1-blake160 lock, which the scripts registry
+/// names "SECP256K1/blake160", whose args are [`UNADDRESSABLE_LOCK_ARGS_LEN`]
+/// bytes: a lock the chain accepts and no address can write.
+pub fn seed_unaddressable_lock(store: &CkbadgerStore, lock_hash: &[u8]) {
+    let secp = hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap();
+    let mut batch = StoreBatch::new(store);
+    batch.put_script_info(
+        &secp,
+        &ScriptInfo {
+            code_hash: secp.clone(),
+            hash_type: 1,
+            name: Some("SECP256K1/blake160".into()),
+            ..Default::default()
+        },
+    );
+    batch.put_lock_script(
+        lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: secp,
+            hash_type: 1,
+            args: vec![0x77; UNADDRESSABLE_LOCK_ARGS_LEN],
+        },
+    );
+    batch.commit().unwrap();
+}
+
 /// Seed `named` as a secp256k1-blake160 lock, which the scripts registry names
 /// "SECP256K1/blake160", and `unnamed` as a lock of
 /// [`UNREGISTERED_LOCK_CODE_HASH`], which the registry does not name (both

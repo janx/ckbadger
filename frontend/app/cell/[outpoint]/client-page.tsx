@@ -1,6 +1,8 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useCopy } from '@/hooks/useCopy';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
@@ -300,15 +302,14 @@ function CellFacts({
 }
 
 function CopyOutpoint({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
+  // the one copy path (hooks/useCopy): "copied" for a moment after a copy that worked, nothing
+  // after one that cannot (no clipboard over plain HTTP on a LAN address)
+  const { copied, copy } = useCopy(value);
   return (
     <button
       type="button"
       aria-label="Copy out point"
-      onClick={async () => {
-        await navigator.clipboard.writeText(value);
-        setCopied(true);
-      }}
+      onClick={copy}
       className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] rounded border px-2"
     >
       {copied ? 'copied' : 'copy'}
@@ -540,7 +541,7 @@ export default function CellDetailPage() {
   if (!parts) return <NotFoundPage notAnId={{ kind: 'cell', reason: OUTPOINT_RULE }} />;
   if (!query.data && isBadRequestApiError(query.error))
     return <NotFoundPage notAnId={{ kind: 'cell', reason: query.error.apiMessage }} />;
-  const body = query.isPending ? (
+  const body = isAwaited(query) ? (
     <DetailSkeleton />
   ) : query.error && !query.data ? (
     <ReadFailure what="cell" error={query.error} />

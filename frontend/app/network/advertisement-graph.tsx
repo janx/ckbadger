@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
@@ -13,17 +14,20 @@ const FIRST_OBSERVATIONS = 10;
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const [showAll, setShowAll] = useState(false);
   const queryClient = useQueryClient();
-  const { data, isLoading, error } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'advertisements', roundId],
     queryFn: api.getNetworkAdvertisements,
     refetchInterval: 30000,
   });
+  const { data, error } = read;
   useEffect(() => {
     if (data && data.roundId !== roundId) {
       void queryClient.invalidateQueries({ queryKey: ['network', 'summary'] });
     }
   }, [data, roundId, queryClient]);
-  if (isLoading) return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
+  // awaited, not isLoading: a read paused offline or between retries is still awaited
+  if (isAwaited(read))
+    return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
       <p role="alert" className="text-negative text-small">

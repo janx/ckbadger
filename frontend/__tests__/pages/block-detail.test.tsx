@@ -1,6 +1,9 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { render } from '@/__tests__/utils/test-utils';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
@@ -509,5 +512,64 @@ describe('BlockDetailPage', () => {
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false; the page took that for a read that had completed
+  // without a block and threw.
+  it('waits while its read is paused offline, then shows the block once back online', async () => {
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByRole('status', { name: 'Loading …' })).toBeInTheDocument();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(api.getBlock).not.toHaveBeenCalled();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByText('Position in the chain')).toBeInTheDocument();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it('still fails loudly when its read completes with no block', async () => {
+    vi.mocked(api.getBlock).mockResolvedValueOnce(null as never);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(
+        await screen.findByText(
+          `crashed: Block ${BLOCK_ID}: request completed without block evidence`
+        )
+      ).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  // A1 review fix, round 2: the block has answered; its sections' reads paused offline, or in a
+  // hidden tab between retries, are still awaited: each says it is loading, never a blank, and a
+  // real empty answer still says so once back online.
+  it('says its activities and transactions are loading while their reads are paused', async () => {
+    const { resume } = renderPaused(<BlockDetailPage />, (client) =>
+      client.setQueryData(['block', BLOCK_ID], mockBlock)
+    );
+    expect(await screen.findByText('Loading activities…')).toHaveAttribute('role', 'status');
+    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
+    resume();
+    expect(
+      await screen.findByRole('table', { name: 'Transactions in this block' })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Activities/ }));
+    expect(await screen.findByText('No activities in this block.')).toBeInTheDocument();
   });
 });

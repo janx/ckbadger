@@ -83,19 +83,22 @@ function Token({ name, title, children }: { name: string; title?: string; childr
  * own: at 360 the links take two lines (256.0 and 263.2 of 326 px at 7.2 px a character) and this
  * one, "ckbadger 0.8.2 · asia/shanghai", 216.0. It breaks only between its two tokens (a zone of
  * more than 28 characters at 360): the row is drawn 2ch to the left in a box that clips its left
- * edge only (clip-path, never overflow-hidden, which would also cut a token on the right), so the
- * "·" leading the first token of each line is never seen and the others read "a · b".
+ * edge only, 0.75ch out as the separated list's (clip-path, never overflow-hidden, which would also
+ * cut a token on the right), so the "·" leading the first token of each line is never seen and the
+ * others read "a · b".
  */
 function ReleaseAndZone() {
   const build = resolveBuildVersion();
+  // no zone where Intl gives none: the release stands alone
+  const zone = localZone();
   return (
     <p
       data-testid="footer-about"
-      className="text-text-dim m-0 min-w-0 basis-full lowercase [clip-path:inset(-1em_-100vw_-1em_0)] md:hidden"
+      className="text-text-dim m-0 min-w-0 basis-full lowercase [clip-path:inset(-1em_-100vw_-1em_-0.75ch)] md:hidden"
     >
       <span className="-ml-[2ch] flex flex-wrap gap-x-[1ch]">
         <Token name="release" title={`ckbadger ${build}`}>{`ckbadger ${releaseOf(build)}`}</Token>
-        <Token name="zone">{localZone()}</Token>
+        {zone !== null && <Token name="zone">{zone}</Token>}
       </span>
     </p>
   );

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
@@ -47,6 +47,30 @@ describe('NetworkMapView', () => {
     expect(screen.getByText(/1 of 2 retained verified peers/)).toHaveTextContent(
       '1 locations are unavailable'
     );
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the map and its notes said "Crawler locations
+  // unavailable: null" while they waited.
+  it('waits while its read is paused offline, then draws the map once back online', async () => {
+    server.use(http.get('/api/:network/v1/network/map', () => HttpResponse.json(producerMap)));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <NetworkMapView neverVerified={0} />
+          <NetworkMapNotes />
+        </QueryClientProvider>
+      );
+      expect(await screen.findByText('Loading crawler locations…')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByLabelText('US peer 7065657241, reachable now')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   // Midnight, continued (review 2026-11-03, item 5, move 3): the map is an instrument, in the one

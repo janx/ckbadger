@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { TerminalRow } from '@/components/ui/terminal-panel';
 import { RowTag, type RowTagVariant } from '@/components/ui/row-tag';
 import { WIDE_ROW_MIN_WIDTH } from '@/components/ui/list-table';
@@ -397,7 +398,7 @@ function PeerEvidenceRow({ peerId }: { peerId: string }) {
   });
   return (
     <TerminalRow data-testid="peer-evidence-row">
-      {detail.isLoading ? (
+      {isAwaited(detail) ? (
         <div className="text-text-dim text-small px-4 py-3 font-mono">Loading evidence…</div>
       ) : detail.isError || !detail.data ? (
         <div className="text-negative text-small px-4 py-3 font-mono">
@@ -555,11 +556,12 @@ export function PeersTable() {
   // Table-rows T8: a folded peer is one line where the row has the wide phone row's room.
   const oneLine = boxWidth !== null && boxWidth >= WIDE_ROW_MIN_WIDTH;
 
-  const { data, isLoading, isError, isFetching } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'peers', filters, cursor],
     queryFn: () =>
       api.getNetworkPeers({ ...filters, cursor, limit: cursor ? MORE_PEERS : FIRST_PEERS }),
   });
+  const { data, isError, isFetching } = read;
 
   useEffect(() => {
     if (!data) return;
@@ -576,8 +578,9 @@ export function PeersTable() {
     mergedTokenRef.current = null;
   }
 
-  const showSkeleton = isLoading && rows.length === 0;
-  const showEmpty = !isLoading && !isError && rows.length === 0;
+  // awaited, not isLoading: a read paused offline or between retries has not answered "no peers"
+  const showSkeleton = isAwaited(read) && rows.length === 0;
+  const showEmpty = !isAwaited(read) && !isError && rows.length === 0;
   const activeFilters = [
     filters.state,
     filters.observation,

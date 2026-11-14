@@ -161,7 +161,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
               </AppLink>
             </>
           ) : (
-            <AssetReadState label="name ring" error={ring.error} loading={ring.isLoading} />
+            <AssetReadState label="name ring" error={ring.error} read={ring} />
           )}
         </section>
       }

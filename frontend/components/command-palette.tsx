@@ -9,7 +9,7 @@ import {
   OPEN_SHORTCUTS_EVENT,
 } from '@/lib/search-focus';
 import { resolveSearchRoute } from '@/lib/search-routing';
-import { localZone } from '@/lib/clock';
+import { zoned } from '@/lib/clock';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { SHORTCUT_HINTS } from '@/lib/shortcuts';
 
@@ -400,7 +400,7 @@ export function CommandPalette() {
               <span title={`ckbadger ${resolveBuildVersion()}`}>
                 {`ckbadger ${releaseOf(resolveBuildVersion())}`}
               </span>
-              {` · the status line's clock is local time, ${localZone()}`}
+              {` · ${zoned("the status line's clock is local time")}`}
             </p>
           </>
         )}

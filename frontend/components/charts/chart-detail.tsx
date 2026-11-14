@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { BlocksOfDay } from '@/components/charts/blocks-of-day';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
@@ -605,7 +606,7 @@ export function ChartDetail({ slug }: { slug: string }) {
             Chart data may be incomplete while the indexer synchronizes history.
           </p>
         )}
-        {data.isLoading && (
+        {isAwaited(data) && (
           <div
             className="bg-base-surface h-96 animate-pulse rounded"
             aria-label={`${definition.title} loading`}

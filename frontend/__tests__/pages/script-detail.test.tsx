@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { renderPaused } from '@/__tests__/utils/paused-read';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
@@ -495,6 +497,24 @@ describe('ScriptDetailPage', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the page said "No script deployments" while it
+  // waited.
+  it('waits while its reads are paused offline, then shows the script once back online', async () => {
+    onlineManager.setOnline(false);
+    try {
+      render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+      expect(await screen.findByRole('status', { name: 'Loading …' })).toBeInTheDocument();
+      expect(screen.queryByText('No script deployments')).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(
+        await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })
+      ).toBeInTheDocument();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   it('follows the board order: the hero with its history, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
@@ -814,5 +834,23 @@ describe('ScriptDetailPage', () => {
       ).length
     ).toBeGreaterThan(0);
     expect(screen.queryByTitle(/5\.04B/)).toBeNull();
+  });
+
+  // A1 review fix, round 2: the family has answered; its capacity history and its cells read
+  // paused offline, or in a hidden tab between retries, are still awaited: each says it is
+  // loading, never "No capacity history." or "No live cells use …", and draws once back online.
+  it('says its capacity history and cells are loading while their reads are paused', async () => {
+    const { resume } = renderPaused(<ScriptDetailPage name="SECP256K1_BLAKE160" />, (client) => {
+      client.setQueryData(['script-family-detail', 'SECP256K1_BLAKE160'], mockScriptFamilyDetail);
+      client.setQueryData(['script-usage', 'SECP256K1_BLAKE160'], mockUsage);
+    });
+    expect(await screen.findByText('Loading capacity history…')).toBeInTheDocument();
+    expect(screen.getByText('Loading cells…')).toBeInTheDocument();
+    expect(screen.queryByText('No capacity history.')).toBeNull();
+    expect(screen.queryByText('No live cells use SECP256K1_BLAKE160')).toBeNull();
+    resume();
+    await waitFor(() => expect(screen.queryByText('Loading capacity history…')).toBeNull());
+    expect(screen.queryByText('No capacity history.')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Loading cells…')).toBeNull());
   });
 });

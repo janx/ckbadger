@@ -1,4 +1,5 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { genesisNeighbours, genesisNeighboursPage } from '@/__tests__/msw/fixtures/genesis-block';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -832,5 +833,18 @@ describe('BlocksPage · Blocks v3 board', () => {
         'cellbase' + 'transaction, area ∝ bytes' + 'proposal' + 'block overhead · user transactions'
       );
     });
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('BlocksPage while its read is paused', () => {
+  it('says it is loading, not nothing, then lists the blocks once back online', async () => {
+    vi.mocked(api.getBlocks).mockResolvedValue(mockBlocksResponse);
+    const { resume } = renderPaused(<BlocksPage />);
+    expect(await screen.findByText('Loading blocks…')).toHaveAttribute('role', 'status');
+    resume();
+    expect(await screen.findByRole('table', { name: 'Latest blocks' })).toBeInTheDocument();
+    expect(screen.queryByText('Loading blocks…')).toBeNull();
   });
 });

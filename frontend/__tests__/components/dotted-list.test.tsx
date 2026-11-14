@@ -48,7 +48,10 @@ describe('Dotted: the one separator-joined list', () => {
       'items-baseline',
       'gap-x-[3ch]',
       'min-w-0',
-      '[clip-path:inset(-1em_-100vw_-1em_0)]'
+      // re-pinned (A4 review 4): the left edge 0.75ch out, so the first item's focus ring (1 px
+      // at a 2 px offset: 3 px; 0.75ch is 4.95 px at 11 px, 5.85 px at 13 px) shows, while a
+      // hung "· " keeps its dot hidden: the dot's cell ends 1ch left of the box
+      '[clip-path:inset(-1em_-100vw_-1em_-0.75ch)]'
     );
     // re-pinned (ruling b): the list never hides text on its right
     expect(list).not.toHaveClass('overflow-hidden');

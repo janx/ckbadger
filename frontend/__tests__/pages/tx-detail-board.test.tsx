@@ -5,7 +5,7 @@
  * the cellbase and DAO-withdrawal variants and the pending wording.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import {
@@ -383,6 +383,35 @@ describe('Transaction board, tier 1', () => {
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
+    // A4 review 3: the one copy path; a copy that worked says so in its title for a moment
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveAttribute(
+        'title',
+        'Copied'
+      )
+    );
+  });
+
+  // A4 review 3: over plain HTTP on a LAN address there is no clipboard. The copy button copies
+  // through the one copy path: nothing claims a copy, and nothing rejects unhandled.
+  it('claims no copy and rejects nothing where the clipboard is absent', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      Object.assign(navigator, { clipboard: undefined });
+      render(<TransactionDetailPage />);
+      await screen.findByRole('heading', { level: 1, name: 'Object transfer' });
+      const button = screen.getByRole('button', { name: 'Copy transaction hash' });
+      await act(async () => {
+        fireEvent.click(button);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(button).toHaveAttribute('title', 'Copy transaction hash');
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
   });
 
   // The seals by kind (C2; the Transaction board's one corner): the transaction's long stone,

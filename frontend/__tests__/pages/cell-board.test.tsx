@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
@@ -67,6 +67,37 @@ describe('Cell page against the Cell board', () => {
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
     mockObjectReads();
+  });
+
+  // A4 review 3: the out point's copy button copies through the one copy path (hooks/useCopy):
+  // where there is no clipboard (plain HTTP on a LAN address) it claims no copy and rejects
+  // nothing; a copy that worked says "copied".
+  it('copies the out point through the one copy path, claiming nothing without a clipboard', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      Object.assign(navigator, { clipboard: undefined });
+      const { unmount } = view();
+      const button = await screen.findByRole('button', { name: 'Copy out point' });
+      await act(async () => {
+        fireEvent.click(button);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(button).toHaveTextContent(/^copy$/);
+      expect(rejections).toEqual([]);
+      unmount();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      view();
+      const again = await screen.findByRole('button', { name: 'Copy out point' });
+      fireEvent.click(again);
+      await waitFor(() => expect(again).toHaveTextContent(/^copied$/));
+      expect(writeText).toHaveBeenCalledWith(`${cell.txHash}:${cell.outputIndex}`);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+      Object.assign(navigator, { clipboard: undefined });
+    }
   });
 
   it('presses the cell’s own seal: a Spore object, its hexagon window and type glyph (seal kinds, C3)', async () => {

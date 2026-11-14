@@ -63,6 +63,29 @@ it('keeps how long ago an item was minted and last moved for the sentence’s ho
   );
 });
 
+// A4 review 1 (the sweep of computed counts): an age is this device's clock minus a block's header
+// time, and a node's clock is not this device's; two header times need not run forward either
+// (a block's timestamp only has to pass the median of the 37 before it). Neither may throw.
+it('reads an age through the one age rule when this device’s clock is behind', () => {
+  const minted = v({ timestamp: '600000', lockName: 'secp256k1', isLive: false });
+  const moved = v({ timestamp: '900000', lockName: 'JoyID', isLive: true });
+  // a minute behind the mint: no age, the clock-behind sentence
+  expect(itemLifeAges([minted], 540_000)).toBe("minted: this device's clock is behind");
+  expect(itemLifeAges([minted, moved], 660_000, 'Issued')).toBe(
+    "issued 1 minute ago · last moved: this device's clock is behind"
+  );
+  // within the 15 s consensus allows: age zero
+  expect(itemLifeAges([minted], 590_000)).toBe('minted under a second ago');
+});
+
+it('tells a move without a duration when the later header time runs backwards', () => {
+  const minted = v({ timestamp: '900000', lockName: 'secp256k1', isLive: false });
+  const moved = v({ timestamp: '880000', lockName: 'Nervape Shadow Lock', isLive: true });
+  expect(itemLifeSentence([minted, moved], 10 * 86_400_000)).toBe(
+    'Minted to a secp256k1 lock, then moved to a Nervape Shadow Lock, where it sits now.'
+  );
+});
+
 it('explains what changed in the cell between minting and now', () => {
   const a = v({
     capacity: '30700000000',

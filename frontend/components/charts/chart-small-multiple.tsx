@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -71,10 +72,11 @@ function cardHeadline(model: ChartModel): ChartHeadline | null {
 }
 
 export function ChartSmallMultiple({ definition }: { definition: ChartDefinition }) {
-  const { data, isLoading, error, refetch } = useQuery({
+  const read = useQuery({
     queryKey: [definition.queryKey],
     queryFn: definition.fetch,
   });
+  const { data, error, refetch } = read;
   const style = axisStyle(definition);
   let model: ChartModel | null = null;
   let ticks: { index: number; label: string }[] = [];
@@ -134,7 +136,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
           </div>
         )}
       </div>
-      {isLoading && (
+      {isAwaited(read) && (
         <div
           className="bg-base-surface h-[120px] animate-pulse rounded"
           aria-label={`${definition.title} loading`}

@@ -9,17 +9,9 @@ import { cn } from '@/lib/utils';
  * Utc8Date) use it, and a site that prints such a token as a bare string wraps it here, never in a
  * class of its own.
  *
- * `data-nobreak` names it for tests and the gate.
+ * `data-nobreak` names it for tests and the gate. It writes no display of its own: a span, inline
+ * unless its caller's class sets another (the /blocks Height cell's hash is a `block` line).
  */
-export function NoBreak({ className, style, ...props }: ComponentProps<'span'>) {
-  // `display: inline` is the span's default, stated so that a name computed without a stylesheet
-  // reads "0x673e18…55f9:0" as browsers do, with no space where the unit ends (OutpointIndex).
-  return (
-    <span
-      data-nobreak=""
-      className={cn('whitespace-nowrap', className)}
-      style={{ display: 'inline', ...style }}
-      {...props}
-    />
-  );
+export function NoBreak({ className, ...props }: ComponentProps<'span'>) {
+  return <span data-nobreak="" className={cn('whitespace-nowrap', className)} {...props} />;
 }

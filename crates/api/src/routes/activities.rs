@@ -54,13 +54,13 @@ fn resolve_party_address(
             lock.hash_type,
             &lock.args,
             network,
-        )
-        .map(Some);
+        );
     }
     if let Some(cached) = cache.get(lock_hash.as_slice()) {
         return Ok(cached.clone());
     }
-    let address = resolve_lock_address(store, lock_hash, network)?.map(|resolved| resolved.address);
+    let address =
+        resolve_lock_address(store, lock_hash, network)?.and_then(|resolved| resolved.address);
     cache.insert(lock_hash.to_vec(), address.clone());
     Ok(address)
 }
@@ -118,13 +118,13 @@ fn participant_ref(
         // view (spec §3), and only when exactly one known lock has it.
         ParticipantId::LockPrefix(prefix) => match store.resolve_lock_hash_prefix(&prefix)? {
             Some((hash, entry)) => Ok(ParticipantRef {
-                address: Some(encode_lock_address(
+                address: encode_lock_address(
                     &hash,
                     &entry.code_hash,
                     entry.hash_type,
                     &entry.args,
                     network,
-                )?),
+                )?,
                 lock_hash: Some(format!("0x{}", hex::encode(hash))),
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
                 lock_kind: registered_script_name(store, &entry.code_hash)?,

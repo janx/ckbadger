@@ -10,6 +10,7 @@ import { GENE_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
 
 /** One status pill for an item page: jade while live, grey once gone (OB-15). */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
@@ -178,9 +179,12 @@ export function itemLifeSentence(
     return `${born}${moves ? `, moved ${moves} ${countNoun(moves, 'time')}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
   }
   if (moves === 0) return `${born}, where it sits now.`;
-  const later = spelledDuration(timeOf(last) - timeOf(first));
+  // Two header times need not run forward (a block's timestamp only has to pass the median of the
+  // 37 before it), so a move whose header time is earlier than the mint's is told without a span.
+  const span = timeOf(last) - timeOf(first);
+  const later = span >= 0 ? ` ${spelledDuration(span)} later` : '';
   return moves === 1
-    ? `${born}, then moved ${later} later to ${lockPhrase(last.lockName)}, where it sits now.`
+    ? `${born}, then moved${later} to ${lockPhrase(last.lockName)}, where it sits now.`
     : `${born}, then moved ${moves} times; the last move put it under ${lockPhrase(last.lockName)}, where it sits now.`;
 }
 
@@ -196,10 +200,16 @@ export function itemLifeAges(
   const first = versions[0];
   const last = versions.at(-1);
   if (!first || !last) throw new Error('item life ages need at least one cell version');
-  const born = `${verb.toLowerCase()} ${spelledDuration(now - timeOf(first))} ago`;
-  return versions.length > 1
-    ? `${born} · last moved ${spelledDuration(now - timeOf(last))} ago`
-    : born;
+  // The one age rule (format-age): a header time this device's clock has not reached by more than
+  // consensus allows has no age.
+  const ago = (label: string, version: ItemCellVersion) => {
+    const age = ageSeconds(timeOf(version), now);
+    return age.kind === 'clock-behind'
+      ? `${label}: ${CLOCK_BEHIND}`
+      : `${label} ${spelledDuration(age.seconds * 1000)} ago`;
+  };
+  const born = ago(verb.toLowerCase(), first);
+  return versions.length > 1 ? `${born} · ${ago('last moved', last)}` : born;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──
