@@ -124,9 +124,28 @@ describe('SiteFooter', () => {
       expect(sep.textContent).toBe('· ');
     }
     // re-pinned (ruling b): the box clips the row's left only, never a token on its right
-    expect(about).toHaveClass('min-w-0', '[clip-path:inset(-1em_-100vw_-1em_0)]');
+    // re-pinned (A4 review 4): its left edge 0.75ch out, as the separated list's (the dot's cell
+    // ends 1ch left of the box)
+    expect(about).toHaveClass('min-w-0', '[clip-path:inset(-1em_-100vw_-1em_-0.75ch)]');
     expect(about).not.toHaveClass('overflow-hidden');
     expect(tokens[0].parentElement).toHaveClass('-ml-[2ch]', 'flex', 'flex-wrap', 'gap-x-[1ch]');
+  });
+
+  // A4 review 5: where Intl gives no time zone the row ended on a bare "· ". The zone is absent
+  // when there is none (localZone says so where the zone is read), and the release stands alone.
+  it('writes the release alone where Intl gives no time zone', () => {
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      ...resolved,
+      timeZone: undefined as unknown as string,
+    });
+    render(<SiteFooter />);
+    const about = screen.getByTestId('footer-about');
+    const tokens = [...about.querySelectorAll<HTMLElement>('[data-token]')];
+    expect(tokens.map((t) => t.dataset.token)).toEqual(['release']);
+    expect(about.textContent).not.toMatch(/·\s*$/);
+    expect(about.textContent).not.toMatch(/undefined/);
+    vi.restoreAllMocks();
   });
 
   it('omits the design and coding attribution', () => {

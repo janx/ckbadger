@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { clockText, localZone } from '@/lib/clock';
 
 describe('the status line clock', () => {
@@ -10,6 +10,20 @@ describe('the status line clock', () => {
 
   it('names the local time zone', () => {
     expect(localZone()).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
-    expect(localZone().length).toBeGreaterThan(0);
+    expect(localZone()!.length).toBeGreaterThan(0);
+  });
+
+  // A4 review 5: an engine may give no zone; then there is none to name (null), never "undefined"
+  // or an empty name, and each place that writes the zone leaves it out.
+  it('has no zone where Intl gives none', () => {
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    for (const timeZone of [undefined, '']) {
+      const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+        ...resolved,
+        timeZone: timeZone as unknown as string,
+      });
+      expect(localZone()).toBeNull();
+      spy.mockRestore();
+    }
   });
 });
