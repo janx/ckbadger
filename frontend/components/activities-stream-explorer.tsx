@@ -210,7 +210,7 @@ function ActivityStreamToolbar({
   return (
     <div
       data-testid="activities-stream-toolbar"
-      className="bg-base-bg border-base-border-subtle border-b py-3"
+      className="bg-base-bg border-row-rule border-b py-3"
     >
       <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
         {FILTER_OPTIONS.map((option) => (
@@ -277,7 +277,7 @@ function ActivityStreamToolbar({
 function ActivityDayDivider({ label }: { label: string }) {
   return (
     <div
-      className="text-text-dim border-base-border-subtle text-meta mt-5 border-b py-2"
+      className="text-text-dim border-row-rule text-meta mt-5 border-b py-2"
       data-testid={getDayDividerTestId(label)}
     >
       {label}

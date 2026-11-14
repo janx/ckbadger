@@ -59,7 +59,7 @@ export function HMultiplier({
           {formatCkbCompact(total.toString()).value} CKB
         </span>
       </div>
-      <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
+      <div className="bg-bar-track flex h-3 w-full overflow-hidden rounded-sm">
         <div
           className="bg-gold transition-all duration-300"
           style={{ width: `${usedBarPercent}%` }}

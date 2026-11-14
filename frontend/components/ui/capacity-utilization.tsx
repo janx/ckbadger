@@ -81,7 +81,7 @@ export function CapacityUtilization({
           {formatCkbCompact(total.toString()).value} CKB
         </span>
       </div>
-      <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
+      <div className="bg-bar-track flex h-3 w-full overflow-hidden rounded-sm">
         <div
           data-testid="capacity-used-bar"
           className="transition-[background-color,box-shadow] duration-200"

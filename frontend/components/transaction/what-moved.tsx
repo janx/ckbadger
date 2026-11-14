@@ -527,7 +527,7 @@ export function WhatMoved({
         <TapOrHoverHint what="a party or an asset" className="text-meta" />
         {form === 'ribbons' && <span className="eyebrow text-text-dim text-small">to</span>}
       </div>
-      <div ref={ref} className="divide-base-border-subtle flex min-w-0 flex-col divide-y px-3">
+      <div ref={ref} className="divide-row-rule flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
           <div key={flow.key} className="py-4">
             <Strip flow={flow} lockCodeHashes={lockCodeHashes} onHover={onHover} />

@@ -468,7 +468,7 @@ function GeneList({
               onMouseLeave={() => onGeneHover?.(null)}
               className={cn(
                 LIST_GRID,
-                'border-base-elevated border-b py-1.5',
+                'border-row-rule border-b py-1.5',
                 lane.gene === activeGene && 'bg-base-surface'
               )}
             >
@@ -515,7 +515,7 @@ function GeneList({
                 {lane.variants.toLocaleString('en-US')}
               </span>
               <span role="cell" className="flex items-center justify-end gap-2">
-                <span aria-hidden="true" className="bg-base-elevated flex h-1 w-14 rounded-sm">
+                <span aria-hidden="true" className="bg-bar-track flex h-1 w-14 rounded-sm">
                   <span
                     className="bg-jade rounded-sm"
                     style={{ width: `${(top.count / total) * 100}%` }}

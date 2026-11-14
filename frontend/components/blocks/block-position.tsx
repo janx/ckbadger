@@ -215,7 +215,7 @@ export function BlockPosition({
         {links.map((arc) => (
           <div
             key={`${arc.from}:${arc.to}`}
-            className="border-base-border-subtle text-small space-y-2 border-t pt-3"
+            className="border-row-rule text-small space-y-2 border-t pt-3"
           >
             <p className="text-gold">
               {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +{arc.to - arc.from}{' '}
@@ -238,7 +238,7 @@ export function BlockPosition({
         {block.uncles.map((uncle, index) => (
           <div
             key={uncle.hash}
-            className="border-base-border-subtle text-small min-w-0 space-y-2 border-t border-dashed pt-3"
+            className="border-row-rule text-small min-w-0 space-y-2 border-t border-dashed pt-3"
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
             <Link href={`/blocks/${uncle.parentHash}`} className="block break-all">
@@ -337,11 +337,16 @@ export function BlockPosition({
                   href={`/blocks/${current ? block.hash : parent ? block.parentHash : number}`}
                   aria-label={`Block ${formatBlockNumber(number)}`}
                 >
+                  {/* A tile is the surface under its own 1 px border (DY-08: on the tier-2 ground
+                      the tile's fill alone is 1.03:1 by day), drawn on the pixel grid. */}
                   <rect
-                    width={tileWidth}
-                    height="88"
+                    x="0.5"
+                    y="0.5"
+                    width={tileWidth - 1}
+                    height="87"
                     rx="6"
                     fill={current ? BLOCK_POSITION_COLORS.currentTile : 'var(--c-tile)'}
+                    stroke="var(--c-slate-other)"
                   />
                   <text
                     x="10"

@@ -216,8 +216,11 @@ export const CODE_CLASS_COLORS = {
   ambiguous: { fill: color('base-bg'), edge: color('identity') },
   retired: { fill: color('base-border-subtle'), edge: color('text-ghost') },
 } as const;
-/** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
-export const FREE_CAPACITY_COLOR = color('base-border-subtle');
+/**
+ * Free capacity in a cell anatomy bar (the Script board's "free" swatch): the bar's empty part, in
+ * the bar-track ink, which clears the ruled paper by day (R5).
+ */
+export const FREE_CAPACITY_COLOR = color('bar-track');
 /** The neutral of plain CKB held: the area under occupied in a script's history. */
 export const HELD_CAPACITY_COLOR = CLASS_COLORS.ckb;
 /** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */

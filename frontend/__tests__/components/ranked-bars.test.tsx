@@ -30,7 +30,9 @@ describe('RankedBars', () => {
     const fills = document.querySelectorAll<HTMLElement>('[data-role="share-fill"]');
     expect(fills[0].style.width).toBe('81.4%');
     expect(fills[0]).toHaveClass('bg-jade', 'h-1.5', 'min-w-[2px]');
-    expect(fills[0].parentElement).toHaveClass('bg-base-border-subtle', 'h-1.5');
+    // the empty track is the bar-track ink, which clears the ruled paper by day (R5, re-pinned on
+    // purpose: it was the hair, 1.09:1 on a ruled line)
+    expect(fills[0].parentElement).toHaveClass('bg-bar-track', 'h-1.5');
 
     // A row with nowhere to go is not a link.
     const dao = document.querySelector('[data-rank-row="dao"]') as HTMLElement;

@@ -488,7 +488,7 @@ function FeedActivityRow({
   } catch (error) {
     // A row that breaks the feed contract is reported in place; the page stays up.
     return (
-      <div className="border-base-elevated border-b py-3">
+      <div className="border-row-rule border-b py-3">
         <ActivityReadError txHash={a.txHash} error={error} />
       </div>
     );

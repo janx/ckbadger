@@ -603,7 +603,7 @@ export function PeersTable() {
         </button>
       }
     >
-      <div aria-busy={isFetching} ref={boxRef} className="border-base-border-subtle border-y">
+      <div aria-busy={isFetching} ref={boxRef} className="border-row-rule border-y">
         <div>
           <div
             id={filtersId}
@@ -707,7 +707,7 @@ export function PeersTable() {
         </div>
 
         {data?.nextCursor != null && (
-          <div className="border-base-border-subtle flex justify-center border-t px-4 py-2">
+          <div className="border-row-rule flex justify-center border-t px-4 py-2">
             <button
               type="button"
               onClick={() => setCursor(data.nextCursor ?? undefined)}

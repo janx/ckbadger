@@ -1232,7 +1232,7 @@ function RawEvidence({
         {fields.map((field) => (
           <div
             key={field.key}
-            className="border-base-elevated grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+            className="border-row-rule grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
           >
             <span className="text-text-bright">{field.key}</span>
             <span className="text-text-dim">bytes {field.bytes}</span>

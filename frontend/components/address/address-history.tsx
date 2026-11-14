@@ -331,7 +331,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
     render: (c) => (
       <span>
         <ExactCkb shannons={BigInt(c.occupiedCapacity)} signed={false} tone="plain" wrap />
-        <span aria-hidden="true" className="bg-base-elevated mt-1 block h-1">
+        <span aria-hidden="true" className="bg-bar-track mt-1 block h-1">
           <span
             className="bg-jade block h-1"
             style={{

@@ -420,7 +420,7 @@ function HoldingSection({
         if (!e.currentTarget.contains(e.relatedTarget)) onActive(null);
       }}
     >
-      <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
+      <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
         <h3 className="text-text-bright text-body flex items-center gap-2 font-medium">
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
@@ -735,7 +735,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         <div
                           key={`${cell.txHash}:${cell.outputIndex}`}
                           data-dao-cell
-                          className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
+                          className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
                         >
                           <span className="text-text-dim">
                             <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
@@ -802,7 +802,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   <div
                     key={t.typeScriptHash}
                     data-token-row={t.typeScriptHash}
-                    className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
+                    className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                   >
                     <span className="min-w-0">
                       <Link
@@ -868,7 +868,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   return (
                     <div
                       key={`${c.txHash}:${c.outputIndex}`}
-                      className="border-base-elevated space-y-1 border-b py-3"
+                      className="border-row-rule space-y-1 border-b py-3"
                     >
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link
@@ -989,7 +989,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
               onClick={() => setOpen(isOpen ? null : key)}
               className={cn(
                 COLLECTION_GRID,
-                'border-base-border-subtle text-small min-h-[41px] cursor-pointer border-t py-1',
+                'border-row-rule text-small min-h-[41px] cursor-pointer border-t py-1',
                 isOpen && 'bg-base-surface'
               )}
             >
@@ -1105,10 +1105,7 @@ function AddressCollectionObjects({
                 <div
                   key={`${c.txHash}:${c.outputIndex}`}
                   role="row"
-                  className={cn(
-                    OBJECT_GRID,
-                    'border-base-border-subtle min-h-[41px] border-t py-1'
-                  )}
+                  className={cn(OBJECT_GRID, 'border-row-rule min-h-[41px] border-t py-1')}
                 >
                   <span role="cell" className="flex min-w-0 items-center gap-2">
                     <ClassMark kind="objects" size={12} />
@@ -1145,7 +1142,7 @@ function AddressCollectionObjects({
               );
             })}
           </div>
-          <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
+          <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
             <CursorPagination
               total={group.itemCount}
               totalLabel="objects"

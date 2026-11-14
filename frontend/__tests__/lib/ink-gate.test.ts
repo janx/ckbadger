@@ -87,7 +87,7 @@ const OPACITY_ALLOWLIST: Record<string, string> = {
   'components/layout/nav-menu.tsx:147': NO_WORDS,
   'components/transaction/script-group-matrix.tsx:162': LINKED,
   'components/transaction/script-group-matrix.tsx:209': LINKED,
-  'components/transaction/script-group-matrix.tsx:355': LINKED,
+  'components/transaction/script-group-matrix.tsx:354': LINKED,
   'components/ui/capacity-utilization.tsx:108': LINKED,
   'components/ui/capacity-utilization.tsx:117': LINKED,
   'components/ui/composition-set.tsx:134': NO_WORDS,

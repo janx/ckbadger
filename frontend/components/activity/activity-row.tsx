@@ -42,7 +42,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { Utc8Date } from '@/components/ui/utc8-date';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
-const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-base-elevated py-2 transition-colors';
+const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
 
 /**
  * A row's hover (consistency C3, T7): the tx hash, and the block's age beside it — the age left

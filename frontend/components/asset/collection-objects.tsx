@@ -338,7 +338,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                       onBlur={() => setRow(null)}
                       className={cn(
                         grid,
-                        'border-base-border-subtle min-h-[41px] border-t py-1 transition-colors',
+                        'border-row-rule min-h-[41px] border-t py-1 transition-colors',
                         lit && 'bg-base-surface'
                       )}
                     >

@@ -80,7 +80,7 @@ export function ProgressBar({
     <div className={cn('', className)}>
       <div
         className={cn(
-          'bg-base-elevated relative w-full overflow-hidden rounded-full',
+          'bg-bar-track relative w-full overflow-hidden rounded-full',
           sizeClasses[size]
         )}
       >

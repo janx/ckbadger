@@ -100,7 +100,8 @@ describe('ActivityFeed', () => {
     expect(headRow).toHaveClass(ACTIVITY_HEAD_CLASS);
     expect(headRow).toContainElement(heading);
     expect(tabRow).toContainElement(screen.getByRole('group', { name: 'Feed' }));
-    expect(tabRow).toHaveClass('border-b', 'border-base-border-subtle');
+    // the rule under the tabs is a row rule (R5, re-pinned on purpose: it was the hair)
+    expect(tabRow).toHaveClass('border-b', 'border-row-rule');
     expect(within(tabRow).queryByRole('link')).toBeNull();
     // the note follows the tab; the heading stays the feed's
     await user.click(screen.getByRole('button', { name: 'Transactions' }));

@@ -151,7 +151,7 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
       <span
         role="img"
         aria-label={`${label}: ${value.toLocaleString('en-US')}${overhead === undefined ? '' : `, ${overhead.toLocaleString('en-US')} overhead, ${(value - overhead).toLocaleString('en-US')} user transactions`}`}
-        className="bg-base-elevated flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
+        className="bg-bar-track flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
       >
         {overhead !== undefined && (
           <span
