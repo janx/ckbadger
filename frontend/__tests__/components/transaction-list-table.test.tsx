@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
@@ -82,6 +84,55 @@ const cellbase: Transaction = {
   activity: null,
   pays: { number: 20829764, hash: '0x' + '64'.repeat(32) },
 };
+
+/** Every class of an element and its descendants that fades it (`opacity-30`, `opacity-[.55]`). */
+function fading(element: Element): string[] {
+  return [element, ...element.querySelectorAll('*')].flatMap((e) =>
+    [...e.classList].filter((c) => /(^|:)opacity-(?!0$|100$)/.test(c))
+  );
+}
+
+// UI review 2026-11-14 (DY-02, U-08, ruling R4): "set back" is the dim ink on every word, never
+// element opacity (55 % put the hash at 3.6:1 and "reward 559.51…" at 2.1:1 by day, and turned
+// the stone pink, an ink the seals do not have); the stone keeps its own state's ink at full
+// strength — a cellbase is in force, so it stays the pressed cinnabar.
+describe('a cellbase row set back (R4, DY-02)', () => {
+  const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is the quiet variant: every word dim, nothing faded, the stone pressed at full strength', () => {
+    render(<TransactionListTable transactions={[scriptCall, cellbase]} />);
+    const [, call, base] = within(screen.getByRole('table')).getAllByRole('row');
+    expect(base).toHaveClass('quiet');
+    expect(call).not.toHaveClass('quiet');
+    expect(fading(base)).toEqual([]);
+    const stone = base.querySelector('[data-seal-state]') as HTMLElement;
+    expect(stone).toHaveAttribute('data-seal-state', 'pressed');
+    expect(fading(stone)).toEqual([]);
+  });
+
+  it('sets the phone row back the same way', () => {
+    atContainerWidth(358);
+    render(<TransactionListTable transactions={[cellbase]} />);
+    const item = screen.getByTestId('transaction-row-mobile').closest('[role="listitem"]')!;
+    expect(item).toHaveClass('quiet');
+    expect(fading(item)).toEqual([]);
+    expect(item.querySelector('[data-seal-state]')).toHaveAttribute('data-seal-state', 'pressed');
+  });
+
+  it('draws the quiet variant in globals.css: the dim ink on every word, the ghost and SVG kept', () => {
+    const rule = css.match(/\.quiet,\s*\.quiet :where\(([^)]*\))\)\s*\{([^}]*)\}/);
+    expect(rule, '.quiet rule').not.toBeNull();
+    // the exclusions: a seal (its SVG paints by attribute) and the padding zeros
+    expect(rule![1]).toContain('svg');
+    expect(rule![1]).toContain('.text-text-ghost');
+    expect(rule![2]).toContain('color: var(--c-text-dim)');
+    expect(rule![2]).not.toMatch(/opacity|filter/);
+  });
+});
 
 describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => {
   it('uses the board columns, with the bar scales in the header', () => {

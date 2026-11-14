@@ -60,6 +60,33 @@ describe('TxStructure page-owned linking (F2-tx, TX-14)', () => {
     expect(screen.getByTestId('out:0')).toHaveClass('opacity-30');
   });
 
+  // UI review 2026-11-14 (DY-02, U-08, ruling R4): the cells the page does not follow are set back
+  // in the dim ink (the quiet variant), never at 30 % (1.5–1.9:1 on the cell page); each stone
+  // keeps its own state's ink at full strength (a consumed cell its dead ink, a live one cinnabar).
+  it('sets the cells it does not follow back in the dim ink, every stone at full strength', () => {
+    render(
+      <TxStructure
+        txHash="0xtx"
+        inputs={[tile('in:0', '20000000000'), tile('in:1', '10000000000')]}
+        outputs={[tile('out:0', '29999990000')]}
+        fee="10000"
+        linking="page"
+        focusedCellIds={['in:0']}
+      />
+    );
+    const sibling = screen.getByTestId('in:1');
+    expect(sibling).toHaveClass('quiet');
+    expect(screen.getByTestId('in:0')).not.toHaveClass('quiet');
+    for (const el of [sibling, ...sibling.querySelectorAll('*')])
+      expect([...el.classList].filter((c) => /(^|:)opacity-/.test(c))).toEqual([]);
+    const stones = [...sibling.querySelectorAll('[data-seal-state]')];
+    expect(stones.length).toBeGreaterThan(0);
+    expect(sibling.querySelector('[data-seal="cell"]')).toHaveAttribute(
+      'data-seal-state',
+      'consumed'
+    );
+  });
+
   it('can leave the continuity legend to the page', () => {
     render(
       <TxStructure
