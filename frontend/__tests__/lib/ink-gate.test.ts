@@ -74,9 +74,6 @@ const OPACITY_ALLOWLIST: Allowlist = {
   'components/asset/object-media.tsx': [HOVER],
   // the deposit-window bars: the first day at 90 %, the others at 50 %
   'components/dao/dao-board.tsx': [NO_WORDS, NO_WORDS],
-  'components/dao/dao-history.tsx': [
-    'left: fraction digits in a history plot, a file the A5 follow-up is changing; listed in the B2 hand-back',
-  ],
   'components/home/ckbytes-section.tsx': [LINKED],
   'components/layout/nav-menu.tsx': [NO_WORDS],
   // the cell headers, the group columns, the group cards
