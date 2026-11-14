@@ -283,6 +283,28 @@ describe('NotFoundPage', () => {
     ]);
   });
 
+  // U-15 (UI review 2026-11-14): "no transaction at this address." — a transaction has a hash, not
+  // an address. Each kind's first line names its id as it is; an address keeps "at this address".
+  it('names each kind’s id honestly in the first line, an address alone "at this address"', () => {
+    const first = (kind: Parameters<typeof notAnIdVerse>[0]) =>
+      entityVerse({ kind, identifier: 'x', checkedEndpoint: '/x' })[0];
+    expect(first('block')).toBe('no block with this number or hash.');
+    expect(first('uncle')).toBe('no uncle at this block and index.');
+    expect(first('transaction')).toBe('no transaction with this hash.');
+    expect(first('cell')).toBe('no cell at this out point.');
+    expect(first('address')).toBe('nothing at this address.');
+    expect(first('script')).toBe('no script with this code hash.');
+    expect(first('script-family')).toBe('no script with this name.');
+    expect(first('token')).toBe('no token with this type hash.');
+    expect(first('object')).toBe('no object with this id.');
+    expect(first('collection')).toBe('no collection with this id.');
+    expect(first('identity')).toBe('no identity with this id.');
+    expect(first('class')).toBe('no class with this id.');
+    expect(first('cluster')).toBe('no cluster with this id.');
+    expect(first('fork')).toBe('no fork at this height and orphan.');
+    expect(first('fiber-channel')).toBe('no fiber channel with this id.');
+  });
+
   it('an entity’s verse: its kind in words, the index asked, and the meme last — never the route’s second line', () => {
     expect(
       entityVerse({
