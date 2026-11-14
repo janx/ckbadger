@@ -309,7 +309,7 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(rowOf(t, 'PW Lock').getAttribute('title')).toContain('PW Lock · lock · deprecated · ');
     expect(rowOf(t, 'AlwaysSuccess')).toHaveAttribute(
       'title',
-      'AlwaysSuccess · lock + type · code evidence unavailable · 0 live of 0\u00a0cells ever · 0.00000000 CKB · 0.00000000 occupied (0%)'
+      'AlwaysSuccess · lock + type · code evidence unavailable · 0 live of 0\u00a0cells ever · 0.00000000 CKB · 0.00000000 occupied (0.00%)'
     );
   });
 

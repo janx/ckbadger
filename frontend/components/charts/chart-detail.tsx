@@ -93,9 +93,10 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
     <div className="max-w-3xl">
       <ol className="space-y-3" aria-label={`${definition.title} ranking`}>
         {rows.map((row, index) => {
-          const width = row.share === '—' ? 0 : Number(row.share.slice(0, -1));
+          // the bar's width is the model's, from the exact parts (never the printed share)
+          const width = row.width;
           if (!Number.isFinite(width) || width < 0 || width > 100)
-            throw new Error(`${definition.slug}: invalid share ${row.share}`);
+            throw new Error(`${definition.slug}: invalid share width ${width} for ${row.label}`);
           return (
             <li key={`${row.label}:${index}`} className="min-w-0">
               <div className="text-small flex min-w-0 flex-wrap items-baseline gap-x-4">

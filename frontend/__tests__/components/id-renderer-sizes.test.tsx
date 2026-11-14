@@ -63,7 +63,7 @@ describe('Address writes an address at a size', () => {
     expect(links.map((link) => link.textContent)).toEqual([
       'ckb1qzda0cr0…4c0cgwga',
       'ckb1qzda0c…0cgwga',
-      'ckb1qzda…0cgwga',
+      'ckb1…0cgwga',
     ]);
     for (const link of links) expect(link).toHaveAttribute('title', ADDRESS);
   });
@@ -92,7 +92,7 @@ describe('HexDisplay and ShortId take the same sizes', () => {
         <ShortId value={ADDRESS} kind="address" size="tight" />
       </>
     );
-    for (const text of ['0x8e4f…b4c5', 'ckb1qzda…0cgwga']) {
+    for (const text of ['0x8e4f…b4c5', 'ckb1…0cgwga']) {
       const unit = screen.getByText(text);
       expect(unit).toHaveAttribute('data-nobreak');
       expect(unit).not.toHaveAttribute('title');

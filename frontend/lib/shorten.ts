@@ -7,7 +7,11 @@
  * | ------- | ---- | ------- | -------------------------------------------------- |
  * | `head`  | 12…8 | 12…8    | an h1, a lede                                      |
  * | `row`   | 10…6 | 10…6    | tables, feeds, tiles                               |
- * | `tight` | 6…4  | 8…6     | a phone row, a chart label, a tile under 200 px    |
+ * | `tight` | 6…4  | 4…6     | a phone row, a chart label, a tile under 200 px    |
+ *
+ * A tight address keeps the network in its head (`ckb1`, `ckt1`) and its identity in the tail; the
+ * characters after `ckb1` start the lock's code hash, the same for every address of a lock. At 11
+ * characters it is a tight hash's width.
  *
  * Counts are characters of the value as written (`0x` and `ckb1` included). The ellipsis is the
  * one character `…`. A value no longer than its shortened form is written whole. An out point is
@@ -36,7 +40,7 @@ export const ELLIPSIS = '…';
 export const SHORT_FORMS: Readonly<Record<ShortSize, Readonly<Record<IdKind, ShortForm>>>> = {
   head: { hash: { head: 12, tail: 8 }, address: { head: 12, tail: 8 } },
   row: { hash: { head: 10, tail: 6 }, address: { head: 10, tail: 6 } },
-  tight: { hash: { head: 6, tail: 4 }, address: { head: 8, tail: 6 } },
+  tight: { hash: { head: 6, tail: 4 }, address: { head: 4, tail: 6 } },
 };
 
 /** An id of a kind at a size; whole when it is no longer than the shortened form. */

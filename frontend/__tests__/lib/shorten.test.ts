@@ -24,10 +24,14 @@ describe('the three sizes (U-09)', () => {
     expect(shortenHash(HASH, 'tight')).toBe('0x8e4f…b4c5');
   });
 
-  it('writes an address at 12…8, 10…6 and 8…6', () => {
+  // The lead's ruling (2026-11-14, B3 follow-up): a tight address is 4…6, the network in the
+  // head and the identity in the tail; its first eight characters ("ckb1q" and the start of the
+  // lock's code hash) are the same for every address of a lock. 11 characters, a tight hash's width.
+  it('writes an address at 12…8, 10…6 and 4…6', () => {
     expect(shortenAddress(ADDRESS, 'head')).toBe('ckb1qzda0cr0…4c0cgwga');
     expect(shortenAddress(ADDRESS, 'row')).toBe('ckb1qzda0c…0cgwga');
-    expect(shortenAddress(ADDRESS, 'tight')).toBe('ckb1qzda…0cgwga');
+    expect(shortenAddress(ADDRESS, 'tight')).toBe('ckb1…0cgwga');
+    expect(shortenAddress(ADDRESS, 'tight')).toHaveLength(shortenHash(HASH, 'tight').length);
   });
 
   it('is one typed table, each form as long as it says', () => {
@@ -35,7 +39,7 @@ describe('the three sizes (U-09)', () => {
     expect(SHORT_FORMS).toEqual({
       head: { hash: { head: 12, tail: 8 }, address: { head: 12, tail: 8 } },
       row: { hash: { head: 10, tail: 6 }, address: { head: 10, tail: 6 } },
-      tight: { hash: { head: 6, tail: 4 }, address: { head: 8, tail: 6 } },
+      tight: { hash: { head: 6, tail: 4 }, address: { head: 4, tail: 6 } },
     });
     for (const size of sizes) {
       expect(shortenHash(HASH, size)).toHaveLength(
@@ -72,9 +76,9 @@ describe('a value no longer than its shortened form is written whole', () => {
     // row: 10 + 1 + 6 = 17
     expect(shortenHash('0x1234567890abcde', 'row')).toBe('0x1234567890abcde'); // 17: whole
     expect(shortenHash('0x1234567890abcdef', 'row')).toBe('0x12345678…abcdef'); // 18: cut
-    // tight address: 8 + 1 + 6 = 15
-    expect(shortenAddress('ckb1qyq1234abcd', 'tight')).toBe('ckb1qyq1234abcd'); // 15: whole
-    expect(shortenAddress('ckb1qyq1234abcde', 'tight')).toBe('ckb1qyq1…4abcde'); // 16: cut
+    // tight address: 4 + 1 + 6 = 11
+    expect(shortenAddress('ckb1q1abcde', 'tight')).toBe('ckb1q1abcde'); // 11: whole
+    expect(shortenAddress('ckb1q12abcde', 'tight')).toBe('ckb1…2abcde'); // 12: cut
   });
 });
 

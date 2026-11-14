@@ -44,7 +44,7 @@ export function titleHash(hash: string): string {
   return shortenHash(hash, 'tight');
 }
 
-/** An address as a tab names it (C1): `ckb1qzda…hprdnn`, the tight size. */
+/** An address as a tab names it (C1): `ckb1…hprdnn`, the tight size. */
 export function titleAddress(address: string): string {
   if (!/^ck[bt]1[0-9a-z]{14,}$/.test(address))
     throw new Error(`titleAddress: not a CKB address: ${address}`);

@@ -107,16 +107,23 @@ describe('scriptLabel', () => {
   });
 });
 
+// CH-14 and the review's item I (re-pinned on purpose): a share is the one percentage of its
+// count in the total, two decimals, never a false 0.00% or 100.00% (it was one decimal of a float
+// share, '<0.1%' below 0.05 %)
 describe('formatShare', () => {
-  it('prints one decimal and marks tiny shares', () => {
-    expect(formatShare(0.814)).toBe('81.4%');
-    expect(formatShare(0.0014)).toBe('0.1%');
-    expect(formatShare(0.0002)).toBe('<0.1%');
-    expect(formatShare(0)).toBe('0.0%');
+  it('prints the one percentage of a count in the total', () => {
+    expect(formatShare(814, 1000)).toBe('81.40%');
+    expect(formatShare(14, 10000)).toBe('0.14%');
+    expect(formatShare(2, 100000)).toBe('<0.01%');
+    expect(formatShare(999_999, 1_000_000)).toBe('>99.99%');
+    expect(formatShare(0, 10)).toBe('0.00%');
+    expect(formatShare(10, 10)).toBe('100.00%');
   });
 
-  it('rejects a share outside [0, 1]', () => {
-    expect(() => formatShare(1.2)).toThrow(/not in \[0, 1\]/);
+  it('rejects a count that is not a part of the total', () => {
+    expect(() => formatShare(12, 10)).toThrow(/not a part of/);
+    expect(() => formatShare(1.5, 10)).toThrow(/not a part of/);
+    expect(() => formatShare(1, 0)).toThrow();
   });
 });
 

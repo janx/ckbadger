@@ -23,10 +23,10 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { BOARD_INKS, DATA_COLOR, HELD_CAPACITY_COLOR, inkStyle } from '@/lib/design-tokens';
 import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
+import { percentOf } from '@/lib/format-unit';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -166,7 +166,7 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
   const occupied = BigInt(family.ownedKnowledgeSum);
   if (occupied > capacity)
     throw new Error(`${family.name}: occupied ${occupied} exceeds capacity ${capacity}`);
-  const share = capacity === BigInt(0) ? null : scriptShare(occupied, capacity);
+  const share = capacity === BigInt(0) ? null : percentOf(occupied, capacity);
   return (
     <HeroFigure
       label="CKB in its cells"
@@ -589,7 +589,7 @@ export function ScriptHistoryNotes({
                 shannons={occupiedNow}
                 signed={false}
                 tone="plain"
-              />, {scriptShare(occupiedNow, capacity)} of what the cells hold
+              />, {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
           {inline && '.'}

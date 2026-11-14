@@ -296,6 +296,21 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
   });
 
+  // CH-14 (the thousands hunt): a count of four digits or more is grouped, as every count is
+  // ('1234 → 5678' read beside '2,555' elsewhere)
+  it('groups a cells count of four digits or more', () => {
+    render(
+      <TransactionListTable
+        transactions={[{ ...transfer, inputsCount: 1234, outputsCount: 5678 }]}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const heads = within(table).getAllByRole('columnheader');
+    const at = heads.findIndex((th) => th.textContent === 'Cells');
+    const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[at];
+    expect(cell).toHaveTextContent(/^1,234 → 5,678$/);
+  });
+
   // Table-rows T5: one bright thing per row, the key cell at body. The 18 px line keeps the row
   // at its one-line height (a 13 px line is 20.8 px and would make it 45.8).
   it('leads each row with its hash at 13 px bright on an 18 px line; a cellbase keeps its dim row (T5)', () => {

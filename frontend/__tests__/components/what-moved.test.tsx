@@ -280,8 +280,8 @@ describe('WhatMoved, the list form', () => {
     const eyebrows = Array.from(object.querySelectorAll('.eyebrow')).map((e) => e.textContent);
     expect(eyebrows).toEqual(['from', 'to']);
     // U-09 (re-pinned): the list's parties at the tight size
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qrgq…sp7v9m');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qrgq…ay02wn');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sp7v9m');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…ay02wn');
     expect(ckb.querySelectorAll('[data-flow-side="to"] [data-flow-end]')).toHaveLength(2);
     expect(ckb.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
       'the miner fee0.00008888 CKB'

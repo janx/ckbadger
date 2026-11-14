@@ -13,7 +13,13 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { MINUS, niceStep, stepDecimals } from '@/lib/chart-ticks';
-import { cellSizeBucketLabel, formatDateWindow, withUnit } from '@/lib/format-unit';
+import {
+  cellSizeBucketLabel,
+  formatDateWindow,
+  percentFigure,
+  percentOf,
+  withUnit,
+} from '@/lib/format-unit';
 import { formatCount } from '@/lib/format-count';
 import {
   ACTIVITY_KIND_COLORS,
@@ -23,12 +29,15 @@ import {
   type AssetClass,
 } from '@/lib/design-tokens';
 import { shortenAddress, shortenHash } from '@/lib/shorten';
+import { formatPercent } from '@/lib/ckb-decimal';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
   label: string;
   title: string;
   share: string;
+  /** The bar's width, % of the whole from the exact parts (never read back from `share`). */
+  width: number;
   /** The asset class the API's label names (Assets ranking), drawn as its mark (CH-06). */
   assetClass?: AssetClass;
   /** Lane L: the entity's page (the same link as the full ranking's row); none for "Others". */
@@ -146,6 +155,8 @@ export interface ChartModel {
     label: string;
     value: string;
     share: string;
+    /** The bar's width, % of the whole from the exact parts (never read back from `share`). */
+    width: number;
     href?: string;
     /** The full identity a shortened label stands for, as the link's hover title (CH-03). */
     title?: string;
@@ -852,6 +863,11 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
 
 const PREVIEW_RANKS = 5;
 
+/** A share bar's width: % of the whole from the exact parts at two decimals; no whole, no bar. */
+function barWidth(part: bigint, total: bigint): number {
+  return total === BigInt(0) ? 0 : Number(formatPercent(part, total, 2));
+}
+
 /**
  * Top five ranked entries plus one "Others" row for the exact remainder of the total, so the card
  * never drops ranks six and beyond (CH-01). The remainder is computed from exact amounts, never
@@ -881,10 +897,18 @@ function rankedPreviewRows(
       label: entry.shortLabel,
       title: entry.fullId ? `${entry.label} · ${entry.fullId}` : entry.label,
       share: entry.share,
+      width: barWidth(entry.amount, total),
       ...(entry.href ? { href: entry.href } : {}),
     })),
     ...(remainder > BigInt(0)
-      ? [{ label: 'Others', title: 'Others', share: remainderShare(remainder) }]
+      ? [
+          {
+            label: 'Others',
+            title: 'Others',
+            share: remainderShare(remainder),
+            width: barWidth(remainder, total),
+          },
+        ]
       : []),
   ];
 }
@@ -984,8 +1008,7 @@ function shareRows(
   });
   if (!entries.length) throw new Error(`${definition.slug}: dated ranking has no series`);
   const total = entries.reduce((sum, entry) => sum + entry.shannons, BigInt(0));
-  const share = (shannons: bigint) =>
-    total === BigInt(0) ? '—' : `${formatScaledInteger(shannons * BigInt(100), total, 2)}%`;
+  const share = (shannons: bigint) => (total === BigInt(0) ? '—' : percentOf(shannons, total));
   const sorted = [...entries].sort((a, b) =>
     a.shannons === b.shannons ? a.label.localeCompare(b.label) : a.shannons > b.shannons ? -1 : 1
   );
@@ -1012,11 +1035,13 @@ function shareRows(
           remainder: true,
           value: entry.value,
           share: share(entry.shannons),
+          width: barWidth(entry.shannons, total),
         }
       : {
           label: distinctLabel(entry),
           value: entry.value,
           share: share(entry.shannons),
+          width: barWidth(entry.shannons, total),
           ...(entry.id ? { href: rankedSeriesHref(entry.id, entry.label) } : {}),
           ...(definition.source === 'assets'
             ? { assetClass: assetLabel(entry.label).assetClass }
@@ -1140,6 +1165,8 @@ function minerRows(
 ): ChartModel {
   if (!Number.isSafeInteger(payload.totalBlocks) || payload.totalBlocks < 0)
     throw new Error(`${definition.slug}: invalid totalBlocks`);
+  if (payload.data.length > 0 && payload.totalBlocks === 0)
+    throw new Error(`${definition.slug}: ${payload.data.length} miners in a window of no blocks`);
   const miners = payload.data.map((miner) => {
     if (!Number.isSafeInteger(miner.blocksMined) || miner.blocksMined < 0)
       throw new Error(`${definition.slug}: invalid blocksMined for ${miner.minerLockHash}`);
@@ -1156,9 +1183,10 @@ function minerRows(
       row: {
         label,
         value: String(miner.blocksMined),
-        // Two decimals, every other share's form (CH-14): the API's floored four, rounded half up,
-        // read the same as the exact block ratio at two.
-        share: `${summary(miner.percentage, '%')}%`,
+        // The one percentage of its blocks in the window's (CH-14, the review's item I): the
+        // API's percentage is floored at four decimals, so 1 block of 1,000,000 read 0.00%.
+        share: percentOf(BigInt(miner.blocksMined), BigInt(payload.totalBlocks)),
+        width: barWidth(BigInt(miner.blocksMined), BigInt(payload.totalBlocks)),
         href: miner.address
           ? `/address/${miner.address}`
           : `/address/${miner.minerLockHash.replace(/^0x/, '')}`,
@@ -1169,9 +1197,8 @@ function minerRows(
     };
   });
   const rankedRows = miners.map((miner) => miner.row);
-  // The remainder at the same two decimals, from the exact block counts.
-  const percent2 = (blocks: bigint) =>
-    `${formatScaledInteger(blocks * BigInt(100), BigInt(payload.totalBlocks), 2)}%`;
+  // The remainder in the same form, from the exact block counts.
+  const percent2 = (blocks: bigint) => percentOf(blocks, BigInt(payload.totalBlocks));
   const window = formatDateWindow(payload.fromDate, payload.toDate);
   const leader = miners[0]?.row;
   return {
@@ -1189,7 +1216,11 @@ function minerRows(
         }
       : null,
     headline: rankedRows[0]
-      ? { pre: 'top', display: summary(payload.data[0].percentage, '%'), unit: '%' }
+      ? {
+          pre: 'top',
+          display: percentFigure(miners[0].blocks, BigInt(payload.totalBlocks)),
+          unit: '%',
+        }
       : null,
     delta: null,
     rankedRows,
@@ -1215,7 +1246,7 @@ function minerRows(
             {
               label: 'Leading miner',
               name: leader.label,
-              value: `${formatChartExact(leader.value, 'blocks')} blocks · ${leader.share}`,
+              value: `${formatCount(Number(leader.value), 'block')} · ${leader.share}`,
             },
           ]
         : []),
@@ -1331,7 +1362,9 @@ function classedSeries(
 
 /**
  * The card's bands: the HODL wave's four coarser age groups, as on the board (CH-07); activity by
- * type its six kinds, largest first, each in the page's class colour (CH-02).
+ * type its six kinds in the page's class order (script calls, CKB transfers, tokens, objects,
+ * identities, Nervos DAO), each in its class colour (CH-02). The order is fixed, not by size, so a
+ * kind's place and colour never move from one day to the next.
  */
 const CARD_GROUPS: Readonly<
   Record<string, readonly { key: string; label: string; members: readonly string[] }[]>
@@ -1376,7 +1409,7 @@ function shareOf(part: string, whole: string, context: string): string {
   const [pn, pd] = exactDecimalRatio(part, `${context} part`);
   const [wn, wd] = exactDecimalRatio(whole, `${context} whole`);
   if (wn === BigInt(0)) throw new Error(`${context}: share of a zero total`);
-  return formatScaledInteger(pn * wd * BigInt(100), pd * wn, 2);
+  return percentFigure(pn * wd, pd * wn);
 }
 
 /** A histogram's headline: its most common bucket, by what that bucket means (CH-09). */

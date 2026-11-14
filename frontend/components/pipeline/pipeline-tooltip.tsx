@@ -17,6 +17,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { color } from '@/lib/palette';
+import { percentOf } from '@/lib/format-unit';
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
 export interface TipContent {
@@ -38,10 +39,8 @@ export const fmtBytes = (b: number) =>
   b >= 1e6 ? `${(b / 1e6).toFixed(2)} MB` : b >= 1000 ? `${(b / 1000).toFixed(1)} KB` : `${b} B`;
 export const fmtCycles = (c: number) =>
   c >= 1e9 ? `${(c / 1e9).toFixed(2)} B` : c >= 1e6 ? `${(c / 1e6).toFixed(1)} M` : fmtInt(c);
-export const pct = (a: number, b: number) => {
-  const p = (a / b) * 100;
-  return p <= 0 ? '0%' : p < 0.01 ? '<0.01%' : p < 1 ? `${p.toFixed(2)}%` : `${p.toFixed(1)}%`;
-};
+/** A share of a block's room, the one percentage (CH-14). */
+export const pct = (a: number, b: number) => percentOf(BigInt(a), BigInt(b));
 const num = (n: number) => `${formatBlockNumber(n)}`;
 const STEPS = ['few', 'moderate', 'many', 'very many'];
 const TONE = {

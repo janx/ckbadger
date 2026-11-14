@@ -52,13 +52,15 @@ export function inscriptionText(value: string): string | null {
 
 /**
  * A trait value for people: control bytes dropped, empty named, pointers and markup described; a
- * btcfs text that is not an inscription is shown as it is.
+ * btcfs text that is not an inscription is shown as it is. An inscription is "inscription <txid>i<n>"
+ * (an inscription is Bitcoin's by definition, and the page says beside the picture where the image
+ * lives): 25 characters, inside the sequencing gel's value budget (the review's item B).
  */
 export function traitDisplay(value: string): string {
   const v = value.replace(CONTROL, '').trim();
   if (!v) return 'empty';
   const inscription = inscriptionText(v);
-  if (inscription) return `Bitcoin inscription ${inscription}`;
+  if (inscription) return `inscription ${inscription}`;
   if (SVG_VALUE.test(v)) return `SVG image · ${value.length.toLocaleString('en-US')} characters`;
   return v;
 }

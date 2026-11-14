@@ -61,28 +61,46 @@ const PADDING = 'padding zeros: the trailing zeros of an amount’s fraction';
 const SEPARATOR = 'decoration: the separator between the crumbs or the parts of a line';
 const ARROW = 'decoration: the aria-hidden arrow between two tiles of a mechanism chain';
 
-/** Per file, in order: the reasons of its sites of one kind. */
-type Allowlist = Readonly<Record<string, readonly string[]>>;
+/**
+ * One allowlisted site: why it may stand, and its anchor, a short text that must appear on the
+ * site's own source line (the variable, the literal, the aria attribute that makes it what the
+ * reason says). The review's item G: with reasons alone, "n reasons for the n sites of a file, in
+ * order", removing one allowed site and adding a new faded word in the same file passed.
+ */
+interface Allowed {
+  reason: string;
+  anchor: string;
+}
+/** Per file, in order: its sites of one kind, each with its reason and its anchor. */
+type Allowlist = Readonly<Record<string, readonly Allowed[]>>;
+const padding = (anchor: string): Allowed => ({ reason: PADDING, anchor });
+const separator = (anchor: string): Allowed => ({ reason: SEPARATOR, anchor });
+const arrow = (anchor: string): Allowed => ({ reason: ARROW, anchor });
 
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
 const GHOST_ALLOWLIST: Allowlist = {
-  'app/dao/depositors/page.tsx': [PADDING],
-  'app/fiber/channels/[id]/client-page.tsx': [SEPARATOR],
-  'components/activity-event-row.tsx': [PADDING],
-  'components/address/address-holdings.tsx': [PADDING],
-  'components/asset/asset-feed.tsx': [SEPARATOR],
-  'components/asset/detail-shell.tsx': [SEPARATOR],
-  'components/asset/genetics.tsx': [ARROW],
-  'components/asset/inventory-table.tsx': [PADDING],
+  'app/dao/depositors/page.tsx': [padding('{parts.ghost}')],
+  'app/fiber/channels/[id]/client-page.tsx': [separator('>/</span>')],
+  'components/activity-event-row.tsx': [padding('data-ghost')],
+  'components/address/address-holdings.tsx': [padding('data-ghost')],
+  'components/asset/asset-feed.tsx': [separator('> · </span>')],
+  'components/asset/detail-shell.tsx': [separator('>/</span>')],
+  'components/asset/genetics.tsx': [arrow('aria-hidden="true"')],
+  'components/asset/inventory-table.tsx': [padding('data-ghost')],
   // Amount's zeros, the deposited figure's, the 24 h change's; the mechanism chain's arrow
-  'components/dao/dao-board.tsx': [PADDING, PADDING, PADDING, ARROW],
-  'components/dao/dao-grows.tsx': [PADDING],
-  'components/dao/dao-history.tsx': [PADDING],
-  'components/fiber/fiber-channel-board.tsx': [PADDING],
-  'components/scripts/script-family-page.tsx': [SEPARATOR],
-  'components/scripts/script-hero.tsx': [PADDING],
-  'components/transaction/script-group-matrix.tsx': [ARROW],
-  'components/ui/script-byte-map.tsx': [ARROW],
+  'components/dao/dao-board.tsx': [
+    padding('{parts.ghost}'),
+    padding('{parts.ghost}'),
+    padding('{parts.ghost}'),
+    arrow('aria-hidden="true"'),
+  ],
+  'components/dao/dao-grows.tsx': [padding('{parts.ghost}')],
+  'components/dao/dao-history.tsx': [padding('{parts.ghost}')],
+  'components/fiber/fiber-channel-board.tsx': [padding('{parts.ghost}')],
+  'components/scripts/script-family-page.tsx': [separator('>/</span>')],
+  'components/scripts/script-hero.tsx': [padding('{parts.ghost}')],
+  'components/transaction/script-group-matrix.tsx': [arrow('aria-hidden="true"')],
+  'components/ui/script-byte-map.tsx': [arrow('aria-hidden="true"')],
 };
 
 /** `text-<ink>/<n>` sites the gate tolerates: none. */
@@ -93,23 +111,31 @@ const LINKED =
 const HOVER =
   'hover feedback on a control or a copyable hash: the pointer’s state, gone when it leaves';
 const NO_WORDS = 'fades no word: the element is a mark, an icon or a bar';
+const linked = (anchor: string): Allowed => ({ reason: LINKED, anchor });
+const hover = (anchor: string): Allowed => ({ reason: HOVER, anchor });
+const noWords = (anchor: string): Allowed => ({ reason: NO_WORDS, anchor });
 
 /** `opacity-*` below 1 the gate tolerates. */
 const OPACITY_ALLOWLIST: Allowlist = {
   // the witness rows, the dependency rows
-  'app/tx/[hash]/client-page.tsx': [LINKED, LINKED],
-  'components/address/address-holdings.tsx': [LINKED],
-  'components/asset/cell-versions.tsx': [LINKED],
-  'components/asset/object-media.tsx': [HOVER],
+  'app/tx/[hash]/client-page.tsx': [linked('lit !== null && !on'), linked('lit !== null && !on')],
+  'components/address/address-holdings.tsx': [linked('active !== kind')],
+  'components/asset/cell-versions.tsx': [linked('active !== key')],
+  'components/asset/object-media.tsx': [hover('hover:opacity-90')],
   // the deposit-window bars: the first day at 90 %, the others at 50 %
-  'components/dao/dao-board.tsx': [NO_WORDS, NO_WORDS],
-  'components/home/ckbytes-section.tsx': [LINKED],
-  'components/layout/nav-menu.tsx': [NO_WORDS],
+  'components/dao/dao-board.tsx': [noWords('bg-gold w-full'), noWords('bg-gold w-full')],
+  'components/home/ckbytes-section.tsx': [linked('active !== part')],
+  // the menu's chevron icon
+  'components/layout/nav-menu.tsx': [noWords('h-3 w-3')],
   // the cell headers, the group columns, the group cards
-  'components/transaction/script-group-matrix.tsx': [LINKED, LINKED, LINKED],
-  'components/ui/composition-set.tsx': [NO_WORDS],
-  'components/ui/hex-display.tsx': [HOVER],
-  'components/ui/terminal-panel.tsx': [NO_WORDS],
+  'components/transaction/script-group-matrix.tsx': [
+    linked('lit?.cells.has(c.id)'),
+    linked('dim(on)'),
+    linked('dim(on)'),
+  ],
+  'components/ui/composition-set.tsx': [noWords('<CompositionMark')],
+  'components/ui/hex-display.tsx': [hover('copyable && ')],
+  'components/ui/terminal-panel.tsx': [noWords('section-mark')],
 };
 
 /**
@@ -121,21 +147,24 @@ const OPACITY_ALLOWLIST: Allowlist = {
  */
 const FADE_ALLOWLIST: Allowlist = {
   // the age fade on a block card's shapes: the tile, the uncle boxes, the dots, the TxSquares
-  'components/pipeline/block-card.tsx': [NO_WORDS],
+  'components/pipeline/block-card.tsx': [noWords('ageOpacity(age)')],
   // the age fade on a block row's shapes: the tile, the uncle boxes, the Dots, the TxSquares
-  'components/pipeline/column-rows.tsx': [NO_WORDS],
+  'components/pipeline/column-rows.tsx': [noWords('ageOpacity(age)')],
   // a party node and its label while another party or pair is pointed at or pinned
-  'components/fiber/fiber-network-graph.tsx': [LINKED],
+  'components/fiber/fiber-network-graph.tsx': [linked('lit ? 1 : DIM')],
   // a day's bars and its date while another day is pointed at or pinned
-  'components/forks/fork-days-chart.tsx': [LINKED],
+  'components/forks/fork-days-chart.tsx': [linked('active === i')],
   // the spark glyphs, the signed bars with their clip label: while another bucket is pointed at
-  'components/home/mini-chart.tsx': [LINKED, LINKED],
+  'components/home/mini-chart.tsx': [
+    linked('bucketOpacity(i, hovered)'),
+    linked('bucketOpacity(i, hovered)'),
+  ],
   // the window's label while a pointed cellbase's reward link runs through its lane
-  'components/pipeline/window-ruler.tsx': [LINKED],
+  'components/pipeline/window-ruler.tsx': [linked('faded ? 0.15')],
   // a lane and its gene name while another gene or a genotype row is pointed at or pinned
-  'components/ui/allele-gel.tsx': [LINKED],
+  'components/ui/allele-gel.tsx': [linked('laneOpacity(lane.gene)')],
   // a gene's map, bytes and name while another gene is pointed at
-  'components/ui/sequencing-gel.tsx': [LINKED],
+  'components/ui/sequencing-gel.tsx': [linked('lit !== g.name')],
 };
 
 const SPARK_GLYPH =
@@ -147,20 +176,41 @@ const SPARK_GLYPH =
  */
 const FAINT_INK_ALLOWLIST: Allowlist = {
   // the quiet slate's ↔ between a channel's two parties
-  'app/fiber/channels/client-page.tsx': [SEPARATOR],
+  'app/fiber/channels/client-page.tsx': [separator('↔')],
   // the quiet slate's ↔ between the two parties of a channel
-  'components/fiber/fiber-channel-board.tsx': [SEPARATOR],
-  'components/home/mini-chart.tsx': [SPARK_GLYPH],
+  'components/fiber/fiber-channel-board.tsx': [separator('↔')],
+  'components/home/mini-chart.tsx': [{ reason: SPARK_GLYPH, anchor: 'SPARK_INK[b.state]' }],
   // the quiet slate's aria-hidden → between two holders
-  'components/scripts/script-family-board.tsx': [SEPARATOR],
+  'components/scripts/script-family-board.tsx': [separator('aria-hidden="true"')],
   // the quiet slate's → between a gene's raw bytes and its value
-  'components/ui/sequencing-gel.tsx': [SEPARATOR],
+  'components/ui/sequencing-gel.tsx': [separator('col.arrow')],
 };
+
+/**
+ * A site's own source: its line, and when that line stands in a JSX opening tag written over
+ * several lines, the whole tag and the line after it (the element's first child: a separator's
+ * glyph). An entry's anchor must stand there; a neighbour's line does not count.
+ */
+function siteSource(lines: readonly string[], line: number): string {
+  const at = line - 1;
+  const endsTag = (l: string) => />\s*$/.test(l);
+  let start = at;
+  while (start > 0 && at - start < 4 && !lines[start].includes('<')) start--;
+  if (!lines[start].includes('<')) start = at;
+  let end = at;
+  while (end < lines.length - 1 && end - at < 4 && !endsTag(lines[end])) end++;
+  if (!endsTag(lines[end])) end = at;
+  // an opening tag that ends its line has its first child on the next line
+  const opensChild = endsTag(lines[end]) && !/(<\/[\w.]*>|\/>)\s*$/.test(lines[end]);
+  return lines.slice(start, opensChild ? end + 2 : end + 1).join('\n');
+}
 
 interface Site {
   path: string;
   line: number;
   what: string;
+  /** The site's own source (siteSource), where its entry's anchor must stand. */
+  source: string;
 }
 
 /**
@@ -173,23 +223,29 @@ function allowlistFailures(sites: readonly Site[], allowlist: Allowlist): string
   for (const site of sites) byPath.set(site.path, [...(byPath.get(site.path) ?? []), site]);
   const out: string[] = [];
   for (const [path, list] of byPath) {
-    const reasons = allowlist[path] ?? [];
+    const entries = allowlist[path] ?? [];
     list.forEach((site, i) => {
-      if (i >= reasons.length)
+      if (i >= entries.length)
         out.push(
-          `${path}:${site.line} ${site.what}: no reason for site ${i + 1} of ${list.length} (${reasons.length} listed)`
+          `${path}:${site.line} ${site.what}: no reason for site ${i + 1} of ${list.length} (${entries.length} listed)`
+        );
+      else if (!site.source.includes(entries[i].anchor))
+        out.push(
+          `${path}:${site.line} ${site.what}: its line lacks the anchor "${entries[i].anchor}" of its reason (${entries[i].reason})`
         );
     });
   }
-  for (const [path, reasons] of Object.entries(allowlist)) {
+  for (const [path, entries] of Object.entries(allowlist)) {
     const list = byPath.get(path) ?? [];
-    if (list.length < reasons.length)
+    if (list.length < entries.length)
       out.push(
-        `${path}: ${reasons.length} reasons for ${list.length} sites (${list.map((s) => `${s.line} ${s.what}`).join(', ') || 'none'}): drop the reason of each site that went`
+        `${path}: ${entries.length} reasons for ${list.length} sites (${list.map((s) => `${s.line} ${s.what}`).join(', ') || 'none'}): drop the reason of each site that went`
       );
-    for (const reason of reasons)
+    for (const { reason, anchor } of entries) {
       if (reason.trim().length <= 10)
         out.push(`${path}: a reason too short to say why: "${reason}"`);
+      if (anchor.trim() === '') out.push(`${path}: an empty anchor names no site`);
+    }
   }
   return out;
 }
@@ -779,42 +835,83 @@ describe('the JSX scan finds faded words and words in an ink under text grade, a
   });
 });
 
-describe('the allowlists key a site by its file and its order, not its line', () => {
-  const reason = 'decoration: a separator between two parts of a line';
-  const list: Allowlist = { 'components/a.tsx': [reason, reason] };
-  const site = (line: number): Site => ({
-    path: 'components/a.tsx',
+describe('the allowlists key a site by its file, its order and its anchor, not its line', () => {
+  const SEPARATE = 'decoration: a separator between two parts of a line';
+  const PAD = 'padding zeros: the trailing zeros of an amount’s fraction';
+  const list: Allowlist = {
+    'components/a.tsx': [
+      { reason: SEPARATE, anchor: 'aria-hidden' },
+      { reason: PAD, anchor: '{parts.ghost}' },
+    ],
+  };
+  const DOT = '<span aria-hidden className="text-text-ghost">·</span>';
+  const ZEROS = '<span className="text-text-ghost">{parts.ghost}</span>';
+  const site = (line: number, source: string, path = 'components/a.tsx'): Site => ({
+    path,
     line,
     what: 'text-text-ghost',
+    source,
   });
 
   it('passes the same sites moved to other lines', () => {
-    expect(allowlistFailures([site(10), site(20)], list)).toEqual([]);
-    expect(allowlistFailures([site(14), site(31)], list)).toEqual([]);
+    expect(allowlistFailures([site(10, DOT), site(20, ZEROS)], list)).toEqual([]);
+    expect(allowlistFailures([site(14, DOT), site(31, ZEROS)], list)).toEqual([]);
+  });
+
+  // The review's item G: n reasons for n sites in order let an allowed site go and a new faded
+  // word take its reason; the new site's line lacks the anchor.
+  it('fails a traded site: an allowed one gone, a new faded word in its place', () => {
+    const word = '<span className="text-text-ghost">{label}</span>';
+    expect(allowlistFailures([site(10, DOT), site(20, word)], list)).toEqual([
+      `components/a.tsx:20 text-text-ghost: its line lacks the anchor "{parts.ghost}" of its reason (${PAD})`,
+    ]);
+    // and two allowed sites swapped in order
+    expect(allowlistFailures([site(10, ZEROS), site(20, DOT)], list)).toHaveLength(2);
   });
 
   it('fails an added site, naming its path, line and class', () => {
-    expect(allowlistFailures([site(10), site(20), site(25)], list)).toEqual([
+    expect(allowlistFailures([site(10, DOT), site(20, ZEROS), site(25, ZEROS)], list)).toEqual([
       'components/a.tsx:25 text-text-ghost: no reason for site 3 of 3 (2 listed)',
     ]);
-    expect(
-      allowlistFailures([{ path: 'components/b.tsx', line: 7, what: 'text-text-ghost' }], list)
-    ).toEqual([
+    expect(allowlistFailures([site(7, ZEROS, 'components/b.tsx')], list)).toEqual([
       'components/b.tsx:7 text-text-ghost: no reason for site 1 of 1 (0 listed)',
       'components/a.tsx: 2 reasons for 0 sites (none): drop the reason of each site that went',
     ]);
   });
 
   it('fails a removed site, naming the file and the sites left', () => {
-    expect(allowlistFailures([site(20)], list)).toEqual([
+    expect(allowlistFailures([site(20, DOT)], list)).toEqual([
       'components/a.tsx: 2 reasons for 1 sites (20 text-text-ghost): drop the reason of each site that went',
     ]);
   });
 
-  it('fails a reason too short to say why', () => {
-    expect(allowlistFailures([site(1)], { 'components/a.tsx': ['zeros'] })).toEqual([
+  it('fails a reason too short to say why and an empty anchor', () => {
+    expect(
+      allowlistFailures([site(1, ZEROS)], {
+        'components/a.tsx': [{ reason: 'zeros', anchor: ' ' }],
+      })
+    ).toEqual([
       'components/a.tsx: a reason too short to say why: "zeros"',
+      'components/a.tsx: an empty anchor names no site',
     ]);
+  });
+
+  it('reads a site’s own source: its line, or its tag over lines and the first child', () => {
+    const lines = [
+      '<span className="text-text-dim">{label}</span>',
+      '{i > 0 && (',
+      '  <span',
+      '    aria-hidden="true"',
+      '    className="text-text-ghost text-center"',
+      '  >',
+      '    →',
+      '  </span>',
+      ')}',
+    ];
+    expect(siteSource(lines, 5)).toBe(lines.slice(2, 7).join('\n'));
+    expect(siteSource(lines, 1)).toBe(lines[0]);
+    const oneLine = ['<span className="text-[color:var(--ink)]" style={quiet}>', '  ↔', '</span>'];
+    expect(siteSource(oneLine, 1)).toBe(oneLine.slice(0, 2).join('\n'));
   });
 });
 
@@ -831,9 +928,11 @@ describe('inks that carry words (R4)', () => {
   for (const file of files) {
     const path = relative(root, file);
     const code = readFileSync(file, 'utf8');
+    const lines = code.split('\n');
     const offences = { ...inkOffences(code), ...jsxInkOffences(code) };
     for (const kind of ['ghost', 'alpha', 'opacity', 'fade', 'faint'] as const)
-      for (const o of offences[kind]) found[kind].push({ path, ...o });
+      for (const o of offences[kind])
+        found[kind].push({ path, ...o, source: siteSource(lines, o.line) });
   }
   const rules = [
     ['ghost', GHOST_ALLOWLIST, 'the ghost ink on a word or a figure'],

@@ -173,7 +173,8 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
     <article
       data-feed-row={tx.hash}
       data-tx-row={tx.hash}
-      // Consistency C3: the activity row's hover, the hash and the age (the row shows the date).
+      // The activity row's hover, the hash and the age (consistency C3); this feed is live, so
+      // the row shows the age too (PA-22).
       title={activityRowTitle(tx.hash, tx.timestamp)}
       data-highlighted={highlighted}
       // A committed tx anchors the proposal window on the block that committed it.

@@ -45,6 +45,7 @@ import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { percentOf } from '@/lib/format-unit';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -404,8 +405,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
   const { mining, compensation, burnt, claimed, unclaimed, total, liveCells } =
     issuanceParts(statistics);
   const issuanceEmpty = total === BigInt(0);
-  const share = (v: bigint) => `${formatPercent(v, total, 2)}%`;
-  const ofCompensation = (v: bigint) => `${formatPercent(v, compensation, 1)}%`;
+  const share = (v: bigint) => percentOf(v, total);
+  const ofCompensation = (v: bigint) => percentOf(v, compensation);
   const root: IcicleNode | null = issuanceEmpty
     ? null
     : {
@@ -739,8 +740,8 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           const percent = formatPercent(part.value, issued, 4);
           const label =
             part.key === 'other'
-              ? `everything else ${formatPercent(part.value, issued, 2)}% → burnt`
-              : `${formatPercent(part.value, issued, 2)}%`;
+              ? `everything else ${percentOf(part.value, issued)} → burnt`
+              : percentOf(part.value, issued);
           // R9: a share is written inside its segment only where it fits (padding included).
           const segmentPx =
             width === null ? 0 : ((width - BAR_GAP_PX * (use.length - 1)) * Number(percent)) / 100;
@@ -763,21 +764,17 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
       <div className="text-text-dim text-meta mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.miners} />
-          occupied by cells <span className="text-text">
-            {formatPercent(occupied, issued, 2)}%
-          </span>{' '}
-          → miners
+          occupied by cells <span className="text-text">{percentOf(occupied, issued)}</span> →
+          miners
         </span>
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
           DAO deposits, free capacity + compensation accrued{' '}
-          <span className="text-text">{formatPercent(depositorWeight, issued, 2)}%</span> →
-          depositors
+          <span className="text-text">{percentOf(depositorWeight, issued)}</span> → depositors
         </span>
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
-          everything else <span className="text-text">{formatPercent(other, issued, 2)}%</span> →
-          burnt
+          everything else <span className="text-text">{percentOf(other, issued)}</span> → burnt
         </span>
       </div>
     </div>

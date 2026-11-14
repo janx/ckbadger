@@ -13,6 +13,7 @@ import { CLASS_COLORS } from '@/lib/design-tokens';
 import { color } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
+import { formatCount } from '@/lib/format-count';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -463,7 +464,7 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
   const cap = weeks.length ? weeklyCap(weeks) : 1;
   const ckb = (v: bigint) => Number(v) / 1e8;
   const clipped = weeks.filter((w) => Math.abs(ckb(w.net)) > cap).length;
-  const note = `±${formatTick(cap, cap)} scale${clipped === 0 ? '' : clipped === 1 ? ', 1 week cut' : `, ${clipped} weeks cut`}`;
+  const note = `±${formatTick(cap, cap)} scale${clipped === 0 ? '' : `, ${formatCount(clipped, 'week')} cut`}`;
   const latest = weeks.at(-1) ?? null;
   const end = latest ? cutCkb(latest.net) : null;
   const biggest = weeks.reduce<Week | null>(

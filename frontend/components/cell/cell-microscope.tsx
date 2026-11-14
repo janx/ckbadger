@@ -285,9 +285,10 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   if (!breakdown || (molecule && outOccupied + dataBytes.length !== breakdown.totalBytes))
     return (
       <p role="alert" className="text-rouge text-small">
-        Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied} occupied CellOutput +{' '}
-        {dataBytes.length} data) disagree with its occupied size{' '}
-        {breakdown ? `${breakdown.totalBytes} B` : '(missing)'}.
+        Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied.toLocaleString('en-US')}{' '}
+        occupied CellOutput + {dataBytes.length.toLocaleString('en-US')} data) disagree with its
+        occupied size{' '}
+        {breakdown ? `${breakdown.totalBytes.toLocaleString('en-US')} B` : '(missing)'}.
       </p>
     );
   const parts = [...outParts, ...dataParts];

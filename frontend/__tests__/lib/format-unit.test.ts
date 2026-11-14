@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { formatCompactInteger, formatCompactRatio } from '@/lib/exact-integer';
 import { formatCkbCompact, formatCompactCkbDelta } from '@/lib/utils';
 import { formatTick } from '@/lib/chart-ticks';
-import { percentOf, withUnit } from '@/lib/format-unit';
+import { percentFigure, percentOf, withUnit } from '@/lib/format-unit';
 
 /**
  * One form per quantity (UI review 2026-11-14, CH-14): a compact count or CKB amount takes a
@@ -25,6 +25,29 @@ describe('compact numbers: one form (CH-14)', () => {
     expect(formatCkbCompact(BigInt('3360000000000000000')).value).toBe('33.60B');
     expect(formatCkbCompact(BigInt('120000000000000000000')).value).toBe('1.20T');
   });
+
+  // The review's item J: the unit is chosen for the ROUNDED value, as formatCompactInteger does;
+  // 999,995 CKB rounds to 1,000.00k at two decimals of k, which is 1.00M (it printed '1000.00k')
+  it('chooses the unit for the rounded amount at every boundary', () => {
+    const ckb = (n: string) => BigInt(n) * BigInt(100000000);
+    expect(formatCkbCompact(ckb('999994')).value).toBe('999.99k');
+    expect(formatCkbCompact(ckb('999995')).value).toBe('1.00M');
+    expect(formatCkbCompact(ckb('999999995')).value).toBe('1.00B');
+    expect(formatCkbCompact(ckb('999999999995')).value).toBe('1.00T');
+    expect(formatCkbCompact(BigInt('99999500000')).value).toBe('1.00k'); // 999.995 CKB
+    expect(formatCkbCompact(BigInt('99999400000')).value).toBe('999.99'); // 999.994 CKB
+    for (const [delta, compact] of [
+      ['-999994', '999.99k'],
+      ['-999995', '1.00M'],
+      ['-999999995', '1.00B'],
+      ['999995', '1.00M'],
+      ['-999.995', '1.00k'],
+      ['-0.99995', '1.00'], // the 4-decimal form below 1 CKB rounds to 1.0000: one CKB at two
+      ['-0.99994', '0.9999'],
+    ] as const)
+      expect(formatCompactCkbDelta(delta).compact).toBe(compact);
+    expect(formatCompactCkbDelta('-999995').direction).toBe('down');
+  });
 });
 
 describe('percent: one form (CH-14)', () => {
@@ -37,6 +60,26 @@ describe('percent: one form (CH-14)', () => {
 
   it('refuses a share of nothing', () => {
     expect(() => percentOf(BigInt(1), BigInt(0))).toThrow();
+  });
+
+  // The review's item I (the lead's ruling): rounding half up at two decimals is right, but two
+  // printed results would state something false; only those two change. A share above nothing
+  // that rounds to 0.00 prints <0.01%; a share below the whole that rounds to 100.00 prints
+  // >99.99%. Exact zero and the exact whole print as before.
+  it('never prints a false 0.00% or 100.00%', () => {
+    const M = BigInt(1_000_000);
+    expect(percentOf(BigInt(1), M)).toBe('<0.01%');
+    expect(percentOf(BigInt(49), M)).toBe('<0.01%'); // 0.0049 %
+    expect(percentOf(BigInt(50), M)).toBe('0.01%'); // 0.005 % rounds half up
+    expect(percentOf(M - BigInt(1), M)).toBe('>99.99%');
+    expect(percentOf(M - BigInt(50), M)).toBe('>99.99%'); // 99.995 % would round to 100.00
+    expect(percentOf(M - BigInt(51), M)).toBe('99.99%');
+    expect(percentOf(BigInt(0), M)).toBe('0.00%');
+    expect(percentOf(M, M)).toBe('100.00%');
+    // the figure alone, for a place that writes the sign apart (a headline's unit)
+    expect(percentFigure(BigInt(1), M)).toBe('<0.01');
+    expect(percentFigure(M - BigInt(1), M)).toBe('>99.99');
+    expect(percentFigure(BigInt(2479), BigInt(10000))).toBe('24.79');
   });
 });
 

@@ -370,12 +370,12 @@ describe('Asset history', () => {
       try {
         mount();
         const [unnamed, named, notIndexed] = screen.getAllByTestId('supply-event-row-mobile');
-        expect(phoneLines(unnamed)[2].right).toMatch(/^to ckb1qzda…111111 lock 0x4343…4343$/);
+        expect(phoneLines(unnamed)[2].right).toMatch(/^to ckb1…111111 lock 0x4343…4343$/);
         expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
           'href',
           scriptPage
         );
-        expect(phoneLines(named)[2].right).toMatch(/^from ckb1qzda…222222 JoyID$/);
+        expect(phoneLines(named)[2].right).toMatch(/^from ckb1…222222 JoyID$/);
         expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
         for (const row of [unnamed, named, notIndexed])
           expect(row).not.toHaveTextContent(/lock kind unavailable/i);

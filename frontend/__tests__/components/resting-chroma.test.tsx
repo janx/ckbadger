@@ -13,11 +13,10 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { Address } from '@/components/ui/address';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { ActivityEventGroup, ParticipantLine } from '@/components/activity-event-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { ActivityStats } from '@/components/home/activity-stats';
-import type { Activity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import type { ParticipantInfo } from '@/lib/api';
 
 const ADDRESS =
   'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq22xdj8q4jdql98qkdhnqzgrsk4nqyavdcratvu9';
@@ -152,71 +151,6 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       unmount();
     }
   });
-
-  const identities: ItemDelta[] = [
-    { kind: 'identity', standard: 'dotcell', identityId: `0x${'ab'.repeat(20)}`, delta: 1 },
-    { kind: 'identity', standard: 'dotbit', identityId: `0x${'cd'.repeat(20)}`, delta: -1 },
-  ];
-
-  it('an ActivityEventGroup: identity hash links rest as ink; the tx hash hovers jade', () => {
-    const activity: Activity = {
-      txHash: TX,
-      blockNumber: 10_000,
-      txIndex: 0,
-      timestamp: '1700000000',
-      ckbDelta: '-100000000',
-      usedDelta: '0',
-      isCellbase: false,
-      itemDeltas: identities,
-      typeCalls: [],
-      lockCalls: [],
-      protocolActions: [],
-      participants: [],
-      roles: [],
-      tags: 0,
-    };
-    const { container } = render(
-      <div data-feed-row={TX}>
-        <ActivityEventGroup activity={activity} formatTimeAgo={() => '2 hrs ago'} />
-      </div>
-    );
-    expectNoAquaLink(container);
-    const hashLinks = screen
-      .getAllByRole('link')
-      .filter((a) => a.getAttribute('href')?.includes('/identities/'));
-    // The group draws its narrow card and its wide grid cells, each with both identities.
-    expect(hashLinks).toHaveLength(2 * identities.length);
-    hashLinks.forEach(expectRestingLink);
-    const txLinks = screen
-      .getAllByRole('link')
-      .filter((a) => a.getAttribute('href')?.endsWith(`/tx/${TX}`));
-    expect(txLinks).toHaveLength(2);
-    for (const tx of txLinks) expect(tx).toHaveClass('text-text', 'hover:text-jade');
-  });
-
-  it("a participant line: an identity delta's hash link rests as ink", () => {
-    const { container } = render(
-      <ParticipantLine
-        participant={{
-          address: null,
-          lockHash: LOCK_HASH,
-          lockHashPrefix: null,
-          roles: [],
-          ckbDelta: '0',
-          usedDelta: '0',
-          itemDeltas: identities,
-          tags: 0,
-        }}
-      />
-    );
-    expectNoAquaLink(container);
-    const hashLinks = screen
-      .getAllByRole('link')
-      .filter((a) => a.getAttribute('href')?.includes('/identities/'));
-    expect(hashLinks).toHaveLength(2);
-    hashLinks.forEach(expectRestingLink);
-  });
-
   it('a section CTA outside every row keeps its aqua (text-interactive) — untouched', () => {
     stubChartWidth(560);
     render(<ActivityStats />);

@@ -154,7 +154,10 @@ describe('Cell page against the Cell board', () => {
     expect(kindLine.children).toHaveLength(2);
     expect(kindLine).toHaveTextContent(/^Celllive$/);
     expect(title).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
-    expect(title.children).toHaveLength(0);
+    // U-09, the lead's question 2 (re-pinned on purpose): the h1 holds one thing, the out point as
+    // TitleId writes it (the row form until its line is measured), where it held the bare text
+    expect(title.children).toHaveLength(1);
+    expect(title.firstElementChild).toHaveAttribute('data-title-id', 'row');
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expect(nameBox.children).toHaveLength(2);
     const idLine = nameBox.lastElementChild as HTMLElement;

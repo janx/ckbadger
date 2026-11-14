@@ -31,7 +31,6 @@ import { api, type ChartResponse, type CkbytesAllocation, type DaoStatistics } f
 import { formatCompactSigned, MINUS } from '@/lib/chart-ticks';
 import {
   formatDecimalBytes,
-  formatPercent,
   formatSignedCkbExact,
   formatSignedCkbInteger,
   formatSignedCount,
@@ -46,6 +45,7 @@ import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
+import { percentFigure } from '@/lib/format-unit';
 
 /** Both change charts show the last 30 complete days. */
 const CHANGE_DAYS = 30;
@@ -301,7 +301,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
   const { active, handlers, focusHandlers } = useHighlight();
   // The page's lit figure flares when the served total changes (material pass v2, move 4).
   const flare = usePhosphor(circulating);
-  const pct = (part: bigint) => formatPercent(part, circulating, 2);
+  const pct = (part: bigint) => percentFigure(part, circulating);
   // Geometry follows the unrounded served amounts; Number is used only for CSS layout.
   const width = (part: bigint) => `${(Number(part) / Number(circulating)) * 100}%`;
   const total = formatCkbAmount(circulating);

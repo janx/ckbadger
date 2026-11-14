@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen, within } from '@/__tests__/utils/test-utils';
+import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { onlineManager } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
@@ -50,6 +50,18 @@ describe('Uncle detail page', () => {
     expect(decoded).toHaveTextContent('1.2065094518945692');
     expect(decoded).toHaveTextContent('S · compensation still owed + the burnt share');
     expect(screen.getByText(blockUncle.dao.raw)).toBeInTheDocument();
+  });
+
+  // The review's item E: the plate's id is the uncle's copy control; a click writes the WHOLE hash
+  it('copies the whole uncle hash when the plate’s id is clicked', async () => {
+    params.current = { id: '8775638', index: '0' };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const { container } = render(<UncleDetailPage />);
+    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    fireEvent.click(container.querySelector('[data-plate-hash]') as HTMLElement);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(blockUncle.hash));
+    expect(blockUncle.hash).toBe(`0x${'ee'.repeat(32)}`);
   });
 
   it('writes the header epoch like the facts and never breaks DAO prose mid-word (BA-41/BA-42)', async () => {

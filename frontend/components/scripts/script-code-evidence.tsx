@@ -11,7 +11,6 @@ import type {
 } from '@/lib/api';
 import { formatCkbAmount } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
-import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
@@ -21,6 +20,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { percentOf } from '@/lib/format-unit';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -71,20 +71,6 @@ export function immutableHow(classes: readonly ScriptCodeClassTotalApi['class'][
     .filter(isImmutableClass)
     .sort((a, b) => Number(b === 'unspendable') - Number(a === 'unspendable'))
     .map((c) => (c === 'fixed' ? 'pinned by data hash' : 'code cell unspendable'));
-}
-
-/**
- * `part / total` as the Scripts board writes a share: one decimal from 10 %, two from 0.1 %,
- * two significant digits below that, rounded half-up and never a false `0.00%`.
- */
-export function scriptShare(part: bigint, total: bigint): string {
-  if (part === BigInt(0)) return '0%';
-  const hundredTimes = part * BigInt(100);
-  if (hundredTimes >= total * BigInt(10)) return `${formatPercent(part, total, 1)}%`;
-  if (hundredTimes * BigInt(10) >= total) return `${formatPercent(part, total, 2)}%`;
-  let decimals = 2;
-  while (hundredTimes * BigInt(10) ** BigInt(decimals) < total * BigInt(10)) decimals++;
-  return `${formatPercent(part, total, decimals).replace(/0+$/, '').replace(/\.$/, '')}%`;
 }
 
 export function CodeClassSwatch({
@@ -168,7 +154,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
     'Who can change the code'
   );
   const words = (row: ScriptCodeClassTotalApi) =>
-    `${scriptClassLabel(row.class)} ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`;
+    `${scriptClassLabel(row.class)} ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`;
   const fits = (text: string, i: number) =>
     width !== null &&
     (width * spans[i].width) / 100 >=
@@ -186,7 +172,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
           <span
             key={row.class}
             data-code-class-segment={row.class}
-            title={`${scriptClassLabel(row.class)}: ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`}
+            title={`${scriptClassLabel(row.class)}: ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`}
             className={cn(
               'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded',
               inside && 'px-2.5',
@@ -227,7 +213,7 @@ export function ScriptCodeClassLegend({
           <CodeClassSwatch value={row.class} />
           <span>{scriptClassLabel(row.class)}</span>{' '}
           <span className="text-text tabular-nums">
-            {scriptShare(BigInt(row.lockOwnedCapacitySum), total)}
+            {percentOf(BigInt(row.lockOwnedCapacitySum), total)}
           </span>
         </li>
       ))}
@@ -278,7 +264,7 @@ export function ScriptCodeClassSummary({
             {joinClauses(
               groups.map(
                 (group) =>
-                  `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
+                  `${percentOf(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
               )
             )}
             .

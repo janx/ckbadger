@@ -5,6 +5,7 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -140,6 +141,39 @@ describe('CellDetailPage', () => {
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
     // the cell's stone, not its transaction's old hash seal
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
+  });
+  // U-09, the lead's ruling of the B3 follow-up (RESPONSIVE_LAYOUT principle 4): the h1 is the
+  // out point at the head size where its measured line holds it, the row size otherwise; the row
+  // size until measured. Below md the h1 is 26 px with −0.02 em tracking, 15.08 px a character:
+  // the head out point "0xababababab…abababab:0" (23 characters) is 346.84 px, inside the 358 px line
+  // at 390 and over the 328 at 360. The page picked the row size at every width before.
+  it.each([
+    [358, '0xababababab…abababab:0'],
+    [328, '0xabababab…ababab:0'],
+  ] as const)('names the cell on a %i px h1 line by %s', async (line, name) => {
+    stubChartWidth(line);
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!(el as Element).closest('h1')) return style;
+      return new Proxy(style, {
+        get: (target, prop) =>
+          prop === 'fontSize'
+            ? '26px'
+            : prop === 'letterSpacing'
+              ? '-0.52px'
+              : (target as unknown as Record<string | symbol, unknown>)[prop],
+      });
+    });
+    try {
+      getCell.mockResolvedValue(base);
+      view();
+      const title = await screen.findByRole('heading', { level: 1 });
+      await waitFor(() => expect(title).toHaveTextContent(new RegExp(`^${name}$`)));
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
   it('presses a spent cell’s seal in the dead ink', async () => {
     getCell.mockResolvedValue({

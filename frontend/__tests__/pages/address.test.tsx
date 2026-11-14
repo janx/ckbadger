@@ -170,7 +170,7 @@ describe('Address v3', () => {
     expect(screen.queryByRole('heading', { name: /^Fiber channels/ })).not.toBeInTheDocument();
     // Consistency plan C1: the tab names the page.
     await waitFor(() =>
-      expect(document.title).toMatch(/^ck[bt]1[0-9a-z]{4}…[0-9a-z]{6} · address · CKBadger$/)
+      expect(document.title).toMatch(/^ck[bt]1…[0-9a-z]{6} · address · CKBadger$/)
     );
   });
 

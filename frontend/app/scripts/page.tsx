@@ -23,7 +23,6 @@ import {
   immutableHow,
   isImmutableClass,
   scriptClassLabel,
-  scriptShare,
 } from '@/components/scripts/script-code-evidence';
 import { HeroFigure } from '@/components/scripts/script-hero';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -38,7 +37,7 @@ import { shortenHash } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { withUnit } from '@/lib/format-unit';
+import { percentOf, withUnit } from '@/lib/format-unit';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -241,7 +240,7 @@ function heldCapacity(script: KnownScript): { total: bigint; occupied: bigint } 
 
 function occupiedShare(script: KnownScript): { share: string } {
   const { total, occupied } = heldCapacity(script);
-  return { share: total === BigInt(0) ? '0%' : scriptShare(occupied, total) };
+  return { share: total === BigInt(0) ? '0.00%' : percentOf(occupied, total) };
 }
 
 function capacityText(value: string) {

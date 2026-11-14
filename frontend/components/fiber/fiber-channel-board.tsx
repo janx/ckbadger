@@ -536,7 +536,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             args={
               channel.state === 'open' || channel.state === 'forceClosed'
                 ? `${STEP_WORDS[steps.length]} ${countNoun(steps.length, 'step')} so far`
-                : `${STEP_WORDS[steps.length]} steps`
+                : `${STEP_WORDS[steps.length]} ${countNoun(steps.length, 'step')}`
             }
           >
             <div className="flex flex-col gap-[22px]">

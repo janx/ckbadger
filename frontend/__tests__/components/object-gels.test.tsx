@@ -17,10 +17,11 @@ const lanes = alleleLanes(
 );
 
 describe('SequencingGel (Object board, OB-7)', () => {
-  // drawn 1:1 for its measured box. U-09 (re-pinned): this DNA's inscription is written by its
-  // txid at the tight size ("Bitcoin inscription a94617…79e0i0", 33 characters, was the tail
-  // alone, 26), so its gene columns fit 1:1 from 937 px; the plate at 1280 is 896 (below)
-  beforeEach(() => stubChartWidth(937));
+  // drawn 1:1 for its measured box; 896 px is the DNA plate at 1280, where the gene columns fit.
+  // The review's item B (the lead's ruling): 8da9b2b5 moved this to 937 px, a width no viewport
+  // gives, when the inscription reading grew to 33 characters; the reading is now
+  // "inscription a94617…79e0i0" (25) and the plate is 896 again
+  beforeEach(() => stubChartWidth(896));
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -59,7 +60,7 @@ describe('SequencingGel (Object board, OB-7)', () => {
     const bg = container.querySelector('[data-gene="prev.bg"]')!;
     expect(bg.textContent).toContain('bytes 0–31 · btcfs');
     expect(bg.textContent).toContain('a94617…79e0');
-    expect(bg.textContent).toContain('Bitcoin inscription a94617…79e0i0');
+    expect(bg.textContent).toContain('inscription a94617…79e0i0');
     const relief = container.querySelector('[data-gene="relief"]')!;
     expect(relief.textContent).toContain('byte 0 · 1 option');
     expect(relief.querySelector('[stroke-dasharray]')).not.toBeNull();
@@ -235,25 +236,45 @@ describe('SequencingGel at the measured width (V3)', () => {
     vi.unstubAllGlobals();
   });
 
-  // U-09: at 896 px, the plate at 1280, this DNA's inscription reading (33 characters) no longer
-  // fits the value column beside the lanes, so the readings take rows under the map
-  it('takes the rows at the 896 px plate when the inscription reading does not fit beside it', () => {
+  // The review's item B: the wide gel holds at the 896 px plate (1280) for this DNA with a value
+  // at the full budget. Its columns before the value end at 684.28 px: the gene columns from 304
+  // (38 + 16 × 15 + 10 + 16), the longest name ("prev.type", 9 × 7.64 + 10), the longest bytes ·
+  // rule ("bytes 51–52 · nervapeNote", 25 × 7.32 + 12), the raw at the tight size (11 × 7.32 + 8),
+  // the arrow's 16 and the 2 px end. 896 − 684.28 = 211.72 px holds 27 characters of 7.64 (206.28)
+  // and not 28 (213.92): the budget is 27. A value of 40 characters is cut to it and still fits.
+  it('draws the wide gel at the 896 px plate with a value cut to the full budget', () => {
     stubChartWidth(896);
-    render(<ControlledGel />);
-    expect(screen.getByRole('list', { name: 'Genes' })).toBeInTheDocument();
+    const long = 'N'.repeat(40);
+    const full = {
+      ...layout,
+      genes: layout.genes.map((g) => (g.name === 'Serial' ? { ...g, value: long } : g)),
+    };
+    const { container } = render(
+      <SequencingGel layout={full} subject="Nervape 3x" active={null} onActive={() => {}} />
+    );
+    expect(screen.queryByRole('list', { name: 'Genes' })).toBeNull();
+    // the drawn words (the group's <title> keeps the whole value for a reader)
+    const words = Array.from(container.querySelectorAll('[data-gene="Serial"] text')).map(
+      (t) => t.textContent
+    );
+    expect(words).toContain(`${'N'.repeat(26)}…`);
+    expect(words.some((w) => w!.includes('N'.repeat(27)))).toBe(false);
+    expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
+      'inscription a94617…79e0i0'
+    );
   });
 
   it('draws lanes and gene columns side by side, 1:1, where the columns fit', () => {
-    stubChartWidth(937);
+    stubChartWidth(896);
     const { container } = render(<ControlledGel />);
     const svg = container.querySelector('svg[role="img"]')!;
-    expect(svg).toHaveAttribute('width', '937');
-    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 937 /);
+    expect(svg).toHaveAttribute('width', '896');
+    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 896 /);
     expect(svg.getAttribute('class')).not.toMatch(/min-w-/);
     expect(container.querySelector('.overflow-x-auto')).toBeNull();
     // the gene readings are SVG columns beside the bands, the value not cut
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
-      'Bitcoin inscription a94617…79e0i0'
+      'inscription a94617…79e0i0'
     );
     // each column starts after the longest text of the one before: "bytes 51–52 · nervapeNote"
     // (25 characters of 11.5 px) ends before the raw column, which no longer collides with it
@@ -289,7 +310,7 @@ describe('SequencingGel at the measured width (V3)', () => {
       )
     ).toEqual(['Color', 'Serial', 'Note']);
     const genes = screen.getByRole('list', { name: 'Genes' });
-    // the longest reading (a94617…79e0 → Bitcoin inscription a94617…79e0i0) does not fit a third
+    // the longest reading (a94617…79e0 → inscription a94617…79e0i0) does not fit a third
     // column at 358 px: each reading takes its own line under the name and bytes
     expect(genes).toHaveAttribute('data-rows', 'two-line');
     const rows = within(genes).getAllByRole('listitem');
@@ -309,10 +330,10 @@ describe('SequencingGel at the measured width (V3)', () => {
       'btcfs',
       'a94617…79e0',
       '→',
-      'Bitcoin inscription a94617…79e0i0',
+      'inscription a94617…79e0i0',
     ])
       expect(bg).toHaveTextContent(part);
-    expect(within(bg).getByText('Bitcoin inscription a94617…79e0i0')).toHaveClass(
+    expect(within(bg).getByText('inscription a94617…79e0i0')).toHaveClass(
       '[overflow-wrap:anywhere]'
     );
     expect(rows[3]).toHaveTextContent('Color');

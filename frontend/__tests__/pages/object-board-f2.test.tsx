@@ -64,10 +64,10 @@ function lifeVersions(): ItemCellVersions {
 
 beforeEach(() => {
   mockItemReads();
-  // the gels lay themselves out for their measured box (V2); U-09: this DNA's inscription is
-  // written by its txid at the tight size, so its gene columns fit beside the lanes from 937 px
-  // (object-gels.test.tsx pins the rows at the 896 px plate)
-  stubChartWidth(937);
+  // the gels lay themselves out for their measured box (V2): 896 px is the DNA plate at 1280,
+  // where the sequencing gel's gene columns fit beside the lanes (the review's item B: 8da9b2b5
+  // had moved this to 937 px, a width no viewport gives)
+  stubChartWidth(896);
   vi.spyOn(api, 'getSporeObject').mockResolvedValue({
     ...sporeDetailProducer,
     sporeId: NERVAPE3X_ID,

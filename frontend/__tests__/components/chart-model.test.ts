@@ -226,7 +226,7 @@ describe('29 chart variants', () => {
       usedShare: zero,
       capacityShare: zero,
     });
-    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—' }]);
+    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—', width: 0 }]);
     const single = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       ...miners,
       totalBlocks: 50,
@@ -266,7 +266,10 @@ describe('29 chart variants', () => {
     expect(model.facts?.[0]).toEqual({
       label: 'Leading miner',
       name: 'ckb1qzda0c…93hhsj',
-      value: '41,743 blocks · 0.00%',
+      // the review's item I (re-pinned): the share is the miner's blocks in the window's, 41,743 of
+      // 66,477 (the fixture's API percentage, '0', was a placeholder the model read before)
+      // the review's item C (re-pinned): the count through formatCount, a no-break space
+      value: '41,743\u00a0blocks · 62.79%',
     });
     expect(model.rankedRows?.[0]).toMatchObject({
       label: 'ckb1qzda0c…93hhsj',
@@ -525,6 +528,59 @@ describe('29 chart variants', () => {
       { label: '2026-02-19', values: { flow: '-0.00000002' } },
     ]);
     expect(model.secondary?.title).toBe('Utilization');
+  });
+
+  // The review's item I: a miner's share is its blocks in the window's blocks through the one
+  // percentage (it was the API's floored four decimals rounded to two: 1 block of 1,000,000 read
+  // 0.00%, 999,999 read 100.00%)
+  it('reads each miner’s share from its blocks through the one percentage', () => {
+    const at = (blocksMined: number[]) =>
+      chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+        title: 'Miners',
+        totalBlocks: 1_000_000,
+        windowDays: 7,
+        fromDate: '2026-07-23',
+        toDate: '2026-07-29',
+        data: blocksMined.map((n, i) => ({
+          minerLockHash: `0x${String(i).repeat(64)}`,
+          address: null,
+          minerName: `Pool ${i}`,
+          blocksMined: n,
+          percentage: ((n / 1_000_000) * 100).toFixed(4),
+        })),
+      });
+    const model = at([999_999, 1]);
+    expect(model.rankedRows?.map((row) => row.share)).toEqual(['>99.99%', '<0.01%']);
+    expect(model.headline).toMatchObject({ display: '>99.99', unit: '%' });
+    // the leading miner's fact ends on the same share (its count's form is the review's item C)
+    expect(model.facts?.[0].value).toMatch(/ · >99\.99%$/);
+    expect(at([600_000, 400_000]).rankedRows?.map((row) => row.share)).toEqual([
+      '60.00%',
+      '40.00%',
+    ]);
+  });
+
+  // The review's item C: the leading miner's blocks go through the one plural rule; a leader of
+  // one block read "1 blocks"
+  it('names a leading miner of one block in the singular', () => {
+    const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+      title: 'Miners',
+      totalBlocks: 2,
+      windowDays: 7,
+      fromDate: '2026-07-23',
+      toDate: '2026-07-29',
+      data: [0, 1].map((i) => ({
+        minerLockHash: `0x${String(i).repeat(64)}`,
+        address: null,
+        minerName: `Pool ${i}`,
+        blocksMined: 1,
+        percentage: '50.0000',
+      })),
+    });
+    expect(model.facts?.[0]).toMatchObject({
+      label: 'Leading miner',
+      value: '1\u00a0block · 50.00%',
+    });
   });
 
   it('retains miner address and unresolved lock-hash identities in ranking links', () => {

@@ -383,7 +383,7 @@ export function TransactionListTable({
       className: 'whitespace-nowrap',
       render: (tx) => (
         <span className="text-text-dim text-small">
-          {consumedCells(tx)} → {tx.outputsCount}
+          {consumedCells(tx).toLocaleString('en-US')} → {tx.outputsCount.toLocaleString('en-US')}
         </span>
       ),
     },

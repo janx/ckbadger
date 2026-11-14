@@ -362,7 +362,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 className="text-text-dim text-small flex flex-wrap items-baseline gap-3"
               >
                 <span>Unconfirmed</span>
-                <span>{a.pendingSummary.txCount} tx</span>
+                <span>{a.pendingSummary.txCount.toLocaleString('en-US')} tx</span>
                 {BigInt(a.pendingSummary.capacityDelta) !== BigInt(0) && (
                   <span>
                     <ExactCkb shannons={BigInt(a.pendingSummary.capacityDelta)} wrap /> pending

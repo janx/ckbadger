@@ -1,8 +1,8 @@
 import { AlignedBar } from '@/components/ui/aligned-bar';
 import { niceTicks } from '@/lib/chart-ticks';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
-import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
 
 const PROPOSAL_COLOR = CLASS_COLORS.dao;
 const GLYPH_WIDTH = 112;
@@ -226,13 +226,13 @@ export function BlocksLimitsFootnote({ blocks }: { blocks: readonly LimitRow[] }
     <p className="text-text-dim text-small">
       Size and cycles · Fullest of these {blocks.length.toLocaleString('en-US')}:{' '}
       <span className="text-text-bright">{fullest.size.toLocaleString('en-US')}</span> bytes,{' '}
-      {formatPercent(BigInt(fullest.size), bytesLimit)}% of the{' '}
-      {maxBlockBytes.toLocaleString('en-US')}-byte limit ·{' '}
+      {percentOf(BigInt(fullest.size), bytesLimit)} of the {maxBlockBytes.toLocaleString('en-US')}
+      -byte limit ·{' '}
       {most ? (
         <>
           most work:{' '}
           <span className="text-text-bright">{BigInt(most.cycles!).toLocaleString('en-US')}</span>{' '}
-          cycles, {formatPercent(BigInt(most.cycles!), cyclesLimit)}% of the{' '}
+          cycles, {percentOf(BigInt(most.cycles!), cyclesLimit)} of the{' '}
           {cyclesLimit.toLocaleString('en-US')}-cycle limit
         </>
       ) : (

@@ -21,7 +21,6 @@ import {
   type ThemeName,
 } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
-import { formatPercent } from '@/lib/ckb-decimal';
 import { formatCount, countNoun } from '@/lib/format-count';
 import {
   ALLELE_GEL,
@@ -35,6 +34,7 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
 import { clipLabel } from '@/lib/shorten';
+import { percentOf } from '@/lib/format-unit';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
@@ -322,7 +322,7 @@ function Gel({
                           }}
                           className="cursor-pointer"
                         >
-                          <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${formatPercent(BigInt(b.count), BigInt(total))}%)`}</title>
+                          <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${percentOf(BigInt(b.count), BigInt(total))})`}</title>
                         </rect>
                         {p.h >= 13 &&
                           lw >= ALLELE_GEL.labelledLane &&

@@ -5,8 +5,8 @@ import type {
   OrphanedBlock,
   ReorgEvent,
 } from '@/lib/api';
-import { formatPercent } from '@/lib/ckb-decimal';
 import { formatUtc8DateTime } from '@/lib/utils';
+import { percentFigure, percentOf } from '@/lib/format-unit';
 
 /**
  * D7: a fork event lives at `/forks/<fork_point_height>/<orphan_hash_prefix8>`, the first
@@ -127,8 +127,8 @@ export function uncleRateFigure(
     if (uncles > 0) throw new Error(`Fork overview: ${uncles} uncles in a window with no blocks`);
     return null;
   }
-  const percent = formatPercent(BigInt(uncles), BigInt(blocks));
-  return { rate: `${percent}%`, percent, uncles, blocks };
+  const percent = percentFigure(BigInt(uncles), BigInt(blocks));
+  return { rate: percentOf(BigInt(uncles), BigInt(blocks)), percent, uncles, blocks };
 }
 
 /** A block header time on the site's UTC+8 clock with its milliseconds: `09:12:32.761`. */

@@ -147,8 +147,10 @@ describe('Charts index encodings (F2 charts)', () => {
   });
 
   // Re-pinned for CH-02 (UI review 2026-11-14): the card's bands are the six kinds in their class
-  // colours, largest first; the merged "Assets" band had no class colour to take.
-  it('summarises activity by type in its six kinds, largest first (CH-07, CH-02)', () => {
+  // colours; the merged "Assets" band had no class colour to take. The review's item D: they stand
+  // in the page's fixed class order, not by size (the test said "largest first" and its data could
+  // not tell); here the largest kind is not first and the shares do not descend.
+  it('summarises activity by type in its six kinds, in the page’s fixed class order (CH-07, CH-02)', () => {
     const model = chartModel(def('activity-type-breakdown'), {
       title: 'Activity Type Breakdown',
       series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'].map((key) => ({
@@ -160,25 +162,26 @@ describe('Charts index encodings (F2 charts)', () => {
         {
           date: '2026-10-29',
           values: {
-            transfer: '10',
-            dao: '2',
+            transfer: '50',
+            dao: '22',
             token: '3',
             object: '4',
             identity: '1',
-            scriptCall: '80',
+            scriptCall: '20',
           },
         },
       ],
     });
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'Script calls 80.00%',
-      'CKB transfers 10.00%',
+      'Script calls 20.00%',
+      'CKB transfers 50.00%',
       'Tokens 3.00%',
       'Objects 4.00%',
       'Identities 1.00%',
-      'Nervos DAO 2.00%',
+      'Nervos DAO 22.00%',
     ]);
-    expect(model.headline).toEqual({ pre: 'script calls', display: '80.00', unit: '%' });
+    // the headline reads the first kind of the fixed order (unchanged here; said in the hand-back)
+    expect(model.headline).toEqual({ pre: 'script calls', display: '20.00', unit: '%' });
   });
 
   it('draws live cells as one live count, consumed cells kept apart (CH-08)', () => {

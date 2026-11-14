@@ -3,10 +3,10 @@
 import { CLASS_COLORS, CLASS_KEYS, type AssetClass } from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
-import { formatPercent } from '@/lib/ckb-decimal';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
+import { percentOf } from '@/lib/format-unit';
 
 export interface ConcentrationGroup {
   label: string;
@@ -58,7 +58,7 @@ export function ConcentrationBar({
     100,
     label
   );
-  const share = (g: ConcentrationGroup) => `${formatPercent(g.value, total)}%`;
+  const share = (g: ConcentrationGroup) => percentOf(g.value, total);
   const words = (g: ConcentrationGroup, i: number) =>
     i === 0 ? `${g.label} ${share(g)}` : `${g.label} · ${share(g)}`;
   const fits = (text: string, i: number) =>
@@ -72,7 +72,7 @@ export function ConcentrationBar({
     <div ref={ref} className="min-w-0 space-y-2">
       <div
         role="img"
-        aria-label={`${label}: ${groups.map((g) => `${g.label} ${formatPercent(g.value, total)}%`).join(', ')}`}
+        aria-label={`${label}: ${groups.map((g) => `${g.label} ${share(g)}`).join(', ')}`}
         className={cn(
           'flex w-full gap-0.5 overflow-hidden',
           labelsInside ? 'text-small h-[28px] rounded tabular-nums' : 'h-3'

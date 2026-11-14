@@ -316,7 +316,7 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
           tone: 'head',
           // U-09 (re-pinned): the phone row's out point and owner at the tight size
           left: '0xfa30…31b9:0',
-          right: 'ckb1qzda…exld6f',
+          right: 'ckb1…exld6f',
         },
         { key: 'what', tone: 'body', left: 'Nervos DAO withdrawal request', right: null },
         {

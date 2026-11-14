@@ -27,9 +27,14 @@ const TX = GX + 16;
 /** One character of 12 px and of 11.5 px JetBrains Mono (0.636 em, measured). */
 const CHAR_12 = 7.64;
 const CHAR_115 = 7.32;
-// A value that is longer is a label cut to this budget; 33 holds an inscription whole ("Bitcoin
-// inscription a94617…79e0i0", its txid at the tight size, U-09): an id is never cut.
-const VALUE_MAX = 33;
+// A value that is longer is a label cut to this budget. 27 is the most the wide gel holds at the
+// DNA plate at 1280 (896 px) for the flagship DNA (Nervape): its columns before the value end at
+// 684.28 px (the gene columns from 304; the longest name, "prev.type", 9 × 7.64 + 10; the longest
+// bytes · rule, "bytes 51–52 · nervapeNote", 25 × 7.32 + 12; the raw at the tight size, 11 × 7.32
+// + 8; the arrow's 16; the 2 px end), and 896 − 684.28 = 211.72 px holds 27 characters (206.28)
+// but not 28 (213.92). An inscription, "inscription a94617…79e0i0" (25, its txid at the tight size,
+// U-09), is never cut.
+const VALUE_MAX = 27;
 const NAME_MAX = 11;
 /** The stacked map: a ruler column, then lanes of up to 20 px and never under 14. */
 const NARROW = { RULER: 34, MAX_LANE: 20, MIN_LANE: 14, TOP: 26, STEP: 7 } as const;

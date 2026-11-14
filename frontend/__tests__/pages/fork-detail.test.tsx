@@ -324,7 +324,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     const table = screen.getByRole('table', { name: 'Blocks' });
     expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })).toHaveLength(3);
-    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1qzda…93hhsj');
+    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1…93hhsj');
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByRole('link', { name: address })).toHaveAttribute(
       'href',

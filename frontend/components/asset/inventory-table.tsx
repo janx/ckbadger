@@ -5,7 +5,7 @@ import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { exactUnsignedInteger, formatDecimal, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatDecimal } from '@/lib/exact-integer';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatTick } from '@/lib/chart-ticks';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -24,6 +24,7 @@ import { formatCompositionTier } from '@/lib/asset-utils';
 import type { CSSProperties, ReactNode } from 'react';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
+import { percentOf } from '@/lib/format-unit';
 
 export interface AssetAmountProps {
   amount: string;
@@ -46,7 +47,7 @@ export function AssetAmount({ amount, decimals }: AssetAmountProps) {
           <span data-fraction className={AMOUNT_INK.neutral.fraction}>
             {significant ? `.${significant}` : ''}
           </span>
-          <span className="text-text-ghost">
+          <span data-ghost className="text-text-ghost">
             {significant ? '' : '.'}
             {fraction.slice(significant.length)}
           </span>
@@ -111,7 +112,7 @@ function heldAndOccupiedParts(a: Asset): ReactNode[] {
     ) : (
       <span key="occupied" className="whitespace-nowrap">
         <OccupiedCkb shannons={occupied} /> occupied
-        {held > BigInt(0) && ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)`}
+        {held > BigInt(0) && ` (${percentOf(occupied, held)})`}
       </span>
     ),
   ];
@@ -405,7 +406,7 @@ function heldTitle(a: Asset): string {
   if (occupied === null) parts.push('occupied unavailable');
   else
     parts.push(
-      `${exactCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)` : ''}`
+      `${exactCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${percentOf(occupied, held)})` : ''}`
     );
   return parts.join(' · ');
 }

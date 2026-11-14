@@ -1,3 +1,5 @@
+import { percentOf } from '@/lib/format-unit';
+
 /** Parse an API integer without passing it through IEEE-754 numbers. */
 export function exactUnsignedInteger(value: string, context: string): bigint {
   if (!/^(0|[1-9]\d*)$/.test(value)) {
@@ -112,5 +114,5 @@ export function formatExactShare(values: readonly [bigint, bigint][], index: num
   if (part === undefined) throw new Error(`missing chart share index ${index}`);
   const total = scaled.reduce((sum, part) => sum + part, BigInt(0));
   if (total === BigInt(0)) return '—';
-  return `${formatScaledInteger(part * BigInt(100), total, 2)}%`;
+  return percentOf(part, total);
 }

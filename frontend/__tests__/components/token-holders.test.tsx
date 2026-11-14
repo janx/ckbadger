@@ -39,7 +39,8 @@ describe('Token distribution', () => {
     expect(screen.getByRole('table', { name: 'Holders by balance' })).toHaveTextContent(
       '1 and above'
     );
-    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder 100.00%/);
+    // the review's item I (re-pinned): a share below the whole reads >99.99%, never 100.00%
+    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder >99\.99%/);
     rerender(
       <TokenDistributionView
         distribution={{ ...distribution, unit: 'raw', decimals: null }}
@@ -96,7 +97,7 @@ describe('Token distribution', () => {
     });
     expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 40) });
     expect(above).toHaveTextContent('5');
-    expect(above).toHaveTextContent('100.00%');
+    expect(above).toHaveTextContent('>99.99%');
   });
   it('names a bucket that starts at 0 and has no upper bound "0 and above" (L2-4)', () => {
     // It used to print "Under " with no bound after it.
@@ -240,7 +241,7 @@ describe('Token holders (board L5)', () => {
         key: 'holder',
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
-        left: '1ckb1qrgq…tllakf JoyID',
+        left: '1ckb1…tllakf JoyID',
         right: '562,997.00000000',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
@@ -338,6 +339,49 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
     for (const row of [named, unnamed, notIndexed])
       expect(row).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+});
+
+// The review's item I: a holder's share is the one percentage, never a false 0.00% or 100.00%
+describe('Token holders’ shares at the extremes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('writes <0.01% for a holder above nothing and >99.99% for one below the whole', async () => {
+    atContainerWidth(1248);
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      data: [
+        {
+          lockScriptHash: `0x${'11'.repeat(32)}`,
+          address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+          balance: '999999',
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockKind: 'JoyID',
+        },
+        {
+          lockScriptHash: `0x${'22'.repeat(32)}`,
+          address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
+          balance: '1',
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockKind: 'JoyID',
+        },
+      ],
+      total: 2,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+      totalSupply: '1000000',
+      anchor: null,
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const [, whale, dust] = within(table).getAllByRole('row');
+    expect(whale).toHaveTextContent('>99.99%');
+    expect(whale).not.toHaveTextContent('100.00%');
+    expect(dust).toHaveTextContent('<0.01%');
+    expect(dust).not.toHaveTextContent('0.00%');
   });
 });
 
@@ -448,7 +492,7 @@ describe('Holders by balance phone row', () => {
     const rows = screen.getAllByTestId('holder-bucket-row-mobile');
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['range', '1 and above', '1 holder'],
-      ['share', '', '100.00% of supply'],
+      ['share', '', '>99.99% of supply'],
     ]);
   });
 });

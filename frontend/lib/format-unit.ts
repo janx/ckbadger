@@ -26,11 +26,26 @@ export function withUnit(value: string, unit: string): string {
 }
 
 /**
- * The one percentage of a part in a whole (CH-14): two decimals, the sign with no space, `24.79%`.
- * More decimals stand only where a page says why in its own words.
+ * The figure of a part in a whole as a percentage (CH-14), exact and rounded half up at two
+ * decimals, with the two printed results that would state something false bounded instead (the
+ * review's item I): a part above nothing that rounds to 0.00 is `<0.01`, a part below the whole
+ * that rounds to 100.00 is `>99.99`. Exact zero and the exact whole are `0.00` and `100.00`. A
+ * bar's width or any number behind a figure is computed from the parts, never from this text.
+ */
+export function percentFigure(part: bigint, total: bigint): string {
+  const figure = formatPercent(part, total, 2);
+  if (part > BigInt(0) && figure === '0.00') return '<0.01';
+  if (part < total && figure === '100.00') return '>99.99';
+  return figure;
+}
+
+/**
+ * The one percentage of a part in a whole (CH-14): two decimals, the sign with no space, `24.79%`,
+ * never a false `0.00%` or `100.00%` ({@link percentFigure}). More decimals stand only where a page
+ * says why in its own words.
  */
 export function percentOf(part: bigint, total: bigint): string {
-  return withUnit(formatPercent(part, total, 2), '%');
+  return withUnit(percentFigure(part, total), '%');
 }
 
 /** A window between two dates: `2026-11-07 → 2026-11-13` (CH-03). */

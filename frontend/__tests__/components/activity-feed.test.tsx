@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
@@ -50,8 +50,17 @@ function serveTransactions(txs: Transaction[]) {
 const rows = () => screen.getByTestId('feed-rows').querySelectorAll('[data-feed-row]');
 
 describe('ActivityFeed', () => {
-  beforeEach(() => usePipelineHoverStore.getState().clear());
-  afterEach(() => usePipelineHoverStore.getState().clear());
+  // The clock stands still in every test (Date only; timers stay real): a row's age and the
+  // expectation computed from the same timestamp read one time, so a second ticking over between
+  // render and assertion cannot change one and not the other (the lead's addendum 3)
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    usePipelineHoverStore.getState().clear();
+  });
+  afterEach(() => {
+    usePipelineHoverStore.getState().clear();
+    vi.useRealTimers();
+  });
 
   it('opens on Latest activity with real tab buttons and a view all link', async () => {
     render(<ActivityFeed />);
@@ -125,9 +134,8 @@ describe('ActivityFeed', () => {
       'href',
       '/mainnet/blocks/20819142'
     );
-    // T7 (option A): the headline links to the tx, the hash is the row's hover. Consistency C3:
-    // block · the absolute UTC+8 date on the right (was block · age); the age joins the hash in
-    // the row's hover.
+    // T7 (option A): the headline links to the tx, the hash is the row's hover, the age beside it
+    // (consistency C3); this feed is live, so its row ends block · age (PA-22; C3 had the date).
     expect(within(first).getByRole('link', { name: 'Script call' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
@@ -360,7 +368,9 @@ describe('ActivityFeed', () => {
 
   it('switches to Transactions: the old latest-transactions rows, View all pointing there', async () => {
     const user = userEvent.setup();
-    serveTransactions(Array.from({ length: 10 }, (_, i) => tx(i)));
+    // the rows served, kept: tx() stamps Date.now(), so a second call can be a second later
+    const served = Array.from({ length: 10 }, (_, i) => tx(i));
+    serveTransactions(served);
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
 
@@ -385,16 +395,16 @@ describe('ActivityFeed', () => {
     // date, consistency C3).
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(tx(0).timestamp)}$`)
+      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp)}$`)
     );
-    expect(within(evidence).getByText(formatTimeAgo(tx(0).timestamp))).toHaveAttribute(
+    expect(within(evidence).getByText(formatTimeAgo(served[0].timestamp))).toHaveAttribute(
       'title',
-      formatUtc8DateTime(tx(0).timestamp)
+      formatUtc8DateTime(served[0].timestamp)
     );
     // The row's hover is the activity row's: the hash and the age (was no title).
     expect(first).toHaveAttribute(
       'title',
-      expect.stringMatching(new RegExp(`^${tx(0).hash} · \\d+s ago$`))
+      expect.stringMatching(new RegExp(`^${served[0].hash} · \\d+s ago$`))
     );
   });
 

@@ -1,8 +1,9 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import { ExactCkb } from '@/components/activity-event-row';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
+import { percentOf } from '@/lib/format-unit';
 
 export interface CapacityPartitionProps {
   subject: string;
@@ -116,9 +117,7 @@ export function CapacityPartition({
             <dd>
               <ExactCkb shannons={p.value} signed={false} tone="plain" />
               {sum > BigInt(0) && (
-                <span className="text-text-dim ml-2">
-                  {formatScaledInteger(p.value * BigInt(100), sum, 2)}%
-                </span>
+                <span className="text-text-dim ml-2">{percentOf(p.value, sum)}</span>
               )}
               {p.label === 'DAO free' && daoFreeNote && (
                 <span className="text-text-dim"> · {daoFreeNote}</span>

@@ -155,12 +155,13 @@ describe('DaoBoard', () => {
     for (const width of [1248, 358]) {
       stubChartWidth(width);
       const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-      // U-09 (re-pinned): the table's row size (10…6), the phone card's tight size (8…6)
+      // U-09 (re-pinned): the table's row size (10…6), the phone card's tight size (4…6, the
+      // lead's ruling; it was 8…6)
       const links = screen.getAllByRole('link', {
         name:
           width === 1248
             ? `${owner.address.slice(0, 10)}…${owner.address.slice(-6)}`
-            : `${owner.address.slice(0, 8)}…${owner.address.slice(-6)}`,
+            : `${owner.address.slice(0, 4)}…${owner.address.slice(-6)}`,
       });
       expect(links).toHaveLength(1);
       expect(links[0]).toHaveAttribute('href', `/mainnet/address/${owner.address}`);
@@ -700,8 +701,9 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     expect(label('miners')).toBe('miners 14.29%');
     expect(label('compensation')).toBe('depositors 42.86%');
     expect(label('burnt')).toBe('burnt 42.86% · no cell can ever claim it');
-    expect(label('paid')).toBe('paid out 33.3%');
-    expect(label('owed')).toBe('still owed 66.7%');
+    // CH-14 (re-pinned): the depositors' two parts take the one percentage, two decimals (was one)
+    expect(label('paid')).toBe('paid out 33.33%');
+    expect(label('owed')).toBe('still owed 66.67%');
     // No exact amount and no word under the boxes.
     expect(svg.textContent).not.toMatch(/\.\d{8}/);
     expect(svg.querySelector('[data-placeholder]')).toBeNull();
@@ -821,17 +823,19 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     // Re-pinned with PB-25 (UI review 2026-11-14): a block wide enough for its share writes it
     // inside at phone width too (the whole, depositors, burnt, still owed here); the narrow ones
     // stay blank and the list below names every part.
-    // (paid out is 49 px: "33.3%" at 11 px and 6 px padding needs 47; miners' 50 px cannot hold
-    // "14.29%" at 13 px and 12 px padding, 72)
+    // (miners' 50 px cannot hold "14.29%" at 13 px and 12 px padding, 72). CH-14 (re-pinned, a fit
+    // lost on purpose and said in the hand-back): paid out is 49 px, and its share at two decimals,
+    // "33.33%" at 11 px (7 px a glyph) and 6 px padding, needs 54 (one decimal, "33.3%", needed 47),
+    // so at 358 it stays blank like miners and the list below names it with its share
     expect(
       Array.from(svg.querySelectorAll('[data-label]')).map((t) => t.getAttribute('data-label'))
-    ).toEqual(['total', 'compensation', 'paid', 'owed', 'burnt']);
+    ).toEqual(['total', 'compensation', 'owed', 'burnt']);
     const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
     expect(legend).toHaveTextContent('secondary issuance since genesis 7.00000000 CKB');
     expect(legend).toHaveTextContent('miners 14.29% · 1.00000000');
     expect(legend).toHaveTextContent('depositors 42.86% · 3.00000000');
-    expect(legend).toHaveTextContent('paid out 33.3% · 1.00000000');
-    expect(legend).toHaveTextContent('still owed 66.7% · 2.00000000 to 22,379 live cells');
+    expect(legend).toHaveTextContent('paid out 33.33% · 1.00000000');
+    expect(legend).toHaveTextContent('still owed 66.67% · 2.00000000 to 22,379 live cells');
     expect(legend).toHaveTextContent('burnt 42.86% · 3.00000000 · no cell can ever claim it');
     // The one line is the desktop form; the list replaces it.
     expect(
@@ -891,7 +895,7 @@ describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
     expect(label('miners')).toBeNull();
     expect(label('compensation')).toBe('42.86%');
     expect(label('burnt')).toBe('burnt 42.86%');
-    expect(label('owed')).toBe('66.7%');
+    expect(label('owed')).toBe('66.67%');
   });
 });
 

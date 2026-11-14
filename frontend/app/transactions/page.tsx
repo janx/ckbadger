@@ -34,7 +34,7 @@ import {
   totalActivities,
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
-import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 
 type TransactionKind =
   | 'all'
@@ -161,7 +161,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
                 {poolStatusLabel(tx.status)}
               </span>
               <span className="text-text-dim">
-                · {formatTimeAgo(new Date(Number(tx.timestamp)))}
+                · <Utc8Age timestamp={tx.timestamp} />
               </span>
             </span>
           ),
@@ -325,7 +325,9 @@ export default function TransactionsPage() {
           <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
             {poolStatusLabel(tx.status)}
           </span>
-          <span className="text-text-dim">· {formatTimeAgo(new Date(Number(tx.timestamp)))}</span>
+          <span className="text-text-dim">
+            · <Utc8Age timestamp={tx.timestamp} />
+          </span>
         </span>
       ),
     },

@@ -257,7 +257,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const weekly = container.querySelector('[data-panel="weekly"]')!;
     // The cap is a round number above p95 × 1.25 (10 × 1.25 → 15); the note follows the name.
     expect(weekly.querySelector('[data-role="chart-name"]')!.textContent).toBe(
-      'net change per week\u00a0·\u00a0±15 scale, 1 week cut'
+      // the review's item C (re-pinned): the count through formatCount, a no-break space
+      'net change per week\u00a0·\u00a0±15 scale, 1\u00a0week cut'
     );
     const clipped = container.querySelectorAll('[data-week][data-clipped="true"]');
     expect(clipped).toHaveLength(1);
