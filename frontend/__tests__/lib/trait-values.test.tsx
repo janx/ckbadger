@@ -270,3 +270,118 @@ describe('trait text has one rendering point', () => {
     expect(sources.flatMap(bareTraitText)).toEqual([]);
   });
 });
+
+/**
+ * B3 round 3 (the lead's sweep for plain words cut in the middle): `break-all` breaks inside any
+ * word, so it belongs only to an element that prints raw text (a URI, a hex dump). An element that
+ * takes it while holding words, its own or a descendant's in the same JSX (literal text of two or
+ * more words, or text beside a ShortId / NoBreak unit), is refused: the media box's reading
+ * ("inscript / ion i0") and a list item whose break-all reached its notice. What it cannot read:
+ * words built in an expression (a template, a call) and words a child component prints in its own
+ * file, which inherit the class all the same.
+ */
+const BREAK_ALL = /(^|[\s'"`])break-all($|[\s'"`])/;
+function breakAllOnWords(path: string): string[] {
+  const code = readFileSync(path, 'utf8');
+  const source = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // the same file's JSX consts (`const label = <>…</>`) and components (`function Reading()`),
+  // followed where an element prints them
+  const consts = new Map<string, ts.Node>();
+  const components = new Map<string, ts.Node>();
+  const index = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && n.initializer && ts.isIdentifier(n.name)) {
+      const init = ts.isParenthesizedExpression(n.initializer)
+        ? n.initializer.expression
+        : n.initializer;
+      if (ts.isJsxElement(init) || ts.isJsxFragment(init) || ts.isJsxSelfClosingElement(init))
+        consts.set(n.name.text, init);
+    }
+    if (ts.isFunctionDeclaration(n) && n.name && /^[A-Z]/.test(n.name.text) && n.body)
+      components.set(n.name.text, n.body);
+    ts.forEachChild(n, index);
+  };
+  index(source);
+  const out: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxElement(node) && BREAK_ALL.test(attrs(node.openingElement, source).className)) {
+      let words = false;
+      let unit = false;
+      let text = false;
+      const seen = new Set<ts.Node>();
+      const scan = (n: ts.Node) => {
+        if (seen.has(n)) return;
+        seen.add(n);
+        if (ts.isJsxText(n)) {
+          const t = n.getText(source).trim();
+          if (t) text = true;
+          if (t.split(/\s+/).filter(Boolean).length >= 2) words = true;
+        }
+        if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
+          const tag = n.tagName.getText(source);
+          if (tag === 'ShortId' || tag === 'NoBreak') unit = true;
+          const body = components.get(tag);
+          if (body) scan(body);
+        }
+        if (ts.isJsxExpression(n) && n.expression && ts.isIdentifier(n.expression)) {
+          const init = consts.get(n.expression.text);
+          if (init) scan(init);
+        }
+        ts.forEachChild(n, scan);
+      };
+      node.children.forEach(scan);
+      if (words || (unit && text)) {
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+        out.push(`${relative(ROOT, path)}:${line}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+describe('break-all only on raw text', () => {
+  const sources = [...files(join(ROOT, 'components')), ...files(join(ROOT, 'app'))];
+
+  it('finds the class where it stands', () => {
+    expect(
+      sources.filter((f) => readFileSync(f, 'utf8').includes('break-all')).length
+    ).toBeGreaterThan(5);
+  });
+
+  /**
+   * Sites outside lane B3's files that the gate finds, reported to the lead in B3 round 3 and not
+   * edited here (other lanes own them): path → how many. A new site in one of them fails, and so
+   * does a listed one that is gone (drop it from the list).
+   */
+  const REPORTED: Record<string, number> = {
+    'components/asset/genetics.tsx': 1,
+    'components/asset/identity-document.tsx': 1,
+    'components/cell/cell-transactions.tsx': 1,
+    'components/cell/code-cell-board.tsx': 3,
+    'components/fiber/fiber-channel-board.tsx': 1,
+    'components/fiber/fiber-channel-step.tsx': 3,
+    'components/scripts/script-code-evidence.tsx': 3,
+    'app/forks/[height]/[orphan]/client-page.tsx': 1,
+    'app/network/nodes-table.tsx': 1,
+    'app/scripts/[name]/client-page.tsx': 1,
+    'app/tx/[hash]/client-page.tsx': 1,
+  };
+
+  it('never puts break-all on an element that holds words', () => {
+    const found = sources.flatMap(breakAllOnWords);
+    const byPath = new Map<string, string[]>();
+    for (const site of found) {
+      const path = site.replace(/:\d+$/, '');
+      byPath.set(path, [...(byPath.get(path) ?? []), site]);
+    }
+    const unreported = [...byPath].flatMap(([path, sites]) =>
+      sites.length > (REPORTED[path] ?? 0) ? sites : []
+    );
+    expect(unreported).toEqual([]);
+    const gone = Object.entries(REPORTED).filter(
+      ([path, n]) => (byPath.get(path)?.length ?? 0) < n
+    );
+    expect(gone).toEqual([]);
+  });
+});
