@@ -102,7 +102,8 @@ describe('FiberChannelsPage', () => {
         .map((dd) => dd.textContent)
     ).toEqual([
       '3 · since 2023-11-15 · 1 in USDI',
-      '2 · in 1\u00a0pair',
+      // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
+      '2 · in 1 pair',
       '1m 40s · 2 of 2 closed within an hour',
     ]);
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();

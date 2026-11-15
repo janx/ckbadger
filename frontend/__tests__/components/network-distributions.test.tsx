@@ -13,6 +13,7 @@ import {
   NetworkTrends,
 } from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const API_BASE = '/api/:network/v1';
 
@@ -151,7 +152,10 @@ describe('NetworkTrends', () => {
     // Re-pinned with U-19 / PB-01: a shorter name, so it fits beside the value gutter at 360 px.
     expect(screen.getByText('peers per completed UTC+8 day')).toBeInTheDocument();
     expect(screen.queryByText(/UTC day/)).toBeNull();
-    expect(screen.getByText(/Coverage: 1970-01-11 through 1970-01-13\./)).toBeInTheDocument();
+    // re-pinned (A4 round 2): each day a unit of its own in the line
+    expect(
+      screen.getByText(fullText(/Coverage: 1970-01-11 through 1970-01-13\./))
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/Days older than the crawler's hourly retention show as gaps, never zero\./)
     ).toBeInTheDocument();
@@ -549,7 +553,8 @@ describe('NetworkTrends', () => {
     expect(rows).toHaveLength(4);
     expect(phoneLines(rows[0]).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['day', 'head', '2025-07-01', '22'],
-      ['leader', 'body', 'US 12', '2\u00a0labels'],
+      // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
+      ['leader', 'body', 'US 12', '2 labels'],
       ['labels', 'quiet', 'US 12 · DE 10', null],
     ]);
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([

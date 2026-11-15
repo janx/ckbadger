@@ -38,6 +38,7 @@ import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { percentOf, withUnit } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -718,7 +719,7 @@ export default function ScriptsPage() {
                   </span>
                 )}
                 {data?.total !== undefined && data.total !== null && (
-                  <span className="ml-auto">{formatCount(data.total, 'script')}</span>
+                  <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
                 )}
               </div>
               {isAwaited(read) ? (

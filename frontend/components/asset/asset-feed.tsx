@@ -36,6 +36,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
 export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject): ItemFeedHeadline {
@@ -124,7 +125,8 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
           <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
           <span className="text-text-dim">
             {' '}
-            · {identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />}
+            ·{' '}
+            {unitNode(identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />)}
           </span>
           <span className="text-text-dim text-meta block">tx {r.index} in block</span>
         </>
@@ -410,9 +412,11 @@ function RecentAssetFeed({
               onClick={() => onOpen('transactions')}
               className="text-text hover:text-text-bright tabular-nums"
             >
-              {recent.transactions === null
-                ? 'All transactions →'
-                : `${formatCount(recent.transactions, 'transaction')} →`}
+              {unitNode(
+                recent.transactions === null
+                  ? 'All transactions →'
+                  : `${formatCount(recent.transactions, 'transaction')} →`
+              )}
             </button>
           </>
         }

@@ -11,6 +11,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { PAGE_SEAL_HEIGHTS } from '@/components/ui/page-seal';
 import { api, type Block, type GlobalActivity, type Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
+import { fullText } from '@/__tests__/utils/full-text';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -495,7 +496,7 @@ describe('Block board · first tier', () => {
       expect(within(tab).getByText('4')).toHaveClass('text-small');
     }
     expect(
-      await screen.findByText("3 committed from #20,827,930's proposals, 2 blocks later")
+      await screen.findByText(fullText("3 committed from #20,827,930's proposals, 2 blocks later"))
     ).toBeInTheDocument();
   });
 

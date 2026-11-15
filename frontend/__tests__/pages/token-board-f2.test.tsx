@@ -15,6 +15,7 @@ import {
   type TokenHistory,
   type GlobalActivity,
 } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -323,7 +324,7 @@ describe('Token board (F2 objects)', () => {
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
     });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(/xUDT · 8 decimals/)).toHaveClass('text-body');
+    expect(await screen.findByText(fullText(/xUDT · 8 decimals/))).toHaveClass('text-body');
     expect(await screen.findByText(/Another token also calls itself TEST/)).toHaveTextContent(
       'Tell them apart by type hash; this one is 0x1212121212…12121212.'
     );

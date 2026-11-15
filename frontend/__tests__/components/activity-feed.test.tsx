@@ -338,7 +338,7 @@ describe('ActivityFeed', () => {
       [...row.querySelectorAll('[data-party]')].map((e) => e.textContent?.slice(-2));
     // The five largest |Δ| (900, 700, 500, 300, 200), paid first.
     expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7']);
-    const more = within(row).getByRole('button', { name: '+3\u00a0participants' });
+    const more = within(row).getByRole('button', { name: '+3 participants' });
     expect(more).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(more);

@@ -5,6 +5,7 @@ import { readDidDocument } from '@/lib/did-document';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 type DidProtocol = Extract<ItemProtocol, { kind: 'did_ckb' }>;
 
@@ -110,9 +111,11 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             >
               <span className="text-text-bright [overflow-wrap:anywhere]">{k.key}</span>
               <span className="text-text-dim text-small">
-                {from === 0
-                  ? 'unchanged since creation'
-                  : `set ${formatUtc8Date(versions[from].cell.timestamp)}`}
+                {unitNode(
+                  from === 0
+                    ? 'unchanged since creation'
+                    : `set ${formatUtc8Date(versions[from].cell.timestamp)}`
+                )}
               </span>
             </Row>
           );

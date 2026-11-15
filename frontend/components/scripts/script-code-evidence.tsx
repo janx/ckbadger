@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -283,7 +284,7 @@ export function ScriptCodeClassSummary({
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
-            />· {formatCount(row.familyCount!, 'script')}
+            />· {unitNode(formatCount(row.familyCount!, 'script'))}
           </li>
         ))}
       </ul>
@@ -327,7 +328,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
       {custody.class === 'multisig' && custody.witnessState === 'verified' && (
         <div className="text-text-dim mt-1">
-          {custody.threshold} of {formatCount(verifiedKeyCount(custody), 'key')} · witness
+          {custody.threshold} of {unitNode(formatCount(verifiedKeyCount(custody), 'key'))} · witness
           configuration matches the code cell lock arguments
         </div>
       )}
@@ -372,7 +373,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
               className="break-all"
             >
               {scriptClassLabel(owner.class)} · {owner.lockHashType} {owner.lockCodeHash} · args{' '}
-              {owner.lockArgs} · {formatCount(owner.codeCells.length, 'code cell')}:{' '}
+              {owner.lockArgs} · {unitNode(formatCount(owner.codeCells.length, 'code cell'))}:{' '}
               {owner.codeCells.map((outpoint, i) => (
                 <Fragment key={outpoint}>
                   {i > 0 && ', '}

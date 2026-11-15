@@ -2,6 +2,7 @@ import { Fragment, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { formatBlockNumber } from '@/lib/format-block';
 import { cn } from '@/lib/utils';
+import { unitText } from '@/components/ui/units';
 
 /**
  * Lane L (L2): a block height written as text is the block's name, so it links to the block's
@@ -40,7 +41,7 @@ export function sentenceText(parts: readonly SentencePart[]): string {
 export function SentenceNodes({ parts }: { parts: readonly SentencePart[] }): ReactNode {
   return parts.map((p, i) =>
     typeof p === 'string' ? (
-      <Fragment key={i}>{p}</Fragment>
+      <Fragment key={i}>{unitText(p)}</Fragment>
     ) : (
       <BlockLink key={i} number={p.block} />
     )

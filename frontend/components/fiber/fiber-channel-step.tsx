@@ -12,6 +12,7 @@ import { formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
 import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 
 export interface FiberStepBox {
   head: ReactNode;
@@ -90,7 +91,7 @@ export function FiberChannelStep({
         <Link href={`/blocks/${blockNumber}`} className="hover:text-jade">
           {formatBlockNumber(blockNumber)}
         </Link>
-        {` · ${formatUtc8DateTime(timestamp)}`}
+        {unitNode(` · ${formatUtc8DateTime(timestamp)}`)}
         {epoch !== undefined && ` · epoch ${stageEpoch(epoch, blockNumber)}`}
       </span>
     </h3>

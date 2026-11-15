@@ -70,9 +70,7 @@ describe('history chart captions (CH-04)', () => {
     expect(lastChart('Owned live capacity').subtitle).toBe(
       'CKB owned, by script · 1,234\u00a0days'
     );
-    expect(
-      screen.getByRole('heading', { name: 'Owned live capacity 1,234\u00a0days' })
-    ).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Owned live capacity 1,234 days' })).toBeTruthy();
   });
 
   it('captions the Assets history charts by asset', async () => {

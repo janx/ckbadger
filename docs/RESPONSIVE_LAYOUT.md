@@ -13,10 +13,10 @@ Content width inside the 16 px page gutter:
 
 | Viewport | Content width | Note                                          |
 | -------- | ------------- | --------------------------------------------- |
-| 1280     | 1248          | desktop reference                             |
+| 1280     | 1232          | desktop reference                             |
 | 640–767  | 608           | the Tailwind `container` locks at 640 px here |
 | 390      | 358           | phone reference                               |
-| 360      | 326           | phone minimum                                 |
+| 360      | 328           | phone minimum                                 |
 
 The 640–767 band has one content width to design for. Below 640 the container is fluid.
 
@@ -60,7 +60,7 @@ The 640–767 band has one content width to design for. Below 640 the container 
   reader, and the status line's mode block says it). The mining figures and the epoch's position
   and time left are the home page's below `md` — a ruled exception to principle 2 (UI review
   2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
-  an 844 px first screen on every page. At 360 the line is 280.6 of 326 px; page content starts at
+  an 844 px first screen on every page. At 360 the line is 280.6 of 328 px; page content starts at
   about y = 111 at 390 (53 px header, 42 px strip, its 16 px margin).
 - **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
   row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
@@ -77,7 +77,7 @@ The 640–767 band has one content width to design for. Below 640 the container 
   status line. The footer's "keyboard shortcuts" is drawn from `md` only; below `md` the footer
   ends instead on a line of its own with the release and the clock's zone, as in
   `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 360
-  the links take two lines, 256.0 and 263.2 of 326 px, and this one 216.0).
+  the links take two lines, 256.0 and 263.2 of 328 px, and this one 216.0).
 - **Transaction pipeline** (homepage): one row down to a 589 px canvas (two whole blocks); below
   that a vertical timeline (mempool, proposed, NEXT, the tip, older blocks as rows; one vertical
   chain line in the gaps). Never scaled, never folded, cards never smaller than 89 px.
@@ -91,11 +91,14 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Touch**: anything a hover reveals must also be reachable by a tap that pins a readout under the
   figure; hints say "tap or hover".
 - **Non-breaking units**: an address with its lock label, a number with its unit, an outpoint with
-  its index, a date, a hyphenated term — never broken inside. A full id in a page's head (a name
-  plate, an asset's id under its title) stands on one line where the measured line holds it, else
-  in equal lines, each one unit (a hash as `0x` and 32 digits, then the last 32 indented 2ch; an
-  address in as few equal lines as hold it), never a scroller; full ids in the evidence tier and in
-  tables keep their own-box scroller.
+  its index, a date, a shortened id, a hyphenated term in a label or a figure — never broken
+  inside; a count breaks only between its number and its noun, where it is wider than its line.
+  Running prose (paragraphs, explanatory list items) may break at a hyphen as ordinary
+  typesetting; the rule covers units in labels, figures and rows, and a date or an id in prose. A
+  full id in a page's head (a name plate, an asset's id under its title) stands on one line where
+  the measured line holds it, else in equal lines, each one unit (a hash as `0x` and 32 digits,
+  then the last 32 indented 2ch; an address in as few equal lines as hold it), never a scroller;
+  full ids in the evidence tier and in tables keep their own-box scroller.
 - **Formats** (`frontend/lib/shorten.ts`, `frontend/lib/format-unit.ts`; UI review 2026-11-14,
   U-09, CH-14, PA-22): a shortened id has three sizes, counted in characters of the value as
   written (`0x` and `ckb1` included) — `head` 12…8 for an h1 or a lede, `row` 10…6 in tables, feeds

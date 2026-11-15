@@ -54,6 +54,7 @@ import { useFromMd } from '@/hooks/useFromMd';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 /** One code cell of a version, as its own `/cells` request resolved (or failed). */
 export interface CodeCellState {
@@ -212,7 +213,7 @@ function ReferenceFacts({
       <dd className={value}>
         {reference.hashType} ·{' '}
         {reference.hashType === 'type' ? 'follows every upgrade' : 'pins this exact binary'} ·{' '}
-        {formatCount(reference.liveCellsCount, 'live cell')}
+        {unitNode(formatCount(reference.liveCellsCount, 'live cell'))}
       </dd>
       <dt className={term}>current code</dt>
       <dd className={value}>{reference.currentVersionHash ?? 'Retired · no current code cell'}</dd>
@@ -1169,7 +1170,9 @@ export function ScriptFamilyPage({
                       render: (cell) => (
                         <span className="text-text-dim">
                           {blockLink(cell.createdAtBlock)}
-                          {cell.createdTimestamp && ` · ${formatUtc8Date(cell.createdTimestamp)}`}
+                          {unitNode(
+                            cell.createdTimestamp && ` · ${formatUtc8Date(cell.createdTimestamp)}`
+                          )}
                         </span>
                       ),
                     },

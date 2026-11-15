@@ -11,6 +11,7 @@ import {
 import network from '../fixtures/fiber-network.json';
 import mainnet from '../fixtures/fiber-network-mainnet.json';
 import type { FiberNetwork } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const node = (tail: string) => screen.getByRole('button', { name: new RegExp(`^Party …${tail},`) });
 const panel = () => screen.getByRole('complementary', { name: 'Party or pair' });
@@ -137,7 +138,9 @@ describe('FiberNetworkGraph', () => {
     expect(screen.getByText(/^Each line is a pair that opened channels\./)).toBeInTheDocument();
     expect(
       screen.getByText(
-        /^Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not which node ran it\. 1 channel with more or fewer than two parties is not drawn\.$/
+        fullText(
+          /^Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not which node ran it\. 1 channel with more or fewer than two parties is not drawn\.$/
+        )
       )
     ).toBeInTheDocument();
     // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece (.prose-tier2:

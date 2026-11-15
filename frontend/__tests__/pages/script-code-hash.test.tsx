@@ -190,7 +190,7 @@ describe('ScriptByCodeHashPage', () => {
       await screen.findByRole('heading', { level: 1, name: 'Ambiguous script reference' })
     ).toBeInTheDocument();
     const heading = screen.getByRole('heading', {
-      name: 'Conflicting live bytecode 2\u00a0versions',
+      name: 'Conflicting live bytecode 2 versions',
     });
     expect(heading.lastElementChild).toHaveTextContent(/^2 versions$/);
     for (const version of versions) expect(screen.getByText(version)).toBeInTheDocument();

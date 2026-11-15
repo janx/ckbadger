@@ -28,6 +28,7 @@ import {
 } from '@/lib/fiber-network-model';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -170,7 +171,7 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
         …{partyTail(a)} ↔ …{partyTail(b)}
       </div>
       <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
-        {formatCount(pair.channels, 'channel')} between <PartyLink party={a} /> and{' '}
+        {unitNode(formatCount(pair.channels, 'channel'))} between <PartyLink party={a} /> and{' '}
         <PartyLink party={b} />
       </div>
       <Rows
@@ -564,8 +565,10 @@ export function FiberPartiesNote({ network }: { network: FiberNetwork }) {
     <p>
       Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not
       which node ran it.
-      {data.unpairedChannels > 0 &&
-        ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${countNoun(data.unpairedChannels, 'is', 'are')} not drawn.`}
+      {unitNode(
+        data.unpairedChannels > 0 &&
+          ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${countNoun(data.unpairedChannels, 'is', 'are')} not drawn.`
+      )}
     </p>
   );
 }

@@ -12,6 +12,7 @@ import {
   dotcellProtocolProducer,
   mnftCollectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 it('keeps object capacity primary, one versions heading and exact occupied values', async () => {
@@ -122,7 +123,7 @@ it('draws an identity collection its weekly transfers from the insights it is se
     ],
   });
   render(<CollectionDetail id="dotbit" kind="identity" />);
-  expect(await screen.findByText(/Week of 2023-11-08: 7 transfers/)).toBeInTheDocument();
+  expect(await screen.findByText(fullText(/Week of 2023-11-08: 7 transfers/))).toBeInTheDocument();
   expect(api.getCollectionInsights).toHaveBeenCalledWith('dotbit', 'identity');
   expect(screen.queryByText(/not indexed for identity collections/)).not.toBeInTheDocument();
   // Lane E: an identity collection has no developer evidence; no empty tier 2 (was an eyebrow and

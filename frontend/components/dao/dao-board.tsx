@@ -46,6 +46,7 @@ import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -911,7 +912,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                   <span className="text-text-bright">
                     Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
                     {row.throughEpochOffset} · <Amount value={row.capacity} /> CKB in{' '}
-                    {formatCount(row.count, 'deposit')}
+                    {unitNode(formatCount(row.count, 'deposit'))}
                   </span>
                 );
               })()}

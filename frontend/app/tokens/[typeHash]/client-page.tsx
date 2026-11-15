@@ -30,6 +30,7 @@ import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 /** The supply-event route always reports its total; a page without one is a contract break. */
 function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
@@ -153,7 +154,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         <>
           <span className="text-body block">
             {formatStandard(t.standard)} ·{' '}
-            {t.decimals === null ? 'Decimals unknown' : formatCount(t.decimals, 'decimal')}
+            {unitNode(
+              t.decimals === null ? 'Decimals unknown' : formatCount(t.decimals, 'decimal')
+            )}
             {t.name && t.name !== t.symbol && <> · {t.name}</>}
           </span>
           {/* C7: the type hash the rail listed names the token under its title, as an id does;
@@ -234,7 +237,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                         className="text-small"
                       />
                     </AppLink>
-                    , {formatCount(other.holdersCount, 'holder')}
+                    , {unitNode(formatCount(other.holdersCount, 'holder'))}
                   </span>
                 ))}
                 . Tell them apart by type hash; this one is{' '}

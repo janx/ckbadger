@@ -32,6 +32,7 @@ import {
 } from '@/lib/cell-byte-layout';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /** Excerpt ranges align to 24 bytes, which every dump row length (24, 16, 8) divides or fits. */
 const ROW = 24;
@@ -378,7 +379,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         )}
       >
         <span>
-          ⋯ {formatCount(to - from, 'byte')} [{fmt(from)}..{fmt(to)}): {listed}
+          ⋯ {unitNode(formatCount(to - from, 'byte'))} [{fmt(from)}..{fmt(to)}): {listed}
         </span>
         <button
           type="button"

@@ -35,6 +35,7 @@ import type { ShortSize } from '@/lib/shorten';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
 import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
+import { unitNode, unitText } from '@/components/ui/units';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -132,14 +133,16 @@ export function ScriptSummarySentence({
       </span>
       ; <span className="text-text-bright">{family.cellsCount.toLocaleString('en-US')}</span> cells
       have used it
-      {Number.isFinite(firstDeployed) ? ` since ${formatUtc8Date(firstDeployed)}` : ''}.
+      {unitNode(Number.isFinite(firstDeployed) ? ` since ${formatUtc8Date(firstDeployed)}` : '')}.
       {code === 'immutable' && ' Its code is immutable: no one can replace it.'}
       {code === 'upgradable' && lineage && last && lineage.length > 1 && (
         <>
           {' '}
           Its code is upgradable: it has been replaced{' '}
-          <span className="text-text-bright">{formatCount(lineage.length - 1, 'time')}</span>, last
-          on <Utc8Date timestamp={last.timestamp} />, and its code cell now sits under{' '}
+          <span className="text-text-bright">
+            {unitNode(formatCount(lineage.length - 1, 'time'))}
+          </span>
+          , last on <Utc8Date timestamp={last.timestamp} />, and its code cell now sits under{' '}
           {holderSentence(last.custody)}.
         </>
       )}
@@ -183,7 +186,7 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
         <>
           in{' '}
           <a href="#its-cells" className="hover:text-text-bright hover:underline">
-            {formatCount(family.liveCellsCount, 'live cell')}
+            {unitNode(formatCount(family.liveCellsCount, 'live cell'))}
           </a>
         </>,
         share && `${share} occupied`,
@@ -199,7 +202,7 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
 /**
  * A code cell holder's name (A4 Chrome F2): its id is one unit, a line may break between the kind
  * and the id; a phrase ("an unspendable lock") is words a line may break between. In the hero
- * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 147 at 360): "multisig 0x6598…d696",
+ * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360): "multisig 0x6598…d696",
  * 204 px whole, is "multisig" over the 112.2 px id; it stands on one line from 640 (288 px).
  */
 function HolderName({ custody, size }: { custody: ScriptCustodyApi; size: ShortSize }) {
@@ -278,7 +281,7 @@ export function ScriptHeroMetrics({
           <Utc8Date timestamp={deployment.deployedAt} />
         </HeroMetric>
       )}
-      <HeroMetric label="Ever used">{formatCount(family.cellsCount, 'cell')}</HeroMetric>
+      <HeroMetric label="Ever used">{unitNode(formatCount(family.cellsCount, 'cell'))}</HeroMetric>
     </dl>
   );
 }
@@ -536,7 +539,7 @@ export function ScriptHistoryReading({
       {point && used !== null && unused !== null ? (
         <>
           <span className="text-text-bright">
-            {point.date}
+            {unitNode(point.date)}
             {active === null && <span className="text-text-dim"> · last full day</span>}
           </span>
           <span className="flex items-baseline gap-1.5">
@@ -608,7 +611,7 @@ export function ScriptHistoryNotes({
       {peak && (
         <Sentence data-testid="script-history-peak" className={block}>
           CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
-          on {peak.date}
+          on {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
@@ -703,9 +706,11 @@ export function ScriptCustodyFigure({
         {holders.map((holder, i) => (
           <li key={holder.lockArgs} data-holder={holder.lockArgs} className="text-small min-w-0">
             <div className="text-text-dim text-meta">
-              {holder.until
-                ? `${formatUtc8Date(holder.from.timestamp)} → ${formatUtc8Date(holder.until.timestamp)}`
-                : `since ${formatUtc8Date(holder.from.timestamp)}`}
+              {unitNode(
+                holder.until
+                  ? `${formatUtc8Date(holder.from.timestamp)} → ${formatUtc8Date(holder.until.timestamp)}`
+                  : `since ${formatUtc8Date(holder.from.timestamp)}`
+              )}
             </div>
             <div className="text-text-bright text-body mt-1">
               {i > 0 && (
@@ -770,9 +775,9 @@ export function ScriptCustodyFigure({
       </ol>
       {handovers.map((handover) => (
         <p key={handover.day} className="text-text-dim text-meta mt-2.5">
-          ● kept across the handover on {handover.day}: {handover.common} of{' '}
-          {formatCount(handover.total, 'key')} · ○ replaced: {handover.total - handover.common} of{' '}
-          {handover.total}
+          ● kept across the handover on {unitNode(handover.day)}: {handover.common} of{' '}
+          {unitNode(formatCount(handover.total, 'key'))} · ○ replaced:{' '}
+          {handover.total - handover.common} of {handover.total}
         </p>
       ))}
       <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
@@ -820,7 +825,7 @@ export function ScriptCustodyMechanism({
       )}
       {inline && lineage && ' '}
       <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-[640px]'}>
-        Code versions: {binaries}.
+        Code versions: {unitText(binaries)}.
       </Sentence>
     </>
   );

@@ -383,7 +383,7 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
         tier="btc_ckb"
       />
     );
-    const section = screen.getByRole('region', { name: 'DNA 53\u00a0bytes · 6\u00a0genes' });
+    const section = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
     const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
     // no minimum width and no sideways scroller anywhere in the panel
     for (const el of [section, among].flatMap((s) => Array.from(s.querySelectorAll('[class]'))))
@@ -487,7 +487,7 @@ describe('The object page reads a declared pattern too (Nervape Headwear object)
       />
     );
     expectPrompt(
-      screen.getByRole('heading', { name: 'DNA 83\u00a0bytes · 4\u00a0genes · number 17' }),
+      screen.getByRole('heading', { name: 'DNA 83 bytes · 4 genes · number 17' }),
       'DNA',
       '83 bytes · 4 genes · number 17'
     );
@@ -508,7 +508,7 @@ describe('The object page reads a declared pattern too (Nervape Headwear object)
       </>
     );
     // Phase 5 (A13): the size and the genes are the DNA command's args, and name its section.
-    const dna = screen.getByRole('region', { name: 'DNA 83\u00a0bytes · 4\u00a0genes' });
+    const dna = screen.getByRole('region', { name: 'DNA 83 bytes · 4 genes' });
     expectPrompt(within(dna).getByRole('heading', { level: 2 }), 'DNA', '83 bytes · 4 genes');
     const evidence = screen.getByLabelText('DNA evidence');
     const genes = within(evidence).getByRole('table', { name: 'DNA genes' });

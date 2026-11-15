@@ -214,10 +214,12 @@ describe('Asset history', () => {
     expect(screen.queryByText(/CKB held peaked/)).toBeNull();
     // Lane P (Main.dc.html): the scope is the hover of the reading's day, not a line of its own.
     expect(screen.queryByText(/Complete UTC\+8 days through/)).toBeNull();
-    expect(within(readout).getByText('2024-01-08')).toHaveAttribute(
-      'title',
-      'complete UTC+8 days through 2024-01-08 · indexed chain time'
-    );
+    // re-pinned (A4 round 2): the date is a unit (a span of its own) inside the titled reading of
+    // the day, and the week's line names the same date as a unit too, so the reading is found by
+    // its title (it was found by its text, then its title read)
+    expect(
+      within(readout).getByTitle('complete UTC+8 days through 2024-01-08 · indexed chain time')
+    ).toHaveTextContent(/^2024-01-08$/);
     fireEvent.click(screen.getByRole('button', { name: '1W' }));
     expect(readout).toHaveTextContent('2024-01-08');
   });

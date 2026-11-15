@@ -7,6 +7,7 @@ import {
   useDocumentTitle,
   type DocumentTitleProps,
 } from '@/lib/use-document-title';
+import { unitNode } from '@/components/ui/units';
 
 /** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
 const DetailTierContext = createContext<1 | 2>(1);
@@ -109,7 +110,7 @@ export function DetailLayout({
         kind === 'entity' && 'max-md:text-index'
       )}
     >
-      {title}
+      {unitNode(title)}
     </h1>
   );
   const head = seal ? (
@@ -157,7 +158,9 @@ export function DetailLayout({
                 className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
               >
                 <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
-                <dd className="text-text-bright min-w-0 break-words tabular-nums">{value}</dd>
+                <dd className="text-text-bright min-w-0 break-words tabular-nums">
+                  {unitNode(value)}
+                </dd>
               </div>
             ))}
           </dl>

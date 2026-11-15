@@ -13,6 +13,7 @@ import {
   useDocumentTitle,
   type DocumentTitleProps,
 } from '@/lib/use-document-title';
+import { unitNode } from '@/components/ui/units';
 
 interface AssetDetailShellBaseProps {
   kind: AssetClass;
@@ -259,7 +260,7 @@ export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
                 className="text-small"
                 parts={[
                   <span key="value" className={m.size === 'body' ? 'text-body' : 'text-section'}>
-                    {m.value}
+                    {unitNode(m.value)}
                   </span>,
                   m.note !== undefined &&
                     dottedGroup(Array.isArray(m.note) ? m.note : [m.note], {

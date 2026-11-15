@@ -312,7 +312,7 @@ describe('option A: every participant, one line each (D1)', () => {
   it('keeps the over-six fold: the five largest and "+N participants" that opens the rest', () => {
     const { container } = render(<ActivityRow activity={feedSamples.eightParties} />);
     expect(lines(container)).toHaveLength(5);
-    fireEvent.click(within(container).getByRole('button', { name: '+3\u00a0participants' }));
+    fireEvent.click(within(container).getByRole('button', { name: '+3 participants' }));
     expect(lines(container)).toHaveLength(8);
   });
 

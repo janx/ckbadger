@@ -41,6 +41,7 @@ import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
 import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
 import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 const activityFilters = [
   ['all', 'All'],
@@ -294,10 +295,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 )}
                 {a.lockScriptInfo?.deprecated && <span className="text-negative">Deprecated</span>}
                 <span>
-                  {holdings.data
-                    ? `${formatCount(holdings.data.liveCellsCount, 'live cell')} · `
-                    : ''}
-                  {formatCount(a.transactionsCount, 'transaction')}
+                  {unitNode(
+                    holdings.data
+                      ? `${formatCount(holdings.data.liveCellsCount, 'live cell')} · `
+                      : ''
+                  )}
+                  {unitNode(formatCount(a.transactionsCount, 'transaction'))}
                 </span>
               </span>
             }
@@ -396,9 +399,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           {n.name}
                         </Link>
                         <span className="text-text-dim">
-                          {n.expiredAt === null
-                            ? 'Expiry unavailable'
-                            : `expires ${formatUtc8Date(n.expiredAt * 1000)}`}
+                          {unitNode(
+                            n.expiredAt === null
+                              ? 'Expiry unavailable'
+                              : `expires ${formatUtc8Date(n.expiredAt * 1000)}`
+                          )}
                         </span>
                       </div>
                     ))}

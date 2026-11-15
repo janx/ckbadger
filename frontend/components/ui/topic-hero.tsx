@@ -5,6 +5,7 @@ import {
   useDocumentTitle,
   type DocumentTitleProps,
 } from '@/lib/use-document-title';
+import { unitNode } from '@/components/ui/units';
 
 // F2 group `fiber`: the hero of the Fiber and Forks boards (V65, V67) — title and a one-sentence
 // lede on the left, a 2 × 2 grid of figures on the right (hierarchy plan R1: index title, body
@@ -71,16 +72,18 @@ function GridHero({ title, lede, figures, breadcrumb }: TopicHeroProps) {
         <dl className="grid min-w-0 grid-cols-2 gap-x-7 gap-y-4">
           {figures.map((figure, index) => (
             <div key={index} className="min-w-0">
-              <dt className="text-text-dim text-meta">{figure.label}</dt>
+              <dt className="text-text-dim text-meta">{unitNode(figure.label)}</dt>
               <dd
                 className={cn(
                   'text-hero mt-[3px] tabular-nums',
                   figure.tone === 'jade' ? 'text-jade' : 'text-text-bright'
                 )}
               >
-                {figure.value}
+                {unitNode(figure.value)}
               </dd>
-              {figure.sub && <dd className="text-text-dim text-meta mt-0.5">{figure.sub}</dd>}
+              {figure.sub && (
+                <dd className="text-text-dim text-meta mt-0.5">{unitNode(figure.sub)}</dd>
+              )}
             </div>
           ))}
         </dl>
@@ -118,7 +121,9 @@ function FigureHero({
         <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{lede}</p>
         {figure && (
           <div data-role="figure" className="mt-9 min-w-0">
-            <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">{figure.label}</div>
+            <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">
+              {unitNode(figure.label)}
+            </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
               <div
                 className={cn(
@@ -136,7 +141,7 @@ function FigureHero({
                 )}
               </div>
               {figure.companion && (
-                <p className="text-body text-text-dim min-w-0">{figure.companion}</p>
+                <p className="text-body text-text-dim min-w-0">{unitNode(figure.companion)}</p>
               )}
             </div>
           </div>
@@ -153,10 +158,12 @@ function FigureHero({
         >
           {figures.map((item, index) => (
             <div key={index} className="min-w-0">
-              <dt className="text-text-dim text-meta">{item.label}</dt>
+              <dt className="text-text-dim text-meta">{unitNode(item.label)}</dt>
               <dd className="text-text-bright text-section mt-0.5 w-fit tabular-nums">
-                {item.value}
-                {item.sub && <span className="text-text-dim text-small"> · {item.sub}</span>}
+                {unitNode(item.value)}
+                {item.sub && (
+                  <span className="text-text-dim text-small"> · {unitNode(item.sub)}</span>
+                )}
               </dd>
             </div>
           ))}

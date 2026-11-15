@@ -488,12 +488,8 @@ describe('Transaction board, tier 1', () => {
     expect(gap).toContainElement(seam!);
     expect(created).toHaveAttribute('data-sheet', 'created');
     expect(canvas).not.toHaveTextContent(/capacity pool/i);
-    expect(
-      within(consumed).getByRole('heading', { name: '1\u00a0cell consumed' })
-    ).toBeInTheDocument();
-    expect(
-      within(created).getByRole('heading', { name: '1\u00a0cell created' })
-    ).toBeInTheDocument();
+    expect(within(consumed).getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
+    expect(within(created).getByRole('heading', { name: '1 cell created' })).toBeInTheDocument();
     // the totals are the API's inputsCapacity and outputsCapacity, exact
     expect(consumed.querySelector('[data-sheet-total]')).toHaveTextContent(/^555(\.0+)? CKB$/);
     expect(created.querySelector('[data-sheet-total]')).toHaveTextContent(/^554\.99935881 CKB$/);
