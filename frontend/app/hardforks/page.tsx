@@ -385,9 +385,9 @@ export default function HardforksPage() {
                 stays on the VM its hash type pins.{' '}
                 <a
                   href={`#${HOW_ID}`}
-                  className="text-text-dim hover:text-text-bright whitespace-nowrap hover:underline"
+                  className="text-text-dim hover:text-text-bright hover:underline"
                 >
-                  How it works ↓
+                  How it works<span className="whitespace-nowrap"> ↓</span>
                 </a>
               </p>
             )}

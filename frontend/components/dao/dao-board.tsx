@@ -197,8 +197,8 @@ export function DaoLede() {
   return (
     <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
       CKB locked in the DAO keeps its share of the supply.{' '}
-      <a href="#evidence" className="hover:text-text-bright whitespace-nowrap hover:underline">
-        How it works ↓
+      <a href="#evidence" className="hover:text-text-bright hover:underline">
+        How it works<span className="whitespace-nowrap"> ↓</span>
       </a>
     </p>
   );
