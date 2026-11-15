@@ -154,7 +154,8 @@ describe('Address v3 components', () => {
         'Lock',
       ]);
       expect(items.map((i) => i.querySelector('dd')!.textContent)).toEqual([
-        '29\u00a0holdings · 5\u00a0DAO cells · 9\u00a0tokens · 14\u00a0objects · 1\u00a0identity',
+        // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
+        '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
         '40 · 5 DAO cells + 15 token cells + 14 objects + 1 identity + 3 other-script cells + 2 plain CKB',
         '1,021',
         'JoyID · type · 22-byte args',

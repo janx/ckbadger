@@ -22,6 +22,7 @@ import { cn, formatTimeAgo } from '@/lib/utils';
 import { countNoun, formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { ClockText } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 interface PeerFilters {
   state?: NetworkPeerDisplayState;
@@ -304,9 +305,9 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                   <ShortId value={advertiser.advertiserPeerId} kind="hash" size="row" />
                 </span>{' '}
                 · <span className="break-all">{advertiser.alias}</span> · observed{' '}
-                {formatCount(advertiser.observationCount, 'completed round')} · first round #
-                {advertiser.firstObservedRound} · latest round #{advertiser.lastObservedRound} ·{' '}
-                {ago(advertiser.lastObservedAt)}
+                {unitNode(formatCount(advertiser.observationCount, 'completed round'))} · first
+                round #{advertiser.firstObservedRound} · latest round #
+                {advertiser.lastObservedRound} · {ago(advertiser.lastObservedAt)}
               </li>
             ))}
           </ul>

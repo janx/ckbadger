@@ -11,6 +11,7 @@ import {
   type TokenHistory,
   type GlobalActivity,
 } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -210,7 +211,7 @@ describe('TokenDetailPage', () => {
   it('renders token overview, exact capacity partition and tier-one history', async () => {
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
-    expect(screen.getByText(/xUDT · 8 decimals/)).toBeInTheDocument();
+    expect(screen.getByText(fullText(/xUDT · 8 decimals/))).toBeInTheDocument();
     expect(screen.getByText('A test token')).toBeInTheDocument();
     const facts = screen.getByRole('region', { name: 'Metrics' });
     // F2 objects (D8): not established, with the one sentence that says why (C7: in its title).

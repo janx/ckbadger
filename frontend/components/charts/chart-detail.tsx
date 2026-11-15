@@ -36,6 +36,7 @@ import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { apiBaseFor } from '@/lib/active-network';
+import { unitText } from '@/components/ui/units';
 
 export type ChartRange = '30d' | '90d' | '1y' | 'all';
 
@@ -105,10 +106,10 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                   {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
                   {row.href ? (
                     <Link href={row.href} title={row.title} className="text-jade hover:underline">
-                      {row.label}
+                      {unitText(row.label)}
                     </Link>
                   ) : (
-                    row.label
+                    unitText(row.label)
                   )}
                 </span>
                 <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
@@ -145,7 +146,7 @@ function Reading({
 }) {
   return (
     <div className="flex flex-col items-end" title={withUnit(formatChartExact(raw, unit), unit)}>
-      <span className="text-text-dim text-meta">{label}</span>
+      <span className="text-text-dim text-meta">{unitText(label)}</span>
       <span className="flex items-baseline">
         <span
           className={`text-hero font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}

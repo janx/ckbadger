@@ -10,6 +10,7 @@ import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { unitNode } from '@/components/ui/units';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -222,9 +223,11 @@ export function DeploymentEvidence({
         pinned={pinned}
         idle="a dot reads its script version, its first code cell and its block (keyboard: focus it)"
       >
-        {selected
-          ? `${markName(selected, 'row')} · deployed ${formatUtc8Date(selected.timestampMs)}`
-          : null}
+        {unitNode(
+          selected
+            ? `${markName(selected, 'row')} · deployed ${formatUtc8Date(selected.timestampMs)}`
+            : null
+        )}
       </ReadoutRow>
       {selected && (
         <>

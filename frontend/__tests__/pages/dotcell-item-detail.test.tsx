@@ -4,6 +4,7 @@ import { api, ApiRequestError, type ItemProtocol, type ItemCellVersions } from '
 import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
@@ -279,7 +280,7 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
   expect(
     await screen.findByRole('heading', { name: 'Term held until 2030-03-18' })
   ).toBeInTheDocument();
-  expect(screen.getByText(/then 30 days of grace/)).toBeInTheDocument();
+  expect(screen.getByText(fullText(/then 30 days of grace/))).toBeInTheDocument();
   expect(document.querySelector('[data-grace]')).not.toBeNull();
   expect(screen.getByRole('region', { name: 'What alice.cell points to' })).toBeInTheDocument();
   const facts = screen.getByRole('region', { name: 'Metrics' });

@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 export interface ListColumn<T> {
   key: string;
@@ -235,7 +236,7 @@ export function ListTable<T>({
                       c.className
                     )}
                   >
-                    {c.render(row)}
+                    {unitNode(c.render(row))}
                   </td>
                 ))}
               </tr>

@@ -13,6 +13,7 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import { TopicSection } from '@/app/network/topic-section';
+import { unitNode, unitText } from '@/components/ui/units';
 
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
@@ -274,7 +275,9 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
               tone: 'body',
               left: leader(row),
               right: row.buckets?.length ? (
-                <span className="text-text-dim">{formatCount(row.buckets.length, 'label')}</span>
+                <span className="text-text-dim">
+                  {unitNode(formatCount(row.buckets.length, 'label'))}
+                </span>
               ) : undefined,
             },
             // A title is no hover on a touch screen: every label and count, quiet, last.
@@ -470,7 +473,10 @@ export function NetworkTrendNotes() {
       (incomplete) day is excluded. Round counts were not recorded. Days older than the
       crawler&apos;s hourly retention show as gaps, never zero.
       {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
-        <> {coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo)}</>
+        <>
+          {' '}
+          {unitText(coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo))}
+        </>
       )}{' '}
       Shaded days have no retained round observation. Rounds per day are unavailable because the
       crawler did not record counts.

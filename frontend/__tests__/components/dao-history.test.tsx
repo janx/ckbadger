@@ -232,7 +232,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     fireEvent.pointerLeave(main);
     expect(reading).toHaveTextContent(new RegExp(`^selected ${date(77)} · deposited`));
     // "selected" opens the same row of items, so it shares their line.
-    const row = within(reading).getByText(date(77)).parentElement!;
+    // re-pinned (A4 round 2): the date is a unit inside its item, the item in the row
+    const row = within(reading).getByText(date(77)).closest('.flex-wrap') as HTMLElement;
     expect(row).toHaveClass('flex', 'flex-wrap');
     expect(row.firstElementChild).toHaveTextContent(/^selected$/);
     fireEvent.click(main, { clientX: 624 });

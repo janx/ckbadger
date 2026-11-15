@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 /**
  * The three voices of a phone row (boards L1–L8): the identity line, the line that says what the
@@ -85,7 +86,7 @@ export function PhoneRow({
               line.grow && 'flex flex-1 items-center'
             )}
           >
-            {line.left}
+            {unitNode(line.left)}
           </span>
           {line.right !== undefined && line.right !== null && (
             <span
@@ -95,7 +96,7 @@ export function PhoneRow({
                 line.tone === 'head' && 'text-text text-small'
               )}
             >
-              {line.right}
+              {unitNode(line.right)}
             </span>
           )}
         </div>
@@ -188,12 +189,12 @@ export function Dotted({
               {' · '}
             </span>
           )}
-          {part}
+          {unitNode(part)}
         </span>
       );
     return i === 0 ? (
       <span key={i} data-dotted-item="" className="min-w-0">
-        {part}
+        {unitNode(part)}
       </span>
     ) : (
       <span key={i} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
@@ -204,7 +205,7 @@ export function Dotted({
         >
           {' · '}
         </span>
-        <span className="indent-0">{part}</span>
+        <span className="indent-0">{unitNode(part)}</span>
       </span>
     );
   };

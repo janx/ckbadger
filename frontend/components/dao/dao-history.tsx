@@ -14,6 +14,7 @@ import { color } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -608,7 +609,7 @@ export function DaoHistoryReading({
       {/* One row of facts, each its own item: a narrower column wraps between them. */}
       <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
         {pin.showingPin && <span>{pinWord} </span>}
-        <span className="text-text-bright">{day.date}</span>
+        <span className="text-text-bright">{unitNode(day.date)}</span>
         <span>
           {' '}
           · deposited{' '}

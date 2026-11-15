@@ -43,3 +43,48 @@ describe('the hero names the code cell holder (A4 Chrome F2)', () => {
     expect(link.closest('.whitespace-nowrap')).toBeNull();
   });
 });
+
+/**
+ * The pieces a line can never break inside: a unit's whole text (NoBreak), else the text between
+ * ordinary spaces (a no-break space joins; a count's inline unit breaks only at its own space).
+ */
+function unbreakablePieces(root: HTMLElement): string[] {
+  const pieces: string[] = [];
+  const walk = (node: Node) => {
+    if (node instanceof HTMLElement && node.hasAttribute('data-nobreak')) {
+      pieces.push(node.textContent!);
+      return;
+    }
+    if (node.nodeType === Node.TEXT_NODE)
+      pieces.push(...node.textContent!.split(/[ \n\t]+/).filter(Boolean));
+    node.childNodes.forEach(walk);
+  };
+  walk(root);
+  return pieces;
+}
+
+/**
+ * A4 round 2, task 1: "Ever used" read "78,675,029 cell / s" at 390 and "78,675,029 cel / ls" at
+ * 360 — the count, joined by a no-break space, is 16 × 10.2 = 163.2 px at 17 px, the tile's value
+ * 153 px at 390 and 143 at 360 (a column of (358 − 32) / 2 = 163 and (328 − 32) / 2 = 148, less the
+ * value's own box), and the dd's overflow-wrap: anywhere cut the word. A count breaks only between
+ * its number and its noun. Every tile value is checked against 143 px: no piece a line cannot break
+ * inside may be wider (14 characters at 17 px, 19 at the notes' 12 px).
+ */
+describe('the hero tiles break no word at a phone width (A4 round 2)', () => {
+  it('sets every value and note in pieces the 143 px tile holds', () => {
+    render(<ScriptHeroMetrics family={{ ...family, cellsCount: 78_675_029 }} lineage={lineage} />);
+    const metrics = screen.getByLabelText('Script figures');
+    for (const dd of metrics.querySelectorAll<HTMLElement>('dd')) {
+      for (const value of dd.querySelectorAll<HTMLElement>('.text-section'))
+        for (const piece of unbreakablePieces(value))
+          expect(piece.length * 10.2, `${piece} in ${dd.textContent}`).toBeLessThanOrEqual(143);
+      for (const note of dd.querySelectorAll<HTMLElement>('.text-text-dim'))
+        for (const piece of unbreakablePieces(note))
+          expect(piece.length * 7.2, `${piece} in ${dd.textContent}`).toBeLessThanOrEqual(143);
+    }
+    // the count: its number and its noun, one unit where the line holds it
+    const ever = within(screen.getByText('Ever used').parentElement!).getByText(/78,675,029/);
+    expect(ever.closest('[data-count]')).toHaveTextContent(/^78,675,029 cells$/);
+  });
+});

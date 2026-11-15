@@ -16,6 +16,7 @@ import type { HardforkHashTypeLaneF2 } from '@/lib/api';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { formatCount } from '@/lib/format-count';
 import { isAwaited } from '@/lib/query-state';
+import { unitNode } from '@/components/ui/units';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -135,7 +136,7 @@ function EditionCard({
             ·{' '}
           </>
         )}
-        {event.activationDate}
+        {unitNode(event.activationDate)}
       </p>
       <p className="text-text text-body max-w-[640px] leading-relaxed">
         {editionStory(event, timeline, tipMs)}

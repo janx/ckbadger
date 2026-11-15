@@ -347,7 +347,7 @@ function VitalsLoading({ form }: { form: PhoneForm }) {
  * when it is, a dim dot and "Not live" while it is not yet or no longer connected. Only a page
  * that holds the socket shows it. On the one line below 640 (PA-14) it is its dot: at 360 the line
  * holds the block (124.8 px), the epoch and its bar (124.8 px) and the dot with two 12 px gaps,
- * 280.6 of 326 px, where "Not live" (72.6 px with its dot) would make it 346.2. The word stays for a
+ * 280.6 of 328 px, where "Not live" (72.6 px with its dot) would make it 346.2. The word stays for a
  * screen reader and in the title, and the status line's mode block says it on every page.
  */
 function LiveMark({ connected, form }: { connected: boolean; form: PhoneForm }) {

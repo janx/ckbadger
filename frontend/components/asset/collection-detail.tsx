@@ -55,6 +55,7 @@ import { retryTransientOnly } from '@/lib/query-client';
 import { Dotted } from '@/components/ui/phone-row';
 import { NoBreak } from '@/components/ui/no-break';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -688,8 +689,10 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
               <p className="text-text-dim text-meta">
-                {formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')} ·{' '}
-                {pds.data.withoutPds} without a PDS. An identity can name more than one endpoint.
+                {unitNode(
+                  formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')
+                )}{' '}
+                · {pds.data.withoutPds} without a PDS. An identity can name more than one endpoint.
               </p>
               <dl className="space-y-3">
                 {pds.data.groups.map((g) => (

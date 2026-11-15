@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { ExactCkb } from '@/components/activity-event-row';
 import { FIBER_COLORS } from '@/lib/design-tokens';
+import { unitNode } from '@/components/ui/units';
 
 interface Side {
   name: ReactNode;
@@ -40,7 +41,7 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
         />
         <div data-split="right" className="flex-1" style={{ background: FIBER_COLORS.openFill }} />
       </div>
-      <div className="text-text-dim text-meta mt-1.5">{note}</div>
+      <div className="text-text-dim text-meta mt-1.5">{unitNode(note)}</div>
     </div>
   );
 }

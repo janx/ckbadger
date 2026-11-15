@@ -11,6 +11,7 @@ import { api } from '@/lib/api';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
 import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overview.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
@@ -49,8 +50,12 @@ describe('ForksPage', () => {
     const rate = await within(hero).findByText('250.00');
     expect(rate).toHaveClass('sm:text-display', 'text-text-bright');
     expect(within(rate).getByText('%')).toHaveClass('text-hero');
-    expect(within(hero).getByText('uncle rate · 3 days through 2026-10-22')).toBeInTheDocument();
-    expect(within(hero).getByText('5 uncles in 2 blocks · target 2.50%')).toHaveClass('text-body');
+    expect(
+      within(hero).getByText(fullText('uncle rate · 3 days through 2026-10-22'))
+    ).toBeInTheDocument();
+    expect(within(hero).getByText(fullText('5 uncles in 2 blocks · target 2.50%'))).toHaveClass(
+      'text-body'
+    );
     // the days are the picture, inside the hero section
     expect(hero.querySelectorAll('[data-uncles]')).toHaveLength(3);
     // the node's own record (R2b-b): one quiet row under the reading, outside the hero
@@ -67,8 +72,9 @@ describe('ForksPage', () => {
         .getAllByRole('definition')
         .map((dd) => dd.textContent)
     ).toEqual([
-      '1\u00a0time · since 2025-08-01',
-      '1\u00a0uncle · 1 one block later',
+      // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
+      '1 time · since 2025-08-01',
+      '1 uncle · 1 one block later',
       '1 of 1 · committed in a later block',
     ]);
     // R11: no coloured text in tier 1 (the glyphs and bars keep their colours)
@@ -166,7 +172,9 @@ describe('ForksPage', () => {
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(
       within(tier2).getByText(
-        /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\. It only notices a fork when the losing block reached it first and it had to switch\. The uncles are the complete record, and they are on chain for anyone to recount\./
+        fullText(
+          /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\. It only notices a fork when the losing block reached it first and it had to switch\. The uncles are the complete record, and they are on chain for anyone to recount\./
+        )
       )
     ).toBeInTheDocument();
     expect(

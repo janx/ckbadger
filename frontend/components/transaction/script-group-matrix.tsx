@@ -8,6 +8,7 @@ import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import type { TxHover, TxLinkSets } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 export interface MatrixColumn {
   id: string;
@@ -236,7 +237,7 @@ export function ScriptGroupMatrix({
                     <span className="truncate">{g.name}</span>
                   )}
                 </span>
-                <span className="text-text-dim truncate">{g.sub('row')}</span>
+                <span className="text-text-dim truncate">{unitNode(g.sub('row'))}</span>
                 <span className="text-text-dim">
                   {cyclesLine(g, 'runs here · cycles not available')}
                 </span>
@@ -254,7 +255,8 @@ export function ScriptGroupMatrix({
                     {g.witness.detail && (
                       <span className="text-text-dim">
                         {' '}
-                        · {g.witness.detail.kind}, {formatCount(g.witness.detail.size, 'B', 'B')}
+                        · {g.witness.detail.kind},{' '}
+                        {unitNode(formatCount(g.witness.detail.size, 'B', 'B'))}
                       </span>
                     )}
                   </button>
@@ -431,7 +433,8 @@ function GroupList({
                   {g.witness.detail && (
                     <span className="text-text-dim">
                       {' '}
-                      ({g.witness.detail.kind} {formatCount(g.witness.detail.size, 'B', 'B')})
+                      ({g.witness.detail.kind}{' '}
+                      {unitNode(formatCount(g.witness.detail.size, 'B', 'B'))})
                     </span>
                   )}
                 </>
@@ -441,7 +444,7 @@ function GroupList({
               data-line="evidence"
               className="text-text-dim text-meta flex flex-wrap gap-x-3 gap-y-0.5"
             >
-              <span className="min-w-0 [overflow-wrap:anywhere]">{g.sub('tight')}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{unitNode(g.sub('tight'))}</span>
               {g.code('tight') !== null && (
                 <span className="min-w-0 [overflow-wrap:anywhere]">{g.code('tight')}</span>
               )}

@@ -15,6 +15,7 @@ import {
   ScriptCapacityEvidenceChart,
   ScriptCustodyEvidence,
 } from '@/components/scripts/script-code-evidence';
+import { fullText } from '@/__tests__/utils/full-text';
 
 describe('script code evidence', () => {
   afterEach(() => {
@@ -94,7 +95,7 @@ describe('script code evidence', () => {
         }}
       />
     );
-    expect(screen.getByText(/3 of 5 keys/)).toBeInTheDocument();
+    expect(screen.getByText(fullText(/3 of 5 keys/))).toBeInTheDocument();
     expect(screen.getByText(/This holder signed to spend/)).toBeInTheDocument();
   });
 
@@ -137,7 +138,7 @@ describe('script code evidence', () => {
       'href',
       `/mainnet/cell/${txB}-2`
     );
-    expect(screen.getByText(/2 code cells:/)).toBeInTheDocument();
+    expect(screen.getByText(fullText(/2 code cells:/))).toBeInTheDocument();
   });
 
   it('aligns API-produced upgrade markers with the indexed chart day and keeps never-signed distinct', () => {

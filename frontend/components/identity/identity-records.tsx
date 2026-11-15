@@ -6,6 +6,7 @@ import {
   type IdentityRecordValue,
 } from '@/lib/identity-records';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 function RecordValue({ value, label }: { value: IdentityRecordValue; label?: string }) {
   switch (value.kind) {
@@ -19,7 +20,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
             className="border-base-border h-12 w-12 shrink-0 border object-cover"
           />
           <span className="text-text">
-            {value.format} · {formatCount(value.bytes, 'byte')}
+            {value.format} · {unitNode(formatCount(value.bytes, 'byte'))}
           </span>
         </span>
       );
@@ -39,7 +40,9 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
         </span>
       );
     case 'bytes':
-      return <span className="text-text">{formatCount(value.bytes, 'byte')}, not text</span>;
+      return (
+        <span className="text-text">{unitNode(formatCount(value.bytes, 'byte'))}, not text</span>
+      );
     case 'empty':
       return <span className="text-text-dim">set, empty</span>;
   }

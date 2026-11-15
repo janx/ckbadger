@@ -239,8 +239,8 @@ it('opens Recent activity with five rows and two links that open the full feed i
   expectPrompt(heading, 'Activity', '--last 5');
   const note = promptNote(heading);
   expect(within(note).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
-  expect(within(note).getByRole('button', { name: '184\u00a0transactions →' })).toBeInTheDocument();
-  fireEvent.click(within(recent).getByRole('button', { name: '184\u00a0transactions →' }));
+  expect(within(note).getByRole('button', { name: '184 transactions →' })).toBeInTheDocument();
+  fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
   expect(await screen.findByRole('tab', { name: 'Transactions' })).toHaveAttribute(
     'aria-selected',
     'true'

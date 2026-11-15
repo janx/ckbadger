@@ -80,7 +80,7 @@ function Token({ name, title, children }: { name: string; title?: string; childr
  * the status line's wide form and the `?` help say from md, so a phone does not lose them. The
  * release is the status line's (resolveBuildVersion, releaseOf; the whole build string in its
  * title), the zone the clock's (localZone). Quiet text in the footer's lowercase, on a line of its
- * own: at 360 the links take two lines (256.0 and 263.2 of 326 px at 7.2 px a character) and this
+ * own: at 360 the links take two lines (256.0 and 263.2 of 328 px at 7.2 px a character) and this
  * one, "ckbadger 0.8.2 · asia/shanghai", 216.0. It breaks only between its two tokens (a zone of
  * more than 28 characters at 360): the row is drawn 2ch to the left in a box that clips its left
  * edge only, 0.75ch out as the separated list's (clip-path, never overflow-hidden, which would also

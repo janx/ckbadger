@@ -23,7 +23,10 @@ function headLines(value: string, hex: boolean, perLine: number): string[] {
   const prefix = hex ? 2 : 0;
   const body = value.slice(prefix);
   const room = perLine - prefix;
-  if (room < 1) throw new Error(`HeadId: ${perLine} characters a line cannot hold ${value}`);
+  // A line narrower than one designed line (`0x` and a digit; an address's one character) is a
+  // layout state, not a broken invariant (A4 round 2): it cannot be designed, so the id stands as
+  // it does before it is measured, one line, whole.
+  if (room < 1) return [value];
   const k = Math.ceil(body.length / Math.ceil(body.length / room));
   const lines: string[] = [];
   for (let at = 0; at < body.length; at += k) lines.push(body.slice(at, at + k));

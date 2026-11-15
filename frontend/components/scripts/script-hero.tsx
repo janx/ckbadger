@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { Dotted } from '@/components/ui/phone-row';
+import { unitNode } from '@/components/ui/units';
 
 // Hierarchy v3 (plan §1b R11, R13; lane C): the pieces of the Scripts pages' heroes, after the DAO
 // page's — one figure with its companion on the same baseline row, and one row of quiet metrics.
@@ -11,7 +12,7 @@ import { Dotted } from '@/components/ui/phone-row';
  * its unit are one unbreakable unit (RESPONSIVE_LAYOUT, a number with its unit; PA-19). Below 640
  * the decimals are body, not hero: the integer of 49,890,081,314 CKB (14 characters at 26 px,
  * 218.4 px), its 9 decimals at 22 px (118.8) and " CKB" (31.2) took 368.4 px, and at 17 px still
- * 341.4, against the 326 px line at 360; at 13 px (70.2) they take 319.8.
+ * 341.4, against the 328 px line at 360; at 13 px (70.2) they take 319.8.
  */
 export function CkbFigure({ shannons }: { shannons: bigint }) {
   if (shannons < BigInt(0)) throw new Error(`Script hero figure: negative amount ${shannons}`);
@@ -86,10 +87,10 @@ export function HeroMetric({
           parts={[
             ...value.map((part, i) => (
               <span key={i} className="text-text-bright text-section">
-                {part}
+                {unitNode(part)}
               </span>
             )),
-            note && <span className="text-text-dim">{note}</span>,
+            note && <span className="text-text-dim">{unitNode(note)}</span>,
           ]}
         />
       </dd>

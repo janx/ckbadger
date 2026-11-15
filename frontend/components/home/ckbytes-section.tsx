@@ -325,7 +325,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
         // the figure, starting its line with no indent, when the line cannot hold both — the
         // figure ≈ 570 px from 640 (14 + 9 characters at 40 px and " CKB" at 20, −0.03 em) and
         // 314.5 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
-        // 682.8 px (1280's 828.8 px column), two at 1024 (649.6), 640 (608), 390 (358), 360 (326).
+        // 682.8 px (1280's 828.8 px column), two at 1024 (649.6), 640 (608), 390 (358), 360 (328).
         className={cn(
           'text-text-bright text-index sm:text-display flex flex-wrap items-center gap-x-3 tabular-nums tracking-[-0.01em]',
           flare
@@ -333,7 +333,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       >
         {/* The figure and its unit, one unbreakable unit (PA-19; the scripts pages' rule): below
             640 the decimals are body, so the integer (14 characters at 26 px, 214.8 px with the
-            tracking), the decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at
+            tracking), the decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 328 at
             360; at the integer's size they took 355.2 px and the unit went to the next line. */}
         <span className="whitespace-nowrap">
           {total.integer}

@@ -6,6 +6,7 @@ import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -90,9 +91,11 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
           onClick={() => setShowAll((value) => !value)}
           className="text-jade text-meta mt-3 underline underline-offset-2"
         >
-          {showAll
-            ? `Show first ${formatCount(FIRST_OBSERVATIONS, 'observation')}`
-            : `Show all ${formatCount(data.edges.length, 'observation')}`}
+          {unitNode(
+            showAll
+              ? `Show first ${formatCount(FIRST_OBSERVATIONS, 'observation')}`
+              : `Show all ${formatCount(data.edges.length, 'observation')}`
+          )}
         </button>
       )}
     </div>

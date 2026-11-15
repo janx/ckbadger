@@ -77,7 +77,8 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
     expect(within(legend).getAllByRole('listitem')).toHaveLength(3);
     expect(within(legend).getByText(/a multisig can replace/i)).toBeInTheDocument();
     expect(legend.textContent).toContain('1,727,000,000');
-    expect(legend.textContent).toContain('18\u00a0scripts');
+    // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
+    expect(legend.textContent).toContain('18 scripts');
   });
 });
 

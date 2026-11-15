@@ -16,6 +16,7 @@ import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { cn } from '@/lib/utils';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 export interface ProtocolEvidenceField {
   name: string;
@@ -351,7 +352,7 @@ function FieldDetail({
           <p className="text-text-dim text-meta mt-1.5">… {fmt(n - shown)} more bytes</p>
           <details className="mt-1.5 min-w-0">
             <summary className="text-text-dim text-meta cursor-pointer">
-              All {formatCount(n, 'byte')} of {reading.name}
+              All {unitNode(formatCount(n, 'byte'))} of {reading.name}
             </summary>
             <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
               0x{bytes.slice(reading.start, reading.end).join('')}

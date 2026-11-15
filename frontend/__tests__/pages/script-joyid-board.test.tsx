@@ -11,6 +11,7 @@ import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -90,7 +91,9 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
-    expect(summary).toContain('it has been replaced 4\u00a0times, last on 2025-11-21');
+    // re-pinned (A4 round 2): a count is a unit of its own, its number and noun joined by a plain
+    // space inside it (it was formatCount's no-break space in the text)
+    expect(summary).toContain('it has been replaced 4 times, last on 2025-11-21');
     expect(summary).toContain('now sits under a multisig that has never signed');
     // The former facts rail: its figures are the hero's figure, companion and metric row.
     expect(screen.queryByRole('complementary', { name: 'Script facts' })).toBeNull();
@@ -132,8 +135,10 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     // ("multisig 0x6598…d696" whole is 204 px at 17 px, wider than the tile's 163 px at 390)
     whole(within(metrics).getByText('0x6598…d696'));
     // the count and its noun, one unit; "Upgradable" and its versions, two items of one list
-    expect(metrics.textContent).toContain('2,707,778\u00a0cells');
-    expect(metrics.textContent).toContain('5\u00a0versions');
+    // re-pinned (A4 round 2): one unit each, number and noun joined by a plain space inside it,
+    // so a tile narrower than the count breaks between them, never inside a word
+    expect(metrics.textContent).toContain('2,707,778 cells');
+    expect(metrics.textContent).toContain('5 versions');
     // every dot belongs to the item after it (the one separated list): none is loose text
     const loose = [...metrics.querySelectorAll('*')].flatMap((el) =>
       [...el.childNodes].filter(
@@ -237,7 +242,10 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(title(rows[2])).toContain('hands it to 0x07a21dc2…9d68ca');
     expect(rows[0]).toHaveTextContent('live · current');
     expect(title(rows[0])).toContain('100,438.00000000');
-    expect(screen.getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)).toBeInTheDocument();
+    // re-pinned (A4 round 2): the id and the count are units of their own in the sentence
+    expect(
+      screen.getByText(fullText(/one type id, 0xd00c84f0…318323, 5 binaries/))
+    ).toBeInTheDocument();
   });
 
   // Table-rows L1-5: the recipe is "The script" facts (board ScriptDetail's tier 2).
@@ -641,7 +649,7 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(h2.parentElement!.children).toHaveLength(2);
     expect(h2.nextElementSibling).toHaveTextContent(/^newest first$/);
     expect(
-      within(tier2()).getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)
+      within(tier2()).getByText(fullText(/one type id, 0xd00c84f0…318323, 5 binaries/))
     ).toBeInTheDocument();
     // Table-rows L1-5: the recipe is "The script" facts.
     expect(within(tier2()).getByRole('heading', { name: 'The script' })).toBeInTheDocument();

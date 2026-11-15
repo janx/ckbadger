@@ -32,6 +32,7 @@ import {
 } from '@/lib/fork-format';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { unitNode, unitText } from '@/components/ui/units';
 
 type Overview = Awaited<ReturnType<typeof api.getForkOverview>>;
 
@@ -153,10 +154,10 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
     <span>
       {href ? (
         <Link href={href} className="text-text hover:text-jade">
-          {when}
+          {unitText(when)}
         </Link>
       ) : (
-        <span className="text-text">{when}</span>
+        <span className="text-text">{unitText(when)}</span>
       )}
       {!compact && (
         <span className="text-text-dim text-meta block w-fit">
@@ -546,12 +547,12 @@ export default function ForksPage() {
                   </p>
                   {data && data.days.length > 0 && (
                     <p>
-                      The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
-                      {formatCount(data.days.length, 'day')}; this node switched branches{' '}
-                      {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only
-                      notices a fork when the losing block reached it first and it had to switch.
-                      The uncles are the complete record, and they are on chain for anyone to
-                      recount.
+                      The chain recorded {unitNode(formatCount(data.unclesInWindow, 'uncle'))} in
+                      these {unitNode(formatCount(data.days.length, 'day'))}; this node switched
+                      branches {unitNode(formatCount(data.nodeSwitchesInWindow, 'time'))} in the
+                      same days. It only notices a fork when the losing block reached it first and
+                      it had to switch. The uncles are the complete record, and they are on chain
+                      for anyone to recount.
                     </p>
                   )}
                 </Prose>
