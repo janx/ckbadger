@@ -35,8 +35,10 @@ Machine-friendly endpoints:
   `createdAtBlock` describes the current cell. Protocol-named `.cell` rights remain separate at
   `/api/{network}/v1/addresses/{addr}/dotcell-names` and add no physical capacity.
 - Inventory summary: `/api/{network}/v1/assets/summary` reads canonical counts at its returned
-  anchor; `/assets` is a separately refreshed cached listing. Collection composition groups and
-  exact live DOB-pending item counts are distinct.
+  anchor; `/assets` is a separately refreshed cached listing that returns the `anchor` (block
+  number and hash) its rows were read at, so a row's counts can be one block behind the asset's
+  own endpoints. Collection composition groups and exact live DOB-pending item counts are
+  distinct.
 - Token history: `/api/{network}/v1/tokens/{typeHash}/history` supplies complete UTC+8 daily
   capacity/supply, complete weekly transfers and exact mint/burn events. `/distribution` supplies
   same-view concentration and balance buckets; `/holders` includes its own `totalSupply` and

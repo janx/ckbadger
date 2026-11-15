@@ -114,9 +114,11 @@ pub struct AppState {
     /// Typed spore cache with pre-computed indexes, replaced atomically by warmup.
     pub spore_cache: Arc<ArcSwap<Option<SporeCache>>>,
     /// Token asset cache, replaced atomically by warmup loop (no TTL expiry).
-    pub token_cache: Arc<ArcSwap<Option<Vec<warmup::CachedAssetEntry>>>>,
+    /// Each snapshot carries the block it was built at.
+    pub token_cache: Arc<ArcSwap<Option<warmup::AssetCacheSnapshot>>>,
     /// Object asset cache, replaced atomically by warmup loop (no TTL expiry).
-    pub object_cache: Arc<ArcSwap<Option<Vec<warmup::CachedAssetEntry>>>>,
+    /// Each snapshot carries the block it was built at.
+    pub object_cache: Arc<ArcSwap<Option<warmup::AssetCacheSnapshot>>>,
     /// In-memory mirror of the node's transaction pool. Memory only: it writes
     /// to no store, and no value it holds enters a balance, holder list or
     /// statistic. Disabled mirrors publish `enabled: false` rather than an
@@ -193,14 +195,25 @@ impl AppState {
         data.updated_at = chrono::Utc::now().timestamp();
     }
 
-    /// Load the token asset cache snapshot. Returns None if warmup hasn't populated it yet.
+    /// Load the token asset cache rows. Returns None if warmup hasn't populated it yet.
     pub fn load_token_cache(&self) -> Option<Vec<warmup::CachedAssetEntry>> {
+        self.load_token_snapshot().map(|snapshot| snapshot.entries)
+    }
+
+    /// Load the object asset cache rows. Returns None if warmup hasn't populated it yet.
+    pub fn load_object_cache(&self) -> Option<Vec<warmup::CachedAssetEntry>> {
+        self.load_object_snapshot().map(|snapshot| snapshot.entries)
+    }
+
+    /// Load the token asset cache with the block it was built at — one load,
+    /// so the rows and the block they name are of the same build.
+    pub fn load_token_snapshot(&self) -> Option<warmup::AssetCacheSnapshot> {
         let guard = self.token_cache.load();
         guard.as_ref().clone()
     }
 
-    /// Load the object asset cache snapshot. Returns None if warmup hasn't populated it yet.
-    pub fn load_object_cache(&self) -> Option<Vec<warmup::CachedAssetEntry>> {
+    /// Load the object asset cache with the block it was built at.
+    pub fn load_object_snapshot(&self) -> Option<warmup::AssetCacheSnapshot> {
         let guard = self.object_cache.load();
         guard.as_ref().clone()
     }

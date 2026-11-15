@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F8)      | 8      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant, data-hash index files code cells only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F8)      | 8      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant, data-hash index files code cells only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **Sampling** (S1-S38) | 38     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows, derived DAO depositor rows vs the DAO lifecycle, derived cluster activity counts vs activity rows, the derived `.bit` → `.bit Cell` index vs `.bit Cell` items |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -186,6 +186,32 @@ Each network's report is also persisted to
 and renamed, so an interrupted run leaves no partial file that could be read as
 complete evidence.
 
+### Asset List vs Detail Counts (S21, S22)
+
+`object_asset_collection_consistency` and `asset_top_holders_address_consistency` compare an
+asset's `/assets` row with its own endpoints (detail, item page, holder page). The two sides are
+not read at the same block by construction: `/assets` answers from the snapshot the API rebuilds
+when the tip moves (it then rests 30 s), and names the block that snapshot was built at in
+`anchor`; every other endpoint reads the store view of its request. A row and a detail are
+comparable only at one block, so a count difference is classified by where it was read:
+
+| Reading                                                                                                              | Result                                                           |
+| -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| the row and the live endpoints agree                                                                                 | pass                                                             |
+| they differ, and a re-read agrees (the snapshot caught up with the block the detail was read at)                     | pass; `N asset(s) agreed on a re-read` on the result line        |
+| they differ with the list `anchor` equal to the API's view (`/assets/summary` `anchor`) before and after the re-read | fail; the finding names the block (`every read at block N`)      |
+| they differ and no reading within 100 s (per check run) stood at one block, or the snapshot's `anchor` is `null`     | inconclusive; the reason names the asset, the counts, the blocks |
+
+`asset_top_holders_address_consistency` then compares each top holder's address detail with the
+address's transaction and live-cell totals. Those are all reads of the request's own view: the
+detail's memo is keyed by the tip block (`docs/API.md` → `transactionsCount` / `total`), so it
+cannot answer a block behind the totals.
+
+A missing `anchor` key on `/assets` is an error: the check does not classify against a list that
+does not say what it read. Contract violations that no re-read can change (a wrong `assetType`,
+an id that is not the asset's, a page without `total`) are findings at once. Neither check needs
+RPC.
+
 ### `.cell` (DotCell) Names (S27-S30)
 
 Four Sampling checks, store-vs-store except the last, which reads cells and
@@ -284,11 +310,11 @@ names it as not sampled. It needs no RPC.
 `dao_depositor_aggregate_consistency` proves the indexer-derived `dao_live_agg` (round 3 L1)
 against the DAO lifecycle rows it is derived from, through the API:
 
-| Assertion                                                                                                                                                       | Finding names              |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| Assertion                                                                                                                                                                                          | Finding names               |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
 | one walk of every `/dao/depositors` page, all ranked at one anchor tip `T`, sums to `/dao/evidence` `phase0` at `T` and has `concentration.currentDepositors` rows (global row = Σ depositor rows) | `dao/evidence@T`            |
-| ranks are `1..=total` and `total` equals the rows listed                                                                                                        | the depositor / the listing |
-| for up to 20 sampled depositors (`--sample-count`; the largest and the smallest), the row equals that lock's `/dao/deposits/{lock}` rows that were phase-0 at `T` | the depositor               |
+| ranks are `1..=total` and `total` equals the rows listed                                                                                                                                           | the depositor / the listing |
+| for up to 20 sampled depositors (`--sample-count`; the largest and the smallest), the row equals that lock's `/dao/deposits/{lock}` rows that were phase-0 at `T`                                  | the depositor               |
 
 Each lifecycle row's own transition blocks give its state at `T`, so a tip that moves during the
 per-lock walks is not a finding. If the tip moves during each of three `/dao/depositors` walks

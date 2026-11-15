@@ -30,7 +30,7 @@ use crate::utils::{
     resolve_object_collection_composition_tier_override, resolve_object_collection_name,
     HASH32_LEN,
 };
-use crate::warmup::CachedAssetEntry;
+use crate::warmup::{AssetCacheAnchor, CachedAssetEntry};
 use crate::AppState;
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
@@ -407,6 +407,31 @@ pub struct AssetResponse {
     pub h_multiplier: Option<String>,
 }
 
+/// The block an asset list page was read at.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetListAnchor {
+    pub block_number: i64,
+    pub block_hash: String,
+}
+
+/// One page of `/assets`.
+///
+/// The rows come from the snapshot the warmup built, not from the store view
+/// of the request, so the page names the block that snapshot was read at:
+/// a row's counts are that block's, and an asset's own endpoints, which read
+/// the store, can already answer a block later.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetListResponse {
+    #[serde(flatten)]
+    pub page: CursorPaginatedResponse<AssetResponse>,
+    /// `null` when the tip moved while the snapshot was built (its rows then
+    /// span more than one block), when the token and object snapshots of an
+    /// unfiltered page stand at different blocks, or on a store with no block.
+    pub anchor: Option<AssetListAnchor>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionCompositionResponse {
@@ -724,7 +749,7 @@ pub(crate) fn collection_activity_responses(
 async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
-) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
+) -> ApiResult<AssetListResponse> {
     let limit = params.limit.clamp(1, 100);
 
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
@@ -743,7 +768,7 @@ async fn list_assets(
         sort_direction: params.sort_direction,
     };
 
-    let (total, rows) = fetch_assets_cached(&state, filter_type, request)?;
+    let (total, rows, anchor) = fetch_assets_cached(&state, filter_type, request)?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
@@ -754,12 +779,13 @@ async fn list_assets(
         None
     };
 
-    ok(CursorPaginatedResponse::new(
-        rows,
-        total,
-        limit,
-        next_cursor,
-    ))
+    ok(AssetListResponse {
+        page: CursorPaginatedResponse::new(rows, total, limit, next_cursor),
+        anchor: anchor.map(|anchor| AssetListAnchor {
+            block_number: anchor.block_number,
+            block_hash: format!("0x{}", hex::encode(anchor.block_hash)),
+        }),
+    })
 }
 
 /// Read from in-memory cache, apply search filter + cursor-based pagination.
@@ -774,59 +800,55 @@ struct CachedAssetsRequest<'a> {
     sort_direction: SortDirection,
 }
 
+/// The matching rows (one more than the page, to tell whether more follow),
+/// their total, and the block the snapshot they come from was built at.
+type CachedAssetsPage = (i64, Vec<AssetResponse>, Option<AssetCacheAnchor>);
+
 fn fetch_assets_cached(
     state: &Arc<AppState>,
     filter_type: Option<AssetFilterType>,
     request: CachedAssetsRequest<'_>,
-) -> Result<(i64, Vec<AssetResponse>), (axum::http::StatusCode, Json<ApiError>)> {
-    let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
+) -> Result<CachedAssetsPage, (axum::http::StatusCode, Json<ApiError>)> {
+    let load_tokens = || {
+        state.load_token_snapshot().ok_or_else(|| {
+            state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
+        })
+    };
+    let load_objects = || {
+        state.load_object_snapshot().ok_or_else(|| {
+            state.asset_cache_unavailable("object cache unavailable; warmup in progress")
+        })
+    };
 
     // Collect from cache based on type filter.
     // Frontend uses "object" and "identity".
-    match filter_type {
-        Some(AssetFilterType::Token) => {
-            if let Some(tokens) = state.load_token_cache() {
-                all_cached.extend(tokens);
-            } else {
-                return Err(state
-                    .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
+    let (mut all_cached, anchor): (Vec<CachedAssetEntry>, Option<AssetCacheAnchor>) =
+        match filter_type {
+            Some(AssetFilterType::Token) => {
+                let tokens = load_tokens()?;
+                (tokens.entries, tokens.anchor)
             }
-        }
-        Some(AssetFilterType::Object) => {
-            if let Some(objects) = state.load_object_cache() {
-                all_cached.extend(objects.into_iter().filter(|e| e.asset_type == "object"));
-            } else {
-                return Err(
-                    state.asset_cache_unavailable("object cache unavailable; warmup in progress")
-                );
+            Some(AssetFilterType::Object) => {
+                let mut objects = load_objects()?;
+                objects.entries.retain(|e| e.asset_type == "object");
+                (objects.entries, objects.anchor)
             }
-        }
-        Some(AssetFilterType::Identity) => {
-            if let Some(objects) = state.load_object_cache() {
-                all_cached.extend(objects.into_iter().filter(|e| e.asset_type == "identity"));
-            } else {
-                return Err(
-                    state.asset_cache_unavailable("object cache unavailable; warmup in progress")
-                );
+            Some(AssetFilterType::Identity) => {
+                let mut objects = load_objects()?;
+                objects.entries.retain(|e| e.asset_type == "identity");
+                (objects.entries, objects.anchor)
             }
-        }
-        None => {
-            if let Some(tokens) = state.load_token_cache() {
-                all_cached.extend(tokens);
-            } else {
-                return Err(state
-                    .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
+            None => {
+                let tokens = load_tokens()?;
+                let objects = load_objects()?;
+                // The two snapshots are replaced one after the other; a page
+                // of both names a block only when both stand at it.
+                let anchor = tokens.shared_anchor(&objects);
+                let mut all = tokens.entries;
+                all.extend(objects.entries);
+                (all, anchor)
             }
-
-            if let Some(objects) = state.load_object_cache() {
-                all_cached.extend(objects);
-            } else {
-                return Err(
-                    state.asset_cache_unavailable("object cache unavailable; warmup in progress")
-                );
-            }
-        }
-    }
+        };
 
     if let Some(standard_filter) = request.standard {
         all_cached.retain(|entry| entry.standard.eq_ignore_ascii_case(standard_filter));
@@ -917,7 +939,7 @@ fn fetch_assets_cached(
         })
         .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
-    Ok((total, assets))
+    Ok((total, assets, anchor))
 }
 
 fn normalize_assets_standard(value: Option<&str>) -> Option<String> {

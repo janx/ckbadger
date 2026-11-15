@@ -96,6 +96,57 @@ impl SporeCache {
     }
 }
 
+/// The tip block a store view stands at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetCacheAnchor {
+    pub block_number: i64,
+    pub block_hash: Vec<u8>,
+}
+
+/// One build of an asset list, with the block it was read at.
+///
+/// The list endpoints answer from this snapshot, not from the store view of
+/// their request, so a row is a statement about `anchor` — the detail of the
+/// same asset, read live, can already stand a block later.
+#[derive(Clone)]
+pub struct AssetCacheSnapshot {
+    /// The block every row was read at. `None` when the tip moved while the
+    /// build ran (its rows then span more than one block) or the store holds
+    /// no block.
+    pub anchor: Option<AssetCacheAnchor>,
+    pub entries: Vec<CachedAssetEntry>,
+}
+
+impl AssetCacheSnapshot {
+    /// The block both snapshots stand at, when it is one block.
+    pub fn shared_anchor(&self, other: &Self) -> Option<AssetCacheAnchor> {
+        self.anchor
+            .clone()
+            .filter(|anchor| other.anchor.as_ref() == Some(anchor))
+    }
+}
+
+/// The block a build stands at, from the tip it read before its first row and
+/// after its last. The build pins no read view (it would hold catch-up back
+/// for as long as it scans), but a view only ever advances and a block's rows
+/// commit with its tip, so an unchanged tip means every row was read at it.
+fn build_anchor(
+    before: Option<AssetCacheAnchor>,
+    after: Option<AssetCacheAnchor>,
+) -> Option<AssetCacheAnchor> {
+    before.filter(|before| after.as_ref() == Some(before))
+}
+
+fn read_tip_anchor(state: &AppState) -> anyhow::Result<Option<AssetCacheAnchor>> {
+    Ok(state
+        .store
+        .get_sync_tip_block()?
+        .map(|(block_number, header)| AssetCacheAnchor {
+            block_number,
+            block_hash: header.hash,
+        }))
+}
+
 /// Cached asset entry with pre-computed metrics, ready for API serving.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CachedAssetEntry {
@@ -722,8 +773,9 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
 /// Uses a single scan for all token 24h transfers instead of N+1 per-token queries.
 fn build_asset_caches_sync(
     state: &AppState,
-) -> anyhow::Result<(Vec<CachedAssetEntry>, Vec<CachedAssetEntry>)> {
+) -> anyhow::Result<(AssetCacheSnapshot, AssetCacheSnapshot)> {
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let tip_before = read_tip_anchor(state)?;
 
     // -- Token assets (list_tokens + scan_all_token_24h_transfers + per-token holder scans) --
     let catalog = {
@@ -1019,7 +1071,17 @@ fn build_asset_caches_sync(
             .then_with(|| b.holders_count.cmp(&a.holders_count))
     });
 
-    Ok((token_assets, object_assets))
+    let anchor = build_anchor(tip_before, read_tip_anchor(state)?);
+    Ok((
+        AssetCacheSnapshot {
+            anchor: anchor.clone(),
+            entries: token_assets,
+        },
+        AssetCacheSnapshot {
+            anchor,
+            entries: object_assets,
+        },
+    ))
 }
 
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
@@ -1329,6 +1391,25 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A build names a block only when the tip it read before its first row
+    /// is the tip it read after its last: a build the tip moved under holds
+    /// rows of more than one block, and an empty store has no block to name.
+    #[test]
+    fn a_build_is_anchored_only_when_the_tip_did_not_move_under_it() {
+        let block = |number: i64, hash: u8| {
+            Some(AssetCacheAnchor {
+                block_number: number,
+                block_hash: vec![hash; 32],
+            })
+        };
+        assert_eq!(build_anchor(block(7, 0x07), block(7, 0x07)), block(7, 0x07));
+        assert_eq!(build_anchor(block(7, 0x07), block(8, 0x08)), None);
+        // A reorg replaced the tip at the same height.
+        assert_eq!(build_anchor(block(7, 0x07), block(7, 0x70)), None);
+        assert_eq!(build_anchor(None, block(0, 0x00)), None);
+        assert_eq!(build_anchor(None, None), None);
+    }
 
     /// Review P1: the cached list's derived count must read the meta and
     /// the row under one pinned read view — a catch-up between the two reads

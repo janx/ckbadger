@@ -79,6 +79,7 @@ const page = (data: Asset[]) => ({
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 });
 const tokens = page([
   {

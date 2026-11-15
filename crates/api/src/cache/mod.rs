@@ -65,6 +65,22 @@ impl CacheKeys {
     pub fn address_balance(lock_hash_hex: &str) -> String {
         format!("ckbadger:addr:balance:{}", lock_hash_hex)
     }
+
+    /// An address's chain view at one tip block. The value is a view of the
+    /// chain, so the key names the view — the tip's number AND hash, as
+    /// [`TipMemo`] does: an entry is never served for a later block, nor for a
+    /// different block at the same height.
+    pub fn address_balance_at(lock_hash_hex: &str, tip: Option<(i64, &[u8])>) -> String {
+        match tip {
+            Some((number, hash)) => format!(
+                "{}:tip:{}:0x{}",
+                Self::address_balance(lock_hash_hex),
+                number,
+                hex::encode(hash)
+            ),
+            None => format!("{}:tip:none", Self::address_balance(lock_hash_hex)),
+        }
+    }
 }
 
 pub struct CacheTtl;
@@ -124,6 +140,31 @@ mod tests {
         let key = CacheKeys::address_balance("0xdeadbeef");
         assert!(key.starts_with("ckbadger:addr:balance:"));
         assert!(key.ends_with("0xdeadbeef"));
+    }
+
+    /// The address memo's key changes with the tip block: with its height,
+    /// and with its hash at one height (a reorg), so a view of one block is
+    /// never the answer for another.
+    #[test]
+    fn test_cache_key_address_balance_at_names_the_tip_block() {
+        let at = |number: i64, hash: u8| {
+            CacheKeys::address_balance_at("0xabc", Some((number, &[hash; 32])))
+        };
+        assert_eq!(
+            at(7, 0x07),
+            format!("ckbadger:addr:balance:0xabc:tip:7:0x{}", "07".repeat(32))
+        );
+        assert_ne!(at(7, 0x07), at(8, 0x07), "another height");
+        assert_ne!(at(7, 0x07), at(7, 0x70), "same height, other block");
+        assert_ne!(
+            at(7, 0x07),
+            CacheKeys::address_balance_at("0xabd", Some((7, &[0x07; 32]))),
+            "another address"
+        );
+        assert_eq!(
+            CacheKeys::address_balance_at("0xabc", None),
+            "ckbadger:addr:balance:0xabc:tip:none"
+        );
     }
 
     #[test]

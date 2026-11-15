@@ -3525,6 +3525,70 @@ must both use the new build to exchange the required calendar evidence.
 
 ---
 
+### VERIFY-007: A cached list row compared with a live detail, one block apart
+
+**Date**: 2026-11-15
+
+**Symptom**: Mainnet run `20261115T023435Z-c99ffc6a`: 71 pass, 1 fail.
+`asset_top_holders_address_consistency` reported, for USDC (`0x797bfd0b…`),
+`detail holdersCount=865 != list holdersCount=864`. Read nine hours later, both said 865.
+
+**Root Cause**: The two sides are one calculation (`aggregate_token_holder_stats`) read at two
+blocks. `/assets` answers from the snapshot `refresh_assets_cache_loop` rebuilds when the tip
+moves and then rests 30 s; `/tokens/{id}` scans the store in the view of its request. Transaction
+`0x16329de1…` in block 21016902 (02:34:55 UTC) paid USDC to a lock that had never held it; the
+check read the token 41.8 s into the run, about 22 s after that block, while the list still
+served the snapshot built before it. Nothing in the list said which block it was a list of, so
+the check could not tell a snapshot one block behind from a wrong count, and compared them
+anyway. It had passed for as long as no top asset's holder count moved in the half minute before
+it was read. Measured on mainnet, the snapshot stood behind the API's own view in 19 of 56
+samples (34 %), by up to three blocks.
+
+**Fix**: The list says what it read: `/assets` returns `anchor`, the tip block its snapshot was
+built at (`null` when the tip moved under the build, since its rows then span more than one
+block). The build pins no read view; it reads the tip before its first row and after its last,
+and a view only advances while a block's rows commit with its tip, so an unchanged tip means
+every row was read at it. `object_asset_collection_consistency` and
+`asset_top_holders_address_consistency` classify a count difference by the block it was read at
+(`CountSettlement`): the asset is re-read until a reading agrees — the first one compared two
+blocks, and the result line says so — or until the list `anchor` equals the API's view
+(`/assets/summary` `anchor`) before and after the live reads, where a difference is the index's
+and fails with the block named. A difference never read at one block within 100 s is
+inconclusive, never a pass. A list without the `anchor` key is an error.
+
+**Validation**: The verifier regression reproduces the mainnet message exactly (red: `Fail`,
+`detail holdersCount=865 != list holdersCount=864`), and its counterparts hold the other three
+outcomes: a difference at one block fails, one never read at one block or against an unanchored
+snapshot is inconclusive, a list without the key errors. Against the real router,
+`asset_contract_real_api_list_snapshot_behind_the_tip_is_not_a_mismatch` serves a snapshot one
+block behind the store and passes once the API rebuilds it, and
+`asset_contract_real_api_mismatch_at_the_snapshot_block_is_a_failure` changes the store under an
+unchanged tip and fails with `every read at block 2`. API: 761 unit, 35 pipeline and 832
+integration tests; indexer: 2,114 unit (247 of them the verifier's) and 210 integration tests;
+frontend 434 files / 4,263 tests; workspace check and all-target Clippy with warnings denied.
+On mainnet, a temporary API of the fixed build (its own secondary directories, port 8191; the
+running services and their binary untouched) passed both checks in 86 of 86 back-to-back runs,
+and the fast and sampling tiers in full (`20261115T123533Z-93c1d75e`: 47 pass, the explorer
+comparisons not selected). A 25-minute watch of that API (456 polls) saw no top token's list and
+detail differ, so on live data the re-read path itself was not taken; the tests above are its
+evidence. That loop is also what found API-023: the same check failing for a second,
+independent reason.
+
+**Lesson**: Two reads are comparable only at one block, and a check can only know that if every
+answer says which block it is of. Run a check that compares endpoints in a loop against live
+data before trusting one green run: a comparison that races the tip passes most of the time.
+
+**Re-sync required**: No. API read path, verifier and tests only; no write path in the domain,
+append-only or network store changed. The API and the verifier must run the same build: the
+verifier refuses an `/assets` page without `anchor`.
+
+**Files**: `crates/indexer/src/verify/api_checks.rs`, `crates/api/src/warmup.rs`,
+`crates/api/src/routes/assets.rs`, `crates/api/src/lib.rs`,
+`crates/api/tests/{api_assets,api_verify_asset_contract}.rs`, `frontend/lib/api.ts`,
+`docs/{API,TESTING}.md`
+
+---
+
 ## Category: Statistics & Charts
 
 ### STATS-012: The daily hash-rate chart served H/ms under an H/s label
@@ -3858,8 +3922,7 @@ writer's order is unchanged: crash safety needs payloads durable before the doma
 **The log**: `ApiError::internal` puts its message in the response body only, and the request
 log wrote `completed status=500` at INFO, so the cause had to be inferred from timings. The
 request log now sits inside the compression layer and reads a 5xx body: the request's line
-carries `error_kind` and `error` (the API error's code and message), at ERROR for every 5xx but
-503. Regression: `an_internal_error_logs_its_message_with_the_request`.
+carries `error_kind` and `error` (the API error's code and message), at ERROR for every 5xx but 503. Regression: `an_internal_error_logs_its_message_with_the_request`.
 
 **Why the tests missed it**: test stores were single unified primaries, so no test had two
 secondaries or a commit landing inside a round. Regression:
@@ -3874,6 +3937,48 @@ writer commits B before A, the reader must advance A before B.
 **Files**: `crates/api/src/store_readiness.rs`, `crates/api/tests/api_store_readiness.rs`,
 `docs/STORE_SCHEMA.md`, `crates/api/src/request_log.rs`, `crates/api/src/lib.rs`,
 `crates/api/tests/api_transactions.rs`
+
+---
+
+### API-023: The address detail's memo named the address, not the block
+
+**Date**: 2026-11-15
+
+**Symptom**: Found while validating VERIFY-007 on mainnet: the verifier's
+`asset_top_holders_address_consistency`, run back to back against one API, failed 11 of 76 runs
+with `transactions endpoint total=2036204 != address transactionsCount=2036203` for one holder
+(`0xd1a7459f…`, a lock that transacts every two minutes), always in runs of three to five
+consecutive failures — 15 to 25 s — after each of its transactions.
+
+**Root Cause**: `GET /addresses/{addr}` kept its chain view (balance, live cells, transaction
+count) for 30 s under `ckbadger:addr:balance:{addr}`: a key that names the address and not the
+block the view is of. `/addresses/{addr}/transactions` and `/cells/live` read the store on every
+request, and both sides call the same `address_tx_count`. So within 30 s of any earlier request
+for the same address — another check of the same run, an open address page — the detail answered
+one block behind the totals of its own page, while `docs/API.md` said the count "can never
+disagree with the merged transaction list beneath it". One calculation path, two blocks.
+
+**Fix**: The memo's key carries the tip of the request's pinned read view, number and hash
+(`CacheKeys::address_balance_at`), the rule `TipMemo` already states: a value computed for one
+tip is the answer for that tip only, and a different block at the same height is a miss. Within
+one block the detail is still served from the memo; the TTL only bounds how long a retired entry
+stays in memory.
+
+**Validation**: `test_address_detail_is_never_served_from_an_earlier_block` (red on the old key:
+detail 1, list 2) and `test_address_detail_is_memoized_within_one_block`; the key's shape is
+pinned by `test_cache_key_address_balance_at_names_the_tip_block`. On mainnet, with a temporary
+API of the fixed build on its own secondary directories, the same back-to-back loop passed 86 of
+86 runs in 8 minutes while the holder made further transactions.
+
+**Lesson**: A cached chain value is a statement about a block. Either its key names the block
+(a memo) or its response does (an anchor, VERIFY-007); a TTL names neither, and the staleness it
+allows is invisible to every reader that also reads the store.
+
+**Re-sync required**: No. Read path only; no write path in the domain, append-only or network
+store changed.
+
+**Files**: `crates/api/src/routes/cells.rs`, `crates/api/src/cache/mod.rs`,
+`crates/api/tests/api_cells.rs`, `docs/API.md`
 
 ---
 
