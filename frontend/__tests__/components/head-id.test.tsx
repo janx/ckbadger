@@ -173,6 +173,30 @@ describe('HeadId, a full id in a page head', () => {
     expect(lines()[0].parentElement).toHaveClass('invisible');
   });
 
+  // A4 round 2, task 4: a line narrower than one designed line (a hash's `0x` and a digit, 21.6 px
+  // at 12 px; an address's one character, 7.2) is a layout state, not a broken invariant: it threw
+  // and took the page down. Such a line cannot be designed, so the id is set as before it is
+  // measured — one line, whole, the text and the title the whole id; never a throw.
+  it('sets the id on one line where the line cannot hold one designed line', () => {
+    for (const [value, kind, width] of [
+      [HASH, 'hash', 21],
+      [HASH, 'hash', 7],
+      [ADDRESS, 'address', 7],
+      [ADDRESS, 'address', 1],
+    ] as const) {
+      stubLine(width);
+      const view = render(<HeadId value={value} kind={kind} />);
+      expect(texts()).toEqual([value]);
+      expect(head()).toHaveAttribute('title', value);
+      view.unmount();
+      vi.restoreAllMocks();
+    }
+    // from one designed line up it is designed: 22 px holds `0x` and a digit (3 × 7.2 = 21.6)
+    stubLine(22);
+    render(<HeadId value={HASH} kind="hash" />);
+    expect(lines()).toHaveLength(64);
+  });
+
   it('refuses a value that is not of its kind', () => {
     expect(() => render(<HeadId value="0x12g4" kind="hash" />)).toThrow('not a hex id');
     expect(() => render(<HeadId value={HASH} kind="address" />)).toThrow('not an address');
