@@ -18,7 +18,7 @@ import { unprotectedUnits } from '@/__tests__/utils/unit-scan';
  *
  * unless the string goes through `unitText` / `unitNode` (components/ui/units.tsx) on its way, or
  * an element around it renders it as a unit (NoBreak, ShortId, time, Utc8Date, Utc8DateTime,
- * Utc8Age, a literal whitespace-nowrap) or is SVG text, which never wraps.
+ * Utc8Age, a literal whitespace-nowrap or truncate) or is SVG text, which never wraps.
  *
  * What it cannot see: a string composed elsewhere (a variable, a function's return, a describer)
  * and rendered as `{text}`; a string passed as a prop to a component that writes it — the rendering
@@ -96,6 +96,18 @@ describe('the unit gate reads the AST exactly (self-tests)', () => {
     expect(scan(`<svg><text>{formatUtc8Date(t)}</text></svg>`)).toEqual([]);
     // a value computed for something else, not written as text here
     expect(scan(`<p>{rows.map((r) => r.day.length)}</p>`)).toEqual([]);
+  });
+
+  // A4 round 4: Tailwind's truncate is white-space: nowrap (with overflow hidden and an ellipsis),
+  // so what it holds is on one line and cannot break inside, as under whitespace-nowrap: the
+  // collection's object row writes its name, a shortened id where the object has no number, in a
+  // truncate link. A truncate from a breakpoint up (sm:truncate) is not one line at every width.
+  it('reads truncate as one line, as whitespace-nowrap', () => {
+    expect(scan(`<a className="min-w-0 truncate">{shortenHash(h, 'row')}</a>`)).toEqual([]);
+    expect(scan(`<a className={cn('truncate', x)}>{shortenHash(h, 'row')}</a>`)).toEqual([]);
+    expect(scan(`<a className="sm:truncate">{shortenHash(h, 'row')}</a>`)).toEqual([
+      "id: shortenHash(h, 'row')",
+    ]);
   });
 });
 

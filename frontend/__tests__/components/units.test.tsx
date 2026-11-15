@@ -1,6 +1,12 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import type { ReactNode } from 'react';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { unitText, unitNode } from '@/components/ui/units';
+import { formatCount } from '@/lib/format-count';
+import { shortenAddress, shortenHash, shortenOutpoint, type ShortSize } from '@/lib/shorten';
 
 /**
  * A4 round 2 (the second Chrome pass): dates, shortened ids and counts broke inside — "2019-11-16"
@@ -66,7 +72,7 @@ describe('unitText: the units a composed string carries', () => {
   // was underlined on "Show all" only. The unit takes its parent's decoration (text-decoration:
   // inherit): a link's or a button's underline, static or on hover, runs through the count.
   it('takes its parent’s text decoration, so an underline runs through it', () => {
-    const [count] = units('Show all 6,396 observations').counts;
+    const [count] = units('Show all 6,396\u00a0observations').counts;
     expect(count).toHaveClass('[text-decoration:inherit]');
   });
 
@@ -76,14 +82,14 @@ describe('unitText: the units a composed string carries', () => {
   // between the number and the noun only. A byte size written the same way ("85 B") is a count
   // by the same rule, by design.
   it('holds the whole noun it was given, the noun one piece after its number', () => {
-    const [cells] = units('in 795,441 live cells').counts;
+    const [cells] = units('in 795,441\u00a0live\u00a0cells').counts;
     expect(cells.textContent).toBe('795,441 live cells');
     const noun = cells.lastElementChild as HTMLElement;
     expect(noun.textContent).toBe('live cells');
     expect(noun).toHaveClass('whitespace-nowrap');
     expect(cells.firstChild!.textContent).toBe('795,441 ');
-    expect(units('1 DAO cell').counts.map((c) => c.textContent)).toEqual(['1 DAO cell']);
-    expect(units('85 B · fee').counts.map((c) => c.textContent)).toEqual(['85 B']);
+    expect(units('1\u00a0DAO\u00a0cell').counts.map((c) => c.textContent)).toEqual(['1 DAO cell']);
+    expect(units('85\u00a0B · fee').counts.map((c) => c.textContent)).toEqual(['85 B']);
   });
 
   it('leaves a string with no unit as it is, and a node it is not given as text', () => {
@@ -92,4 +98,138 @@ describe('unitText: the units a composed string carries', () => {
     expect(unitNode(node)).toBe(node);
     expect(unitNode(null)).toBeNull();
   });
+});
+
+/** The largest count formatCount is given: a chain quantity, at most a u64. */
+const U64_MAX = BigInt('18446744073709551615');
+const HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+const ADDRESS =
+  'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwgx292hnvmn68xf779vmzrshpmm6epn4c0cgwga';
+const SIZES: ShortSize[] = ['head', 'row', 'tight'];
+const plain = (s: string) => s.replaceAll('\u00a0', ' ');
+
+/**
+ * A4 round 4: unitText runs on strings the site does not write — a miner's witness message, a
+ * token's name, a trait value, API text given to a shared component — so it must be linear in its
+ * input, and read only the forms the formatters write: every quantifier bounded by what they can
+ * write, and no unit begun inside a longer run of its own characters (a number longer than the
+ * bound is plain text, not a unit cut out of its tail). Measured with Node on 200,000 characters:
+ * the matcher of 1a8688aa took 25.2 s on a run of digits, 19.5 s on digits grouped by commas and
+ * 13.7 s on digits and bare commas (quadratic), and read a unit out of the id, chain and date runs
+ * below; the bounded matcher takes 0.1 to 3.1 ms on each (unitText in this suite). One run's
+ * budget is 250 ms: about eighty times the slowest shape's linear time, under a fiftieth of what
+ * the quadratic one took. A run over the budget but not ten times over gets two more tries, so a
+ * pause of the parallel suite is not read as quadratic.
+ */
+describe('unitText on text the site does not write (A4 round 4)', () => {
+  const LENGTH = 200_000;
+  const BUDGET_MS = 250;
+  const fill = (head: string, piece: string) =>
+    (head + piece.repeat(Math.ceil(LENGTH / piece.length))).slice(0, LENGTH);
+  const SHAPES: [string, string][] = [
+    ['a run of digits', fill('', '1')],
+    ['digits grouped by commas', fill('1', ',234')],
+    ['digits and bare commas', fill('', '1,')],
+    ['0x and a run of hex', fill('0x', 'a')],
+    ['a shortened hash with a run of hex for its tail', fill('0x1234…', 'a')],
+    ['the address alphabet after ckb1', fill('ckb1', 'qyqszqgp')],
+    ['ckb1 repeated', fill('', 'ckb1')],
+    ['a shortened address with a run for its tail', fill('ckb1qzda0cr0…', 'q')],
+    ['a chain of ⍽-joined words after a number', fill('1', '\u00a0word')],
+    ['⍽-joined digits', fill('', '1\u00a0')],
+    ['clock-like and date-like digits', fill('', '2026-11-1412:03:29')],
+  ];
+
+  it.each(SHAPES)('reads %s, 200,000 characters, as plain text in linear time', (_, text) => {
+    expect(text).toHaveLength(LENGTH);
+    let result: ReactNode = null;
+    let best = Infinity;
+    for (let run = 0; run < 3 && best >= BUDGET_MS; run++) {
+      const start = performance.now();
+      result = unitText(text);
+      const ms = performance.now() - start;
+      best = Math.min(best, ms);
+      if (ms > 10 * BUDGET_MS) break;
+    }
+    expect(result === text, 'no unit: the same string back').toBe(true);
+    expect(best).toBeLessThan(BUDGET_MS);
+  });
+
+  it('still reads every form the formatters write, at the bounds', () => {
+    for (const size of SIZES) {
+      const hash = shortenHash(HASH, size);
+      expect(units(`at ${hash}.`).whole).toEqual([hash]);
+      // a tight address is `ckb1` and its tail: nothing between the prefix and the ellipsis
+      const address = shortenAddress(ADDRESS, size);
+      expect(units(`by ${address}.`).whole).toEqual([address]);
+      const outPoint = shortenOutpoint(HASH, Number.MAX_SAFE_INTEGER, size);
+      expect(units(`cell ${outPoint}`).whole).toEqual([outPoint]);
+    }
+    // the largest count, the noun of the most words, a punctuation mark after it
+    const most = formatCount(U64_MAX, 'byte no field describes', 'bytes no field describes');
+    expect(units(`(${most})`).counts.map((c) => c.textContent)).toEqual([`${plain(most)})`]);
+    const longest = formatCount(Number.MAX_SAFE_INTEGER, 'confirmation');
+    expect(units(`${longest},`).counts.map((c) => c.textContent)).toEqual([`${plain(longest)},`]);
+  });
+
+  it('reads no unit out of a longer run of its own characters', () => {
+    // a count of more digits than a u64, and digits formatCount would have grouped
+    expect(units('123,456,789,012,345,678,901,234\u00a0cells').counts).toEqual([]);
+    expect(units('12345678\u00a0cells').counts).toEqual([]);
+    expect(units('x1,234\u00a0cells').counts.map((c) => c.textContent)).toEqual(['1,234 cells']);
+    // a date or a clock inside a longer run of digits
+    expect(units('12026-11-14').whole).toEqual([]);
+    expect(units('2026-11-142').whole).toEqual([]);
+    expect(units('11:12:03:29 UTC+8').whole).toEqual([]);
+    // a date followed by a label's colon is still a date
+    expect(units('Week of 2026-11-09: 5\u00a0transfers').whole).toEqual(['2026-11-09']);
+    // a head or a tail longer than any form's
+    expect(units(`0x${'1'.repeat(11)}…abcd`).whole).toEqual([]);
+    expect(units('0x5cb3…b4fab4fab').whole).toEqual([]);
+    expect(units('0x5cb3…b4fa:12345678901234567').whole).toEqual([]);
+  });
+});
+
+const ROOT = join(__dirname, '..', '..');
+function sources(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sources(path);
+    return /\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+/** The nouns the source gives formatCount (or a file's `plural`, which calls it) as literals. */
+function sourceNouns(): [string, string | undefined][] {
+  const nouns: [string, string | undefined][] = [];
+  for (const dir of ['app', 'components', 'lib', 'hooks'])
+    for (const path of sources(join(ROOT, dir))) {
+      const file = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest);
+      const visit = (node: ts.Node): void => {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          ['formatCount', 'plural'].includes(node.expression.text)
+        ) {
+          const [, one, many] = node.arguments;
+          if (one && ts.isStringLiteralLike(one))
+            nouns.push([one.text, many && ts.isStringLiteralLike(many) ? many.text : undefined]);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(file);
+    }
+  return nouns;
+}
+
+// A4 round 4: the noun bounds are the source's — its longest noun word ("confirmations") and its
+// noun of the most words ("bytes no field describes") — so a noun written later that is longer
+// fails here instead of losing its unit on the page.
+it('holds every noun the source gives formatCount, at the largest count', () => {
+  const nouns = sourceNouns();
+  expect(nouns.length).toBeGreaterThan(50);
+  for (const [one, many] of nouns) {
+    const text = formatCount(U64_MAX, one, many);
+    expect(units(`${text})`).counts.map((c) => c.textContent)).toEqual([`${plain(text)})`]);
+  }
 });
