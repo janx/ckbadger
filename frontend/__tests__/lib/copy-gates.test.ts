@@ -268,11 +268,6 @@ describe('copy gates (U-15)', () => {
     },
     {
       file: 'components/scripts/script-family-board.tsx',
-      text: '${family.name} cells · occupied and fr',
-      why: 'a plot named by its script: "CKB in JoyID cells · occupied and free"',
-    },
-    {
-      file: 'components/scripts/script-family-board.tsx',
       text: '${family.name} cells',
       why: 'an axis named by its script: "CKB in JoyID cells"',
     },
