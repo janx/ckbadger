@@ -97,6 +97,18 @@ describe('the unit gate reads the AST exactly (self-tests)', () => {
     // a value computed for something else, not written as text here
     expect(scan(`<p>{rows.map((r) => r.day.length)}</p>`)).toEqual([]);
   });
+
+  // A4 round 4: Tailwind's truncate is white-space: nowrap (with overflow hidden and an ellipsis),
+  // so what it holds is on one line and cannot break inside, as under whitespace-nowrap: the
+  // collection's object row writes its name, a shortened id where the object has no number, in a
+  // truncate link. A truncate from a breakpoint up (sm:truncate) is not one line at every width.
+  it('reads truncate as one line, as whitespace-nowrap', () => {
+    expect(scan(`<a className="min-w-0 truncate">{shortenHash(h, 'row')}</a>`)).toEqual([]);
+    expect(scan(`<a className={cn('truncate', x)}>{shortenHash(h, 'row')}</a>`)).toEqual([]);
+    expect(scan(`<a className="sm:truncate">{shortenHash(h, 'row')}</a>`)).toEqual([
+      "id: shortenHash(h, 'row')",
+    ]);
+  });
 });
 
 const ROOT = join(__dirname, '..', '..');
