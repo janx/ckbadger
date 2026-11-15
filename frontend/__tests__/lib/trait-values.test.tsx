@@ -108,18 +108,32 @@ function unwrappedPrinters(path: string): string[] {
       PRINTERS.test(node.expression.getText(source)) &&
       !/^function /.test(node.parent.getText(source))
     ) {
-      // up to the JSX child that prints it; a call in an attribute (a title, an aria label) or one
-      // whose result a function body keeps for later (a row's title) prints nothing here
+      // up to the element that prints it: the JSX element it is a child of, or the one TraitText
+      // stands in when it is TraitText's text; a call in another attribute (a title, an aria label)
+      // or one whose result a function body keeps for later (a row's title) prints nothing here
       let up: ts.Node = node;
       let printed = true;
-      while (up && !(ts.isJsxExpression(up) && ts.isJsxElement(up.parent))) {
-        if (ts.isJsxAttribute(up) || ts.isVariableDeclaration(up) || ts.isBlock(up))
+      let host: ts.JsxElement | null = null;
+      while (up && !ts.isSourceFile(up)) {
+        if (ts.isJsxAttribute(up)) {
+          const el = up.parent.parent;
+          if (up.name.getText(source) === 'text' && tagName(el, source) === 'TraitText')
+            host = ts.isJsxElement(el.parent) ? el.parent : null;
+          else printed = false;
+          break;
+        }
+        if (ts.isVariableDeclaration(up) || ts.isBlock(up)) {
           printed = false;
+          break;
+        }
+        if (ts.isJsxExpression(up) && ts.isJsxElement(up.parent)) {
+          host = up.parent;
+          break;
+        }
         up = up.parent;
       }
-      if (up) up = up.parent;
-      if (up && printed) {
-        const { className, title } = attrs((up as ts.JsxElement).openingElement, source);
+      if (host && printed) {
+        const { className, title } = attrs(host.openingElement, source);
         const wraps = className.includes('[overflow-wrap:anywhere]');
         const clips = /\btruncate\b/.test(className) && title;
         if (!wraps && !clips) {

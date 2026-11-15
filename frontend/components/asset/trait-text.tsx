@@ -1,8 +1,20 @@
+import { NoBreak } from '@/components/ui/no-break';
+import { traitTextParts } from '@/lib/dob-genes';
+
 /**
- * Trait text (a trait value, or a sentence built from trait values) as the pages print it today:
- * the text as it is. The red step of B3 round 2; the next commit makes a shortened id inside it one
- * unit.
+ * The one rendering point for trait text: a trait value, or a sentence built from trait values,
+ * printed where a page prints it, every shortened id inside it one unit (NoBreak) and the text
+ * around it as it is, free to wrap between its words, and third-party text to break anywhere where
+ * its element says so (B3 round 2: "inscription 020172…cb69i0" broke after its ellipsis on a phone).
+ * Nothing is added to the text: a copied value is the plain text. `__tests__/lib/trait-values.test.tsx`
+ * refuses trait text printed anywhere else.
  */
 export function TraitText({ text }: { text: string }) {
-  return <>{text}</>;
+  return (
+    <>
+      {traitTextParts(text).map((part, i) =>
+        part.unit ? <NoBreak key={i}>{part.text}</NoBreak> : part.text
+      )}
+    </>
+  );
 }

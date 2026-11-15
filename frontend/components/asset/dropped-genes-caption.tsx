@@ -1,5 +1,6 @@
 import { droppedGenesCaption, type DroppedGene } from '@/lib/dob-genes';
 import { cn } from '@/lib/utils';
+import { TraitText } from '@/components/asset/trait-text';
 
 /**
  * The one caption under a gel that names the genes without a lane, and why (C9), on the object page
@@ -22,7 +23,7 @@ export function DroppedGenesCaption({
       data-role="caption"
       className={cn('text-text-dim text-small [overflow-wrap:anywhere]', className)}
     >
-      {droppedGenesCaption(dropped, objects)}
+      <TraitText text={droppedGenesCaption(dropped, objects)} />
     </p>
   );
 }

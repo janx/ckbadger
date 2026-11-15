@@ -4,7 +4,7 @@
 import type { CollectionInsights, CurrentPattern, GeneDefinition, ObjectGenetics } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
 import { parseBtcfsUri } from '@/lib/btcfs';
-import { shortenHash } from '@/lib/shorten';
+import { ELLIPSIS, SHORT_FORMS, shortenHash } from '@/lib/shorten';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { stepGenes } from '@/lib/dob-declared';
 import { formatCount } from '@/lib/format-count';
@@ -49,6 +49,43 @@ const SVG_VALUE = /^\s*<svg[\s>]/i;
 export function inscriptionText(value: string): string | null {
   const inscription = parseBtcfsUri(value.replace(CONTROL, '').trim());
   return inscription && `${shortenHash(inscription.txid, 'tight')}i${inscription.index}`;
+}
+
+/**
+ * The inscription id inscriptionText writes, found in trait text: the txid's tight form (6…4 hex,
+ * lib/shorten.ts) and `i<index>`, standing alone (no letter or digit on either side). The index is
+ * bounded to six digits, so a unit is at most 18 characters: 129.6 px at 12 px, inside the 142 px
+ * the narrowest trait line gets (the object genes' dd at 360). Text that only looks like it, a
+ * longer hex run or a third-party string, is not matched and breaks as text does.
+ */
+const INSCRIPTION_ID = new RegExp(
+  `(?<![0-9A-Za-z])[0-9a-f]{${SHORT_FORMS.tight.hash.head}}${ELLIPSIS}` +
+    `[0-9a-f]{${SHORT_FORMS.tight.hash.tail}}i\\d{1,6}(?![0-9A-Za-z])`,
+  'g'
+);
+
+/** One part of trait text: words that wrap as text does, or a shortened id that is one unit. */
+export interface TraitTextPart {
+  text: string;
+  unit: boolean;
+}
+
+/**
+ * Trait text (a trait value, or a sentence built from trait values) in its parts: each shortened
+ * inscription id a unit, the text around it as it is (B3 round 2: UAX #14 allows a line break after
+ * the ellipsis, so "inscription 020172…cb69i0" broke as "inscription 020172…" / "cb69i0" on a phone). The parts
+ * join to the text exactly: nothing is added, the unit is made where the text is rendered.
+ */
+export function traitTextParts(text: string): TraitTextPart[] {
+  const parts: TraitTextPart[] = [];
+  let at = 0;
+  for (const m of text.matchAll(INSCRIPTION_ID)) {
+    if (m.index > at) parts.push({ text: text.slice(at, m.index), unit: false });
+    parts.push({ text: m[0], unit: true });
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), unit: false });
+  return parts;
 }
 
 /**
