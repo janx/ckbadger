@@ -509,7 +509,7 @@ function GeneList({
       >
         <div
           role="row"
-          className={cn(LIST_GRID, 'border-base-border text-text-dim text-meta border-b pb-1.5')}
+          className={cn(LIST_GRID, 'border-row-rule text-text-dim text-meta border-b pb-1.5')}
         >
           <span role="columnheader">gene</span>
           <span role="columnheader" className="text-right">
