@@ -11,6 +11,14 @@ describe('formatCount', () => {
     expect(formatCount(1, 'entry', 'entries')).toBe('1\u00a0entry');
     expect(formatCount(3, 'entry', 'entries')).toBe('3\u00a0entries');
   });
+  // A4 round 3: a noun of several words is the count's noun whole: its words are joined by the
+  // no-break space too, so the count and all of its noun are one unit ("795,441 live cells", not
+  // "795,441 live" and a loose "cells"), and a renderer reads the noun exactly as it was given.
+  it('joins a noun of several words to its count whole', () => {
+    expect(formatCount(795441, 'live cell')).toBe('795,441 live cells');
+    expect(formatCount(1, 'DAO cell')).toBe('1 DAO cell');
+    expect(formatCount(2, 'more party', 'more parties')).toBe('2 more parties');
+  });
   it('rejects a count that is not a non-negative integer', () => {
     expect(() => formatCount(-1, 'block')).toThrow('Invalid count -1 for block');
     expect(() => formatCount(1.5, 'block')).toThrow('Invalid count 1.5 for block');
