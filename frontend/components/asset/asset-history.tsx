@@ -22,6 +22,12 @@ const DAY = 86400000;
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
 /** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
 export const HISTORY_PLOT_HEIGHT = 280;
+/**
+ * The name of every CKB-held history plot — a token's, a collection's, a script's — and its unit,
+ * said once (the ticks are bare). A fixed form: SVG text does not wrap, so a name carries no free
+ * length part (the page's h1 says whose CKB); its fit at 328 px is pinned by plot-name-fit.test.
+ */
+export const HELD_PLOT_NAME = 'CKB held · occupied, free';
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
   /** Completed weekly totals, or why this page has none to draw. */
@@ -359,7 +365,7 @@ export function AssetHistory({
             // The page's picture (R13): at least 280 px, its name inside it.
             height={HISTORY_PLOT_HEIGHT}
             // SVG text cannot wrap: the name fits beside the gutter on a 360 px phone (U-19).
-            plotName="CKB held · occupied, free"
+            plotName={HELD_PLOT_NAME}
             plotLeft={plotLeft}
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
             xDomain={domain}
@@ -374,7 +380,8 @@ export function AssetHistory({
               {...supplyAxis}
               subtitle="Exact total supply"
               // the unit once, as the ticks are bare (U-19)
-              plotName={supplyUnit === 'raw' ? 'supply in raw units' : `supply in ${supplyUnit}`}
+              // a fixed form: the symbol has no length bound, the page's h1 names the token
+              plotName={supplyUnit === 'raw' ? 'supply in raw units' : 'supply in tokens'}
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
               plotLeft={plotLeft}
