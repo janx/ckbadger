@@ -7,6 +7,7 @@ import { parseBtcfsUri } from '@/lib/btcfs';
 import { shortenHash } from '@/lib/shorten';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { stepGenes } from '@/lib/dob-declared';
+import { formatCount } from '@/lib/format-count';
 
 export interface DnaTrait {
   name: string;
@@ -51,16 +52,33 @@ export function inscriptionText(value: string): string | null {
 }
 
 /**
- * A trait value for people: control bytes dropped, empty named, pointers and markup described; a
- * btcfs text that is not an inscription is shown as it is. An inscription is "inscription <txid>i<n>"
- * (an inscription is Bitcoin's by definition, and the page says beside the picture where the image
- * lives): 25 characters, inside the sequencing gel's value budget (the review's item B).
+ * A value that is two or more btcfs URIs joined by `;`, every one an inscription: how many (a
+ * pattern's option may list the inscriptions an object can point at); null when it is not such a
+ * list, one element that is not an inscription making it plain text.
+ */
+function inscriptionCount(value: string): number | null {
+  const parts = value.split(';').map((part) => part.trim());
+  if (parts.length < 2) return null;
+  return parts.every((part) => parseBtcfsUri(part) !== null) ? parts.length : null;
+}
+
+/**
+ * A trait value for people: control bytes dropped, empty named, pointers and markup described. An
+ * inscription is "inscription <txid>i<n>" (an inscription is Bitcoin's by definition, and the page
+ * says beside the picture where the image lives): 25 characters, inside the sequencing gel's
+ * 27-character value budget (the review's item B); a `;`-list of inscriptions is how many, through
+ * the count rule ("5 inscriptions", the lead's Chrome finding of 2026-11-15: five of them, 374
+ * characters with no break, overflowed two pages). Anything else, a btcfs text that is not an
+ * inscription, an https or ipfs URL included, is shown as it is, and every place that prints a
+ * trait value lets it break anywhere (`__tests__/lib/trait-values.test.tsx`).
  */
 export function traitDisplay(value: string): string {
   const v = value.replace(CONTROL, '').trim();
   if (!v) return 'empty';
   const inscription = inscriptionText(v);
   if (inscription) return `inscription ${inscription}`;
+  const inscriptions = inscriptionCount(v);
+  if (inscriptions !== null) return formatCount(inscriptions, 'inscription');
   if (SVG_VALUE.test(v)) return `SVG image · ${value.length.toLocaleString('en-US')} characters`;
   return v;
 }

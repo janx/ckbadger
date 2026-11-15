@@ -34,6 +34,7 @@ import {
 import type { ShortSize } from '@/lib/shorten';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
+import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -434,7 +435,9 @@ export function ScriptHistoryFigure({
     values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
   }));
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
-  const plotName = `CKB in ${family.name} cells · occupied and free`;
+  // The token and collection plots' name: the same stack (occupied, free above it) in the same
+  // unit; the page's h1 says which script, and a script's name has no length bound (lane A5).
+  const plotName = HELD_PLOT_NAME;
   const held: ChartValueAxisInput = {
     title: `CKB in ${family.name} cells`,
     data,

@@ -159,7 +159,9 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     // follow-up (U-19): the ticks are bare, so the occupied panel's name says its unit, CKB.
     expect(
       [...document.querySelectorAll('[data-role="chart-name"]')].map((t) => t.textContent)
-    ).toEqual(['CKB in JoyID cells · occupied and free', "CKB occupied by those cells' own bytes"]);
+      // Re-pinned with the plot-name fit (lane A5, Chrome at 360): the token and collection plots'
+      // fixed name, as a script's name has no length bound; the h1 says which script.
+    ).toEqual(['CKB held · occupied, free', "CKB occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
@@ -378,8 +380,9 @@ describe('JoyID script page · visual pass', () => {
     expect(history.querySelectorAll('[data-custodian]')).toHaveLength(0);
   });
 
-  // At 358 px the plot's name takes 274 of the 348 px line: no label fits beside it, so none is
-  // written; the three dashed lines stay, and the versions are the timeline's ticks.
+  // Re-pinned with the plot-name fit (lane A5, Chrome at 360): at 358 px the plot is 300 px wide
+  // after its 48 px gutter and its fixed name takes 8 + 25 × 7 = 183 of them, so a version label
+  // can fit beside it; whatever is written never touches the name, and the three lines stay.
   it('writes no version label over the plot name on a phone (358 px); the lines stay', async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -396,7 +399,15 @@ describe('JoyID script page · visual pass', () => {
     render(<ScriptDetailPage name="JoyID" />);
     await screen.findByRole('heading', { name: 'JoyID', level: 1 });
     const history = await screen.findByTestId('script-history');
-    expect(history.querySelectorAll('[data-upgrade-label]')).toHaveLength(0);
+    const plot = 358 - 10 - 48;
+    const nameEnd = 8 + 'CKB held · occupied, free'.length * 7;
+    for (const label of history.querySelectorAll<HTMLElement>('[data-upgrade-label]')) {
+      const w = 4 + label.textContent!.length * 7;
+      const start = label.style.left
+        ? (Number.parseFloat(label.style.left) / 100) * plot
+        : plot - (Number.parseFloat(label.style.right) / 100) * plot - w;
+      expect(start, label.textContent!).toBeGreaterThanOrEqual(nameEnd + 8);
+    }
     expect(history.querySelectorAll('[data-upgrade-line]')).toHaveLength(3);
     expect(screen.getAllByTestId('holder-timeline')[0]).toHaveTextContent('v5 2025-11-21');
   });
@@ -525,8 +536,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(follows(hero().querySelector('[data-role="figure"]')!, history)).toBe(true);
     const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
     expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    // Re-pinned with the plot-name fit: the fixed name of every CKB-held history plot.
     expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-      'CKB in JoyID cells · occupied and free'
+      'CKB held · occupied, free'
     );
     expect(Number(occupied.getAttribute('height'))).toBeLessThan(
       Number(main.getAttribute('height'))

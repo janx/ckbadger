@@ -64,7 +64,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
       </p>
       <dl className="grid gap-3 sm:grid-cols-2">
         {Object.entries(labels).map(([key, label]) => (
-          <div key={key} className="border-base-border flex justify-between gap-3 border-b py-2">
+          <div key={key} className="border-row-rule flex justify-between gap-3 border-b py-2">
             <dt className="text-meta">{label}</dt>
             <dd
               className={

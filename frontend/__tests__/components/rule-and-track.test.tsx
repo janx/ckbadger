@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -135,6 +136,144 @@ describe('a horizontal rule in the content is a row rule (R5, DY-01)', () => {
 // Ruling 4c: a chart's gridline is a rule on the ruled paper — in the hair it is one more ruled
 // line by day (1.09:1). Every chart grid (and the forks chart's base line) is the row-rule key,
 // the hair by night as before.
+/**
+ * A row's rule drawn in the frame border's ink (`border-base-border`, any alpha): an element that
+ * is a row by its structure — a `tr` / `th` / `td`, an element with `role="row"`,
+ * `"columnheader"` or `"rowheader"`, or the element a `.map(` callback returns — and whose class
+ * names that colour with a top, bottom or y border (or a y divide). Its class is read from a string,
+ * a template or the literals inside a `cn(…)` / ternary. A frame reads as a frame by its fill and
+ * its four sides; a row reads as a row by its rule, the row-rule ink every list shares (by day the
+ * frame border sits at 1.27:1 on the tier-2 ground beside the row rule's 1.37).
+ */
+const FRAME_COLOUR = /(?<![\w-])(?:[\w-]+:)*(?:border|divide)-base-border(?:\/\d+)?(?![\w-])/;
+const ROW_ROLES = new Set(['row', 'columnheader', 'rowheader']);
+const ROW_TAGS = new Set(['tr', 'th', 'td']);
+
+function frameRuledRows(file: string, code: string): { line: number; what: string }[] {
+  const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: { line: number; what: string }[] = [];
+  const classText = (attrs: ts.JsxAttributes): string => {
+    const attr = attrs.properties.find(
+      (p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(source) === 'className'
+    );
+    if (!attr?.initializer) return '';
+    const texts: string[] = [];
+    const collect = (node: ts.Node) => {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+        texts.push(node.text);
+      else if (ts.isTemplateExpression(node)) {
+        texts.push(node.head.text, ...node.templateSpans.map((s) => s.literal.text));
+        node.templateSpans.forEach((s) => collect(s.expression));
+      } else ts.forEachChild(node, collect);
+    };
+    collect(attr.initializer);
+    return texts.join(' ');
+  };
+  const attrValue = (attrs: ts.JsxAttributes, name: string) => {
+    const attr = attrs.properties.find(
+      (p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(source) === name
+    );
+    return attr?.initializer && ts.isStringLiteral(attr.initializer) ? attr.initializer.text : null;
+  };
+  /** Whether the element is what a `.map(` callback returns. */
+  const returnedByMap = (element: ts.Node): boolean => {
+    let node: ts.Node = element;
+    while (ts.isParenthesizedExpression(node.parent)) node = node.parent;
+    let fn: ts.Node | undefined;
+    if (ts.isArrowFunction(node.parent) && node.parent.body === node) fn = node.parent;
+    else if (ts.isReturnStatement(node.parent)) {
+      fn = node.parent.parent;
+      while (fn && !ts.isFunctionLike(fn)) fn = fn.parent;
+    }
+    if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return false;
+    const call = fn.parent;
+    return (
+      ts.isCallExpression(call) &&
+      call.arguments[0] === fn &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      call.expression.name.text === 'map'
+    );
+  };
+  const visit = (node: ts.Node) => {
+    const opening = ts.isJsxElement(node)
+      ? node.openingElement
+      : ts.isJsxSelfClosingElement(node)
+        ? node
+        : null;
+    if (opening) {
+      const cls = classText(opening.attributes);
+      const colour = cls.match(FRAME_COLOUR);
+      const row =
+        ROW_TAGS.has(opening.tagName.getText(source)) ||
+        ROW_ROLES.has(attrValue(opening.attributes, 'role') ?? '') ||
+        returnedByMap(node);
+      if (colour && HORIZONTAL.test(cls) && row)
+        out.push({
+          line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+          what: `<${opening.tagName.getText(source)}> ${colour[0]}`,
+        });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+/** Rows a structure reads as rows that are a frame's edge after all, per file in order: none. */
+const FRAME_ROWS: Record<string, readonly string[]> = {};
+
+describe('a row is ruled in the row-rule ink, never the frame border’s (R5, DY-01)', () => {
+  it('finds a row by its tag, its role or as what a .map( returns, never a frame or a child', () => {
+    const code = [
+      'export const A = () => (',
+      '  <table><tbody><tr className="border-base-border border-b" /></tbody></table>',
+      ');',
+      'export const B = () => <div role="row" className="border-base-border/50 border-b" />;',
+      'export const C = ({ xs }: { xs: string[] }) => (',
+      '  <ul>{xs.map((x) => (<li key={x} className={cn("border-base-border border-t", x && "py-2")} />))}</ul>',
+      ');',
+      'export const D = ({ xs }: { xs: string[] }) => xs.map((x) => {',
+      '  const k = x;',
+      '  return <div key={k} className="border-base-border border-b"><span className="border-base-border border-b" /></div>;',
+      '});',
+      'export const E = () => <div className="border-base-border border-b px-3">head</div>;',
+      'export const F = ({ xs }: { xs: string[] }) => xs.map((x) => <div key={x} className="border-row-rule border-b" />);',
+      'export const G = ({ xs }: { xs: string[] }) => xs.map((x) => <div key={x} className="border-base-border border" />);',
+      'export const H = ({ xs }: { xs: string[] }) => xs.filter((x) => <div className="border-base-border border-b" />);',
+    ].join('\n');
+    expect(frameRuledRows('a.tsx', code)).toEqual([
+      { line: 2, what: '<tr> border-base-border' },
+      { line: 4, what: '<div> border-base-border/50' },
+      { line: 6, what: '<li> border-base-border' },
+      { line: 10, what: '<div> border-base-border' },
+    ]);
+  });
+
+  it('rules no row of a list or a table in the frame border’s ink', () => {
+    const root = join(__dirname, '..', '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.tsx$/.test(name)) files.push(path);
+      }
+    };
+    walk(join(root, 'app'));
+    walk(join(root, 'components'));
+    const short: string[] = [];
+    for (const file of files) {
+      const path = relative(root, file);
+      const found = frameRuledRows(file, readFileSync(file, 'utf8'));
+      const listed = FRAME_ROWS[path] ?? [];
+      found.slice(listed.length).forEach((r) => short.push(`${path}:${r.line} ${r.what}`));
+      if (found.length < listed.length)
+        short.push(`${path}: ${listed.length} frame rows listed, ${found.length} found`);
+    }
+    expect(short).toEqual([]);
+  });
+});
+
 describe('chart gridlines are rules (R5, ruling 4c)', () => {
   afterEach(() => vi.restoreAllMocks());
 
