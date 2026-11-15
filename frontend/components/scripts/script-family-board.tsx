@@ -202,7 +202,7 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
 /**
  * A code cell holder's name (A4 Chrome F2): its id is one unit, a line may break between the kind
  * and the id; a phrase ("an unspendable lock") is words a line may break between. In the hero
- * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 147 at 360): "multisig 0x6598…d696",
+ * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360): "multisig 0x6598…d696",
  * 204 px whole, is "multisig" over the 112.2 px id; it stands on one line from 640 (288 px).
  */
 function HolderName({ custody, size }: { custody: ScriptCustodyApi; size: ShortSize }) {
