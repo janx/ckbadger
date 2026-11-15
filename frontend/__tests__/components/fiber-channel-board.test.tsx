@@ -187,7 +187,8 @@ describe('FiberChannelBoard', () => {
     const bar = container.querySelector('[data-split="left"]') as HTMLElement;
     expect(parseFloat(bar.style.width)).toBeGreaterThan(94);
     expect(
-      screen.getByText(/^at open, 2025-03-06 · net input to the opening transaction/)
+      // re-pinned (A4 round 2): the date is a unit of its own in the note
+      screen.getByText(fullText(/^at open, 2025-03-06 · net input to the opening transaction/))
     ).toBeInTheDocument();
   });
 
