@@ -30,6 +30,19 @@ it('keeps object capacity primary, one versions heading and exact occupied value
     screen.getByRole('region', { name: 'Raw item evidence' }).closest('[data-tier]')
   ).toHaveAttribute('data-tier', '2');
 });
+// A4 Chrome F4 (the other tier-2 grids): the raw evidence's out point set its tx hash at 13 px in
+// an 11 px line, 514.8 px, in a 460 px column at 1024 ((976 − 56) / 2): a scroll of 55 px. The hash
+// takes its line's 11 px: 66 × 6.6 = 435.6 px and ":N" after it, 448.8 px, within 460.
+it('sets the raw evidence’s out point at its line’s size, so a whole hash fits a 1024 column', async () => {
+  render(<SporeDetailView object={sporeDetailProducer} error={null} />);
+  const evidence = await screen.findByRole('region', { name: 'Raw item evidence' });
+  const line = within(evidence).getByText(/^Outpoint/);
+  expect(line).toHaveClass('text-meta');
+  const hash = line.querySelector('[data-full-value]') as HTMLElement;
+  expect(hash).not.toBeNull();
+  expect(hash.className).not.toMatch(/(^|\s)text-(body|small|section)/);
+});
+
 it('rejects impossible object capacity rather than clamping it', () => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
   expect(() =>

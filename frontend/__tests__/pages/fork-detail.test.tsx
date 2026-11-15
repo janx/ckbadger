@@ -221,6 +221,27 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(tier2).not.toHaveTextContent('miner witness unavailable');
   });
 
+  // A4 Chrome F4: at 1280 tier 2's two columns gave each hash 466 px (588 less a 110 px label
+  // column and its 12 px gap) for 475.2 (66 characters at 12 px), a 9 px scroll; at 1024, 338. The
+  // label column takes its labels' width ("first dropped", 13 characters: 93.6 px), and the
+  // columns are as many as hold a fact row with a whole hash, 93.6 + 12 + 475.2 = 580.8 px: two
+  // from a 1217.6 px grid (1280's 1232), one below (1024's 976), a phone's below 581 px.
+  it('gives tier 2’s full hashes their room: label columns by their labels, columns by the hash (A4 Chrome F4)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    const columns = tier2.querySelector('.grid') as HTMLElement;
+    expect(columns).toHaveClass('grid-cols-[repeat(auto-fill,minmax(min(100%,581px),1fr))]');
+    expect(columns.className).not.toMatch(/lg:grid-cols-2/);
+    const facts = [...tier2.querySelectorAll<HTMLElement>('.grid.text-small')];
+    expect(facts.length).toBeGreaterThanOrEqual(2);
+    for (const grid of facts) {
+      expect(grid).toHaveClass('sm:grid-cols-[max-content_minmax(0,1fr)]');
+      expect(grid.className).not.toMatch(/110px/);
+    }
+  });
+
   it('keeps the originally adopted branch distinct from a block that came back', async () => {
     at('10', '028ea506');
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(reentryFixture));
