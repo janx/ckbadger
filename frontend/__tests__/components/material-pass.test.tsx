@@ -469,7 +469,9 @@ describe('move 5 on the activity row', () => {
     for (const line of lines(container)) {
       const kind = line.querySelector('[data-role="lock-kind"]') as HTMLElement;
       expect(kind).toHaveTextContent('Default Lock');
-      expect(kind).toHaveClass('small-caps', 'lowercase', 'text-text-dim', 'whitespace-nowrap');
+      // re-pinned (A4 Chrome sweep): a lock name is words, never made one unit
+      expect(kind).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
+      expect(kind).not.toHaveClass('whitespace-nowrap');
       expect(kind).not.toHaveClass('border', 'text-meta');
     }
     expect(container.querySelector('[data-row-tag]')).toBeNull();

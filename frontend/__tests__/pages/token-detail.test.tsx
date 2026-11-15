@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import {
   api,
   ApiRequestError,
@@ -163,6 +164,15 @@ describe('TokenDetailPage', () => {
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('token index mismatch');
     expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
+  });
+
+  // A4 Chrome F3: the type hash under the title was HexCode's own-box scroller (box 358 px for
+  // 436 px of content at 390, on the first screen); it is the head's HeadId in the head's 11 px,
+  // on its own line under the standard.
+  it('prints the type hash in its head as the head’s full id, never a scroller', async () => {
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
+    expectHeadId(hash);
   });
 
   it('keeps the token visible and names the distribution endpoint when that secondary read fails', async () => {

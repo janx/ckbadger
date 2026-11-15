@@ -29,7 +29,7 @@ import {
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { CapacityHistory } from '@/components/asset/capacity-history';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
-import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Address } from '@/components/ui/address';
@@ -477,9 +477,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
       // has no description to record; it opens with what the standard is instead. A cluster or
       // class is named by its id under the title; its kind leads the lede.
-      identity={
-        kind === 'identity' ? undefined : <Hash hash={id} truncate={false} className="text-meta" />
-      }
+      identity={kind === 'identity' ? undefined : <HeadId value={id} kind="hash" copyable />}
       lede={
         kind === 'identity' ? undefined : (
           <div className="space-y-2.5">

@@ -34,7 +34,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { BlockLink } from '@/components/ui/block-link';
-import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { Address } from '@/components/ui/address';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
@@ -265,7 +265,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           : []),
       ]}
       status={<LiveBadge live={object.isLive} gone="Burned" />}
-      identity={<Hash hash={id} truncate={false} className="text-meta" />}
+      identity={<HeadId value={id} kind="hash" copyable />}
       // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
       // moved to tier 2 ("This object, in words").
       lede={

@@ -381,11 +381,8 @@ export default function ForksPage() {
             lede={
               <>
                 Two blocks, one height: one stays, one is an uncle.{' '}
-                <a
-                  href="#evidence"
-                  className="hover:text-text-bright whitespace-nowrap hover:underline"
-                >
-                  How it works ↓
+                <a href="#evidence" className="hover:text-text-bright hover:underline">
+                  How it works<span className="whitespace-nowrap"> ↓</span>
                 </a>
               </>
             }

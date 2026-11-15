@@ -9,6 +9,7 @@ import {
   createTestQueryClient,
 } from '@/__tests__/utils/test-utils';
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import { api } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
@@ -58,6 +59,14 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
     cursor: undefined,
   });
 });
+// A4 Chrome F3: the cluster id under the title was HexCode's own-box scroller (box 358 px for
+// 436 px at 390, the first screen); it is the head's HeadId in the head's 11 px.
+it('prints the cluster id in its head as the head’s full id, never a scroller', async () => {
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('heading', { name: 'Genes' })).toBeInTheDocument();
+  expectHeadId(id);
+});
+
 it('keeps live, created and burned counts separate and never adds the cluster cell to item capacity', async () => {
   render(<ClusterPage clusterId={id} />);
   await screen.findByRole('heading', { name: 'Genes' });

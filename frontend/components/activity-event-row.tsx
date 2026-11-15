@@ -411,16 +411,15 @@ export function ItemDeltaFact({
       return (
         <span className="text-text-bright">
           <ClassMark kind="objects" size={12} className="mr-1.5" />
-          <span className="whitespace-nowrap">
-            {collectionName ? `${collectionName} ` : 'object '}
-            <Link
-              href={getObjectDetailHref(item.objectId)}
-              className="hover:text-jade transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ShortId value={item.objectId} kind="hash" size={size} />
-            </Link>
-          </span>{' '}
+          {/* the id is the unit (ShortId); the collection's name is words (A4 Chrome sweep) */}
+          {collectionName ? `${collectionName} ` : 'object '}
+          <Link
+            href={getObjectDetailHref(item.objectId)}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ShortId value={item.objectId} kind="hash" size={size} />
+          </Link>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
           {showComposition && item.composition && (
             <CompositionBadge tier={item.composition} size="sm" className="ml-1.5 align-middle" />
@@ -432,16 +431,15 @@ export function ItemDeltaFact({
       return (
         <span className="text-text-bright">
           <ClassMark kind="identities" size={12} className="mr-1.5" />
-          <span className="whitespace-nowrap">
-            {`${formatStandard(item.standard)} `}
-            <Link
-              href={getIdentityItemDetailHref(item.standard, item.identityId)}
-              className="hover:text-jade transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ShortId value={item.identityId} kind="hash" size={size} />
-            </Link>
-          </span>{' '}
+          {/* the id is the unit (ShortId); the standard's name is words (A4 Chrome sweep) */}
+          {`${formatStandard(item.standard)} `}
+          <Link
+            href={getIdentityItemDetailHref(item.standard, item.identityId)}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ShortId value={item.identityId} kind="hash" size={size} />
+          </Link>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
         </span>
       );

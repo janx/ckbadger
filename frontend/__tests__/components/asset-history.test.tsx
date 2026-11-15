@@ -378,6 +378,11 @@ describe('Asset history', () => {
           scriptPage
         );
         expect(phoneLines(named)[2].right).toMatch(/^from ckb1…222222 JoyID$/);
+        // A4 Chrome sweep (c): the party is not one nowrap run around its lock name (words); its
+        // address is the unit, the name may break
+        const party = within(named).getByText('JoyID').closest('span:not([data-lock-kind])');
+        expect(party).not.toHaveClass('whitespace-nowrap');
+        expect(within(named).getByText('JoyID').closest('.whitespace-nowrap')).toBeNull();
         expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
         for (const row of [unnamed, named, notIndexed])
           expect(row).not.toHaveTextContent(/lock kind unavailable/i);

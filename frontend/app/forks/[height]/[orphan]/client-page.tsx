@@ -69,6 +69,11 @@ function Miner({ block, size }: { block: MinerBlock; size: ShortSize }) {
 /**
  * A full hash in tier 2 (U-16): one token, whole on its line where the line holds it, else one
  * line in its own box that scrolls sideways (HexCode's full form); never wrapped in the middle.
+ * Tier 2 gives it its room (A4 Chrome F4): a fact row is its label column, as wide as its labels
+ * ("first dropped", 13 characters at 12 px: 93.6 px), the 12 px gap and a whole hash, 66 × 7.2 =
+ * 475.2 px: 580.8 px. The tier's columns are as many as hold such a row (auto-fill of 581 px): two
+ * from a 1217.6 px tier (1280's 1232, each column 588, a hash's cell 482.4), one below (1024's 976,
+ * a cell of 870.4; 640's 608, 502.4); below 581 px a phone's one column scrolls the hash in its box.
  */
 const FullHash = ({ hash }: { hash: string }) => (
   <HexCode value={hash} truncate={false} copyable={false} variant="inherit" />
@@ -229,7 +234,7 @@ function StoredFork({ event }: { event: ReorgEvent }) {
         node recorded when it switched.
       </p>
       <DetailTier2>
-        <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,581px),1fr))] items-start gap-x-14 gap-y-10">
           <StoredEvent event={event} />
         </div>
       </DetailTier2>
@@ -410,7 +415,7 @@ function StoredEvent({
 }) {
   return (
     <DetailSection title="This node’s fork event, as stored">
-      <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
+      <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[max-content_minmax(0,1fr)]">
         <span className="text-text-dim">fork point</span>
         <span className="min-w-0">
           {blockAt(event.forkPointNumber)} <FullHash hash={event.forkPointHash} />
@@ -777,7 +782,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
       </div>
 
       <DetailTier2>
-        <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,581px),1fr))] items-start gap-x-14 gap-y-10">
           <StoredEvent event={event} onMain={onMain} />
           {inclusions.map((number) => {
             const uncles = orphanedBlocks.filter((block) => block.uncleIn?.blockNumber === number);
@@ -791,7 +796,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                   </>
                 }
               >
-                <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
+                <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[max-content_minmax(0,1fr)]">
                   {uncles.map((block, i) => (
                     <span key={block.hash} className="contents">
                       <span className="text-text-dim">uncle {i}</span>

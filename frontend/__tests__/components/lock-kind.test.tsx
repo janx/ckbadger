@@ -35,9 +35,17 @@ describe('LockKind (R-2)', () => {
     expect(kind).toHaveClass('whitespace-nowrap');
   });
 
-  it('keeps its dim one-line form by default and takes a row chip’s classes (table-rows L2-4)', () => {
+  // A4 Chrome sweep (re-pinned): a registered name is words ("Nervape Shadow Lock"), not a unit, so
+  // LockKind makes it nowrap in no form; only the unregistered "lock <code hash>" (a label with its
+  // id) is. A row chip is a box whose own class keeps its words on one line (rowTagClass).
+  it('lets a registered name break between its words (A4 Chrome sweep)', () => {
+    render(<LockKind size="row" lockKind="Nervape Shadow Lock" lockCodeHash={CODE} />);
+    expect(screen.getByText('Nervape Shadow Lock')).not.toHaveClass('whitespace-nowrap');
+  });
+
+  it('keeps its dim form by default and takes a row chip’s classes (table-rows L2-4)', () => {
     const { rerender } = render(<LockKind size="row" lockKind="JoyID" lockCodeHash={CODE} />);
-    expect(screen.getByText('JoyID')).toHaveClass('text-text-dim', 'whitespace-nowrap');
+    expect(screen.getByText('JoyID')).toHaveClass('text-text-dim');
     rerender(
       <LockKind size="row" lockKind="JoyID" lockCodeHash={CODE} className={rowTagClass()} />
     );

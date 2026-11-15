@@ -21,6 +21,7 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import {
@@ -189,7 +190,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         { label: className, href: classHref },
       ]}
       status={<LiveBadge live={item.isLive} gone="Burned" />}
-      identity={<Hash hash={item.nftId} truncate={false} className="text-meta break-all" />}
+      identity={<HeadId value={item.nftId} kind="hash" copyable />}
       intro={
         <div className="space-y-4 pt-1">
           <AssetReadState error={detail.error} label="m-NFT" retained />
