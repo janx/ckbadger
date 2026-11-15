@@ -263,7 +263,7 @@ describe('Address v3', () => {
     expect(full).not.toBeNull();
     expect(full.textContent).toBe(addressText);
     expect(full).toHaveAttribute('title', addressText);
-    expect(full).toHaveClass('text-small');
+    expect(full.className).not.toMatch(/(^|\s)text-/);
     expect(idLine.querySelector('.overflow-x-auto')).toBeNull();
     expect(full.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     expect(screen.getByRole('button', { name: 'Copy address' })).toHaveClass(

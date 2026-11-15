@@ -36,7 +36,7 @@ import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { ShortId } from '@/components/ui/short-id';
 import { ClockText, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
-import { PlateHash } from '@/components/ui/page-seal';
+import { HeadId } from '@/components/ui/head-id';
 import { percentOf } from '@/lib/format-unit';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
@@ -262,7 +262,7 @@ export default function BlockDetailPage() {
           // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
           // voice (C10 round 2), click to copy as before; one line or two halves, never a
           // scroller (the lead's ruling a).
-          identity={<PlateHash hash={block.hash} copyable />}
+          identity={<HeadId value={block.hash} kind="hash" copyable />}
           // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
           // hash, and the transactions it holds in rods. A count the API did not serve is refused
           // (the summary below reads it first), never filled in.

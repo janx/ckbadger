@@ -167,12 +167,12 @@ describe('TokenDetailPage', () => {
   });
 
   // A4 Chrome F3: the type hash under the title was HexCode's own-box scroller (box 358 px for
-  // 436 px of content at 390, on the first screen); it is the head's HeadId at the head's 11 px,
+  // 436 px of content at 390, on the first screen); it is the head's HeadId in the head's 11 px,
   // on its own line under the standard.
   it('prints the type hash in its head as the head’s full id, never a scroller', async () => {
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
-    expectHeadId(hash, 'meta');
+    expectHeadId(hash);
   });
 
   it('keeps the token visible and names the distribution endpoint when that secondary read fails', async () => {

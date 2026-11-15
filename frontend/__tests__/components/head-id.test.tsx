@@ -14,8 +14,9 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
  *   halves, 34 + 32;
  * - an address: as few lines of equal length as hold it (the last the remainder).
  *
- * The advance is JetBrains Mono's 0.6 em of the step the piece sets: 7.2 px at `small` (12 px),
- * 6.6 px at `meta` (11 px). A hash takes 66 × 7.2 = 475.2 px on one line at 12 px (435.6 at
+ * The advance is JetBrains Mono's 0.6 em of the line's computed size plus its tracking, the head's
+ * voice (jsdom computes no type, so it is stubbed): 7.2 px at a plate's 12 px, 6.6 px at an asset
+ * head's 11 px. A hash takes 66 × 7.2 = 475.2 px on one line at 12 px (435.6 at
  * 11 px); a 97-character address 698.4 px; a 620-character address (a Godwoken lock) 4,464 px.
  * Moved from the PlateHash test, its every case kept.
  */
@@ -30,6 +31,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** The line's width (stubChartWidth) and its type, 12 px by default, untracked. */
+function stubLine(width: number, fontPx = 12) {
+  stubChartWidth(width);
+  const real = window.getComputedStyle.bind(window);
+  vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+    const style = real(el, pseudo);
+    if (!(el as Element).hasAttribute('data-head-id')) return style;
+    return new Proxy(style, {
+      get: (target, prop) =>
+        prop === 'fontSize'
+          ? `${fontPx}px`
+          : prop === 'letterSpacing'
+            ? 'normal'
+            : (target as unknown as Record<string | symbol, unknown>)[prop],
+    });
+  });
+}
 
 const head = () => document.querySelector('[data-head-id]') as HTMLElement;
 const lines = () => [...head().querySelectorAll<HTMLElement>('[data-head-line]')];
@@ -48,8 +67,8 @@ function expectDesigned(value: string) {
 
 describe('HeadId, a full id in a page head', () => {
   it('sets a hash in two halves where the line cannot hold it (358 px, a 390 phone)', () => {
-    stubChartWidth(358);
-    render(<HeadId value={HASH} kind="hash" step="small" />);
+    stubLine(358);
+    render(<HeadId value={HASH} kind="hash" />);
     const [first, second] = lines();
     expect(texts()).toEqual([HASH.slice(0, 34), HASH.slice(34)]);
     // the second stands 2ch in, its digits under the first's
@@ -59,55 +78,56 @@ describe('HeadId, a full id in a page head', () => {
   });
 
   it('keeps a hash on one line where the line holds it, split just below (12 px: 475.2)', () => {
-    stubChartWidth(476);
-    const { unmount } = render(<HeadId value={HASH} kind="hash" step="small" />);
+    stubLine(476);
+    const { unmount } = render(<HeadId value={HASH} kind="hash" />);
     expect(texts()).toEqual([HASH]);
     expect(head().querySelector('br')).toBeNull();
     unmount();
     vi.restoreAllMocks();
-    stubChartWidth(475);
-    render(<HeadId value={HASH} kind="hash" step="small" />);
+    stubLine(475);
+    render(<HeadId value={HASH} kind="hash" />);
     expect(lines()).toHaveLength(2);
   });
 
-  it('measures at its own step: 11 px holds a hash from 435.6 px', () => {
-    stubChartWidth(436);
-    const { unmount } = render(<HeadId value={HASH} kind="hash" step="meta" />);
+  it('measures at its line’s type: 11 px holds a hash from 435.6 px', () => {
+    stubLine(436, 11);
+    const { unmount } = render(<HeadId value={HASH} kind="hash" />);
     expect(texts()).toEqual([HASH]);
-    expect(head()).toHaveClass('text-meta');
+    // it sets no voice of its own: the head's line does
+    expect(head().className).not.toMatch(/(^|\s)text-/);
     unmount();
     vi.restoreAllMocks();
-    stubChartWidth(435);
-    render(<HeadId value={HASH} kind="hash" step="meta" />);
+    stubLine(435, 11);
+    render(<HeadId value={HASH} kind="hash" />);
     expect(texts()).toEqual([HASH.slice(0, 34), HASH.slice(34)]);
   });
 
   it('takes more equal lines where half a hash does not fit (240 px at 12 px: 33 characters)', () => {
-    stubChartWidth(240);
-    render(<HeadId value={HASH} kind="hash" step="small" />);
+    stubLine(240);
+    render(<HeadId value={HASH} kind="hash" />);
     // 0x and 22 digits, then 22 and 20, each later line 2ch in
     expect(texts()).toEqual([HASH.slice(0, 24), HASH.slice(24, 46), HASH.slice(46)]);
     expectDesigned(HASH);
   });
 
   it('sets a 97-character address in as few equal lines as hold it', () => {
-    stubChartWidth(699);
-    const { unmount } = render(<HeadId value={ADDRESS} kind="address" step="small" />);
+    stubLine(699);
+    const { unmount } = render(<HeadId value={ADDRESS} kind="address" />);
     expect(texts()).toEqual([ADDRESS]);
     unmount();
     // 698 px: 96 characters a line, two lines of 49 and 48 (the address page at 640: 578 px)
     for (const width of [698, 578]) {
       vi.restoreAllMocks();
-      stubChartWidth(width);
-      const view = render(<HeadId value={ADDRESS} kind="address" step="small" />);
+      stubLine(width);
+      const view = render(<HeadId value={ADDRESS} kind="address" />);
       expect(texts()).toEqual([ADDRESS.slice(0, 49), ADDRESS.slice(49)]);
       expectDesigned(ADDRESS);
       view.unmount();
     }
     // 328 px, the address page at 390 beside its copy button: 45 a line, three of 33, 33 and 31
     vi.restoreAllMocks();
-    stubChartWidth(328);
-    render(<HeadId value={ADDRESS} kind="address" step="small" />);
+    stubLine(328);
+    render(<HeadId value={ADDRESS} kind="address" />);
     expect(texts()).toEqual([ADDRESS.slice(0, 33), ADDRESS.slice(33, 66), ADDRESS.slice(66)]);
     // an address has no prefix to stand under: no line is indented
     for (const line of lines()) expect(line).not.toHaveClass('pl-[2ch]');
@@ -115,19 +135,19 @@ describe('HeadId, a full id in a page head', () => {
   });
 
   it('sets a 620-character address in as many equal lines as it needs', () => {
-    stubChartWidth(4464);
-    const { unmount } = render(<HeadId value={LONG_ADDRESS} kind="address" step="small" />);
+    stubLine(4464);
+    const { unmount } = render(<HeadId value={LONG_ADDRESS} kind="address" />);
     expect(texts()).toEqual([LONG_ADDRESS]);
     unmount();
     vi.restoreAllMocks();
-    stubChartWidth(4463);
-    const two = render(<HeadId value={LONG_ADDRESS} kind="address" step="small" />);
+    stubLine(4463);
+    const two = render(<HeadId value={LONG_ADDRESS} kind="address" />);
     expect(texts()).toEqual([LONG_ADDRESS.slice(0, 310), LONG_ADDRESS.slice(310)]);
     two.unmount();
     // 328 px: 45 a line, fourteen lines, thirteen of 45 and the last 35
     vi.restoreAllMocks();
-    stubChartWidth(328);
-    render(<HeadId value={LONG_ADDRESS} kind="address" step="small" />);
+    stubLine(328);
+    render(<HeadId value={LONG_ADDRESS} kind="address" />);
     expect(texts().map((t) => t!.length)).toEqual([...Array(13).fill(45), 35]);
     expectDesigned(LONG_ADDRESS);
   });
@@ -135,15 +155,15 @@ describe('HeadId, a full id in a page head', () => {
   it('is one line until it is measured', () => {
     // jsdom lays nothing out: no width, so no measurement (the layout effect measures before the
     // first paint in a browser, so the one-line form is never painted where it does not fit)
-    render(<HeadId value={ADDRESS} kind="address" step="small" />);
+    render(<HeadId value={ADDRESS} kind="address" />);
     expect(texts()).toEqual([ADDRESS]);
   });
 
   it('copies the whole id when it copies, keeping its lines', async () => {
-    stubChartWidth(326);
+    stubLine(326);
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    render(<HeadId value={HASH} kind="hash" step="small" copyable />);
+    render(<HeadId value={HASH} kind="hash" copyable />);
     fireEvent.click(head());
     expect(writeText).toHaveBeenCalledWith(HASH);
     expect(screen.getByTitle(HASH)).toBe(head());
@@ -154,12 +174,8 @@ describe('HeadId, a full id in a page head', () => {
   });
 
   it('refuses a value that is not of its kind', () => {
-    expect(() => render(<HeadId value="0x12g4" kind="hash" step="small" />)).toThrow(
-      'not a hex id'
-    );
-    expect(() => render(<HeadId value={HASH} kind="address" step="small" />)).toThrow(
-      'not an address'
-    );
+    expect(() => render(<HeadId value="0x12g4" kind="hash" />)).toThrow('not a hex id');
+    expect(() => render(<HeadId value={HASH} kind="address" />)).toThrow('not an address');
   });
 
   // A4 review 3: the piece copies through the one copy path (hooks/useCopy). A copy that cannot
@@ -191,9 +207,9 @@ describe('HeadId, a full id in a page head', () => {
       ['refuses', () => ({ writeText: vi.fn().mockRejectedValue(new DOMException('denied')) })],
     ] as const)
       it(`shows no tick and throws nothing where the clipboard ${label}`, async () => {
-        stubChartWidth(600);
+        stubLine(600);
         Object.assign(navigator, { clipboard: clipboard() });
-        render(<HeadId value={HASH} kind="hash" step="small" copyable />);
+        render(<HeadId value={HASH} kind="hash" copyable />);
         await clickAndSettle();
         expect(screen.queryByText('✓')).toBeNull();
         expect(lines()[0].parentElement).not.toHaveClass('invisible');
@@ -201,20 +217,20 @@ describe('HeadId, a full id in a page head', () => {
       });
 
     it('shows the tick, then the id again, and leaves no timer when it goes', async () => {
-      stubChartWidth(600);
+      stubLine(600);
       Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
       vi.useFakeTimers();
       const click = () =>
         act(async () => {
           fireEvent.click(head());
         });
-      const { unmount } = render(<HeadId value={HASH} kind="hash" step="small" copyable />);
+      const { unmount } = render(<HeadId value={HASH} kind="hash" copyable />);
       await click();
       expect(screen.getByText('✓')).toBeInTheDocument();
       expect(vi.getTimerCount()).toBe(1);
       unmount();
       expect(vi.getTimerCount()).toBe(0);
-      render(<HeadId value={HASH} kind="hash" step="small" copyable />);
+      render(<HeadId value={HASH} kind="hash" copyable />);
       await click();
       expect(screen.getByText('✓')).toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1500));

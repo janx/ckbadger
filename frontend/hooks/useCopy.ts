@@ -7,7 +7,7 @@ export const COPIED_MS = 1500;
 
 /**
  * The one copy path (A4 review 3): the controls that copy a value and show it for a moment copy
- * through it (HexCode, HexDisplay, a name plate's PlateHash, the transaction page's and the cell
+ * through it (HexCode, HexDisplay, a head's HeadId, the transaction page's and the cell
  * page's copy buttons). Three that say a failure in words of their own (the address page's copy,
  * the protocol evidence's, the crash page's report) keep their handlers for the controls lane.
  * `copy()` writes `text` and resolves whether it did; `copied` is true for COPIED_MS after a copy

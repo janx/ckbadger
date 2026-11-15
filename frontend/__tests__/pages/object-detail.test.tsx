@@ -65,11 +65,11 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   expect(api.getItemCellVersions).toHaveBeenCalledWith('spore', id);
 });
 // A4 Chrome F3: the object id under the title was HexCode's own-box scroller (box 358 px for
-// 436 px at 390, the first screen); it is the head's HeadId at the head's 11 px.
+// 436 px at 390, the first screen); it is the head's HeadId in the head's 11 px.
 it('prints the object id in its head as the head’s full id, never a scroller', async () => {
   render(<SporeDetailPage sporeId={id} />);
   expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
-  expectHeadId(id, 'meta');
+  expectHeadId(id);
 });
 
 it('renders exact raw protocol bytes and current gene mapping with separate VM provenance', async () => {

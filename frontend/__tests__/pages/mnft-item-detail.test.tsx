@@ -146,7 +146,7 @@ describe('MnftItemDetailPage', () => {
   it('prints the token id in its head as the head’s full id, never a scroller', async () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
-    expectHeadId(id, 'meta');
+    expectHeadId(id);
   });
 
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
