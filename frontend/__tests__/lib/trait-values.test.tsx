@@ -276,9 +276,11 @@ describe('trait text has one rendering point', () => {
  * word, so it belongs only to an element that prints raw text (a URI, a hex dump). An element that
  * takes it while holding words, its own or a descendant's in the same JSX (literal text of two or
  * more words, or text beside a ShortId / NoBreak unit), is refused: the media box's reading
- * ("inscript / ion i0") and a list item whose break-all reached its notice. What it cannot read:
- * words built in an expression (a template, a call) and words a child component prints in its own
- * file, which inherit the class all the same.
+ * ("inscript / ion i0") and a list item whose break-all reached its notice. Round 4 reads words
+ * built in an expression too: a literal or a template's text of two or more words, and a value named
+ * for prose (`message`, `apiMessage`, `error`, `mismatch`, `reason`). What it cannot read: words a
+ * call returns, a value otherwise named, and words a component from another file prints, which
+ * inherit the class all the same.
  */
 const BREAK_ALL = /(^|[\s'"`])break-all($|[\s'"`])/;
 function breakAllOnWords(path: string): string[] {
@@ -311,11 +313,36 @@ function breakAllOnWords(path: string): string[] {
       const scan = (n: ts.Node) => {
         if (seen.has(n)) return;
         seen.add(n);
+        // an attribute (a class, a title) prints nothing; a call's arguments are its own business,
+        // but a callback it is given renders (`items.map((x) => <li>…</li>)`)
+        if (ts.isJsxAttribute(n)) return;
+        if (ts.isCallExpression(n)) {
+          scan(n.expression);
+          for (const arg of n.arguments)
+            if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) scan(arg);
+          return;
+        }
         if (ts.isJsxText(n)) {
           const t = n.getText(source).trim();
           if (t) text = true;
           if (t.split(/\s+/).filter(Boolean).length >= 2) words = true;
         }
+        // B3 round 4: words built in an expression, a literal of two or more words (a fallback, a
+        // template's text) or a value named for prose (an error's message, a mismatch, a reason)
+        if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) {
+          if (n.text.trim().split(/\s+/).filter(Boolean).length >= 2) words = true;
+        }
+        if (ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
+          if (n.text.trim().split(/\s+/).filter(Boolean).length >= 2) words = true;
+        }
+        if (
+          (ts.isIdentifier(n) || ts.isPropertyAccessExpression(n)) &&
+          ts.isJsxExpression(n.parent) &&
+          /^(message|apiMessage|error|mismatch|reason)$/i.test(
+            ts.isIdentifier(n) ? n.text : n.name.text
+          )
+        )
+          words = true;
         if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
           const tag = n.tagName.getText(source);
           if (tag === 'ShortId' || tag === 'NoBreak') unit = true;
