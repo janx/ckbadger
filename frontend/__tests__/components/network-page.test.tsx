@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { NetworkClientPage } from '@/app/network/client-page';
+import { render as renderWithClient } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 
 const API_BASE = '/api/:network/v1';
 
@@ -133,6 +135,77 @@ describe('NetworkClientPage', () => {
       screen.getByText(/1 of 2 retained verified peers have approximate GeoIP coordinates/i)
     ).toBeInTheDocument();
     expect(container.querySelector('[class*="gold"], [class*="warning"]')).toBeNull();
+  });
+
+  // Lane E4: "updated N ago" reads the page's one clock, so it moves with no data change; it was
+  // written once at render. The clock stops with the page.
+  it('moves the latest round’s "updated" age with no data change, and leaves no timer behind (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    try {
+      const round = {
+        candidatePeers: 2,
+        verifiedRetainedPeers: 2,
+        reachablePeers: 1,
+        verifiedUnavailablePeers: 1,
+        exhaustedCandidates: 1,
+        roundId: 5,
+        startedAt: 0,
+        finishedAt: 0,
+        addressAttempts: 2,
+        nonSuccessfulAddressAttempts: 1,
+        foreignPeers: 0,
+        malformedAddresses: 0,
+        newVerifiedPeers: 0,
+        peerOutcomes: {
+          sameNetworkIdentified: 1,
+          exhausted: { withRetainedVerification: 1, withoutRetainedVerification: 0 },
+          foreignNetwork: { withRetainedVerification: 0, withoutRetainedVerification: 0 },
+        },
+        addressObservations: {
+          dialRequestFailed: 1,
+          noAuthenticatedSessionBeforeDeadline: 0,
+          authenticatedSessionWithoutIdentifyBeforeDeadline: 0,
+          malformedIdentify: 0,
+          foreignNetwork: 0,
+          sameNetworkIdentified: 1,
+        },
+        discovery: {
+          validNodesMessages: 1,
+          validResponseMessages: 1,
+          validAnnounceMessages: 0,
+          malformedMessages: 0,
+          unexpectedMessages: 0,
+          normalizedAdvertisedAddresses: 2,
+          rejectedAdvertisedAddresses: 0,
+        },
+        localObserver: null,
+        directSessionObservations: { observerInitiated: 0, peerInitiated: 0 },
+      };
+      server.use(
+        http.get(`${API_BASE}/network/summary`, () =>
+          HttpResponse.json({
+            enabled: true,
+            hasData: true,
+            lastRound: { ...round, finishedAt: T0 / 1000 - 20 },
+            activeRound: null,
+          })
+        )
+      );
+      const { unmount } = renderWithClient(<NetworkClientPage />);
+      const updated = () => screen.queryByText(/^Round #5 · updated /)?.textContent;
+      await loadUnderStillClock(() => updated() !== undefined);
+      expect(updated()).toBe('Round #5 · updated 20s ago');
+      tick(1000);
+      expect(updated()).toBe('Round #5 · updated 21s ago');
+      tick(38_000);
+      expect(updated()).toBe('Round #5 · updated 59s ago');
+      tick(1000);
+      expect(updated()).toBe('Round #5 · updated 1m ago');
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows active progress separately from the last completed round', async () => {

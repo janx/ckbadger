@@ -155,7 +155,7 @@ export function Header() {
             <button
               type="button"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="text-text-dim hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+              className="text-text-dim hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center transition-colors"
               aria-label="Toggle menu"
             >
               {isMenuOpen ? (
@@ -208,7 +208,7 @@ export function Header() {
                 <Link
                   href="/"
                   onClick={() => setIsMenuOpen(false)}
-                  className={`text-body block rounded border px-3 py-2.5 font-mono lowercase transition ${
+                  className={`text-body block border px-3 py-2.5 font-mono lowercase transition ${
                     pathname === '/'
                       ? 'border-jade/40 bg-jade/8 text-jade'
                       : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -234,7 +234,7 @@ export function Header() {
                         <Link
                           href={item.href}
                           onClick={() => setIsMenuOpen(false)}
-                          className={`text-body block rounded border px-3 py-2.5 font-mono lowercase transition ${
+                          className={`text-body block border px-3 py-2.5 font-mono lowercase transition ${
                             isDropdownActive(item)
                               ? 'border-jade/40 bg-jade/8 text-jade'
                               : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -249,7 +249,7 @@ export function Header() {
                             key={child.href}
                             href={child.href}
                             onClick={() => setIsMenuOpen(false)}
-                            className={`text-small block rounded px-3 py-2 font-mono lowercase transition ${
+                            className={`text-small block px-3 py-2 font-mono lowercase transition ${
                               isLinkActive(child.href)
                                 ? 'text-jade bg-jade/8'
                                 : 'text-text-dim hover:text-jade'
@@ -265,7 +265,7 @@ export function Header() {
                       key={item.href}
                       href={item.href}
                       onClick={() => setIsMenuOpen(false)}
-                      className={`text-body block rounded border px-3 py-2.5 font-mono lowercase transition ${
+                      className={`text-body block border px-3 py-2.5 font-mono lowercase transition ${
                         isLinkActive(item.href)
                           ? 'border-jade/40 bg-jade/8 text-jade'
                           : 'text-text hover:text-jade hover:border-jade/20 border-transparent'

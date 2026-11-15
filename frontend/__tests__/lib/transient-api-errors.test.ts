@@ -2,14 +2,12 @@
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
+import { api, ApiRequestError, type DeriveProgress } from '@/lib/api';
 import {
-  api,
-  ApiRequestError,
-  type DeriveProgress,
   isDerivePendingError,
   isStoreCatchingUpError,
   isTransientApiError,
-} from '@/lib/api';
+} from '@/lib/api-errors';
 import {
   createAppQueryClient,
   NETWORK_INITIALIZING_MAX_RETRY_DELAY_MS,

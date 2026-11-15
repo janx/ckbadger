@@ -10,14 +10,6 @@ vi.mock('@/lib/api', () => ({
   api: {
     getScripts: vi.fn(),
   },
-  isWarmupPendingError: (error: unknown) =>
-    Boolean(
-      error &&
-      typeof error === 'object' &&
-      (error as { code?: string; status?: number }).code === 'warmup_pending' &&
-      (error as { code?: string; status?: number }).status === 503
-    ),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

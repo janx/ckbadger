@@ -33,8 +33,6 @@ vi.mock('@/lib/api', () => ({
     // F2 group dao (DAO-12)
     getDaoDepositors: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 describe('renderMarkdownPage', () => {

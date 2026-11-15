@@ -215,7 +215,7 @@ describe('Token holders (board L5)', () => {
     // in the row's hover) — and a lock not indexed is said so in the row's hover, not "lock kind
     // unavailable".
     expect(within(first).getByText('JoyID')).toHaveAttribute('data-lock-kind');
-    expect(within(first).getByText('JoyID')).toHaveClass('text-meta', 'border', 'rounded-sm');
+    expect(within(first).getByText('JoyID')).toHaveClass('text-meta', 'border');
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
     expect(within(first).getByText('JoyID')).toHaveAttribute('title', `0x${'9b'.repeat(32)}`);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');

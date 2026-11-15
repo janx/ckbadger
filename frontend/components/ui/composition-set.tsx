@@ -177,7 +177,7 @@ export function CompositionSet({
             ? shares.map((t) => `${COMPOSITION_TIER_LABELS[t]} ${n(counts[t])}`).join(', ')
             : 'none'
         }`}
-        className="bg-base-surface mt-2 flex h-2 gap-0.5 overflow-hidden rounded"
+        className="bg-base-surface mt-2 flex h-2 gap-0.5 overflow-hidden"
       >
         {total > 0 &&
           shares.map((t) => (
@@ -206,7 +206,7 @@ export function CompositionSet({
             aria-pressed={!filter.selected}
             onClick={() => filter.onSelect('')}
             className={cn(
-              'inline-flex h-7 items-center gap-1.5 rounded border px-2.5',
+              'inline-flex h-7 items-center gap-1.5 border px-2.5',
               !filter.selected ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'
             )}
           >
@@ -222,7 +222,7 @@ export function CompositionSet({
               disabled={counts[tier] === 0 && filter.selected !== tier}
               onClick={() => filter.onSelect(tier)}
               className={cn(
-                'inline-flex h-7 items-center gap-1.5 rounded border px-2.5 disabled:cursor-default',
+                'inline-flex h-7 items-center gap-1.5 border px-2.5 disabled:cursor-default',
                 filter.selected === tier ? 'border-jade' : 'border-base-border'
               )}
             >

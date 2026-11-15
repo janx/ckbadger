@@ -10,6 +10,7 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import {
   api,
   ApiRequestError,
@@ -111,6 +112,34 @@ beforeEach(() => {
 });
 
 describe('MnftItemDetailPage', () => {
+  // Lane E4: how long ago the item was issued, the life sentence's hover, reads the page's one
+  // clock, so it moves with no data change; it was written once, from the time the page mounted.
+  // The clock stops with the page.
+  it('moves the life sentence’s issued age with no data change (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    try {
+      const [version] = mnftProtocolProducer.versions;
+      vi.mocked(api.getItemProtocol).mockResolvedValue({
+        ...mnftProtocolProducer,
+        versions: [{ ...version, cell: { ...version.cell, timestamp: String(T0 - 20_000) } }],
+      } as ItemProtocol);
+      const { unmount } = render(<MnftItemDetailPage objectId={id} />);
+      const ages = () => screen.getByText(/^Issued by Issuer A/).getAttribute('title');
+      await loadUnderStillClock(() => screen.queryByText(/^Issued by Issuer A/) !== null);
+      expect(ages()).toBe('issued 20\u00a0seconds ago');
+      tick(1000);
+      expect(ages()).toBe('issued 21\u00a0seconds ago');
+      tick(38_000);
+      expect(ages()).toBe('issued 59\u00a0seconds ago');
+      tick(1000);
+      expect(ages()).toBe('issued 1\u00a0minute ago');
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();

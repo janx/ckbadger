@@ -23,12 +23,6 @@ export function blockBarCells(fraction: number, width: number): number {
   return Math.floor(fraction * width);
 }
 
-/** The bar as text: the filled cells, then the empty ones (`blockBar(0.6, 10)` → `██████░░░░`). */
-export function blockBar(fraction: number, width: number): string {
-  const full = blockBarCells(fraction, width);
-  return BAR_FULL.repeat(full) + BAR_EMPTY.repeat(width - full);
-}
-
 /**
  * One eighth block per value, its height the value's share of the largest, from zero: 0 is `▁`
  * (the floor), the largest `█`, the rest rounded to the nearest eighth in between. The values are

@@ -1079,7 +1079,7 @@ export function ScriptFamilyPage({
                   <span key={name} className="inline-flex items-center gap-1.5">
                     <span
                       aria-hidden="true"
-                      className="inline-block h-2 w-2 rounded-sm"
+                      className="inline-block h-2 w-2"
                       style={{ backgroundColor: color }}
                     />
                     {name}

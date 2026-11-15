@@ -632,8 +632,7 @@ svg a:hover {
 
 /* Move 2b — a well: inset, for what is typed into (the search field, a filter, the command palette)
    and what is read as bytes (a hex dump, raw JSON). Square corners (UI review 2026-11-14, ruling
-   R1): it sets no radius, so the `--well-radius` the header's search field still sets is read by
-   nothing. The row-rule ink; the inset is the boards' (`inset 0 1px 3px`, 60 % black by night, the
+   R1): it sets no radius. The row-rule ink; the inset is the boards' (`inset 0 1px 3px`, 60 % black by night, the
    ink at 8 % by day); the lower lip (visual finish V4) is kept as a material and set transparent:
    the rubbing has none. */
 .well {

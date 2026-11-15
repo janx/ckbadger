@@ -5,13 +5,15 @@ import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/uti
 import { server } from '@/__tests__/msw/server';
 import { feedSamples, latestActivities } from '@/__tests__/msw/fixtures/home';
 import { MINUS } from '@/lib/chart-ticks';
-import { ActivityFeed, FEED_ROWS, formatOccupiedDelta } from '@/components/home/activity-feed';
+import { ActivityFeed, FEED_ROWS } from '@/components/home/activity-feed';
+import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 
 const API = '/api/:network/v1';
 
@@ -146,7 +148,9 @@ describe('ActivityFeed', () => {
     );
     expect(evidence).not.toHaveTextContent('0x01ababab');
     // PA-22 (re-pinned): the home feed is live, its row says its age (it was the date)
-    expect(evidence).toHaveTextContent(new RegExp(`^#20,819,142 · ${formatTimeAgo(a.timestamp)}$`));
+    expect(evidence).toHaveTextContent(
+      new RegExp(`^#20,819,142 · ${formatTimeAgo(a.timestamp, Date.now())}$`)
+    );
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
@@ -395,17 +399,62 @@ describe('ActivityFeed', () => {
     // date, consistency C3).
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp)}$`)
+      new RegExp(
+        `^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp, Date.now())}$`
+      )
     );
-    expect(within(evidence).getByText(formatTimeAgo(served[0].timestamp))).toHaveAttribute(
-      'title',
-      formatUtc8DateTime(served[0].timestamp)
-    );
+    expect(
+      within(evidence).getByText(formatTimeAgo(served[0].timestamp, Date.now()))
+    ).toHaveAttribute('title', formatUtc8DateTime(served[0].timestamp));
     // The row's hover is the activity row's: the hash and the age (was no title).
     expect(first).toHaveAttribute(
       'title',
       expect.stringMatching(new RegExp(`^${served[0].hash} · \\d+s ago$`))
     );
+  });
+
+  // Lane E4: a row's hover (the hash and the age) reads the page's one clock, so its age moves with
+  // no data change, on the activity rows and on the transaction rows; it was written once at
+  // render. Only the row's title renders again, and the clock stops with the feed.
+  describe('a row’s hover reads the one clock (E4)', () => {
+    const at = new Date(T0 - 20_000).toISOString();
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ now: T0 });
+    });
+    const shown = () =>
+      Array.from(screen.queryByTestId('feed-rows')?.querySelectorAll('[data-feed-row]') ?? []);
+    const expectTitleTicks = (row: () => Element, hash: string) => {
+      expect(row()).toHaveAttribute('title', `${hash} · 20s ago`);
+      tick(1000);
+      expect(row()).toHaveAttribute('title', `${hash} · 21s ago`);
+      tick(38_000);
+      expect(row()).toHaveAttribute('title', `${hash} · 59s ago`);
+      tick(1000);
+      expect(row()).toHaveAttribute('title', `${hash} · 1m ago`);
+    };
+
+    it('on an activity row', async () => {
+      const activity = { ...feedSamples.tokenTransfer, timestamp: at };
+      server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([activity])));
+      const { unmount } = render(<ActivityFeed />);
+      await loadUnderStillClock(() => shown().length === 1);
+      expectTitleTicks(() => rows()[0], activity.txHash);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('on a transaction row', async () => {
+      const served = { ...tx(0), timestamp: at };
+      serveTransactions([served]);
+      const { unmount } = render(<ActivityFeed />);
+      await loadUnderStillClock(() => shown().length > 0);
+      fireEvent.click(screen.getByRole('button', { name: 'Transactions' }));
+      await loadUnderStillClock(() => shown()[0]?.getAttribute('data-tx-row') === served.hash);
+      expectTitleTicks(() => rows()[0], served.hash);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   it('cross-highlights a transaction row with the pipeline and hovers it back', async () => {

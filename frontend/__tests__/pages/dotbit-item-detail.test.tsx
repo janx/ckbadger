@@ -3,6 +3,7 @@ import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import Page from '@/app/identities/dotbit/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import {
   dotbitV4ProtocolProducer as evidence,
   itemActivityFeedProducer,
@@ -46,6 +47,36 @@ it('renders exact canonical protocol, whole cell history and raw bytes for dotbi
         `/mainnet/cell/${evidence.versions[0].cell.txHash}-${evidence.versions[0].cell.outputIndex}`
     );
   expect(link).toBeDefined();
+});
+// Lane E4: how far off the expiry is (the Expires metric's hover, the term bar's hover, the
+// summary's) and whether the term has ended read the page's one clock: a day passing, or the
+// expiry itself, changes them with no data change. They were read once, from the time the page
+// mounted. The page renders again only when what it writes changes, and the clock stops with it.
+it('moves the expiry’s day count and its state with the one clock (E4)', async () => {
+  const DAY = 86_400_000;
+  // the served term ends at 1,900,000,000 s (2030-03-17 17:46:40 UTC); the clock stands a day and
+  // a second before it, on a whole second
+  const expiresAt = 1_900_000_000_000;
+  vi.useFakeTimers({ now: expiresAt - DAY - 1000 });
+  try {
+    const { unmount } = render(<Page identityId={evidence.itemId} />);
+    const fact = (label: string) =>
+      Array.from(document.querySelectorAll('[data-role="metrics"] dl > div')).find(
+        (f) => f.querySelector('dt')?.textContent === label
+      );
+    await loadUnderStillClock(() => fact('Expires') !== undefined);
+    expect(fact('Expires')).toHaveAttribute('title', 'expires in 1\u00a0day');
+    expect(screen.getByRole('heading', { name: 'Term held until 2030-03-18' })).toBeInTheDocument();
+    tick(2000);
+    expect(fact('Expires')).toHaveAttribute('title', 'expires in 0\u00a0days');
+    tick(DAY);
+    expect(fact('Expired')).toHaveAttribute('title', 'expired 0\u00a0days ago');
+    expect(screen.getByRole('heading', { name: 'Term expired on 2030-03-18' })).toBeInTheDocument();
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 it('keeps recycled identity history while showing no live capacity', async () => {
   vi.mocked(api.getDotbitItemDetail).mockResolvedValue({

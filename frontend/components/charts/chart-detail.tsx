@@ -115,8 +115,8 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                   {withUnit(formatChartExact(row.value, model.unit), model.unit)} · {row.share}
                 </span>
               </div>
-              <div className="bg-bar-track mt-1 h-1 rounded">
-                <div className="bg-jade h-1 rounded" style={{ width: `${width}%` }} />
+              <div className="bg-bar-track mt-1 h-1">
+                <div className="bg-jade h-1" style={{ width: `${width}%` }} />
               </div>
             </li>
           );
@@ -396,7 +396,7 @@ function DetailBody({
                     type="button"
                     aria-pressed={range === option}
                     onClick={() => setRange(option)}
-                    className={`text-small rounded border px-3 py-1 ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
+                    className={`text-small border px-3 py-1 ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
                   >
                     {label}
                   </button>
@@ -408,7 +408,7 @@ function DetailBody({
                   type="button"
                   aria-pressed={logScale}
                   onClick={() => setLogScale((current) => !current)}
-                  className={`text-small rounded border px-3 py-1 ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
+                  className={`text-small border px-3 py-1 ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
                 >
                   Log scale
                 </button>
@@ -419,7 +419,7 @@ function DetailBody({
                   aria-label="How to read and zoom this chart"
                   aria-expanded={helpOpen}
                   onClick={() => setHelpOpen((open) => !open)}
-                  className="border-base-border text-text-dim hover:text-text-bright text-small rounded border px-2 py-1"
+                  className="border-base-border text-text-dim hover:text-text-bright text-small border px-2 py-1"
                 >
                   ?
                 </button>
@@ -601,14 +601,14 @@ export function ChartDetail({ slug }: { slug: string }) {
         {sync.data?.syncStatus?.chartDataMayBeIncomplete && (
           <p
             role="status"
-            className="text-warning border-warning/30 bg-warning/10 text-small mb-5 rounded border px-3 py-2"
+            className="text-warning border-warning/30 bg-warning/10 text-small mb-5 border px-3 py-2"
           >
             Chart data may be incomplete while the indexer synchronizes history.
           </p>
         )}
         {isAwaited(data) && (
           <div
-            className="bg-base-surface h-96 animate-pulse rounded"
+            className="bg-base-surface h-96 animate-pulse"
             aria-label={`${definition.title} loading`}
           />
         )}

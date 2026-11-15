@@ -490,7 +490,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       setHover({ block, tx: hit.id, window: info.kind === 'committed' ? info.block.number : null });
       nextArc = info.kind === 'cellbase' ? info.block.number : null;
       nextCursor = 'pointer';
-      show(txTip(info, snapshot, Date.now()));
+      show(txTip(info, snapshot));
     } else if (hit?.kind === 'ghost') {
       // A predicted tx: linked to its pool square by hash when the listed pool has it.
       const g = ghostOfTx.get(hit.id);
@@ -797,9 +797,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
       </span>
       {sel ? (
         <>
-          <span
-            className={`text-meta rounded border px-1.5 py-[3px] leading-none ${TAG_TONE[sel.tag]}`}
-          >
+          <span className={`text-meta border px-1.5 py-[3px] leading-none ${TAG_TONE[sel.tag]}`}>
             {sel.tag}
           </span>
           <span>{sel.text}</span>
@@ -814,7 +812,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
         type="button"
         aria-label="Clear selection"
         onClick={clearPin}
-        className="border-base-border text-text hover:text-text-bright text-meta rounded border px-[7px] py-[3px]"
+        className="border-base-border text-text hover:text-text-bright text-meta border px-[7px] py-[3px]"
       >
         ×
       </button>

@@ -24,14 +24,6 @@ export function getScriptRefBadgeLabel(value: string | null | undefined): string
   return `bytecode(${normalized ?? 'data'})`;
 }
 
-export function getScriptRefVerboseLabel(value: string | null | undefined): string {
-  const normalized = normalizeScriptRefHashType(value);
-  if (normalized === 'type') {
-    return 'type ref';
-  }
-  return `bytecode hash ref (${normalized ?? 'data'})`;
-}
-
 const SCRIPT_REF_HASH_TYPE_BYTE: Record<ScriptRefHashType, number> = {
   data: 0,
   type: 1,

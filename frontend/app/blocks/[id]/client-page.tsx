@@ -35,7 +35,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { ShortId } from '@/components/ui/short-id';
-import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { ClockText, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { PlateHash } from '@/components/ui/page-seal';
 import { percentOf } from '@/lib/format-unit';
 
@@ -723,7 +723,7 @@ export default function BlockDetailPage() {
                     <Utc8DateTime timestamp={block.timestamp} />
                   </dd>
                   <dd className="text-text-dim mt-1">
-                    {formatTimeAgo(block.timestamp)}
+                    <ClockText text={(now) => formatTimeAgo(block.timestamp, now)} />
                     {parentElapsedMs !== null && (
                       <> · {parentElapsedMs / 1000} s after its parent</>
                     )}
@@ -787,7 +787,7 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
     <Link
       href={href}
       aria-label={label}
-      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center rounded border"
+      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -820,7 +820,7 @@ function EpochBar({
     <span
       role="img"
       aria-label={String(Array.isArray(children) ? children.join('') : children)}
-      className="bg-base-border flex h-1 w-[72px] shrink-0 overflow-hidden rounded-sm"
+      className="bg-base-border flex h-1 w-[72px] shrink-0 overflow-hidden"
     >
       <span className="bg-text h-full" style={{ width: `${((index + 1) / length) * 100}%` }} />
     </span>

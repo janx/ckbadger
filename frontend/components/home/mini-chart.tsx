@@ -181,7 +181,7 @@ function FigureBody({ body }: { body: ChartBody }) {
       return (
         <div
           aria-hidden="true"
-          className="bg-base-surface animate-pulse rounded"
+          className="bg-base-surface animate-pulse"
           style={{ height: CHART_H }}
         />
       );
@@ -284,7 +284,7 @@ function ChartCanvas({ ariaLabel, xsFor, readoutOf, signature, children }: Canva
           width={width}
           height={CHART_H}
           viewBox={`0 0 ${width} ${CHART_H}`}
-          className="focus-visible:ring-base-border block touch-pan-y overflow-visible rounded-sm font-mono tabular-nums outline-none focus-visible:ring-1"
+          className="focus-visible:ring-base-border block touch-pan-y overflow-visible font-mono tabular-nums outline-none focus-visible:ring-1"
           onPointerMove={(e) => readout.hover(bucketAt(e.clientX))}
           onPointerDown={() => {
             pressed.current = true;

@@ -20,8 +20,6 @@ vi.mock('@/lib/api', () => ({
   },
   ApiRequestError: class ApiRequestError extends Error {},
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 const route = vi.hoisted(() => ({ name: 'Default Lock' }));

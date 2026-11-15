@@ -48,7 +48,7 @@ export function SporePreview({ preview, physicality = 'default' }: SporePreviewP
 
 function StaticPreview({ preview }: { preview: NonNullable<PreviewKind> }) {
   return (
-    <div className="flex items-center justify-center rounded p-8" style={FRAME_STYLE}>
+    <div className="flex items-center justify-center p-8" style={FRAME_STYLE}>
       <div
         className="relative"
         style={{ filter: `drop-shadow(0 4px 12px ${material('preview-cast')})` }}
@@ -97,7 +97,7 @@ function PhysicalPreview({
   const shadowBlur = tilt.active ? 20 : 12;
 
   return (
-    <div className="flex items-center justify-center rounded p-8" style={FRAME_STYLE}>
+    <div className="flex items-center justify-center p-8" style={FRAME_STYLE}>
       {/* Ambient glow — breathes behind the artwork */}
       <div
         className="preview-ambient-glow absolute"
@@ -135,7 +135,7 @@ function PhysicalPreview({
         >
           {/* Light reflection overlay */}
           <div
-            className="pointer-events-none absolute inset-0 z-10 rounded"
+            className="pointer-events-none absolute inset-0 z-10"
             style={{
               background: `radial-gradient(ellipse at ${lightX}% ${lightY}%, ${material('preview-sheen')} 0%, transparent 60%)`,
               mixBlendMode: 'overlay',
@@ -165,7 +165,7 @@ function ImagePreview({ dataUrl }: { dataUrl: string }) {
     <img
       src={dataUrl}
       alt="Spore content preview"
-      className="h-80 w-80 max-w-full rounded object-contain"
+      className="h-80 w-80 max-w-full object-contain"
       draggable={false}
     />
   );
@@ -180,7 +180,7 @@ function MediaUrlPreview({ url, mediaType }: { url: string; mediaType: string })
       <img
         src={src}
         alt="Spore decoded media preview"
-        className="h-80 w-80 max-w-full rounded object-contain"
+        className="h-80 w-80 max-w-full object-contain"
         draggable={false}
       />
     );
@@ -191,7 +191,7 @@ function MediaUrlPreview({ url, mediaType }: { url: string; mediaType: string })
       <img
         src={src}
         alt="Spore decoded media preview"
-        className="h-80 w-80 max-w-full rounded object-contain"
+        className="h-80 w-80 max-w-full object-contain"
         draggable={false}
       />
     );
@@ -212,7 +212,7 @@ function SvgPreview({ markup }: { markup: string }) {
       sandbox=""
       srcDoc={srcDoc}
       title="Spore SVG preview"
-      className="h-80 w-80 rounded border-0"
+      className="h-80 w-80 border-0"
       style={{ colorScheme: 'normal' }}
     />
   );

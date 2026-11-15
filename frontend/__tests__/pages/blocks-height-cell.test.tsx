@@ -9,8 +9,6 @@ import { formatBlockNumber } from '@/lib/format-block';
 
 vi.mock('@/lib/api', () => ({
   api: { getBlocks: vi.fn() },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

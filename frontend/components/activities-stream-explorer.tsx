@@ -25,6 +25,7 @@ import {
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { useClockTime } from '@/components/ui/utc8-date';
 import { countNoun } from '@/lib/format-count';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
@@ -122,9 +123,11 @@ function toActivityDate(timestamp: string): Date {
   return new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
 }
 
-/** The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone. */
-function getActivityDayLabel(timestamp: string): string {
-  const now = Date.now();
+/**
+ * The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone:
+ * "Today" and "Yesterday" are the reader's, at `now` from the page's one clock (lane E4).
+ */
+function getActivityDayLabel(timestamp: string, now: number): string {
   const day = formatUtc8Date(toActivityDate(timestamp).getTime());
   if (day === formatUtc8Date(now)) return 'Today';
   if (day === previousChainDay(now)) return 'Yesterday';
@@ -223,7 +226,7 @@ function ActivityStreamToolbar({
             aria-pressed={selectedFilter === option.value}
             onClick={() => onFilterChange(option.value)}
             className={cn(
-              'text-small flex items-center gap-2 rounded border px-3 py-2 transition-colors',
+              'text-small flex items-center gap-2 border px-3 py-2 transition-colors',
               selectedFilter === option.value
                 ? 'border-base-border text-text-bright bg-base-surface'
                 : 'text-text-dim hover:text-text border-transparent'
@@ -234,7 +237,7 @@ function ActivityStreamToolbar({
               <span
                 aria-hidden="true"
                 data-swatch
-                className="h-[9px] w-[9px] rounded-sm"
+                className="h-[9px] w-[9px]"
                 style={{ backgroundColor: option.swatch }}
               />
             )}
@@ -256,7 +259,7 @@ function ActivityStreamToolbar({
         <div
           role="img"
           aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
-          className="mt-3 flex h-2 overflow-hidden rounded-sm"
+          className="mt-3 flex h-2 overflow-hidden"
         >
           {FILTER_OPTIONS.filter(
             (o) => o.value !== 'all' && counts[o.value] !== undefined && counts[o.value]! > 0
@@ -306,12 +309,12 @@ function SkeletonRows() {
       data-testid="activities-stream-skeleton"
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="bg-base-elevated h-4 w-28 animate-pulse rounded" />
-        <div className="bg-base-elevated h-3 w-24 animate-pulse rounded" />
+        <div className="bg-base-elevated h-4 w-28 animate-pulse" />
+        <div className="bg-base-elevated h-3 w-24 animate-pulse" />
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <div className="bg-base-elevated h-3 w-32 animate-pulse rounded" />
-        <div className="bg-base-elevated h-3 w-20 animate-pulse rounded" />
+        <div className="bg-base-elevated h-3 w-32 animate-pulse" />
+        <div className="bg-base-elevated h-3 w-20 animate-pulse" />
       </div>
     </div>
   ));
@@ -325,6 +328,8 @@ export function ActivitiesStreamExplorer({
   totalCount?: number;
 }) {
   useEffect(() => ensureKeyframes(), []);
+  // "Today" and "Yesterday" move on at UTC+8 midnight: the stream renders again when the date does
+  const now = useClockTime((t) => formatUtc8Date(t));
 
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -499,7 +504,7 @@ export function ActivitiesStreamExplorer({
       <div ref={topAnchorRef} />
 
       {headQuery.isError && visibleItems.length > 0 && (
-        <div className="border-base-border bg-base-surface/90 text-text-dim text-small rounded-lg border px-3 py-2 font-mono">
+        <div className="border-base-border bg-base-surface/90 text-text-dim text-small border px-3 py-2 font-mono">
           Could not refresh:{' '}
           {headQuery.error instanceof Error
             ? headQuery.error.message
@@ -525,7 +530,7 @@ export function ActivitiesStreamExplorer({
               type="button"
               onClick={handleMergePending}
               aria-label={`${pendingNewItems.length} new ${countNoun(pendingNewItems.length, 'activity', 'activities')}`}
-              className="border-jade/10 w-full rounded-none border-y bg-[color:var(--bar)] px-4 py-1.5 text-left transition-colors hover:bg-[color:var(--bar-hover)] sm:py-2"
+              className="border-jade/10 w-full border-y bg-[color:var(--bar)] px-4 py-1.5 text-left transition-colors hover:bg-[color:var(--bar-hover)] sm:py-2"
               style={cssVars({
                 '--bar': STREAM_COLORS.pending,
                 '--bar-hover': STREAM_COLORS.pendingHover,
@@ -561,8 +566,8 @@ export function ActivitiesStreamExplorer({
             {visibleItems.map((activity, index) => {
               const key = itemKey(activity);
               const previousLabel =
-                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp) : null;
-              const currentLabel = getActivityDayLabel(activity.timestamp);
+                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp, now) : null;
+              const currentLabel = getActivityDayLabel(activity.timestamp, now);
               const showDayDivider = currentLabel !== previousLabel;
 
               return (
@@ -585,7 +590,7 @@ export function ActivitiesStreamExplorer({
                 <button
                   type="button"
                   onClick={() => void fetchNextPage()}
-                  className="border-base-border text-text hover:text-text-bright text-small rounded border px-5 py-2"
+                  className="border-base-border text-text hover:text-text-bright text-small border px-5 py-2"
                 >
                   Older
                 </button>

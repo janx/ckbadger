@@ -105,28 +105,3 @@ export function useRouter() {
     prefetch: async () => {},
   };
 }
-
-export function redirect(href: string): never {
-  if (typeof window !== 'undefined') {
-    window.location.assign(href);
-  }
-  throw new Error(`redirect:${href}`);
-}
-
-/**
- * What `notFound()` throws (consistency plan C2): an error that carries HTTP 404, so the route's
- * error boundary reads it with the same classifier as an API not-found (`isNotFoundApiError`) and
- * renders the 404 design. A plain `Error('notFound')` reached the boundary as a crash.
- */
-export class RouteNotFoundError extends Error {
-  readonly status = 404;
-
-  constructor() {
-    super('notFound');
-    this.name = 'RouteNotFoundError';
-  }
-}
-
-export function notFound(): never {
-  throw new RouteNotFoundError();
-}

@@ -84,7 +84,7 @@ export function CodeClassSwatch({
   return (
     <span
       aria-hidden="true"
-      className={className ?? 'inline-block h-2 w-3.5 shrink-0 rounded-sm'}
+      className={className ?? 'inline-block h-2 w-3.5 shrink-0'}
       style={{ backgroundColor: swatch.fill, boxShadow: `inset 0 0 0 1px ${swatch.edge}` }}
     />
   );
@@ -164,7 +164,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
       ref={ref}
       role="img"
       aria-label="CKB under lock scripts by who can change their code"
-      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden rounded tabular-nums"
+      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden tabular-nums"
     >
       {held.map((row, i) => {
         const inside = fits(words(row), i) ? words(row) : '';
@@ -174,7 +174,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
             data-code-class-segment={row.class}
             title={`${scriptClassLabel(row.class)}: ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`}
             className={cn(
-              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded',
+              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap',
               inside && 'px-2.5',
               SEGMENT_INK[row.class] ?? 'text-text-bright'
             )}
@@ -506,7 +506,7 @@ export function ScriptCapacityEvidenceChart({
                 title={`${deployed.hashType} ${deployed.referenceHash} · ${scriptClassLabel(deployed.custody.class)} · ${deployed.indexedDay}${retired ? ' to retirement' : ' to latest chart day'}`}
               >
                 <div
-                  className="bg-emphasis/40 absolute top-1 h-3 min-w-[3px] rounded-sm"
+                  className="bg-emphasis/40 absolute top-1 h-3 min-w-[3px]"
                   style={{ left: `${start}%`, width: `${width}%` }}
                 />
               </div>
@@ -524,7 +524,7 @@ export function ScriptCapacityEvidenceChart({
             {markers.map((marker) => (
               <span
                 key={key(marker)}
-                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 rounded border px-2 py-1"
+                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
               >
                 <button
                   type="button"

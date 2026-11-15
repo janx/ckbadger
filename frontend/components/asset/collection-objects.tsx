@@ -278,7 +278,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                     type="button"
                     aria-label={`Clear ${name} = ${value}`}
                     onClick={() => filter(name, null)}
-                    className="border-jade bg-base-surface text-text-bright text-meta h-[22px] rounded border px-2"
+                    className="border-jade bg-base-surface text-text-bright text-meta h-[22px] border px-2"
                   >
                     {geneLabel(name)} {traitDisplay(value)} ×
                   </button>
@@ -376,7 +376,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                               <>
                                 <i
                                   aria-hidden="true"
-                                  className="mr-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+                                  className="mr-1.5 inline-block h-2.5 w-2.5 shrink-0"
                                   style={{
                                     background: band?.colour ?? GEL_INK[ink][1],
                                     opacity: band?.colour ? 1 : 0.8,

@@ -197,7 +197,7 @@ export function AmongDidCkb({
           <li key={s.key} className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
-              className="h-2 w-2 rounded-sm"
+              className="h-2 w-2"
               style={{ backgroundColor: s.color, opacity: s.opacity }}
             />
             <span className={s.mine ? 'text-text-bright' : 'text-text'}>{s.label}</span>

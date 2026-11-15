@@ -238,7 +238,7 @@ function Allocation({ d }: { d: Derived<AllocationView> }) {
   if (d.state === 'loading') {
     return (
       <div aria-hidden="true" className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
-        <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
+        <div className="bg-base-surface h-9 w-2/3 animate-pulse" />
         <div className="bg-base-surface h-2.5 animate-pulse" />
       </div>
     );
@@ -250,7 +250,7 @@ function Allocation({ d }: { d: Derived<AllocationView> }) {
         data-testid="ckbytes-allocation-error"
         className={cn(
           ALLOCATION_CLASS,
-          'border-negative/40 text-negative text-small rounded border px-3 py-2'
+          'border-negative/40 text-negative text-small border px-3 py-2'
         )}
       >
         {d.message}
@@ -436,12 +436,12 @@ function LegendItem({
       type="button"
       data-legend={name}
       data-active={active || undefined}
-      className="focus-visible:ring-base-border -mx-1 flex items-baseline gap-2 rounded bg-transparent px-1 py-1 text-left outline-none focus-visible:ring-1"
+      className="focus-visible:ring-base-border -mx-1 flex items-baseline gap-2 bg-transparent px-1 py-1 text-left outline-none focus-visible:ring-1"
       {...events}
     >
       <span
         aria-hidden="true"
-        className={cn('h-2 w-2 self-center rounded-sm', swatch)}
+        className={cn('h-2 w-2 self-center', swatch)}
         style={swatchColor === undefined ? undefined : { backgroundColor: swatchColor }}
       />
       <span className={active ? 'text-text-bright' : 'text-text'}>{name}</span>
@@ -590,7 +590,7 @@ function DaoBlock() {
         <span className="text-text-dim text-small">deposited</span>
       </div>
       {d.state === 'loading' && (
-        <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse rounded" />
+        <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse" />
       )}
       {d.state === 'error' && (
         <div role="alert" className="text-rouge text-small">

@@ -10,8 +10,6 @@ import { api, type KnownScript } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: { getScripts: vi.fn() },
-  isWarmupPendingError: () => false,
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 

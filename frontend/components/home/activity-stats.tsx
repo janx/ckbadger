@@ -61,7 +61,7 @@ export function ActivityStats() {
         />
       </div>
       {d.state === 'loading' && (
-        <div aria-hidden="true" className="bg-base-surface h-40 animate-pulse rounded" />
+        <div aria-hidden="true" className="bg-base-surface h-40 animate-pulse" />
       )}
       {d.state === 'error' && (
         <div role="alert" className="text-rouge text-small">

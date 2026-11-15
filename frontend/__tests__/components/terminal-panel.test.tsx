@@ -7,12 +7,11 @@ import {
 } from '@/components/ui/terminal-panel';
 
 // Midnight, continued (review 2026-11-03, item 5, move 3): "instruments are framed, text is
-// flat". TerminalPanel is the one instrument frame — a 1 px line (`border-base-border`), an 8 px
-// radius (visual finish V10: glass frames take `rounded-lg`), `.glass` (material pass v2, move 2)
-// and inset scanlines — headed by a command line led by the prompt square. Rubbing × Song print,
+// flat". TerminalPanel is the one instrument frame — a 1 px line (`border-base-border`), square
+// corners (UI review 2026-11-14, ruling R1), `.glass` (material pass v2, move 2) and inset scanlines — headed by a command line led by the prompt square. Rubbing × Song print,
 // phase 2: a flat tile, the glass's materials the opaque surface, and no jade top edge.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
-  it('frames its content: hairline, 8 px radius, the flat glass tile, scanlines, no lit edge', () => {
+  it('frames its content: hairline, the flat glass tile, scanlines, no lit edge', () => {
     const { container } = render(
       <TerminalPanel aria-label="An instrument" data-testid="frame">
         <TerminalPanelContent>inside</TerminalPanelContent>
@@ -24,21 +23,18 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(frame).toHaveClass(
       'relative',
       'overflow-hidden',
-      'rounded-lg',
       'border',
       'border-base-border',
       'glass'
     );
     expect(frame).not.toHaveClass('bg-base-surface');
-    // only the glass frame takes the glass radius; the flat variants keep the default 4 px
+    // only the glass frame is glass
     for (const variant of ['elevated', 'inset'] as const) {
       const { getByTestId, unmount } = render(
         <TerminalPanel data-testid={`flat-${variant}`} variant={variant}>
           flat
         </TerminalPanel>
       );
-      expect(getByTestId(`flat-${variant}`)).toHaveClass('rounded');
-      expect(getByTestId(`flat-${variant}`)).not.toHaveClass('rounded-lg');
       expect(getByTestId(`flat-${variant}`)).not.toHaveClass('glass');
       unmount();
     }

@@ -100,8 +100,8 @@ function GelPlate({
   const copper = plateStyle(tier);
   if (copper)
     return (
-      <div data-gel-plate="copper" className="rounded-lg p-[5px]" style={copper}>
-        <div className={cn('rounded', className)}>{children}</div>
+      <div data-gel-plate="copper" className="p-[5px]" style={copper}>
+        <div className={className}>{children}</div>
       </div>
     );
   return (
@@ -779,7 +779,7 @@ function PatternReading({
                 <span className="hidden sm:inline">→</span>
               </span>
             )}
-            <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5 [overflow-wrap:anywhere]">
+            <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5 [overflow-wrap:anywhere]">
               <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
               {tile.body ??
                 steps.map((step) => (
@@ -934,7 +934,7 @@ function PatternReading({
         <div
           role="group"
           aria-label="One object, read this way"
-          className="border-base-border-subtle min-w-0 rounded border px-3.5 py-3"
+          className="border-base-border-subtle min-w-0 border px-3.5 py-3"
         >
           <div className="text-meta text-text-dim flex flex-wrap items-baseline justify-between gap-x-3">
             <span>

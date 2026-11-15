@@ -254,7 +254,7 @@ describe('move 3 on the tx page’s cells diagram', () => {
     for (const sheet of sheets) {
       // material pass v2 (move 2): the frame's surface is `.glass`, not the flat colour — a flat
       // tile since rubbing × Song print, with no lit top edge
-      expect(sheet).toHaveClass('rounded-lg', 'border', 'glass');
+      expect(sheet).toHaveClass('border', 'glass');
       expect(sheet).not.toHaveClass('neon-edge-top');
     }
     // the sheets' heads are their eyebrows

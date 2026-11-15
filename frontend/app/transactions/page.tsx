@@ -23,7 +23,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -34,7 +34,7 @@ import {
   totalActivities,
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
-import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 
 type TransactionKind =
   | 'all'
@@ -87,6 +87,15 @@ function poolConsumed(tx: PoolRow): number {
 /** A pool transaction's stone: its hash and its cells; not in a block yet, so pressed unpressed. */
 function poolSealId(tx: PoolRow): SealId {
   return { kind: 'tx', hash: tx.hash, consumed: poolConsumed(tx), created: tx.outputsCount };
+}
+
+/**
+ * When the newest pool transaction was seen, on the UTC+8 clock (lane P); how long ago is its
+ * hover, read from the page's one clock, so it moves with no data change (lane E4).
+ */
+function NewestSeen({ at }: { at: string }) {
+  const age = useAge(at);
+  return <Utc8DateTime timestamp={at} title={age} />;
 }
 
 /**
@@ -461,7 +470,7 @@ export default function TransactionsPage() {
                 id="transactions-kind"
                 value={kind}
                 onChange={(e) => chooseKind(e.target.value as TransactionKind)}
-                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 rounded border px-2"
+                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 border px-2"
               >
                 {KINDS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -477,7 +486,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === 'pool'}
                   onClick={() => setTab(tab === 'pool' ? 'committed' : 'pool')}
                   className={cn(
-                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border px-2.5',
+                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5',
                     tab === 'pool'
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'border-base-border-subtle text-text'
@@ -501,7 +510,7 @@ export default function TransactionsPage() {
                   aria-pressed={kind === option.value}
                   onClick={() => chooseKind(option.value)}
                   className={cn(
-                    'text-small flex min-h-[34px] items-center gap-2 rounded border px-3',
+                    'text-small flex min-h-[34px] items-center gap-2 border px-3',
                     kind === option.value
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'text-text-dim hover:text-text border-transparent'
@@ -512,7 +521,7 @@ export default function TransactionsPage() {
                   ) : option.value !== 'all' ? (
                     <span
                       aria-hidden="true"
-                      className="h-2 w-2 rounded-sm"
+                      className="h-2 w-2"
                       style={{ backgroundColor: option.color }}
                     />
                   ) : null}
@@ -534,7 +543,7 @@ export default function TransactionsPage() {
               <div
                 role="img"
                 aria-label={`Yesterday's kind occurrences; categories overlap`}
-                className="flex h-2 overflow-hidden rounded-sm"
+                className="flex h-2 overflow-hidden"
               >
                 {KINDS.filter(
                   (option) =>
@@ -595,18 +604,14 @@ export default function TransactionsPage() {
                     // Lane P: on the UTC+8 clock; how long ago is its hover.
                     <>
                       {' '}
-                      · newest seen{' '}
-                      <Utc8DateTime
-                        timestamp={poolHead.data.summary.newestSeenAt}
-                        title={formatTimeAgo(poolHead.data.summary.newestSeenAt)}
-                      />
+                      · newest seen <NewestSeen at={poolHead.data.summary.newestSeenAt} />
                     </>
                   )}
                 </span>
                 <button
                   type="button"
                   onClick={() => setTab('pool')}
-                  className="border-base-border text-text hover:text-text-bright rounded border px-3 py-2"
+                  className="border-base-border text-text hover:text-text-bright border px-3 py-2"
                 >
                   Open the pool →
                 </button>

@@ -263,7 +263,7 @@ function BlocksLegend() {
         proposal
       </span>
       <span className="flex items-center gap-1.5">
-        <span aria-hidden="true" className="flex h-2 w-[18px] overflow-hidden rounded-sm">
+        <span aria-hidden="true" className="flex h-2 w-[18px] overflow-hidden">
           <span className="w-2" style={{ backgroundColor: CLASS_COLORS.ckb }} />
           <span className="flex-1" style={{ backgroundColor: DATA_COLOR }} />
         </span>

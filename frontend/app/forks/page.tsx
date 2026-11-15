@@ -10,6 +10,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { ClockText, useClockTime } from '@/components/ui/utc8-date';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
 import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
@@ -159,7 +160,7 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
       )}
       {!compact && (
         <span className="text-text-dim text-meta block w-fit">
-          {formatTimeAgo(event.detectedAt)}
+          <ClockText text={(now) => formatTimeAgo(event.detectedAt, now)} />
         </span>
       )}
       {!compact && !href && (
@@ -171,10 +172,13 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
   );
 }
 
-/** A switch row's title: what left its one-line "Seen" cell (T1), then its key. */
-function switchTitle(event: ReorgEvent): string {
+/**
+ * A switch row's title: what left its one-line "Seen" cell (T1), then its key. Its age is the
+ * clock's, at `now` (lane E4).
+ */
+function switchTitle(event: ReorgEvent, now: number): string {
   return [
-    `seen ${seenWhen(event)} UTC+8, ${formatTimeAgo(event.detectedAt)}`,
+    `seen ${seenWhen(event)} UTC+8, ${formatTimeAgo(event.detectedAt, now)}`,
     ...(forkEventHref(event) ? [] : [missingAddressWords(event.firstOrphanStatus)]),
     `fork point ${formatBlockNumber(event.forkPointNumber)}, depth ${event.depth}`,
   ].join(' · ');
@@ -356,6 +360,14 @@ export default function ForksPage() {
     !hasPrevious &&
     events.data !== undefined &&
     events.data.data.length > PREVIEW_ROWS;
+  const shown = events.data
+    ? collapsed
+      ? events.data.data.slice(0, PREVIEW_ROWS)
+      : events.data.data
+    : [];
+  // The rows' titles hold their ages (T1): the page reads the one clock through them, so it renders
+  // again only when one of the titles shown changes (lane E4).
+  const now = useClockTime((t) => shown.map((e) => switchTitle(e, t)).join('\n'));
   const total = events.data?.total;
   return (
     <div className="min-h-screen">
@@ -429,9 +441,9 @@ export default function ForksPage() {
               <>
                 <ListTable
                   label="Branch switches on this node"
-                  rows={collapsed ? events.data.data.slice(0, PREVIEW_ROWS) : events.data.data}
+                  rows={shown}
                   rowKey={(event) => String(event.id)}
-                  rowTitle={switchTitle}
+                  rowTitle={(event) => switchTitle(event, now)}
                   empty="No branch switches observed by this node. Chain uncles above can still exist."
                   columns={spanHeads<ReorgEvent>([
                     {

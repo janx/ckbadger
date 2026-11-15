@@ -32,25 +32,25 @@ it('spells durations and lock phrases for prose', () => {
 
 // Lane P (after lane F's C3): the sentence tells the path; its dates are the page's Minted and Last
 // moved metrics (C7) and how long ago they were is its hover (itemLifeAges) — no "ago" in text.
+// Lane E4 (re-pinned): the sentence takes no "now", as it writes no time of the reader's.
 it('tells an item’s life from its cell versions', () => {
-  const now = 10 * 86_400_000;
   const minted = v({ timestamp: '0', lockName: 'secp256k1', isLive: false });
   const moved = v({ timestamp: '30000', lockName: 'Nervape Shadow Lock', isLive: true });
-  expect(itemLifeSentence([{ ...moved, timestamp: '0' }], now)).toBe(
+  expect(itemLifeSentence([{ ...moved, timestamp: '0' }])).toBe(
     'Minted to a Nervape Shadow Lock, where it sits now.'
   );
-  expect(itemLifeSentence([minted, moved], now)).toBe(
+  expect(itemLifeSentence([minted, moved])).toBe(
     'Minted to a secp256k1 lock, then moved 30\u00a0seconds later to a Nervape Shadow Lock, where it sits now.'
   );
   expect(
-    itemLifeSentence([minted, { ...moved, isLive: false, consumedAtBlock: 12 }], now, 'Issued', 'X')
+    itemLifeSentence([minted, { ...moved, isLive: false, consumedAtBlock: 12 }], 'Issued', 'X')
   ).toBe('Issued by X to a secp256k1 lock, moved 1 time; its last cell was consumed at block 12.');
   const third = v({ timestamp: String(8 * 86_400_000), lockName: 'JoyID', isLive: true });
-  expect(itemLifeSentence([minted, { ...moved, isLive: false }, third], now)).toBe(
+  expect(itemLifeSentence([minted, { ...moved, isLive: false }, third])).toBe(
     'Minted to a secp256k1 lock, then moved 2 times; the last move put it under a JoyID lock, where it sits now.'
   );
-  expect(itemLifeSentence([minted, moved], now)).not.toMatch(/ ago/);
-  expect(() => itemLifeSentence([], now)).toThrow('at least one cell version');
+  expect(itemLifeSentence([minted, moved])).not.toMatch(/ ago/);
+  expect(() => itemLifeSentence([])).toThrow('at least one cell version');
 });
 
 it('keeps how long ago an item was minted and last moved for the sentence’s hover', () => {
@@ -81,7 +81,7 @@ it('reads an age through the one age rule when this device’s clock is behind',
 it('tells a move without a duration when the later header time runs backwards', () => {
   const minted = v({ timestamp: '900000', lockName: 'secp256k1', isLive: false });
   const moved = v({ timestamp: '880000', lockName: 'Nervape Shadow Lock', isLive: true });
-  expect(itemLifeSentence([minted, moved], 10 * 86_400_000)).toBe(
+  expect(itemLifeSentence([minted, moved])).toBe(
     'Minted to a secp256k1 lock, then moved to a Nervape Shadow Lock, where it sits now.'
   );
 });

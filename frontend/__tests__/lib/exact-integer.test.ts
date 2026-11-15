@@ -8,7 +8,6 @@ import {
   exactSignedDecimalRatio,
   formatCompactRatio,
   formatExactDecimal,
-  formatExactShare,
 } from '@/lib/exact-integer';
 
 describe('exact integer display', () => {
@@ -58,7 +57,7 @@ describe('exact integer display', () => {
     expect(formatDecimal('0.126499999999999999', 2, 100)).toBe('12.65');
   });
 
-  it('formats decimal chart amounts and shares from exact rational values', () => {
+  it('formats decimal chart amounts from exact rational values', () => {
     expect(exactDecimalRatio('1.005', 'chart')).toEqual([BigInt(1005), BigInt(1000)]);
     expect(exactSignedDecimalRatio('-30.00000000', 'flow')).toEqual([
       BigInt(-3000000000),
@@ -70,25 +69,6 @@ describe('exact integer display', () => {
     expect(formatCompactRatio(BigInt(600), BigInt(1))).toBe('600.00');
     expect(formatCompactRatio(BigInt(9900000001), BigInt(100000000))).toBe('99.00');
     expect(formatCompactRatio(BigInt('9007199254740993'), BigInt(1))).toBe('9.01P');
-    expect(
-      formatExactShare(
-        [
-          [BigInt(201), BigInt(1)],
-          [BigInt(19799), BigInt(1)],
-        ],
-        0
-      )
-    ).toBe('1.01%');
-    expect(
-      formatExactShare(
-        [
-          [BigInt(1), BigInt(2)],
-          [BigInt(1), BigInt(3)],
-        ],
-        0
-      )
-    ).toBe('60.00%');
-    expect(formatExactShare([[BigInt(0), BigInt(1)]], 0)).toBe('—');
     expect(() => exactDecimalRatio('1e3', 'chart')).toThrow('chart');
   });
 });

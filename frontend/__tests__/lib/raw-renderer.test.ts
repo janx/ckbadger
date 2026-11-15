@@ -21,8 +21,6 @@ vi.mock('@/lib/api', () => ({
     getTransactionCellDeps: vi.fn(),
     getTransactionLifecycle: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 describe('renderRawPage', () => {

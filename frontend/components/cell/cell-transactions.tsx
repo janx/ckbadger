@@ -199,7 +199,7 @@ function NotSpentYet({
   return (
     <div
       data-testid="not-spent-yet"
-      className="text-small flex max-w-[640px] flex-col gap-1.5 rounded border border-dashed px-3 py-2.5"
+      className="text-small flex max-w-[640px] flex-col gap-1.5 border border-dashed px-3 py-2.5"
       style={{ borderColor: BOARD_INKS.quiet }}
     >
       <div className="flex flex-wrap justify-between gap-2">

@@ -1,6 +1,4 @@
 export {
-  notFound,
-  redirect,
   useParams,
   usePathname,
   useRouter,

@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { T0, tick } from '@/__tests__/utils/still-clock';
 import {
-  FIXTURE_NOW,
   FIXTURE_TIP,
   buildPipelineSnapshot,
   pipelineSnapshot,
@@ -46,11 +46,7 @@ describe('PipelineTooltip', () => {
   it('keeps fee shannons beyond the safe Number range exact', () => {
     const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
     const tx = pool.pending[0];
-    const tip = txTip(
-      { kind: 'pending', tx: { ...tx, fee: '9007199254740993' } },
-      snapshot,
-      FIXTURE_NOW
-    );
+    const tip = txTip({ kind: 'pending', tx: { ...tx, fee: '9007199254740993' } }, snapshot);
     expect(tip.rows).toContainEqual(['fee', '9,007,199,254,740,993 sh']);
   });
   // jsdom does not lay out, so the contract is in the classes: values never wrap, and the tooltip
@@ -69,9 +65,7 @@ describe('PipelineTooltip', () => {
     const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
     const early = pool.proposed.find((t) => t.hash === poolTxHash('e0'));
     if (!early) throw new Error('fixture: e0 is not proposed');
-    const tip = renderTip(
-      txTip({ kind: 'proposed', tx: early, tooEarly: true }, snapshot, FIXTURE_NOW)
-    );
+    const tip = renderTip(txTip({ kind: 'proposed', tx: early, tooEarly: true }, snapshot));
     expect(within(tip).getByText('not yet: proposed in the last block')).toHaveClass(
       'whitespace-nowrap'
     );
@@ -89,6 +83,33 @@ describe('PipelineTooltip', () => {
     expect(foot).toHaveClass('w-0');
     expect(foot).toHaveClass('min-w-full');
     expect(foot).not.toHaveClass('whitespace-nowrap');
+  });
+});
+
+// Lane E4: a pending transaction's wait, a running duration, reads the page's one clock while the
+// tooltip is up. The panel keeps one tooltip per hovered transaction (the same key keeps the same
+// content), so the wait was written once, at the first pointer move, and stood still for as long
+// as the pointer rested on the square. The clock stops with the tooltip.
+describe('a pending transaction’s wait (E4)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('moves with no data change while the tooltip is up, and leaves no timer behind', () => {
+    vi.useFakeTimers({ now: T0 });
+    const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
+    const tip = renderTip(
+      txTip({ kind: 'pending', tx: { ...pool.pending[0], arrivedAt: T0 - 20_000 } }, snapshot)
+    );
+    const waiting = () => within(tip).getByText('waiting').nextElementSibling!.textContent;
+    expect(waiting()).toBe('20.0 s');
+    tick(1000);
+    expect(waiting()).toBe('21.0 s');
+    tick(38_000);
+    expect(waiting()).toBe('59.0 s');
+    tick(1000);
+    expect(waiting()).toBe('60.0 s');
+    expect(vi.getTimerCount()).toBe(1);
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

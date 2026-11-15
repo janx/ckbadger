@@ -51,11 +51,8 @@ function RankedPreview({ model }: { model: ChartModel }) {
             </span>
             <span className="shrink-0 tabular-nums">{row.share}</span>
           </div>
-          <div className="bg-bar-track mt-1 h-1 rounded">
-            <div
-              className="bg-jade h-1 rounded"
-              style={{ width: `${shareWidth(row, model.title)}%` }}
-            />
+          <div className="bg-bar-track mt-1 h-1">
+            <div className="bg-jade h-1" style={{ width: `${shareWidth(row, model.title)}%` }} />
           </div>
         </li>
       ))}
@@ -138,7 +135,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
       </div>
       {isAwaited(read) && (
         <div
-          className="bg-base-surface h-[120px] animate-pulse rounded"
+          className="bg-base-surface h-[120px] animate-pulse"
           aria-label={`${definition.title} loading`}
         />
       )}
@@ -192,7 +189,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             <li key={entry.key} className="flex items-center gap-1.5">
               <span
                 aria-hidden="true"
-                className="h-[7px] w-[7px] rounded-sm"
+                className="h-[7px] w-[7px]"
                 style={{ backgroundColor: entry.color }}
               />
               <span>{entry.label}</span>

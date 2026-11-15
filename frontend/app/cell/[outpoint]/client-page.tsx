@@ -310,7 +310,7 @@ function CopyOutpoint({ value }: { value: string }) {
       type="button"
       aria-label="Copy out point"
       onClick={copy}
-      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] rounded border px-2"
+      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] border px-2"
     >
       {copied ? 'copied' : 'copy'}
     </button>

@@ -5,7 +5,6 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NetworkQueryScope } from '@/components/network-query-scope';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
-import { useRecentBlocksStore } from '@/hooks/useRecentBlocksStore';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 
 function NetworkData({ fetchNetwork }: { fetchNetwork: (network: string) => Promise<string> }) {
@@ -97,28 +96,6 @@ describe('NetworkQueryScope', () => {
 
     expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
     expect(fetchNetwork).toHaveBeenCalledTimes(2);
-  });
-
-  it('clears the module-global recent-blocks series when the network changes', async () => {
-    const user = userEvent.setup();
-    renderScope(fetchNetwork);
-
-    expect(await screen.findByText('mainnet')).toBeInTheDocument();
-    // The 24h series the recent-blocks hook accumulates for mainnet. It lives in
-    // a module-global zustand store, so the per-network QueryClient reset alone
-    // would leave it in place for the next network.
-    act(() => {
-      useRecentBlocksStore.getState().setBlocks([{ timestamp: 1000, transactionsCount: 5 }]);
-    });
-    expect(useRecentBlocksStore.getState().initialized).toBe(true);
-
-    await user.click(screen.getByRole('button', { name: 'go-testnet' }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
-    });
-    expect(useRecentBlocksStore.getState().blocks).toEqual([]);
-    expect(useRecentBlocksStore.getState().initialized).toBe(false);
   });
 
   it('clears module-global realtime data when the network changes', async () => {

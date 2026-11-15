@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { FIBER_GRAPH, fiberGraphModel } from '@/lib/fiber-network-model';
+import { FIBER_GRAPH, fiberGraphData, fiberGraphLayout } from '@/lib/fiber-network-model';
 import type { FiberNetwork } from '@/lib/api';
 import mainnet from '@/__tests__/fixtures/fiber-network-mainnet.json';
 import small from '@/__tests__/fixtures/fiber-network.json';
+
+/** The graph as the Fiber page builds it: the data, then its layout at a width (lane E3 moved this
+ * composition here when its last caller in the app went). */
+const fiberGraphModel = (network: FiberNetwork, width: number) =>
+  fiberGraphLayout(fiberGraphData(network), width);
 
 const network = mainnet as FiberNetwork;
 const byTail = (model: ReturnType<typeof fiberGraphModel>, tail: string) => {

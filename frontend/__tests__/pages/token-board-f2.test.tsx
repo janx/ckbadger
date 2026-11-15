@@ -26,8 +26,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getTokenActivityFeed: vi.fn(),
     getTokenTransactions: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,

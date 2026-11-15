@@ -15,8 +15,11 @@ export type Age = { kind: 'age'; seconds: number } | { kind: 'clock-behind' };
  * The one rule for a relative age (review 45fd ruling D4): whole seconds since the time,
  * truncated; a time at most ALLOWED_FUTURE_MS ahead of `now` is age zero; a time further ahead has
  * no age, as this device's clock is behind the chain's. A timestamp that is not a time throws.
+ * `now` has no default (lane E4): an age on screen takes it from the page's one clock
+ * (`useClockText` in components/ui/utc8-date.tsx), so it moves with no data change; a read of
+ * the wall clock here wrote it once and left it standing.
  */
-export function ageSeconds(timestamp: string | number | Date, now = Date.now()): Age {
+export function ageSeconds(timestamp: string | number | Date, now: number): Age {
   const then =
     timestamp instanceof Date
       ? timestamp.getTime()
@@ -98,7 +101,7 @@ function timeMs(timestamp: string | number | Date): number {
  * A fact rail's relative age in its two largest units (Transaction board: "2d 20h ago"), from a
  * year on in years and days ("6y 363d ago"). Feed rows take `formatAgeOneUnit`.
  */
-export function formatAgeTwoUnits(timestamp: string | number | Date, now = Date.now()): string {
+export function formatAgeTwoUnits(timestamp: string | number | Date, now: number): string {
   const age = ageSeconds(timestamp, now);
   if (age.kind === 'clock-behind') return CLOCK_BEHIND;
   const years = calendarYears(timeMs(timestamp), now);
@@ -110,7 +113,7 @@ export function formatAgeTwoUnits(timestamp: string | number | Date, now = Date.
  * notation of the one form; null when the time is further ahead than consensus allows, as this
  * device's clock is behind the chain's. A pool entry's wait reads it ("in pool for 5m").
  */
-export function ageInOneUnit(timestamp: string | number | Date, now = Date.now()): string | null {
+export function ageInOneUnit(timestamp: string | number | Date, now: number): string | null {
   const age = ageSeconds(timestamp, now);
   if (age.kind === 'clock-behind') return null;
   const years = calendarYears(timeMs(timestamp), now);
@@ -121,7 +124,7 @@ export function ageInOneUnit(timestamp: string | number | Date, now = Date.now()
 }
 
 /** A feed row's relative age in its largest unit ("5m ago"); from a year on, "6y 363d ago". */
-export function formatAgeOneUnit(timestamp: string | number | Date, now = Date.now()): string {
+export function formatAgeOneUnit(timestamp: string | number | Date, now: number): string {
   const age = ageInOneUnit(timestamp, now);
   return age === null ? CLOCK_BEHIND : `${age} ago`;
 }

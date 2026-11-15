@@ -9,8 +9,6 @@ vi.mock('@/lib/api', () => ({
   api: {
     getNetworkStats: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 /** The page the strip is drawn on (the setup's stub answers '/', the home page). */

@@ -1,3 +1,3 @@
 'use client';
 
-export { Link as AppLink, type LinkProps as AppLinkProps } from '@/components/ui/link';
+export { Link as AppLink } from '@/components/ui/link';

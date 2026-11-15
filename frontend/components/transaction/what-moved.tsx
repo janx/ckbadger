@@ -251,7 +251,7 @@ function Plate({
     <div
       ref={plateRef}
       data-flow-plate
-      className="bg-base-bg/95 text-small flex max-w-full flex-col items-center gap-0.5 whitespace-nowrap rounded border px-3 py-1.5"
+      className="bg-base-bg/95 text-small flex max-w-full flex-col items-center gap-0.5 whitespace-nowrap border px-3 py-1.5"
       style={{ borderColor: colorOf(asset) }}
     >
       <span className="text-text-bright flex items-center gap-1.5 font-medium">
@@ -390,7 +390,7 @@ function RibbonStrip({
           >
             <span
               aria-hidden="true"
-              className={cn('w-1 shrink-0 rounded-sm', terminal && 'border border-dashed')}
+              className={cn('w-1 shrink-0', terminal && 'border border-dashed')}
               style={terminal ? { borderColor: color } : { background: color, opacity: 0.9 }}
             />
             <div className="min-w-0 flex-1 py-0.5">

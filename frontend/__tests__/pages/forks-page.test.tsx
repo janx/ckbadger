@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import ForksPage from '@/app/forks/page';
 import { api } from '@/lib/api';
@@ -12,8 +14,6 @@ import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
@@ -429,6 +429,71 @@ describe('ForksPage', () => {
       /^seen 2025-08-01 06:13:20 UTC\+8, .+ ago · fork point #10, depth 1$/
     );
     expect(within(row).getByText('50 ms')).toHaveClass('text-small', 'tabular-nums');
+  });
+});
+
+// Lane E4: a switch's age, in the table row's title and on the phone row's own line, reads the
+// page's one clock, so it moves with no data change; both were written once at render. The clock
+// stops with the page.
+describe('ForksPage: a switch’s age reads the one clock (E4)', () => {
+  const seenAt = (detectedAt: string): List => {
+    const served = list();
+    return { ...served, data: [{ ...served.data[0], detectedAt }, ...served.data.slice(1)] };
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ now: T0 });
+    vi.mocked(api.getForks).mockResolvedValue(seenAt(new Date(T0 - 20_000).toISOString()));
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    // the phone width's ResizeObserver stub and its getBoundingClientRect spy
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('moves the age in a table row’s title', async () => {
+    const { unmount } = render(<ForksPage />);
+    const title = () =>
+      within(screen.getByRole('table', { name: 'Branch switches on this node' }))
+        .getAllByRole('row')[1]
+        .getAttribute('title');
+    await loadUnderStillClock(
+      () => screen.queryByRole('table', { name: 'Branch switches on this node' }) !== null
+    );
+    expect(title()).toMatch(/ UTC\+8, 20s ago · /);
+    tick(1000);
+    expect(title()).toMatch(/ UTC\+8, 21s ago · /);
+    tick(38_000);
+    expect(title()).toMatch(/ UTC\+8, 59s ago · /);
+    tick(1000);
+    expect(title()).toMatch(/ UTC\+8, 1m ago · /);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('moves the age on a phone row’s own line', async () => {
+    atContainerWidth(358);
+    const { unmount } = render(<ForksPage />);
+    const age = () =>
+      within(
+        within(
+          screen.getByRole('list', { name: 'Branch switches on this node, compact' })
+        ).getAllByRole('listitem')[0]
+      ).getByText(/^\d+[smh] ago$/).textContent;
+    await loadUnderStillClock(
+      () => screen.queryByRole('list', { name: 'Branch switches on this node, compact' }) !== null
+    );
+    expect(age()).toBe('20s ago');
+    tick(1000);
+    expect(age()).toBe('21s ago');
+    tick(38_000);
+    expect(age()).toBe('59s ago');
+    tick(1000);
+    expect(age()).toBe('1m ago');
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
