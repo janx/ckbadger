@@ -502,7 +502,7 @@ export function ScriptCapacityEvidenceChart({
             {custodyBands.map(({ deployed, start, width, retired }) => (
               <div
                 key={key(deployed)}
-                className="border-base-border relative h-5 border-b border-dashed"
+                className="border-row-rule relative h-5 border-b border-dashed"
                 title={`${deployed.hashType} ${deployed.referenceHash} · ${scriptClassLabel(deployed.custody.class)} · ${deployed.indexedDay}${retired ? ' to retirement' : ' to latest chart day'}`}
               >
                 <div

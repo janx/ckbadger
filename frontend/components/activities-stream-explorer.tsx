@@ -305,7 +305,7 @@ function SkeletonRows() {
   return Array.from({ length: 8 }).map((_, index) => (
     <div
       key={index}
-      className="border-base-border/50 border-b px-3 py-3 last:border-b-0"
+      className="border-row-rule border-b px-3 py-3 last:border-b-0"
       data-testid="activities-stream-skeleton"
     >
       <div className="flex items-center justify-between gap-2">
@@ -604,7 +604,7 @@ export function ActivitiesStreamExplorer({
             )}
 
             {isFetchNextPageError && (
-              <div className="border-base-border/50 border-t px-3 py-3 text-center">
+              <div className="border-row-rule border-t px-3 py-3 text-center">
                 <p className="text-text text-small">Could not read older activities</p>
                 <button
                   type="button"

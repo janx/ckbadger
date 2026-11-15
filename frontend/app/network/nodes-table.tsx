@@ -685,7 +685,7 @@ export function PeersTable() {
           <div>
             {!folded && (
               <div
-                className="border-base-border bg-base-surface/50 text-text-dim text-small grid items-center gap-x-4 border-b px-4 py-2 font-mono"
+                className="border-row-rule bg-base-surface/50 text-text-dim text-small grid items-center gap-x-4 border-b px-4 py-2 font-mono"
                 style={{ gridTemplateColumns: GRID_TEMPLATE, minWidth: GRID_MIN_PX }}
               >
                 {COLUMNS.map((label, index) => (
