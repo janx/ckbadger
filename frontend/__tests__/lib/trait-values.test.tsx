@@ -349,39 +349,9 @@ describe('break-all only on raw text', () => {
     ).toBeGreaterThan(5);
   });
 
-  /**
-   * Sites outside lane B3's files that the gate finds, reported to the lead in B3 round 3 and not
-   * edited here (other lanes own them): path → how many. A new site in one of them fails, and so
-   * does a listed one that is gone (drop it from the list).
-   */
-  const REPORTED: Record<string, number> = {
-    'components/asset/genetics.tsx': 1,
-    'components/asset/identity-document.tsx': 1,
-    'components/cell/cell-transactions.tsx': 1,
-    'components/cell/code-cell-board.tsx': 3,
-    'components/fiber/fiber-channel-board.tsx': 1,
-    'components/fiber/fiber-channel-step.tsx': 3,
-    'components/scripts/script-code-evidence.tsx': 3,
-    'app/forks/[height]/[orphan]/client-page.tsx': 1,
-    'app/network/nodes-table.tsx': 1,
-    'app/scripts/[name]/client-page.tsx': 1,
-    'app/tx/[hash]/client-page.tsx': 1,
-  };
-
+  // B3 round 4: the seventeen sites reported in round 3 are cleared, and the list that kept them
+  // is gone with them; every site anywhere is refused
   it('never puts break-all on an element that holds words', () => {
-    const found = sources.flatMap(breakAllOnWords);
-    const byPath = new Map<string, string[]>();
-    for (const site of found) {
-      const path = site.replace(/:\d+$/, '');
-      byPath.set(path, [...(byPath.get(path) ?? []), site]);
-    }
-    const unreported = [...byPath].flatMap(([path, sites]) =>
-      sites.length > (REPORTED[path] ?? 0) ? sites : []
-    );
-    expect(unreported).toEqual([]);
-    const gone = Object.entries(REPORTED).filter(
-      ([path, n]) => (byPath.get(path)?.length ?? 0) < n
-    );
-    expect(gone).toEqual([]);
+    expect(sources.flatMap(breakAllOnWords)).toEqual([]);
   });
 });
