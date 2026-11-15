@@ -42,6 +42,7 @@ import {
   pageFixture,
   fixtureHash,
 } from '@/__tests__/msw/fixtures/address';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -352,13 +353,14 @@ describe('Address v3', () => {
       within(nav)
         .getAllByRole('link')
         .map((l) => l.textContent)
-    ).toEqual(['5\u00a0DAO cells', '9\u00a0tokens', '14\u00a0objects', '1\u00a0identity']);
+      // re-pinned (A4 round 2): each count a unit, its number and noun joined by a plain space
+    ).toEqual(['5 DAO cells', '9 tokens', '14 objects', '1 identity']);
     // PA-25 (the lead's follow-up): the nav opened with a loose "·" that was left alone at a line's
     // start when the nav wrapped under the heading. The heading and the links are one separated
     // list: each link carries its own dot, none is loose text.
     const list = nav.closest('[data-dotted]');
     expect(list).not.toBeNull();
-    expect(list).toContainElement(screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' }));
+    expect(list).toContainElement(screen.getByRole('heading', { name: 'Holdings 40 cells' }));
     expect(nav.querySelectorAll('[data-dotted-separator]')).toHaveLength(4);
     const loose = [...nav.querySelectorAll('*'), nav].flatMap((el) =>
       [...el.childNodes].filter(
@@ -371,14 +373,12 @@ describe('Address v3', () => {
     expect(loose).toHaveLength(0);
     // Phase 5 (A21): the holdings run on the live cells; the count nav stands beside the heading,
     // outside its name, and the section is named by the heading.
-    const heading = screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' });
+    const heading = screen.getByRole('heading', { name: 'Holdings 40 cells' });
     expectPrompt(heading, 'Holdings', '40 cells');
     // re-pinned (PA-25): the heading and the nav are items of one separated list
     expect(heading.closest('[data-dotted]')).toContainElement(nav);
     expect(heading).not.toContainElement(nav);
-    expect(screen.getByRole('region', { name: 'Holdings 40\u00a0cells' })).toContainElement(
-      heading
-    );
+    expect(screen.getByRole('region', { name: 'Holdings 40 cells' })).toContainElement(heading);
     expect(screen.queryByText(/holdings, one mark each/)).toBeNull();
     expect(await screen.findByRole('link', { name: 'valar.bit' })).toHaveAttribute(
       'href',
@@ -1074,7 +1074,10 @@ describe('Address v3', () => {
     }));
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('1 deposit · 1 withdrawal request')).toBeInTheDocument();
+    // re-pinned (A4 round 2): the counts are units of their own in the line
+    expect(
+      await screen.findByText(fullText('1 deposit · 1 withdrawal request'))
+    ).toBeInTheDocument();
     const request = addressProducerCells.data.find((c) => c.dao?.status === 'withdrawing')!;
     expect(request.dao!.lockScriptHash).not.toBe(request.lockScriptHash);
     expect(screen.getByRole('link', { name: 'withdraw requested' })).toHaveAttribute(
@@ -1414,9 +1417,7 @@ describe('Address · consistency round (C13, C14)', () => {
     vi.mocked(api.getAddressTokens).mockResolvedValue(pageFixture([]));
     render(<AddressDetailPage />);
     await loaded();
-    const holdings = screen
-      .getByRole('heading', { name: 'Holdings 40\u00a0cells' })
-      .closest('section')!;
+    const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' }).closest('section')!;
     expect(within(holdings).getByText('no tokens')).toBeInTheDocument();
     expect(within(holdings).queryByRole('heading', { name: /Tokens$/ })).toBeNull();
     expect(within(holdings).getByRole('heading', { name: /Objects$/ })).toBeInTheDocument();
@@ -1426,9 +1427,7 @@ describe('Address · consistency round (C13, C14)', () => {
   it('leads Holdings with the composition block, every tier counted', async () => {
     render(<AddressDetailPage />);
     await loaded();
-    const holdings = screen
-      .getByRole('heading', { name: 'Holdings 40\u00a0cells' })
-      .closest('section')!;
+    const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' }).closest('section')!;
     const comp = within(holdings).getByRole('group', { name: 'Object composition' });
     expect(comp).toHaveTextContent('11 of 14 fully on-chain');
     expect(
@@ -1511,7 +1510,7 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(tier1.querySelector('section')).toHaveAttribute('aria-label', 'Balance');
     const balance = screen.getByRole('region', { name: 'Balance' });
     const metrics = screen.getByRole('region', { name: 'Metrics' });
-    const holdings = screen.getByRole('heading', { name: 'Holdings 40\u00a0cells' });
+    const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' });
     expect(
       balance.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();

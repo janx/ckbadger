@@ -11,6 +11,7 @@ import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { TopicSection } from '@/app/network/topic-section';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 const TOP_N = 8;
 /**
@@ -144,8 +145,8 @@ export function HostingBar() {
   if (total !== data.verifiedRetained)
     return (
       <p role="alert" className="text-negative text-small">
-        Hosting networks cover {formatCount(total, 'peer')}, not the {data.verifiedRetained}{' '}
-        verified.
+        Hosting networks cover {unitNode(formatCount(total, 'peer'))}, not the{' '}
+        {data.verifiedRetained} verified.
       </p>
     );
   const ranked = [...byOrg.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));

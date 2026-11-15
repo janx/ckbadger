@@ -4,6 +4,7 @@ import { render } from '@/__tests__/utils/test-utils';
 import { BlockPosition } from '@/components/blocks/block-position';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const parent = `0x${'a'.repeat(64)}`;
 const uncle = `0x${'b'.repeat(64)}`;
@@ -118,7 +119,7 @@ describe('BlockPosition', () => {
     const current = mobile.getByRole('link', { name: 'Current block #932' }).parentElement!;
     expect(current).toHaveStyle({ backgroundColor: 'var(--c-tile-current)' });
     expect(current.className).not.toMatch(/\[#/);
-    expect(mobile.getAllByText('1 proposed → committed · +2 blocks')).toHaveLength(2);
+    expect(mobile.getAllByText(fullText('1 proposed → committed · +2 blocks'))).toHaveLength(2);
     expect(mobile.getByRole('link', { name: `Parent ${parent}` })).toHaveAttribute(
       'href',
       `/mainnet/blocks/${parent}`

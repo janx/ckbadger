@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '../utils/test-utils';
 import { TopicHero } from '@/components/ui/topic-hero';
+import { fullText } from '@/__tests__/utils/full-text';
 
 describe('TopicHero (Fiber / Forks board hero)', () => {
   it('sets the index title and a body lede beside a grid of hero figures with meta labels, in order (R1)', () => {
@@ -116,7 +117,7 @@ describe('TopicHero figure layout (hierarchy v3, R11, R13)', () => {
     expect(values).toHaveLength(3);
     for (const dd of values) expect(dd).toHaveClass('text-section', 'text-text-bright', 'w-fit');
     expect(values[0]).toHaveTextContent(/^345 · since 2025-02-28 · 1 in USDI$/);
-    expect(within(values[0]).getByText(/since 2025-02-28/)).toHaveClass(
+    expect(within(values[0]).getByText(fullText(/since 2025-02-28/))).toHaveClass(
       'text-small',
       'text-text-dim'
     );

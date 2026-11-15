@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { HexMap } from '@/components/ui/hex-map';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const fields = [
   { name: 'Version', start: 0, end: 1, valueHex: '0x01' },
@@ -268,7 +269,7 @@ describe('protocol byte evidence', () => {
     // 32 bytes in two rows, then the rest folded with its full hex
     expect(detail.querySelectorAll('[data-hex-row]')).toHaveLength(2);
     expect(within(detail).getByText('… 68 more bytes')).toBeInTheDocument();
-    const all = within(detail).getByText('All 100 bytes of Long').closest('details')!;
+    const all = within(detail).getByText(fullText('All 100 bytes of Long')).closest('details')!;
     expect(all).not.toHaveAttribute('open');
     expect(all.querySelector('pre')).toHaveTextContent('0x' + '00'.repeat(100));
     // a field of 64 bytes or fewer is shown whole

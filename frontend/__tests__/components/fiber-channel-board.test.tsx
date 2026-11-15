@@ -9,6 +9,7 @@ import type { FiberChannelDetail, FiberChannelEvidence } from '@/lib/api';
 import producerDetail from '../fixtures/fiber-open-detail.json';
 import producerEvidence from '../fixtures/fiber-evidence-open.json';
 import c07e from '../fixtures/fiber-channel-c07e.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/components/fiber/fiber-channel-step', () => ({
   FiberChannelStep: (props: {
@@ -274,7 +275,7 @@ describe('FiberChannelBoard', () => {
       expect(tier2).toContainElement(heading);
       expect(heading).toHaveClass('text-body', 'text-text');
     }
-    expect(screen.getByText('Fiber Funding Lock · args, 20 bytes')).toBeInTheDocument();
+    expect(screen.getByText(fullText('Fiber Funding Lock · args, 20 bytes'))).toBeInTheDocument();
     expect(
       screen.getByText('blake160 of the two parties’ aggregated public key')
     ).toBeInTheDocument();
@@ -336,7 +337,9 @@ describe('FiberChannelBoard', () => {
       },
     };
     render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={v1} />);
-    expect(screen.getByText(/Fiber Commitment Lock · args, 58 bytes/)).toHaveTextContent('full58');
+    expect(screen.getByText(fullText(/Fiber Commitment Lock · args, 58 bytes/))).toHaveTextContent(
+      'full58'
+    );
     expect(screen.getByText('Settlement hash / flag').nextElementSibling).toHaveTextContent(
       `0x${'66'.repeat(20)} · 1`
     );

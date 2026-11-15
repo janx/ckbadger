@@ -3,6 +3,7 @@ import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { ObjectMedia } from '@/components/asset/object-media';
 import type { SporeDetail } from '@/lib/api';
 import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
+import { fullText } from '@/__tests__/utils/full-text';
 
 // A Bitcoin txid shaped like the Nervape 3x one (0bfb…5719); the middle digits are a fixture.
 const txid = '0bfb6dd6b0ac0fa8d8a9a0c8ad66d33c63cb34e08cf8ea76b8b6a1fbd2f15719';
@@ -235,7 +236,7 @@ it('shows the first reference and the action under the title, the rest in the di
   expect(box).not.toHaveTextContent(malformed);
   expect(within(box).queryByText('Not a recognisable btcfs inscription reference.')).toBeNull();
   // they are in the disclosure that follows it, whole: URI and reading
-  const details = screen.getByText('Media dependencies · 3 sources').closest('details')!;
+  const details = screen.getByText(fullText('Media dependencies · 3 sources')).closest('details')!;
   expect(follows(box, details)).toBe(true);
   expect(within(details).getByText(later)).toBeInTheDocument();
   expect(

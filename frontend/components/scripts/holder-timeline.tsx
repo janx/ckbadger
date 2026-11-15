@@ -9,6 +9,7 @@ import { holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
 import { shortenHash } from '@/lib/shorten';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
+import { unitNode } from '@/components/ui/units';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -281,8 +282,9 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
         )}
         <span>{signerState(reading)}</span>
         <span>
-          {formatCount(holders.length, 'holder')} · {formatCount(family.versionsCount, 'version')} ·{' '}
-          {formatCount(holders.length - 1, 'handover')}
+          {unitNode(formatCount(holders.length, 'holder'))} ·{' '}
+          {unitNode(formatCount(family.versionsCount, 'version'))} ·{' '}
+          {unitNode(formatCount(holders.length - 1, 'handover'))}
         </span>
         <TapOrHoverHint className="ml-auto" />
       </div>

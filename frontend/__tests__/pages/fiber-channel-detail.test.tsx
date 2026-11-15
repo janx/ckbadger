@@ -5,6 +5,7 @@ import { server } from '@/__tests__/msw/server';
 import FiberChannelDetailPage from '@/app/fiber/channels/[id]/client-page';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import fixture from '@/__tests__/fixtures/fiber-channel-c07e.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const id = fixture.channel.channelId;
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -67,7 +68,9 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
     expect(screen.getByRole('heading', { name: /^3 · Settle/ })).toBeInTheDocument();
     // the tier-2 witnesses row reads the step's own transaction (sizes and fee)
     expect(
-      await screen.findByText('2 witnesses, 85, 85 B · fee 920 shannons, from outside inputs')
+      await screen.findByText(
+        fullText('2 witnesses, 85, 85 B · fee 920 shannons, from outside inputs')
+      )
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^2 · Force close/ })).toHaveTextContent(
       'epoch 11,639 · 836 / 1,434'

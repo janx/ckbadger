@@ -11,6 +11,7 @@ import type { SealId, SealState } from '@/lib/seal/stones';
 import { cn } from '@/lib/utils';
 import { CELL_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /** A transaction's stone (the seals by kind): its hash and the cells it consumed and created. */
 export type TxSealId = Extract<SealId, { kind: 'tx' }>;
@@ -386,7 +387,7 @@ export function TxStructure({
                     strokeDasharray="4 3"
                   />
                 </svg>
-                {l.from} → {l.to} · {l.label}
+                {unitNode(l.from)} → {l.to} · {l.label}
               </button>
             </li>
           ))}
@@ -493,7 +494,9 @@ function SheetHead({
       )}
     >
       <h3 className={cn('flex flex-col', mirrored)}>
-        <span className="text-text-bright text-section">{formatCount(count, 'cell')}</span>{' '}
+        <span className="text-text-bright text-section">
+          {unitNode(formatCount(count, 'cell'))}
+        </span>{' '}
         <span className="eyebrow text-text-dim text-meta order-first">{side}</span>
       </h3>
       {total !== undefined && (

@@ -109,7 +109,8 @@ describe('DAO depositors page (DAO-12)', () => {
       // U-09 (re-pinned): the phone row's depositor at the tight size, 4…6 (the lead's ruling)
       { key: 'holder', tone: 'head', left: '1ckb1…sd2hqn', right: '999.00000000 CKB' },
       { key: 'axis', tone: 'quiet', left: '01%', right: null },
-      { key: 'share', tone: 'quiet', left: '1.00%', right: '1\u00a0deposit' },
+      // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
+      { key: 'share', tone: 'quiet', left: '1.00%', right: '1 deposit' },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });

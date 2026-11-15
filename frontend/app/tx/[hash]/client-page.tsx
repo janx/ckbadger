@@ -85,6 +85,7 @@ import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
+import { unitNode, unitText } from '@/components/ui/units';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
@@ -461,7 +462,7 @@ function WitnessRow({
           )}
         </span>
         <span className="text-text-dim">
-          {formatCount(w.size, 'B', 'B')}
+          {unitNode(formatCount(w.size, 'B', 'B'))}
           {readers.length > 0 && ` · read by ${readers.join(', ')}`}
         </span>
       </span>
@@ -1300,7 +1301,9 @@ export default function TransactionDetailPage() {
             </span>
             {!isProvisional && (
               <span className="text-text-dim text-small">
-                {formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')}
+                {unitNode(
+                  formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')
+                )}
               </span>
             )}
           </div>
@@ -1359,8 +1362,10 @@ export default function TransactionDetailPage() {
                     compact
                     quiet
                   />
-                  {feePaidBy.length > 1 &&
-                    ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`}
+                  {unitNode(
+                    feePaidBy.length > 1 &&
+                      ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`
+                  )}
                 </dd>
               )}
             </div>
@@ -1707,7 +1712,8 @@ export default function TransactionDetailPage() {
                           lifecycle.commitmentDistance !== undefined && (
                             <>
                               {' '}
-                              · committed {formatCount(lifecycle.commitmentDistance, 'block')} later
+                              · committed{' '}
+                              {unitNode(formatCount(lifecycle.commitmentDistance, 'block'))} later
                             </>
                           )}{' '}
                         · window {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
@@ -1776,7 +1782,7 @@ export default function TransactionDetailPage() {
                   )}
                   ,{' '}
                   <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>
-                    {line}
+                    {unitText(line)}
                   </span>
                 </dd>
               </div>,

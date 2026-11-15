@@ -13,6 +13,7 @@ import { formatCount } from '@/lib/format-count';
 import { HexCode } from '@/components/ui/hex-code';
 import { Dotted } from '@/components/ui/phone-row';
 import { shortenHash } from '@/lib/shorten';
+import { unitNode } from '@/components/ui/units';
 
 /** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
 export type BlockNeighbour = Pick<
@@ -209,7 +210,7 @@ export function BlockPosition({
           >
             <p className="text-gold">
               {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +
-              {formatCount(arc.to - arc.from, 'block')}
+              {unitNode(formatCount(arc.to - arc.from, 'block'))}
             </p>
             <p className="flex flex-wrap items-center gap-2">
               <Link href={`/blocks/${arc.from}`}>{formatBlockNumber(arc.from)}</Link>
@@ -220,7 +221,7 @@ export function BlockPosition({
             </p>
             {arc.uncles.size > 0 && (
               <p className="text-text-dim">
-                Includes proposals carried by {formatCount(arc.uncles.size, 'uncle')}.
+                Includes proposals carried by {unitNode(formatCount(arc.uncles.size, 'uncle'))}.
               </p>
             )}
           </div>

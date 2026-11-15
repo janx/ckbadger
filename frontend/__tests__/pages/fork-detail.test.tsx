@@ -11,6 +11,7 @@ import unincludedFixture from '@/__tests__/fixtures/fork-api-producer/fork-uninc
 import multiFixture from '@/__tests__/fixtures/fork-api-producer/fork-multi-uncle-detail.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const route = { height: '10', orphan: '17404795' };
 vi.mock('@/src/navigation', () => ({
@@ -53,7 +54,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     // Consistency plan C1: the tab names the page.
     await waitFor(() => expect(document.title).toBe('#10 · 17404795 · fork · CKBadger'));
     // U-16 (re-pinned): the detection time is one unit of its own, inside the line
-    expect(screen.getByText(/block deep/)).toHaveTextContent(
+    expect(screen.getByText(fullText(/block deep/))).toHaveTextContent(
       '1 block deep · detected 2025-08-01 06:13:20 UTC+8 · this node switched once'
     );
     expect(screen.queryByText(/Fork event #1754000000000/)).toBeNull();
@@ -102,7 +103,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     expect(within(switches).queryByRole('link', { name: /#11/ })).toBeNull();
     // the legend's times fit their column: the date is in the header (visual pass)
-    expect(screen.getByText('before 06:13:20 UTC+8')).toBeInTheDocument();
+    expect(screen.getByText(fullText('before 06:13:20 UTC+8'))).toBeInTheDocument();
     // drawn to the width at every size: no sideways scroller and no "scroll sideways" caption (V4)
     expect(screen.queryByText('scroll sideways for both branches')).toBeNull();
     expect(tree.closest('.overflow-x-auto')).toBeNull();
@@ -148,7 +149,8 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(phoneLines(dropped).map((l) => l.key)).toEqual(['identity', 'miner', 'fate']);
     expect(phoneLines(dropped)[0].left).toMatch(/^#11′ 0x/);
     expect(phoneLines(dropped)[1].left).toMatch(/^miner /);
-    expect(phoneLines(dropped)[1].right).toMatch(/^\d+\u00a0txs?$/);
+    // re-pinned (A4 round 2): a count is a unit, its number and noun joined by a plain space
+    expect(phoneLines(dropped)[1].right).toMatch(/^\d+ txs?$/);
     const txs = screen.getAllByTestId('fork-tx-row-mobile');
     const orphanHash = unincludedFixture.orphanedTransactions[1].hash;
     const orphan = txs.find((row) => row.textContent!.includes(orphanHash))!;

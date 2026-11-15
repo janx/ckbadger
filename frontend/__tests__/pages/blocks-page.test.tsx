@@ -584,7 +584,8 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [head, , figures] = phoneLines(cards[0]);
-      expect([head.left, head.right]).toEqual(['#20,987,284', '999\u00a0txs · 59m ago']);
+      // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
+      expect([head.left, head.right]).toEqual(['#20,987,284', '999 txs · 59m ago']);
       // the consensus detail stands with the quiet figures, after the hash, each count unbroken
       expect(figures.left).toMatch(/^0x5e5e…5e5e · 12\sproposals · 1\suncle · /);
       const quiet = cards[0].querySelector('[data-line="figures"]') as HTMLElement;

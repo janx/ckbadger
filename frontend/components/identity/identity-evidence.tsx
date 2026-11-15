@@ -12,6 +12,7 @@ import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 type Of<K extends ItemProtocol['kind']> = Extract<ItemProtocol, { kind: K }>;
 
@@ -150,10 +151,12 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </Field>
           <Dim> → </Dim>
           <Field name="expired_at" label="expires">
-            {d.expiredAt === null ? (
-              <Dim>not recorded</Dim>
-            ) : (
-              formatUtc8DateTime(Number(d.expiredAt) * 1000)
+            {unitNode(
+              d.expiredAt === null ? (
+                <Dim>not recorded</Dim>
+              ) : (
+                formatUtc8DateTime(Number(d.expiredAt) * 1000)
+              )
             )}
           </Field>
         </>

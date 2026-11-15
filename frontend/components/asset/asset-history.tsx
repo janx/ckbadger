@@ -17,6 +17,7 @@ import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 const DAY = 86400000;
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
@@ -277,7 +278,7 @@ export function AssetHistory({
   const peakItem = peak && (
     <span title="the most CKB its cells held on any complete day">
       peak <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
-      {peak.date}
+      {unitNode(peak.date)}
     </span>
   );
   const weekText =
@@ -297,7 +298,7 @@ export function AssetHistory({
           className="text-text-bright"
           title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
         >
-          {point.date}
+          {unitNode(point.date)}
         </span>,
         <>
           held <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />

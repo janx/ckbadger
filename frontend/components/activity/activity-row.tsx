@@ -48,6 +48,7 @@ import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
@@ -944,7 +945,9 @@ function Participants({
           onClick={() => setExpanded((e) => !e)}
           className="text-interactive hover:text-jade text-small self-start bg-transparent pl-[18px] leading-[18px] transition-colors"
         >
-          {expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`}
+          {unitNode(
+            expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`
+          )}
         </button>
       )}
     </div>

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import MinerAddressDistributionPage from '@/app/charts/miner-address-distribution/page';
 import { api } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -44,7 +45,8 @@ describe('MinerAddressDistributionPage', () => {
     expect(await screen.findByText('Miners')).toBeInTheDocument();
     // Re-pinned for CH-03: the window with an arrow; a lock hash shortened like an address, its
     // kind said once under the ranking instead of a bracketed word on each row.
-    expect(screen.getByText('2026-07-23 → 2026-07-29 · 10 blocks')).toBeInTheDocument();
+    // re-pinned (A4 round 2): the range and the count are units of their own in the line
+    expect(screen.getByText(fullText('2026-07-23 → 2026-07-29 · 10 blocks'))).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Resolved Pool' })).toHaveAttribute(
       'href',
       `/mainnet/address/${minerAddress}`

@@ -14,6 +14,7 @@ import { ShortId } from '@/components/ui/short-id';
 import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
+import { unitNode } from '@/components/ui/units';
 
 export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind: 'm-nft' }>;
 
@@ -421,9 +422,11 @@ export function IdentitySummary({
           ) : (
             '. Its expiry is not recorded. '
           )}
-          {owners.changes === 0
-            ? 'Its owner has never changed. '
-            : `Its owner changed ${times(owners.changes)}, most recently on ${formatUtc8Date(owners.since.cell.timestamp)}. `}
+          {unitNode(
+            owners.changes === 0
+              ? 'Its owner has never changed. '
+              : `Its owner changed ${times(owners.changes)}, most recently on ${formatUtc8Date(owners.since.cell.timestamp)}. `
+          )}
           {d.records.length
             ? `${plural(d.records.length, 'record is', 'records are')} set`
             : 'No records are set'}
@@ -451,11 +454,13 @@ export function IdentitySummary({
             <NoBreak>{formatUtc8Date(mint.timestamp)}</NoBreak>
           </B>{' '}
           into <B>{wallet}</B>
-          {!isLive
-            ? '; the cell is no longer live. '
-            : owners.changes === 0
-              ? ' that still holds it. '
-              : `; since ${formatUtc8Date(owners.since.timestamp)} ${lockPhrase(owners.since.lockName)} holds it. `}
+          {unitNode(
+            !isLive
+              ? '; the cell is no longer live. '
+              : owners.changes === 0
+                ? ' that still holds it. '
+                : `; since ${formatUtc8Date(owners.since.timestamp)} ${lockPhrase(owners.since.lockName)} holds it. `
+          )}
           {term.kind === 'term' && (
             <>
               {now >= term.expiresAt ? (

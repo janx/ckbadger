@@ -81,9 +81,7 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
     // longer repeated as a "Capacity entering the pool" line under the sheets
     const consumed = container.querySelector('[data-sheet="consumed"]') as HTMLElement;
     const created = container.querySelector('[data-sheet="created"]') as HTMLElement;
-    expect(
-      within(consumed).getByRole('heading', { name: '1\u00a0cell consumed' })
-    ).toBeInTheDocument();
+    expect(within(consumed).getByRole('heading', { name: '1 cell consumed' })).toBeInTheDocument();
     expect(consumed.querySelector('[data-sheet-total]')).toHaveTextContent(/^1,062(\.0+)? CKB$/);
     expect(created.querySelector('[data-sheet-total]')).toHaveTextContent(/^1,061\.99999545 CKB$/);
     expect(within(created).getByTestId('tx-fee')).toHaveTextContent(/^fee0\.00000455 CKB$/);

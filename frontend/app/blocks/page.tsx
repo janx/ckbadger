@@ -32,6 +32,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import type { ShortSize } from '@/lib/shorten';
 import { useState } from 'react';
+import { unitNode } from '@/components/ui/units';
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
@@ -420,7 +421,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
           ),
           right: (
             <>
-              {formatCount(block.transactionSizes.length, 'tx', 'txs')} ·{' '}
+              {unitNode(formatCount(block.transactionSizes.length, 'tx', 'txs'))} ·{' '}
               <Utc8Age timestamp={block.timestamp} />
             </>
           ),

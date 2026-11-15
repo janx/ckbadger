@@ -31,6 +31,7 @@ import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import { percentOf } from '@/lib/format-unit';
 import { isAwaited, type ReadState } from '@/lib/query-state';
+import { unitNode } from '@/components/ui/units';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -517,7 +518,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   );
   const summary = (kind: AddressCellClass) => (
     <>
-      {formatCount(holdings.classes[kind].cellCount, 'cell')} ·{' '}
+      {unitNode(formatCount(holdings.classes[kind].cellCount, 'cell'))} ·{' '}
       <ExactCkb
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
@@ -559,7 +560,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   onFocus={() => setActive(c.key)}
                   onBlur={() => setActive(null)}
                 >
-                  {formatCount(c.count, c.one, c.many)}
+                  {unitNode(formatCount(c.count, c.one, c.many))}
                 </a>
               )),
               { role: 'holdings-nav', className: 'text-text-dim', nav: { label: 'Holdings' } }
@@ -586,7 +587,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           <span className="text-text-dim">On-chain space they take</span>
           <span>
             {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
-            {formatCount(holdings.liveCellsCount, 'cell')}
+            {unitNode(formatCount(holdings.liveCellsCount, 'cell'))}
           </span>
         </div>
         <div
@@ -670,7 +671,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           summary={
             <>
               {holdings.holdings.object.toLocaleString('en-US')} in{' '}
-              {formatCount(holdings.objectCollections.length, 'collection')} · {held_('object')}
+              {unitNode(formatCount(holdings.objectCollections.length, 'collection'))} ·{' '}
+              {held_('object')}
             </>
           }
           active={active}
@@ -687,8 +689,10 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             ) : (
               <>
                 <p className="text-text-dim text-small pt-3">
-                  {formatCount(holdings.depositCellsCount, 'deposit')} ·{' '}
-                  {formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')}
+                  {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
+                  {unitNode(
+                    formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')
+                  )}
                 </p>
                 <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
                   <div>
@@ -799,7 +803,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             summary={
               <>
                 {holdings.holdings.token.toLocaleString('en-US')} kinds in{' '}
-                {formatCount(holdings.classes.token.cellCount, 'cell')} · {held_('token')}
+                {unitNode(formatCount(holdings.classes.token.cellCount, 'cell'))} · {held_('token')}
               </>
             }
             active={active}
@@ -899,9 +903,11 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       </div>
                       <div className="text-text-dim text-small flex flex-wrap justify-between gap-2">
                         <span>
-                          {c.expiresAt === null
-                            ? 'Expiry unavailable'
-                            : `expires ${formatUtc8Date(c.expiresAt * 1000)}`}{' '}
+                          {unitNode(
+                            c.expiresAt === null
+                              ? 'Expiry unavailable'
+                              : `expires ${formatUtc8Date(c.expiresAt * 1000)}`
+                          )}{' '}
                           · held since{' '}
                           <Link href={`/blocks/${c.heldSinceBlock!}`}>
                             {formatBlockNumber(c.heldSinceBlock!)}

@@ -67,15 +67,37 @@ function sources(dir: string): string[] {
   });
 }
 
+/**
+ * Files another lane holds while this gate lands (the lead's brief, A4 round 2: lane B3 works on
+ * the trait-value and genetics files in parallel); each goes when that lane has protected its
+ * units. An entry that no longer has a finding fails (the last test).
+ */
+const ELSEWHERE: Readonly<Record<string, string>> = {
+  'components/asset/genetics.tsx': "lane B3's genetics captions, in parallel",
+  'components/asset/collection-evidence.tsx': "lane B3's trait-value files, in parallel",
+  'components/asset/collection-objects.tsx': "lane B3's trait-value files, in parallel",
+  'components/ui/allele-gel.tsx': "lane B3's genetics files, in parallel",
+  'components/ui/sequencing-gel.tsx': "lane B3's genetics files, in parallel",
+};
+
 describe('every unit written as text is one unit (A4 round 2)', () => {
+  const findings = (rel: string) =>
+    unprotectedUnits(parse(readFileSync(join(ROOT, rel), 'utf8'))).map(
+      (f) => `${rel}:${f.line}: ${f.kind}: ${f.text}`
+    );
+
   it('writes no date, shortened id, count or date field as plain text', () => {
     const found: string[] = [];
     for (const dir of ['app', 'components'])
       for (const path of sources(join(ROOT, dir))) {
         const rel = relative(ROOT, path);
-        for (const f of unprotectedUnits(parse(readFileSync(path, 'utf8'))))
-          found.push(`${rel}:${f.line}: ${f.kind}: ${f.text}`);
+        if (rel in ELSEWHERE) continue;
+        found.push(...findings(rel));
       }
     expect(found).toEqual([]);
+  });
+
+  it('keeps no file aside that has nothing left to protect', () => {
+    for (const rel of Object.keys(ELSEWHERE)) expect(findings(rel), rel).not.toEqual([]);
   });
 });

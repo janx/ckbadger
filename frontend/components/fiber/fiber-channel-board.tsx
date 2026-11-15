@@ -26,6 +26,7 @@ import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
 import type { ShortSize } from '@/lib/shorten';
+import { unitNode } from '@/components/ui/units';
 
 type Party = FiberChannel['observedParties'][number];
 
@@ -383,7 +384,7 @@ function StageWitnesses({ stage }: { stage: FiberChannelEvidence['stages'][numbe
   const sizes = tx.data?.witnessDetails?.map((witness) => witness.size);
   return (
     <span>
-      {formatCount(stage.witnessCount, 'witness', 'witnesses')}
+      {unitNode(formatCount(stage.witnessCount, 'witness', 'witnesses'))}
       {sizes && sizes.length > 0 && `, ${sizes.join(', ')} B`}
       {` · fee ${BigInt(stage.fee).toLocaleString('en-US')} shannons, ${
         stage.feeSource === 'channel_only' ? 'out of the channel' : 'from outside inputs'
@@ -573,7 +574,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                       <div>
                         <div className="text-text-dim">
                           Fiber Funding Lock · args,{' '}
-                          {formatCount(argsBytes(evidence.funding.lockArgs), 'byte')}
+                          {unitNode(formatCount(argsBytes(evidence.funding.lockArgs), 'byte'))}
                         </div>
                         <div className="text-text-bright break-all">
                           {evidence.funding.lockArgs}
@@ -593,7 +594,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         <div>
                           <div className="text-text-dim mb-1">
                             Fiber Commitment Lock · args,{' '}
-                            {formatCount(argsBytes(tracked.lockArgs), 'byte')} ·{' '}
+                            {unitNode(formatCount(argsBytes(tracked.lockArgs), 'byte'))} ·{' '}
                             {tracked.lockFormat}
                           </div>
                           <Grid>

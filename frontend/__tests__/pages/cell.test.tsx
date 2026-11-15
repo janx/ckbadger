@@ -370,14 +370,12 @@ describe('CellDetailPage', () => {
     const member = (index: number) => ({ txHash: `0x${'cd'.repeat(32)}`, outputIndex: index });
     getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0), member(1)] });
     const { unmount } = view();
-    const heading = await screen.findByRole('heading', { name: 'Dep group 2\u00a0items' });
+    const heading = await screen.findByRole('heading', { name: 'Dep group 2 items' });
     expect(heading.parentElement!.parentElement!.querySelectorAll('li')).toHaveLength(2);
     unmount();
     getCell.mockResolvedValue({ ...base, isDepGroup: true, depGroupItems: [member(0)] });
     view();
-    expect(
-      await screen.findByRole('heading', { name: 'Dep group 1\u00a0item' })
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Dep group 1 item' })).toBeInTheDocument();
   });
   it('refuses a dep group without its members rather than drawing an empty list', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});

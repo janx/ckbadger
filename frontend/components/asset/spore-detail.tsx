@@ -45,6 +45,7 @@ import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -235,7 +236,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             {coll && collectionName && (
               <span>
                 {' '}
-                {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`}
+                {unitNode(
+                  `One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`
+                )}
               </span>
             )}
           </p>

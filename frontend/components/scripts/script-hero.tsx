@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { Dotted } from '@/components/ui/phone-row';
+import { unitNode } from '@/components/ui/units';
 
 // Hierarchy v3 (plan §1b R11, R13; lane C): the pieces of the Scripts pages' heroes, after the DAO
 // page's — one figure with its companion on the same baseline row, and one row of quiet metrics.
@@ -86,10 +87,10 @@ export function HeroMetric({
           parts={[
             ...value.map((part, i) => (
               <span key={i} className="text-text-bright text-section">
-                {part}
+                {unitNode(part)}
               </span>
             )),
-            note && <span className="text-text-dim">{note}</span>,
+            note && <span className="text-text-dim">{unitNode(note)}</span>,
           ]}
         />
       </dd>

@@ -43,6 +43,7 @@ import { formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { DocumentTitle } from '@/lib/use-document-title';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 type MinerBlock = {
   number: number;
@@ -195,7 +196,7 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
           Fork at {formatBlockNumber(event.forkPointNumber)}
         </h1>
         <span className="text-text-dim text-body">
-          {formatCount(event.depth, 'block')} deep · detected{' '}
+          {unitNode(formatCount(event.depth, 'block'))} deep · detected{' '}
           <Utc8DateTime timestamp={event.detectedAt} /> · this node switched once
         </span>
       </div>
@@ -215,7 +216,9 @@ function StoredFork({ event }: { event: ReorgEvent }) {
       <ShortId value={event.oldTipHash} kind="hash" size="head" /> to{' '}
       {formatBlockNumber(event.newTipNumber)}{' '}
       <ShortId value={event.newTipHash} kind="hash" size="head" />
-      {` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.`}
+      {unitNode(
+        ` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.`
+      )}
       {event.revertedByEvent ? ' A later switch on this node reversed it.' : ''}
     </>
   );
@@ -429,7 +432,7 @@ function StoredEvent({
           <Utc8DateTime timestamp={event.detectedAt} />
         </span>
         <span className="text-text-dim">depth</span>
-        <span>{formatCount(event.depth, 'block')}</span>
+        <span>{unitNode(formatCount(event.depth, 'block'))}</span>
         <span className="text-text-dim">old tip</span>
         <span className="min-w-0">
           {formatBlockNumber(event.oldTipNumber)} <FullHash hash={event.oldTipHash} />
@@ -526,14 +529,16 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
           </div>
           <div className="text-body mt-2 grid grid-cols-[34px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 sm:grid-cols-[34px_190px_minmax(0,1fr)]">
             <span className="text-text-bright">{TIP_MARKS[1]}</span>
-            <span className="text-text-dim">before {formatUtc8Time(event.detectedAt)}</span>
+            <span className="text-text-dim">
+              before {unitNode(formatUtc8Time(event.detectedAt))}
+            </span>
             <span className="text-text col-span-2 sm:col-span-1">
               this node’s tip is {formatBlockNumber(event.oldTipNumber)}{' '}
               <ShortId className="text-text-dim" value={event.oldTipHash} kind="hash" size="row" />{' '}
               {where(event.oldTipHash)}
             </span>
             <span className="text-text-bright">{TIP_MARKS[2]}</span>
-            <span className="text-text-dim">{formatUtc8Time(event.detectedAt)}</span>
+            <span className="text-text-dim">{unitNode(formatUtc8Time(event.detectedAt))}</span>
             <span className="text-text col-span-2 sm:col-span-1">
               the node switches to{' '}
               {onMain(event.newTipHash) ? (

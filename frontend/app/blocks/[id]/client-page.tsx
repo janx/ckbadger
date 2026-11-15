@@ -38,6 +38,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { ClockText, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -274,7 +275,7 @@ export default function BlockDetailPage() {
           // plate from the page's left edge, where the tab row and the sections start (C10).
           lede={
             <p data-testid="block-summary" className="text-body max-w-[80ch] leading-relaxed">
-              {formatCount(block.transactionsCount, 'transaction')}
+              {unitNode(formatCount(block.transactionsCount, 'transaction'))}
               {block.minerAddress && (
                 <>
                   , mined by{' '}
@@ -286,15 +287,18 @@ export default function BlockDetailPage() {
                   />
                 </>
               )}{' '}
-              on <Utc8Date timestamp={block.timestamp} /> at {formatUtc8Time(block.timestamp)}.
+              on <Utc8Date timestamp={block.timestamp} /> at{' '}
+              {unitNode(formatUtc8Time(block.timestamp))}.
               {block.miningReward !== null ? (
                 <>
                   {' '}
                   The miner earns {amount(block.miningReward, 'reward')} for this block
-                  {paidIn !== null && <>, paid {formatCount(paidIn, 'block')} later</>}.
+                  {paidIn !== null && <>, paid {unitNode(formatCount(paidIn, 'block'))} later</>}.
                 </>
               ) : (
-                paidIn !== null && <> Its reward is paid {formatCount(paidIn, 'block')} later.</>
+                paidIn !== null && (
+                  <> Its reward is paid {unitNode(formatCount(paidIn, 'block'))} later.</>
+                )
               )}
             </p>
           }
@@ -574,7 +578,7 @@ export default function BlockDetailPage() {
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Block bytes</dt>
                 {/* R2b-a 5: `size` is the molecule-serialized block. */}
-                <dd>{formatCount(block.size, 'byte')}, molecule-serialized</dd>
+                <dd>{unitNode(formatCount(block.size, 'byte'))}, molecule-serialized</dd>
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
@@ -894,9 +898,11 @@ function CommittedFrom({
   const [only] = origins.keys();
   return (
     <span className="text-text-dim text-small">
-      {origins.size === 1
-        ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
-        : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${formatCount(origins.size, 'block')}`}
+      {unitNode(
+        origins.size === 1
+          ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
+          : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${formatCount(origins.size, 'block')}`
+      )}
     </span>
   );
 }
@@ -963,10 +969,10 @@ function UncleRow({
         )}
       </span>
       <span className="text-text-dim">
-        {formatUtc8Time(uncle.timestamp)}
+        {unitNode(formatUtc8Time(uncle.timestamp))}
         {detail?.msAfterSibling != null &&
           `, ${detail.msAfterSibling >= 0 ? `${detail.msAfterSibling.toLocaleString('en-US')} ms after` : `${(-detail.msAfterSibling).toLocaleString('en-US')} ms before`} its sibling`}{' '}
-        · {formatCount(uncle.proposalIds.length, 'proposal')}
+        · {unitNode(formatCount(uncle.proposalIds.length, 'proposal'))}
       </span>
     </article>
   );

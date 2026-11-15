@@ -31,6 +31,7 @@ import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatTick } from '@/lib/chart-ticks';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -417,9 +418,11 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             pagination.reset();
           }}
         >
-          {all
-            ? 'Top 10 holders'
-            : `All ${distribution.data ? formatCount(distribution.data.holdersCount, 'holder') : 'holders'} →`}
+          {unitNode(
+            all
+              ? 'Top 10 holders'
+              : `All ${distribution.data ? formatCount(distribution.data.holdersCount, 'holder') : 'holders'} →`
+          )}
         </button>
       }
     >

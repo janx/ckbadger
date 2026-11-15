@@ -8,6 +8,7 @@ import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { ClassMark } from '@/components/ui/class-mark';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
@@ -133,7 +134,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
       {profile && (
         <details className="text-meta min-w-0">
           <summary className="cursor-pointer">
-            Media dependencies · {formatCount(profile.sources.length, 'source')}
+            Media dependencies · {unitNode(formatCount(profile.sources.length, 'source'))}
           </summary>
           <ul className="mt-3 space-y-3">
             {profile.sources.map((s, i) => (
