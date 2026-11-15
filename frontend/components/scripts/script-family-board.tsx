@@ -24,7 +24,14 @@ import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { BOARD_INKS, DATA_COLOR, HELD_CAPACITY_COLOR, inkStyle } from '@/lib/design-tokens';
-import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
+import {
+  deploymentOnDay,
+  holderName,
+  holderParts,
+  signingText,
+  type CodeHolder,
+} from '@/lib/script-lineage';
+import type { ShortSize } from '@/lib/shorten';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
 
@@ -188,6 +195,23 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
  * The remaining figures in one quiet row (R13; the former facts rail): the code and who holds its
  * code cell, the first deployment and every cell that ever used it.
  */
+/**
+ * A code cell holder's name (A4 Chrome F2): its id is one unit, a line may break between the kind
+ * and the id; a phrase ("an unspendable lock") is words a line may break between. In the hero
+ * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 147 at 360): "multisig 0x6598…d696",
+ * 204 px whole, is "multisig" over the 112.2 px id; it stands on one line from 640 (288 px).
+ */
+function HolderName({ custody, size }: { custody: ScriptCustodyApi; size: ShortSize }) {
+  const { label, id } = holderParts(custody, size);
+  return id === null ? (
+    <>{label}</>
+  ) : (
+    <>
+      {label} <NoBreak>{id}</NoBreak>
+    </>
+  );
+}
+
 export function ScriptHeroMetrics({
   family,
   lineage,
@@ -229,8 +253,8 @@ export function ScriptHeroMetrics({
             href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
             className="hover:text-jade"
           >
-            {/* the holder's kind and its key are one unit (U-16); a hero tile, tight (U-09) */}
-            <NoBreak>{holderName(last.custody, 'tight')}</NoBreak>
+            {/* a hero tile, tight (U-09) */}
+            <HolderName custody={last.custody} size="tight" />
           </Link>
         </HeroMetric>
       )}
