@@ -370,7 +370,9 @@ describe('transaction and activity foundations', () => {
     const group = container.querySelector('[data-group-id="lock:long"]');
     expect(group).toHaveClass('min-w-0');
     const dependency = screen.getByText(outpoint);
-    expect(dependency).toHaveClass('min-w-0', 'break-all');
+    // B3 round 4 (re-pinned on purpose): the column breaks the outpoint with
+    // [overflow-wrap:anywhere], so its cycles words beside it stay whole (it was break-all)
+    expect(dependency).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
     expect(dependency).toHaveTextContent(outpoint);
   });
   it('cross-highlights resolved script groups, cells and continuity using hover and keyboard focus', () => {

@@ -1691,7 +1691,7 @@ export default function ScriptDetailPage({
                     minWidth: 210,
                     width: '30%',
                     render: (row) => (
-                      <span className="text-text-dim break-all">
+                      <span className="text-text-dim [overflow-wrap:anywhere]">
                         {row.currentVersionHash ?? 'Retired · no current code cell'}
                       </span>
                     ),
@@ -1714,7 +1714,7 @@ export default function ScriptDetailPage({
                     <div className="break-all">
                       {row.hashType} · {row.referenceHash}
                     </div>
-                    <div className="break-all">
+                    <div className="[overflow-wrap:anywhere]">
                       Current code: {row.currentVersionHash ?? 'retired'}
                     </div>
                     {row.custody ? (

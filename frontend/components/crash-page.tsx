@@ -73,7 +73,10 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
       standalone={standalone || contextSafe}
       contextSafe={contextSafe}
     >
-      <span role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">
+      <span
+        role="alert"
+        className="text-negative min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]"
+      >
         ✗ {message}
       </span>
       {/* words wrap between words; only the route, one long token, may break anywhere */}

@@ -741,7 +741,7 @@ export default function TransactionDetailPage() {
             waiting for the node… the inputs of this unconfirmed transaction cannot be resolved yet.
             Retrying automatically.
           </p>
-          <p className="break-all">{error.apiMessage}</p>
+          <p className="[overflow-wrap:anywhere]">{error.apiMessage}</p>
         </div>
       </DetailLayout>
     );
@@ -1546,7 +1546,7 @@ export default function TransactionDetailPage() {
                   {selectedGroup && (
                     <p
                       data-testid="tx-witness-focused-group"
-                      className="text-text-dim mt-3 break-all"
+                      className="text-text-dim mt-3 [overflow-wrap:anywhere]"
                     >
                       Focused script group: {selectedGroup}{' '}
                       <button

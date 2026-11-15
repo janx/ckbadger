@@ -192,8 +192,9 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
         ) : (
           <ul className="space-y-1">
             {detail.aliases.map((alias) => (
-              <li key={alias.address} className="text-text break-all">
-                {alias.address}{' '}
+              <li key={alias.address} className="text-text">
+                {/* the address alone breaks anywhere; the words after it break between them */}
+                <span className="break-all">{alias.address}</span>{' '}
                 <span className="text-text-dim">
                   · first advertised {ago(alias.firstAdvertisedAt)} · last advertised{' '}
                   {ago(alias.lastAdvertisedAt)} · last verified {optionalAge(alias.lastVerifiedAt)}

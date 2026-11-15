@@ -47,7 +47,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
           ))}
         </select>
       </label>
-      <div className="text-meta break-all">
+      <div className="text-meta [overflow-wrap:anywhere]">
         Outpoint{' '}
         {/* the hash at its line's 11 px (A4 Chrome F4): 66 × 6.6 = 435.6 px and ":N", within a
             1024 column's 460 px; at 13 px it took 514.8 and scrolled */}

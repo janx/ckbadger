@@ -103,7 +103,7 @@ export function FiberChannelStep({
     );
   } else if (transaction.error || lookup.error) {
     body = (
-      <p role="alert" className="text-rouge text-small break-all">
+      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
         {title} transaction unavailable: {String(transaction.error ?? lookup.error)}
       </p>
     );
@@ -121,14 +121,14 @@ export function FiberChannelStep({
       : -1;
     if (consumes && spentIndex < 0) {
       body = (
-        <p role="alert" className="text-rouge text-small break-all">
+        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
           {title} transaction {txHash} does not spend the {consumes.role} cell {consumes.txHash}:
           {consumes.index}
         </p>
       );
     } else if (carries && carries.index >= tiles.outputs.length) {
       body = (
-        <p role="alert" className="text-rouge text-small break-all">
+        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
           {title} transaction {txHash} has no output {carries.index} to carry the channel
         </p>
       );

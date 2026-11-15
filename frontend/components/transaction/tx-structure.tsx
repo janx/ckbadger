@@ -416,7 +416,7 @@ export function TxStructure({
                     'bg-base-surface'
                 )}
               >
-                <span className="min-w-0 break-all">
+                <span className="min-w-0 [overflow-wrap:anywhere]">
                   <span className="text-text-dim mr-2">{g.kind}</span>
                   <Link href={g.href} className="text-text-bright hover:text-jade">
                     {g.label}
@@ -426,8 +426,8 @@ export function TxStructure({
                   </span>
                 </span>
                 <span className="text-text-dim min-w-0 break-all">{g.cellIds.join(', ')}</span>
-                <div className="min-w-0 break-all">{g.witness}</div>
-                <div className="min-w-0 break-all">
+                <div className="min-w-0 [overflow-wrap:anywhere]">{g.witness}</div>
+                <div className="min-w-0 [overflow-wrap:anywhere]">
                   {g.dependency}
                   {g.cycles !== undefined && (
                     <span className="text-text-dim block">

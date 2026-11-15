@@ -362,7 +362,8 @@ export function ObjectGeneticsEvidence({
       {decoded && decoded.media.length > 0 && (
         <ul aria-label="Decoder output" className="text-meta space-y-1">
           {decoded.media.map((m) => (
-            <li key={`${m.hash}:${m.step ?? 'x'}`} className="break-all">
+            // words break between them; a media type anyone can mint breaks anywhere if it must
+            <li key={`${m.hash}:${m.step ?? 'x'}`} className="[overflow-wrap:anywhere]">
               <span className="text-text">
                 {m.mediaType} · {formatCount(m.size, 'byte')}
                 {m.step !== null ? ` · step ${m.step + 1}` : ''}
@@ -388,7 +389,8 @@ export function ObjectGeneticsEvidence({
           {cached.traits.map((t, i) => (
             <div key={`${t.name}:${i}`} className="min-w-0">
               <dt className="text-text-dim">{t.name}</dt>
-              <dd className="break-all">{t.value === '' ? '(empty)' : t.value}</dd>
+              {/* a raw trait value anyone can mint: words stay whole, a long run breaks anywhere */}
+              <dd className="[overflow-wrap:anywhere]">{t.value === '' ? '(empty)' : t.value}</dd>
             </div>
           ))}
         </dl>

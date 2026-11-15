@@ -106,7 +106,10 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
       {otherReferences.length > 0 && (
         <ul className="text-text-dim text-meta space-y-1">
           {otherReferences.map((reference) => (
-            <li key={`${reference.referenceHash}-${reference.hashType}`} className="break-all">
+            <li
+              key={`${reference.referenceHash}-${reference.hashType}`}
+              className="[overflow-wrap:anywhere]"
+            >
               Also named as{' '}
               <Link
                 href={`/script/${reference.referenceHash}?hashType=${reference.hashType}`}
@@ -129,7 +132,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
             codeCell.typeIdVersions.map((item) => (
               <p
                 key={`${item.typeScriptHash}:${item.codeCellTxHash}:${item.codeCellOutputIndex}`}
-                className="break-all"
+                className="[overflow-wrap:anywhere]"
               >
                 <span className={item.thisBinary ? 'text-text-bright' : 'text-text-dim'}>
                   Version {item.ordinal}
@@ -151,7 +154,10 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
             <p className="text-text-dim">No registered Type ID version history for this binary.</p>
           )}
           {codeCell.upgradeCohort.map((item) => (
-            <p key={`${item.currentTxHash}:${item.currentOutputIndex}`} className="break-all">
+            <p
+              key={`${item.currentTxHash}:${item.currentOutputIndex}`}
+              className="[overflow-wrap:anywhere]"
+            >
               <Link
                 href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`}
                 className="text-[color:var(--ink)]"
