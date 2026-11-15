@@ -15,6 +15,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { retryTransientOnly } from '@/lib/query-client';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatCount } from '@/lib/format-count';
+import { unitText } from '@/components/ui/units';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
@@ -238,8 +239,8 @@ export function MnftClassEvidence({
             <dt className="text-text-dim">issuer</dt>
             <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               {issuerDetail.name ?? 'Unnamed issuer'} ·{' '}
-              {formatCount(issuerDetail.classCount, 'class', 'classes')} ·{' '}
-              {formatCount(issuerDetail.setCount, 'set')}
+              {unitText(formatCount(issuerDetail.classCount, 'class', 'classes'))} ·{' '}
+              {unitText(formatCount(issuerDetail.setCount, 'set'))}
             </dd>
           </>
         )}

@@ -126,7 +126,7 @@ export function ActivityReadError({ txHash, error }: { txHash: string; error: un
     <span
       role="alert"
       data-testid="activity-read-error"
-      className="text-rouge text-small block whitespace-normal break-all font-mono"
+      className="text-rouge text-small block whitespace-normal font-mono [overflow-wrap:anywhere]"
     >
       {`Cannot read tx ${txHash}: ${message}`}
     </span>

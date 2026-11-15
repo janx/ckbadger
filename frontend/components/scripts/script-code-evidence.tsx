@@ -341,7 +341,10 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </div>
       )}
       {custody.lockArgs && (
-        <div className="text-text-dim text-meta mt-1 break-all font-mono" title={custody.lockArgs}>
+        <div
+          className="text-text-dim text-meta mt-1 font-mono [overflow-wrap:anywhere]"
+          title={custody.lockArgs}
+        >
           Lock args {custody.lockArgs}
         </div>
       )}
@@ -358,7 +361,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </details>
       )}
       {signer && (
-        <div className="text-text-dim mt-1 break-all">
+        <div className="text-text-dim mt-1 [overflow-wrap:anywhere]">
           This holder signed to spend the code cell in{' '}
           <AppLink href={`/tx/${signer}`} className="text-emphasis hover:underline">
             <ShortId value={signer} kind="hash" size="row" />
@@ -370,7 +373,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
           {custody.owners.map((owner) => (
             <li
               key={`${owner.lockCodeHash}:${owner.lockHashType}:${owner.lockArgs}`}
-              className="break-all"
+              className="[overflow-wrap:anywhere]"
             >
               {scriptClassLabel(owner.class)} · {owner.lockHashType} {owner.lockCodeHash} · args{' '}
               {owner.lockArgs} · {unitNode(formatCount(owner.codeCells.length, 'code cell'))}:{' '}

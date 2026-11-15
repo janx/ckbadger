@@ -35,7 +35,7 @@ export function DotCellRecordsTable({ records }: Props) {
             >
               <td className="text-text-bright px-4 py-2 align-top">{record.key}</td>
               <td className="text-text-dim px-4 py-2 align-top">{record.label}</td>
-              <td className="text-text break-all px-4 py-2 align-top">
+              <td className="text-text px-4 py-2 align-top [overflow-wrap:anywhere]">
                 {record.decodedAddress ? (
                   <Link
                     href={`/address/${record.decodedAddress.address}`}

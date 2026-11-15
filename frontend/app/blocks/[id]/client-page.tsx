@@ -400,7 +400,7 @@ export default function BlockDetailPage() {
                 </div>
                 <div className="min-w-0">
                   <dt className="text-text-dim mb-1">Miner client</dt>
-                  <dd className="text-text-bright break-all">{client.line}</dd>
+                  <dd className="text-text-bright [overflow-wrap:anywhere]">{client.line}</dd>
                   {client.decoded && (
                     <dd className="text-text-dim">decoded from the cellbase message</dd>
                   )}
@@ -582,7 +582,7 @@ export default function BlockDetailPage() {
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
-                <dd className="break-all">
+                <dd className="[overflow-wrap:anywhere]">
                   {block.minerMessage ?? 'None: genesis has no miner message'}
                 </dd>
               </div>

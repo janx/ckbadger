@@ -3,6 +3,7 @@ import { onlineManager } from '@tanstack/react-query';
 import Page from '@/app/classes/[classId]/client-page';
 import { api } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 // An m-NFT class id is its issuer id (20 bytes) and a 4-byte class index (lane E draws it).
 const mockClassId = '0x1111111111111111111111111111111111111111' + '00000003';
@@ -105,7 +106,10 @@ it('retains class and issuer raw evidence and separate full transaction history'
   expect(
     [...evidence.querySelectorAll('[data-segment]')].map((s) => s.getAttribute('data-target'))
   ).toEqual(['field-0', 'field-1']);
-  expect(within(evidence).getByText('Test Issuer · 5 classes · 2 sets')).toBeInTheDocument();
+  // each count is one unit (B3 round 4, task 3): the line is read across their spans
+  expect(
+    within(evidence).getByText(fullText('Test Issuer · 5 classes · 2 sets'))
+  ).toBeInTheDocument();
   expect(within(evidence).getByText('100 · planned 100')).toBeInTheDocument();
   expect(within(evidence).getByText('not recorded')).toBeInTheDocument();
   // Main.dc.html: "Recent activity" opens the full feed at its transactions.

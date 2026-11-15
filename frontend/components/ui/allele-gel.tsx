@@ -22,6 +22,7 @@ import {
 } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { unitText } from '@/components/ui/units';
 import {
   ALLELE_GEL,
   alleleGelLayout,
@@ -459,7 +460,7 @@ function Gel({
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
       <p className="text-text-dim text-meta mt-1">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
-        {formatCount(total, 'object')}, common at the top, rare below
+        {unitText(formatCount(total, 'object'))}, common at the top, rare below
       </p>
     </>
   );
@@ -606,7 +607,8 @@ function GeneList({
       )}
       <p className="text-text-dim text-meta mt-1">
         genes ranked by how many variants they have · most common = how many of all{' '}
-        {formatCount(total, 'object')} carry the commonest variant · open a gene for every variant
+        {unitText(formatCount(total, 'object'))} carry the commonest variant · open a gene for every
+        variant
       </p>
     </div>
   );

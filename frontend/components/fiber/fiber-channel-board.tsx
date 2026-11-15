@@ -496,7 +496,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </div>
           </div>
           {evidenceError && (
-            <p role="alert" className="text-rouge text-small mt-3 break-all">
+            <p role="alert" className="text-rouge text-small mt-3 [overflow-wrap:anywhere]">
               Local node evidence unavailable: {evidenceError}
             </p>
           )}

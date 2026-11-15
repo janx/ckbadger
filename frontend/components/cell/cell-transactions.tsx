@@ -67,7 +67,7 @@ export function TransactionEvidence({
     );
   if (transaction.error || dependencies.error)
     return (
-      <p role="alert" className="text-rouge text-small break-all">
+      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
         {label} transaction evidence unavailable: {String(transaction.error ?? dependencies.error)}
       </p>
     );

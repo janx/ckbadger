@@ -3,7 +3,7 @@
 // gene). Everything here reads the API's pattern, byte map and trait counts; nothing is guessed.
 import type { CollectionInsights, CurrentPattern, GeneDefinition, ObjectGenetics } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
-import { parseBtcfsUri } from '@/lib/btcfs';
+import { parseBtcfsUri, type BtcfsInscription } from '@/lib/btcfs';
 import { ELLIPSIS, SHORT_FORMS, shortenHash } from '@/lib/shorten';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { stepGenes } from '@/lib/dob-declared';
@@ -89,14 +89,15 @@ export function traitTextParts(text: string): TraitTextPart[] {
 }
 
 /**
- * A value that is two or more btcfs URIs joined by `;`, every one an inscription: how many (a
- * pattern's option may list the inscriptions an object can point at); null when it is not such a
- * list, one element that is not an inscription making it plain text.
+ * A value that is two or more btcfs URIs joined by `;`, every one an inscription: its inscriptions
+ * (a pattern's option may list the inscriptions an object can point at); null when it is not such a
+ * list, one element that is not an inscription making it plain text. The one place that decides
+ * what such a list is: traitDisplay counts it, the media box reads each (B3 round 4).
  */
-function inscriptionCount(value: string): number | null {
-  const parts = value.split(';').map((part) => part.trim());
+export function inscriptionList(value: string): BtcfsInscription[] | null {
+  const parts = value.split(';').map((part) => parseBtcfsUri(part.trim()));
   if (parts.length < 2) return null;
-  return parts.every((part) => parseBtcfsUri(part) !== null) ? parts.length : null;
+  return parts.every((part) => part !== null) ? (parts as BtcfsInscription[]) : null;
 }
 
 /**
@@ -114,8 +115,8 @@ export function traitDisplay(value: string): string {
   if (!v) return 'empty';
   const inscription = inscriptionText(v);
   if (inscription) return `inscription ${inscription}`;
-  const inscriptions = inscriptionCount(v);
-  if (inscriptions !== null) return formatCount(inscriptions, 'inscription');
+  const inscriptions = inscriptionList(v);
+  if (inscriptions !== null) return formatCount(inscriptions.length, 'inscription');
   if (SVG_VALUE.test(v)) return `SVG image · ${value.length.toLocaleString('en-US')} characters`;
   return v;
 }

@@ -7,7 +7,7 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
   return (
     <div className="min-w-0">
       <dt className="text-text-dim text-meta">{label}</dt>
-      <dd className="mt-1 break-all">
+      <dd className="mt-1 [overflow-wrap:anywhere]">
         {party.lockHash ? (
           <AppLink href={`/address/${party.address ?? party.lockHash}`}>
             <Hash

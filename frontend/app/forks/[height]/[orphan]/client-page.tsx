@@ -121,7 +121,7 @@ export default function ForkDetailPage() {
         {isAwaited(query) && <p role="status">Loading fork evidence…</p>}
         {query.error && <ReadFailure what="fork" error={query.error} />}
         {mismatch && (
-          <p role="alert" className="text-rouge text-body break-all">
+          <p role="alert" className="text-rouge text-body [overflow-wrap:anywhere]">
             {mismatch}
           </p>
         )}
@@ -816,11 +816,12 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     </span>
                   ))}
                   <span className="text-text-dim">included by</span>
-                  <span className="break-all">
+                  <span>
                     {includer && includer.minerLockHash !== null ? (
+                      // the address alone breaks anywhere; "not recorded" breaks between words
                       <Link
                         href={`/address/${minerAddressOf(includer)}`}
-                        className="hover:text-jade"
+                        className="hover:text-jade break-all"
                       >
                         {minerAddressOf(includer)}
                       </Link>

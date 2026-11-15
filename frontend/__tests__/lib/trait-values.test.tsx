@@ -276,9 +276,11 @@ describe('trait text has one rendering point', () => {
  * word, so it belongs only to an element that prints raw text (a URI, a hex dump). An element that
  * takes it while holding words, its own or a descendant's in the same JSX (literal text of two or
  * more words, or text beside a ShortId / NoBreak unit), is refused: the media box's reading
- * ("inscript / ion i0") and a list item whose break-all reached its notice. What it cannot read:
- * words built in an expression (a template, a call) and words a child component prints in its own
- * file, which inherit the class all the same.
+ * ("inscript / ion i0") and a list item whose break-all reached its notice. Round 4 reads words
+ * built in an expression too: a literal or a template's text of two or more words, and a value named
+ * for prose (`message`, `apiMessage`, `error`, `mismatch`, `reason`). What it cannot read: words a
+ * call returns, a value otherwise named, and words a component from another file prints, which
+ * inherit the class all the same.
  */
 const BREAK_ALL = /(^|[\s'"`])break-all($|[\s'"`])/;
 function breakAllOnWords(path: string): string[] {
@@ -311,11 +313,36 @@ function breakAllOnWords(path: string): string[] {
       const scan = (n: ts.Node) => {
         if (seen.has(n)) return;
         seen.add(n);
+        // an attribute (a class, a title) prints nothing; a call's arguments are its own business,
+        // but a callback it is given renders (`items.map((x) => <li>…</li>)`)
+        if (ts.isJsxAttribute(n)) return;
+        if (ts.isCallExpression(n)) {
+          scan(n.expression);
+          for (const arg of n.arguments)
+            if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) scan(arg);
+          return;
+        }
         if (ts.isJsxText(n)) {
           const t = n.getText(source).trim();
           if (t) text = true;
           if (t.split(/\s+/).filter(Boolean).length >= 2) words = true;
         }
+        // B3 round 4: words built in an expression, a literal of two or more words (a fallback, a
+        // template's text) or a value named for prose (an error's message, a mismatch, a reason)
+        if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) {
+          if (n.text.trim().split(/\s+/).filter(Boolean).length >= 2) words = true;
+        }
+        if (ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
+          if (n.text.trim().split(/\s+/).filter(Boolean).length >= 2) words = true;
+        }
+        if (
+          (ts.isIdentifier(n) || ts.isPropertyAccessExpression(n)) &&
+          ts.isJsxExpression(n.parent) &&
+          /^(message|apiMessage|error|mismatch|reason)$/i.test(
+            ts.isIdentifier(n) ? n.text : n.name.text
+          )
+        )
+          words = true;
         if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
           const tag = n.tagName.getText(source);
           if (tag === 'ShortId' || tag === 'NoBreak') unit = true;
@@ -349,39 +376,9 @@ describe('break-all only on raw text', () => {
     ).toBeGreaterThan(5);
   });
 
-  /**
-   * Sites outside lane B3's files that the gate finds, reported to the lead in B3 round 3 and not
-   * edited here (other lanes own them): path → how many. A new site in one of them fails, and so
-   * does a listed one that is gone (drop it from the list).
-   */
-  const REPORTED: Record<string, number> = {
-    'components/asset/genetics.tsx': 1,
-    'components/asset/identity-document.tsx': 1,
-    'components/cell/cell-transactions.tsx': 1,
-    'components/cell/code-cell-board.tsx': 3,
-    'components/fiber/fiber-channel-board.tsx': 1,
-    'components/fiber/fiber-channel-step.tsx': 3,
-    'components/scripts/script-code-evidence.tsx': 3,
-    'app/forks/[height]/[orphan]/client-page.tsx': 1,
-    'app/network/nodes-table.tsx': 1,
-    'app/scripts/[name]/client-page.tsx': 1,
-    'app/tx/[hash]/client-page.tsx': 1,
-  };
-
+  // B3 round 4: the seventeen sites reported in round 3 are cleared, and the list that kept them
+  // is gone with them; every site anywhere is refused
   it('never puts break-all on an element that holds words', () => {
-    const found = sources.flatMap(breakAllOnWords);
-    const byPath = new Map<string, string[]>();
-    for (const site of found) {
-      const path = site.replace(/:\d+$/, '');
-      byPath.set(path, [...(byPath.get(path) ?? []), site]);
-    }
-    const unreported = [...byPath].flatMap(([path, sites]) =>
-      sites.length > (REPORTED[path] ?? 0) ? sites : []
-    );
-    expect(unreported).toEqual([]);
-    const gone = Object.entries(REPORTED).filter(
-      ([path, n]) => (byPath.get(path)?.length ?? 0) < n
-    );
-    expect(gone).toEqual([]);
+    expect(sources.flatMap(breakAllOnWords)).toEqual([]);
   });
 });

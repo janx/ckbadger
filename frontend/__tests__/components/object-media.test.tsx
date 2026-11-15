@@ -320,3 +320,42 @@ it('keeps break-all to the raw URI lines; the readings and the notice break betw
   expect(reading).toHaveTextContent(/^Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗$/);
   expect(container.querySelector('figure')).not.toBeNull();
 });
+
+// B3 round 4, task 2: a value of btcfs inscriptions joined by ';' (the 秦晖 collection's Source,
+// which traitDisplay reads as "5 inscriptions") was "Not a recognisable btcfs inscription
+// reference." here. It is read through the one path that decides what such a list is, one reading
+// per inscription, each the existing label and explorer link; a list with an element that is not
+// an inscription keeps the notice.
+it('reads a ;-list of inscriptions one reading each, and keeps the notice for a broken list', () => {
+  const second = 'cd'.repeat(32);
+  const list = `btcfs://${txid}i0;btcfs://${second}i2`;
+  const broken = `btcfs://${txid}i0;btcfs://not-one`;
+  render(
+    <ObjectMedia
+      object={{
+        ...object,
+        mediaProfile: {
+          tier: 'btc_ckb',
+          sources: [
+            { uri: list, scheme: 'btcfs', sourceLocation: 'DOB trait', dependencyTier: 'btc_ckb' },
+            { uri: broken, scheme: 'btcfs', sourceLocation: 'DNA', dependencyTier: 'btc_ckb' },
+          ],
+          issues: [],
+        },
+      }}
+      contentHex={null}
+    />
+  );
+  const box = screen.getByText('Its image lives on Bitcoin').closest('figure')!;
+  expect(
+    within(box).getByRole('link', { name: 'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗' })
+  ).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);
+  expect(
+    within(box).getByRole('link', { name: 'Bitcoin tx cdcdcdcdcd…cdcdcd · inscription i2 ↗' })
+  ).toHaveAttribute('href', `https://mempool.space/tx/${second}`);
+  expect(within(box).queryByText('Not a recognisable btcfs inscription reference.')).toBeNull();
+  const details = screen.getByText(fullText('Media dependencies · 2 sources')).closest('details')!;
+  expect(
+    within(details).getByText('Not a recognisable btcfs inscription reference.')
+  ).toBeInTheDocument();
+});
