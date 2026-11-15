@@ -280,7 +280,7 @@ describe('ForksPage', () => {
     const more = screen.getByRole('button', { name: 'Show all 18 branch switches ↓' });
     expect(more).toHaveClass('text-small');
     expect(more).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText(/18 switches/)).toBeNull();
+    expect(screen.queryByText(fullText(/18 switches/))).toBeNull();
     // expanding is the link: every row, every column, in place, then the pager
     fireEvent.click(more);
     expect(bodyRows()).toHaveLength(18);

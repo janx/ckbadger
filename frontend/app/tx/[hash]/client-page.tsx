@@ -435,7 +435,9 @@ function WitnessRow({
   };
   const note = readable(tx.hash, () => {
     const text = noteText();
-    return text ? <span className="text-text-dim [overflow-wrap:anywhere]">{text}</span> : null;
+    return text ? (
+      <span className="text-text-dim [overflow-wrap:anywhere]">{unitText(text)}</span>
+    ) : null;
   });
   return (
     <button

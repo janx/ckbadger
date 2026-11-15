@@ -537,7 +537,7 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressHoldings).mockRejectedValue(new Error('owner index broken'));
     render(<AddressDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('owner index broken');
-    expect(screen.queryByText('0 holdings, one mark each')).not.toBeInTheDocument();
+    expect(screen.queryByText(fullText('0 holdings, one mark each'))).not.toBeInTheDocument();
   });
   it('shows real zero holdings without suppressing named-only .cell rights and history', async () => {
     vi.mocked(api.getAddressHoldings).mockResolvedValue(emptyHoldings);

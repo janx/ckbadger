@@ -7,6 +7,7 @@ import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
 import { api, type KnownScript } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: { getScripts: vi.fn() },
@@ -240,7 +241,7 @@ describe('Scripts list · visual pass (R2b-b)', () => {
     render(<ScriptsPage />);
     await screen.findByRole('table', { name: 'Scripts' });
     expect(screen.queryByRole('heading', { name: 'Scripts', level: 2 })).toBeNull();
-    expect(screen.getByText('3 scripts')).toBeInTheDocument();
+    expect(screen.getByText(fullText('3 scripts'))).toBeInTheDocument();
   });
 });
 

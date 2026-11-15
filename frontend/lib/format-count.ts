@@ -16,12 +16,15 @@ export function countNoun(
 }
 
 /** The no-break space that joins a count and its noun into one unit. */
-const NBSP = ' ';
+const NBSP = '\u00a0';
 
 /**
  * `1 block`, `2 blocks`, `1,234 confirmations`: the noun agrees with the count (FF-D6, TX-34). The
  * count and its noun are one unit (U-16: "78,647,937" / "cells" broke apart), joined by a no-break
- * space, so a line breaks before the count or after the noun, never between them.
+ * space, so a line breaks before the count or after the noun, never between them. A noun of several
+ * words is the noun whole ("795,441 live cells", "1 DAO cell"): its words are joined by the
+ * no-break space too (A4 round 3), so the unit holds what it was given and a renderer reads it
+ * exactly (components/ui/units.tsx), never guessing where a noun ends.
  */
 export function formatCount(
   count: number | bigint,
@@ -29,5 +32,5 @@ export function formatCount(
   plural = `${singular}s`
 ): string {
   const noun = countNoun(count, singular, plural);
-  return `${count.toLocaleString('en-US')}${NBSP}${noun}`;
+  return `${count.toLocaleString('en-US')}${NBSP}${noun.split(' ').join(NBSP)}`;
 }
