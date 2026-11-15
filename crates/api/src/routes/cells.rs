@@ -3382,7 +3382,20 @@ async fn get_address(
 ) -> ApiResult<AddressResponse> {
     // Check cache first. The cache holds the chain view only; the pending
     // summary is the pool's, and is attached fresh on every request.
-    let cache_key = CacheKeys::address_balance(&addr);
+    //
+    // A chain view is keyed by the block it is a view of: the tip of this
+    // request's pinned read view. Keyed by the address alone, an entry outlived
+    // its block and the detail answered one block behind the transaction and
+    // live-cell totals of the same address, which read the store.
+    let tip = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let cache_key = CacheKeys::address_balance_at(
+        &addr,
+        tip.as_ref()
+            .map(|(number, header)| (*number, header.hash.as_slice())),
+    );
     if let Some(mut cached) = state.cache.get::<AddressResponse>(&cache_key).await {
         let lock_hash = parse_hash32(&cached.lock_script_hash, "cached address lock hash")?;
         cached.pending_summary = address_pending_summary(&state, &lock_hash).await?;
@@ -3529,7 +3542,8 @@ async fn get_address(
         pending_summary: None,
     };
 
-    // Cache the chain view for 30 seconds
+    // Cache this block's chain view; the key retires it when the tip moves,
+    // the TTL only bounds how long a retired entry stays in memory.
     state
         .cache
         .set(&cache_key, &response, CacheTtl::ADDRESS_BALANCE)

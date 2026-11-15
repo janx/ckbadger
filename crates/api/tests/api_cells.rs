@@ -2913,3 +2913,57 @@ async fn spend_requirements_call_only_the_consensus_type_id_script_builtin() {
         );
     }
 }
+
+/// Regression (mainnet 2026-11-15, verify `asset_top_holders_address_consistency`:
+/// `transactions endpoint total=2036204 != address transactionsCount=2036203`
+/// in 11 of 76 runs against a holder that transacts every two minutes).
+/// `/addresses/{addr}` cached its chain view for 30 s under a key that named
+/// the address but not the block, so after a new block it answered one block
+/// behind the transaction list of the same address.
+#[tokio::test]
+async fn test_address_detail_is_never_served_from_an_earlier_block() {
+    let store = test_store();
+    let lock = [0x61u8; 32];
+    seed_block_headers_at(&store, &[(0, 1_000), (1, 2_000)]);
+    seed_pool_address_balance(&store, &lock, 1);
+    let app = create_router(test_config(store.clone())).await;
+    let detail_path = format!("/addresses/0x{}", hex::encode(lock));
+    let transactions_path = format!("{detail_path}/transactions?limit=1");
+
+    let (status, detail) = get_json(&app, &detail_path).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["transactionsCount"], 1);
+
+    // Block 2 gives the address its second transaction.
+    seed_pool_address_balance(&store, &lock, 2);
+    seed_block_headers_at(&store, &[(2, 3_000)]);
+
+    let (_, transactions) = get_json(&app, &transactions_path).await;
+    assert_eq!(transactions["total"], 2);
+    let (_, detail) = get_json(&app, &detail_path).await;
+    assert_eq!(
+        detail["transactionsCount"], transactions["total"],
+        "the detail and the transaction list of one address answer at one block"
+    );
+    assert_eq!(detail["recentActivitiesCount"], 2);
+}
+
+/// The other half: a change the tip does not move for is not a new chain view,
+/// so within one block the detail is still answered from its memo.
+#[tokio::test]
+async fn test_address_detail_is_memoized_within_one_block() {
+    let store = test_store();
+    let lock = [0x62u8; 32];
+    seed_block_headers_at(&store, &[(0, 1_000), (1, 2_000)]);
+    seed_pool_address_balance(&store, &lock, 1);
+    let app = create_router(test_config(store.clone())).await;
+    let detail_path = format!("/addresses/0x{}", hex::encode(lock));
+
+    let (_, detail) = get_json(&app, &detail_path).await;
+    assert_eq!(detail["transactionsCount"], 1);
+
+    // No block commits a row without moving the tip; the memo is keyed by it.
+    seed_pool_address_balance(&store, &lock, 2);
+    let (_, detail) = get_json(&app, &detail_path).await;
+    assert_eq!(detail["transactionsCount"], 1);
+}

@@ -6712,3 +6712,72 @@ async fn identity_collection_routes_reject_malformed_id_and_miss_unknown() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// `/assets` answers from the snapshot the warmup built, not from the store
+/// view of the request, so it names the block that snapshot was read at.
+///
+/// Regression (mainnet 2026-11-15): the list said USDC had 864 holders while
+/// its detail said 865 — block 21016902 had landed between the snapshot and
+/// the detail read, and nothing in the list said which block it was.
+#[tokio::test]
+async fn test_assets_list_names_the_block_its_snapshot_was_built_at() {
+    let store = test_store();
+    let token = [0x11u8; 32];
+    store
+        .put_token_direct(
+            &token,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some("Alpha Token".to_string()),
+                symbol: Some("ALPHA".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&token, &[0x01; 32], 5u128);
+    batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(0, 1_000), (1, 2_000), (2, 3_000)]);
+
+    let state = test_app_state(test_config(store.clone()));
+    dispatch_initial_warmup(state.clone(), false).await;
+    let app = router_from_state(state);
+    let block = |number: u8| {
+        serde_json::json!({
+            "blockNumber": number,
+            "blockHash": format!("0x{}", hex::encode([number; 32])),
+        })
+    };
+
+    for path in ["/assets?type=token", "/assets?type=object", "/assets"] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        assert_eq!(json["anchor"], block(2), "{path}");
+    }
+
+    // Block 3 gives the token a second holder. The snapshot is not rebuilt:
+    // the list still holds block 2's count and still says block 2, while the
+    // endpoints that read the store answer at block 3.
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&token, &[0x02; 32], 7u128);
+    batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(3, 4_000)]);
+
+    let (_, list) = get_json(&app, "/assets?type=token").await;
+    assert_eq!(list["data"][0]["holdersCount"], 1);
+    assert_eq!(list["anchor"], block(2));
+    let (_, detail) = get_json(&app, &format!("/tokens/0x{}", hex::encode(token))).await;
+    assert_eq!(detail["holdersCount"], 2);
+    let (_, summary) = get_json(&app, "/assets/summary").await;
+    assert_eq!(summary["anchor"], block(3));
+}

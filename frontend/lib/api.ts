@@ -1546,6 +1546,16 @@ interface SearchResponse {
   ambiguous?: boolean;
 }
 
+/**
+ * A page of `GET /assets`. The rows come from the snapshot the API rebuilds when the tip moves,
+ * not from the store view of the request; `anchor` is the block that snapshot was built at, so a
+ * row's counts are that block's and can be one block behind the asset's own endpoints. `null`
+ * when the snapshot spans more than one block (or the store holds none).
+ */
+export interface AssetListResponse extends CursorPaginatedResponse<Asset> {
+  anchor: { blockNumber: number; blockHash: string } | null;
+}
+
 export interface InventorySummary {
   source: 'canonical_asset_indexes';
   anchor: { blockNumber: number; blockHash: string } | null;
@@ -4622,7 +4632,7 @@ export const api = {
     return fetchApi(`/tokens/${typeHash}/transactions?${query}`);
   },
 
-  getAssets: (params: AssetQueryParams = {}): Promise<CursorPaginatedResponse<Asset>> => {
+  getAssets: (params: AssetQueryParams = {}): Promise<AssetListResponse> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.type) query.set('type', params.type);

@@ -70,6 +70,7 @@ const mockTokenAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 const mockClusterAssets = {
@@ -107,6 +108,7 @@ const mockClusterAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 const mockDotbitIdentityAssets = {
@@ -144,6 +146,7 @@ const mockDotbitIdentityAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 const mockDidCkbIdentityAssets = {
@@ -181,6 +184,7 @@ const mockDidCkbIdentityAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 const mockMixedObjectAssets = {
@@ -246,6 +250,7 @@ const mockMixedObjectAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 const emptyAssets = {
@@ -254,6 +259,7 @@ const emptyAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 const sortableTokenAssets = {
@@ -319,6 +325,7 @@ const sortableTokenAssets = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
+  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
 
 describe('Tokens Inventory Page', () => {

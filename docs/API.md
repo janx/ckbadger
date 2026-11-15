@@ -136,6 +136,8 @@ Each item a transaction moves is one `ItemDeltaResponse`, tagged by `kind`:
 | GET    | `/api/v1/assets/objects/{collection_id}/activities`              | `list_object_collection_activities`    | List collection-level activities (cursor, optional `action`)                          |
 | GET    | `/api/v1/assets/objects/{collection_id}/charts/capacity-history` | `get_object_collection_capacity_chart` | Stacked-area capacity history chart (date range)                                      |
 
+`/assets` answers from the in-memory snapshot the warmup rebuilds when the tip moves, not from the store view of the request, and says so: beside the page it returns `anchor: {blockNumber,blockHash} | null`, the block that snapshot was built at. A row's counts (`holdersCount`, `totalSupply`, `liveCount`, …) are that block's; an asset's own endpoints read the store and can already answer a block later, so a row is comparable with its detail only when the detail was read at `anchor`. `anchor` is `null` when the tip moved while the snapshot was built (its rows then span more than one block), when the token and object snapshots of an unfiltered page stand at different blocks, and on a store with no block.
+
 `/assets/summary` returns `source: "canonical_asset_indexes"`, `anchor: {blockNumber,blockHash} | null`, `counts: {token,object,identity}`, `objectStandards: [{standard,collectionsCount,liveCount}]`, `objectComposition: [{tier,collectionsCount,liveCount}]`, `fullyOnchainObjectsCount`, and `pendingItemsCount`. Composition rows classify whole collections; their `liveCount` counts members of those collections, not individual-item tiers. `pendingItemsCount` independently counts every live pending Spore, including members of mixed collections and the existing Sole Spores sentinel collection. A fully pending collection has tier `decode_pending`; mixed collections retain their normal aggregate classification. The same owning catalog supplies warmup membership/classification and the summary; no page sampling is used.
 
 The summary's request pins its canonical view. `/assets` remains a warmup snapshot, so separate list and summary requests do not claim a shared anchor. Summary reads token metadata, checks only enough canonical holder rows to establish positive membership for unlabelled tokens, scans collection aggregates and live Spore pending evidence; it does not run all token capacity/history/holder-sum scans. `composition_tier` additionally accepts `decode_pending`; filtering precedes pagination and `total` covers the entire matching snapshot.
@@ -341,6 +343,13 @@ protocol named it in without it holding a cell (`addr_prefix_stats`). They are a
 helper (`address_tx_count`) that every consumer calls, so the count can never disagree with the
 merged transaction list beneath it. Pool rows stay out of both and are reported in `pool`.
 
+`/addresses/{addr}` memoizes its chain view (balance, counts, lock script) per tip block: the
+memo's key carries the tip's number and hash, as read in the request's pinned view, so the detail
+never answers a block behind the address's transaction and live-cell totals, and a reorg to
+another block at the same height is a miss. (Until 2026-11-15 the key named only the address and
+the entry lived 30 s, so after a new block the detail's `transactionsCount` and `liveCellsCount`
+could trail `total` on `/transactions` and `/cells/live` by that block.)
+
 **`/cells/live-summary` response and consistency**
 
 ```json
@@ -417,8 +426,8 @@ merged transaction list beneath it. Pool rows stay out of both and are reported 
 - Always present. `capacityDelta` is the address's signed net capacity change in shannons, as a
   decimal string, over its page-one tx-pool segment: the pool transactions involving it that are
   not indexed yet, at most 200.
-- Independent of any list filter, and computed per request — never served from the 30 s detail
-  cache.
+- Independent of any list filter, and computed per request — never served from the detail's
+  per-block memo.
 - `null` when the tx-pool mirror is disabled or unhealthy: there is no pool view to summarise,
   and "0 pending" would be a guess. A healthy mirror with nothing pending gives
   `{ "txCount": 0, "capacityDelta": "0" }`.

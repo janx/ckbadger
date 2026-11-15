@@ -648,11 +648,12 @@ async fn the_export_ignores_the_warmup_cache() {
         state.token_cache.load().is_some(),
         "the cache must be populated, or this test proves nothing"
     );
-    state
-        .token_cache
-        .store(std::sync::Arc::new(Some(vec![poisoned_token_entry(
-            &hex0x(&hash),
-        )])));
+    state.token_cache.store(std::sync::Arc::new(Some(
+        ckbadger_api::warmup::AssetCacheSnapshot {
+            anchor: None,
+            entries: vec![poisoned_token_entry(&hex0x(&hash))],
+        },
+    )));
 
     let app = axum::Router::new()
         .nest("/api/v1", api_routes())

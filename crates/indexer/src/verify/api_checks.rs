@@ -155,6 +155,228 @@ struct CursorPageWithTotal<T> {
     total: Option<i64>,
 }
 
+/// The block an API answer says it was read at.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnchorRecord {
+    block_number: i64,
+    block_hash: String,
+}
+
+/// A key that must be on the wire and may be `null`: `null` is a statement,
+/// an absent key is an API that does not say.
+fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(deserializer)
+}
+
+/// One page of `/assets`. The API answers it from an in-memory snapshot it
+/// rebuilds when the tip moves, not from the store view of the request, so the
+/// page names the block that snapshot was built at.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetListPage<T> {
+    data: Vec<T>,
+    /// `null` when the tip moved while the snapshot was built: its rows then
+    /// span more than one block.
+    #[serde(deserialize_with = "required_nullable")]
+    anchor: Option<AnchorRecord>,
+}
+
+#[derive(serde::Deserialize)]
+struct ViewAnchorRecord {
+    #[serde(deserialize_with = "required_nullable")]
+    anchor: Option<AnchorRecord>,
+}
+
+/// The block the API's store view stands at. Every request is answered from
+/// one pinned view, and `/assets/summary` is a request that states its tip.
+fn api_view_anchor(ctx: &CheckContext) -> anyhow::Result<Option<AnchorRecord>> {
+    Ok(api_get::<ViewAnchorRecord>(ctx, "assets/summary")?.anchor)
+}
+
+/// How long one check run re-reads count differences before leaving them
+/// unclassified. A snapshot standing at the tip exists from each rebuild until
+/// the next block, and the API rests 30 s between rebuilds
+/// (`refresh_assets_cache_loop`); this waits for three of them.
+#[cfg(not(test))]
+const COUNT_SETTLE_WAIT: std::time::Duration = std::time::Duration::from_secs(100);
+#[cfg(not(test))]
+const COUNT_SETTLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(test)]
+const COUNT_SETTLE_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
+#[cfg(test)]
+const COUNT_SETTLE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// One reading of an asset's counts: its `/assets` row against the endpoints
+/// that read the store live.
+struct CountReading<T> {
+    /// The block the list snapshot holding the row was built at.
+    list_anchor: Option<AnchorRecord>,
+    /// Every count on which the row and the live endpoints differ.
+    differences: Vec<String>,
+    /// What the reading fetched for the rest of the check.
+    live: T,
+}
+
+/// The count differences of one check run, classified by the block they were
+/// read at.
+///
+/// A list row and a detail are comparable only at one block. The first reading
+/// of an asset is not bracketed; when it differs, the asset is re-read until a
+/// reading agrees (the first one compared two blocks) or until the list
+/// snapshot and the API's view before and after the live reads all stand at
+/// the same block — a difference there is the index's.
+#[derive(Default)]
+struct CountSettlement {
+    /// Assets whose first reading differed and a re-read agreed.
+    agreed: u64,
+    /// Assets whose difference was never read at one block.
+    unsettled: Vec<String>,
+    waited: std::time::Duration,
+}
+
+impl CountSettlement {
+    /// Classify `first`, re-reading with `reread` while it differs (`None`:
+    /// the asset is not on the list page any more). Pushes the finding when the
+    /// difference stands at one block and returns the live side of the reading
+    /// that decided the asset.
+    fn resolve<T>(
+        &mut self,
+        ctx: &CheckContext,
+        entity: &str,
+        first: CountReading<T>,
+        findings: &mut Vec<Finding>,
+        mut reread: impl FnMut() -> anyhow::Result<Option<CountReading<T>>>,
+    ) -> anyhow::Result<T> {
+        if first.differences.is_empty() {
+            return Ok(first.live);
+        }
+        let started = std::time::Instant::now();
+        let budget = COUNT_SETTLE_WAIT.saturating_sub(self.waited);
+        let mut last = first;
+        let mut readings = 1u32;
+        let unsettled = loop {
+            let before = api_view_anchor(ctx)?;
+            let reading = reread()?;
+            let after = api_view_anchor(ctx)?;
+            let views = match reading {
+                Some(reading) => {
+                    readings += 1;
+                    if reading.differences.is_empty() {
+                        self.agreed += 1;
+                        self.waited += started.elapsed();
+                        return Ok(reading.live);
+                    }
+                    let one_block = match (&reading.list_anchor, &before, &after) {
+                        (Some(list), Some(before), Some(after))
+                            if list == before && before == after =>
+                        {
+                            Some(list.clone())
+                        }
+                        _ => None,
+                    };
+                    if let Some(anchor) = one_block {
+                        let mut details = reading.differences;
+                        details.push(format!(
+                            "every read at block {} ({})",
+                            anchor.block_number, anchor.block_hash
+                        ));
+                        findings.push(Finding {
+                            entity: entity.to_string(),
+                            details,
+                        });
+                        self.waited += started.elapsed();
+                        return Ok(reading.live);
+                    }
+                    let views = format!(
+                        "{}, {}",
+                        describe_list_anchor(&reading.list_anchor),
+                        describe_view_anchors(&before, &after)
+                    );
+                    last = reading;
+                    views
+                }
+                None => "its row left the list page".to_string(),
+            };
+            if started.elapsed() >= budget {
+                break format!(
+                    "{entity}: {} — not read at one block in {readings} reading(s) over {:.1}s \
+                     (last: {views})",
+                    last.differences.join("; "),
+                    started.elapsed().as_secs_f64()
+                );
+            }
+            std::thread::sleep(COUNT_SETTLE_INTERVAL);
+        };
+        self.waited += started.elapsed();
+        self.unsettled.push(unsettled);
+        Ok(last.live)
+    }
+
+    /// The check's result. A finding fails it; a difference never read at one
+    /// block says nothing about the index, so it is inconclusive, not a pass;
+    /// the re-reads that agreed stay on the result line.
+    fn finish(self, checked: u64, findings: Vec<Finding>, pass_detail: String) -> CheckResult {
+        let agreed = (self.agreed > 0).then(|| {
+            format!(
+                "{} asset(s) agreed on a re-read (the first read compared two blocks)",
+                self.agreed
+            )
+        });
+        let unsettled = (!self.unsettled.is_empty()).then(|| {
+            format!(
+                "{} asset(s) differ from their /assets row and no reading was taken at one \
+                 block — rerun: {}",
+                self.unsettled.len(),
+                self.unsettled.join(" | ")
+            )
+        });
+        if !findings.is_empty() {
+            // The findings decide the status; what was left unclassified beside
+            // them stays on the result line rather than being dropped.
+            let notes: Vec<String> = agreed.into_iter().chain(unsettled).collect();
+            return CheckResult {
+                detail: (!notes.is_empty()).then(|| notes.join("; ")),
+                ..CheckResult::fail(checked, findings)
+            };
+        }
+        if let Some(unsettled) = unsettled {
+            return CheckResult::inconclusive(unsettled);
+        }
+        CheckResult::pass_with_detail(
+            checked,
+            match agreed {
+                Some(agreed) => format!("{pass_detail}, {agreed}"),
+                None => pass_detail,
+            },
+        )
+    }
+}
+
+fn describe_list_anchor(anchor: &Option<AnchorRecord>) -> String {
+    match anchor {
+        Some(anchor) => format!("list snapshot at block {}", anchor.block_number),
+        None => "list snapshot spans more than one block".to_string(),
+    }
+}
+
+fn describe_view_anchors(before: &Option<AnchorRecord>, after: &Option<AnchorRecord>) -> String {
+    match (before, after) {
+        (Some(before), Some(after)) if before == after => {
+            format!("live reads at block {}", before.block_number)
+        }
+        (Some(before), Some(after)) => format!(
+            "live reads between block {} ({}) and block {} ({})",
+            before.block_number, before.block_hash, after.block_number, after.block_hash
+        ),
+        _ => "live reads on a store with no block".to_string(),
+    }
+}
+
 /// One row of an address activity feed. Page one leads with the address's
 /// tx-pool rows, which have no chain position yet (`blockNumber: null`) and
 /// carry `poolStatus` instead; every committed row has its block.
@@ -3755,10 +3977,8 @@ impl Check for ObjectAssetCollectionConsistency {
         Some(ctx.sample_count.min(OBJECT_COLLECTION_SAMPLE_MAX) as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let assets: CursorPageWithTotal<ObjectAssetListApiRecord> = api_get(
-            ctx,
-            &format!("assets?type=object&limit={}", OBJECT_ASSET_LIST_LIMIT),
-        )?;
+        let list_path = format!("assets?type=object&limit={}", OBJECT_ASSET_LIST_LIMIT);
+        let assets: AssetListPage<ObjectAssetListApiRecord> = api_get(ctx, &list_path)?;
         if assets.data.is_empty() || ctx.sample_count == 0 {
             return Ok(CheckResult::pass_with_detail(
                 0,
@@ -3775,14 +3995,16 @@ impl Check for ObjectAssetCollectionConsistency {
 
         let mut findings = vec![];
         let mut checked = 0u64;
+        let mut settlement = CountSettlement::default();
 
         for idx in sample_indices {
             let object = &assets.data[idx];
             let asset = &object.asset;
+            let entity = format!("asset={}", asset.id);
 
             if asset.asset_type != "object" {
                 findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
+                    entity,
                     details: vec![format!(
                         "unexpected asset type '{}' in object asset list",
                         asset.asset_type
@@ -3798,106 +4020,111 @@ impl Check for ObjectAssetCollectionConsistency {
                 continue;
             }
 
-            let total_count = object.total_supply.parse::<i64>().map_err(|error| {
-                anyhow::anyhow!(
-                    "asset={} invalid list totalSupply '{}': {}",
-                    asset.id,
-                    object.total_supply,
-                    error
-                )
+            let first = read_object_collection_counts(ctx, object, assets.anchor.clone())?;
+            let contract = settlement.resolve(ctx, &entity, first, &mut findings, || {
+                let page: AssetListPage<ObjectAssetListApiRecord> = api_get(ctx, &list_path)?;
+                page.data
+                    .iter()
+                    .find(|row| row.asset.id == asset.id)
+                    .map(|row| read_object_collection_counts(ctx, row, page.anchor.clone()))
+                    .transpose()
             })?;
-            anyhow::ensure!(
-                total_count >= 0,
-                "asset={} invalid negative list totalSupply={}",
-                asset.id,
-                total_count
-            );
-            anyhow::ensure!(
-                object.live_count >= 0,
-                "asset={} invalid negative list liveCount={}",
-                asset.id,
-                object.live_count
-            );
-
-            let collection_detail: NftCollectionDetailApiRecord =
-                api_get(ctx, &format!("assets/objects/{}", asset.id))?;
-            let detail_id = normalize_hex_key(&collection_detail.collection_id);
-            let asset_id = normalize_hex_key(&asset.id);
-
-            if detail_id != asset_id {
-                findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec![format!(
-                        "detail collectionId mismatch: detail=0x{}, list=0x{}",
-                        detail_id, asset_id
-                    )],
-                });
-            }
-            if collection_detail.total_count != total_count {
-                findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec![format!(
-                        "detail totalCount={} != list totalSupply={}",
-                        collection_detail.total_count, total_count
-                    )],
-                });
-            }
-            if collection_detail.live_count != object.live_count {
-                findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec![format!(
-                        "detail liveCount={} != list liveCount={}",
-                        collection_detail.live_count, object.live_count
-                    )],
-                });
-            }
-            if collection_detail.holders_count != asset.holders_count {
-                findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec![format!(
-                        "detail holdersCount={} != list holdersCount={}",
-                        collection_detail.holders_count, asset.holders_count
-                    )],
-                });
-            }
-
-            let items: CursorPageWithTotal<serde_json::Value> =
-                api_get(ctx, &format!("assets/objects/{}/items?limit=1", asset.id))?;
-            match items.total {
-                Some(total) if total == collection_detail.total_count => {}
-                Some(total) => findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec![format!(
-                        "items total={} != detail totalCount={}",
-                        total, collection_detail.total_count
-                    )],
-                }),
-                None => findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec!["items response missing total".to_string()],
-                }),
-            }
+            findings.extend(contract.into_iter().map(|detail| Finding {
+                entity: entity.clone(),
+                details: vec![detail],
+            }));
 
             checked += 1;
             progress.inc(1);
         }
 
-        if checked == 0 {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no non-spore object collections sampled".to_string(),
-            ));
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass_with_detail(
-                checked,
-                format!("{} sampled object collections", checked),
-            ))
+        let pass_detail = if checked == 0 {
+            "no non-spore object collections sampled".to_string()
         } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
+            format!("{} sampled object collections", checked)
+        };
+        Ok(settlement.finish(checked, findings, pass_detail))
     }
+}
+
+/// One reading of an object collection: its `/assets` row against its detail
+/// and its item page. The live side is the contract violations no re-read can
+/// change.
+fn read_object_collection_counts(
+    ctx: &CheckContext,
+    object: &ObjectAssetListApiRecord,
+    list_anchor: Option<AnchorRecord>,
+) -> anyhow::Result<CountReading<Vec<String>>> {
+    let asset = &object.asset;
+    let total_count = object.total_supply.parse::<i64>().map_err(|error| {
+        anyhow::anyhow!(
+            "asset={} invalid list totalSupply '{}': {}",
+            asset.id,
+            object.total_supply,
+            error
+        )
+    })?;
+    anyhow::ensure!(
+        total_count >= 0,
+        "asset={} invalid negative list totalSupply={}",
+        asset.id,
+        total_count
+    );
+    anyhow::ensure!(
+        object.live_count >= 0,
+        "asset={} invalid negative list liveCount={}",
+        asset.id,
+        object.live_count
+    );
+
+    let mut contract = vec![];
+    let mut differences = vec![];
+
+    let collection_detail: NftCollectionDetailApiRecord =
+        api_get(ctx, &format!("assets/objects/{}", asset.id))?;
+    let detail_id = normalize_hex_key(&collection_detail.collection_id);
+    let asset_id = normalize_hex_key(&asset.id);
+    if detail_id != asset_id {
+        contract.push(format!(
+            "detail collectionId mismatch: detail=0x{}, list=0x{}",
+            detail_id, asset_id
+        ));
+    }
+    if collection_detail.total_count != total_count {
+        differences.push(format!(
+            "detail totalCount={} != list totalSupply={}",
+            collection_detail.total_count, total_count
+        ));
+    }
+    if collection_detail.live_count != object.live_count {
+        differences.push(format!(
+            "detail liveCount={} != list liveCount={}",
+            collection_detail.live_count, object.live_count
+        ));
+    }
+    if collection_detail.holders_count != asset.holders_count {
+        differences.push(format!(
+            "detail holdersCount={} != list holdersCount={}",
+            collection_detail.holders_count, asset.holders_count
+        ));
+    }
+
+    let items: CursorPageWithTotal<serde_json::Value> =
+        api_get(ctx, &format!("assets/objects/{}/items?limit=1", asset.id))?;
+    match items.total {
+        Some(total) if total == collection_detail.total_count => {}
+        Some(total) => differences.push(format!(
+            "items total={} != detail totalCount={}",
+            total, collection_detail.total_count
+        )),
+        None => contract.push("items response missing total".to_string()),
+    }
+
+    Ok(CountReading {
+        list_anchor,
+        differences,
+        live: contract,
+    })
 }
 
 /// S22: Top token/object asset holders must align with address-page invariants.
@@ -3917,12 +4144,10 @@ impl Check for AssetTopHoldersAddressConsistency {
         Some((TOP_ASSET_LIMIT * TOP_HOLDER_LIMIT * 2) as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let token_assets: CursorPageWithTotal<AssetListApiRecord> =
-            api_get(ctx, &format!("assets?type=token&limit={}", TOP_ASSET_LIMIT))?;
-        let object_assets: CursorPageWithTotal<AssetListApiRecord> = api_get(
-            ctx,
-            &format!("assets?type=object&limit={}", TOP_ASSET_LIMIT),
-        )?;
+        let token_list_path = format!("assets?type=token&limit={}", TOP_ASSET_LIMIT);
+        let object_list_path = format!("assets?type=object&limit={}", TOP_ASSET_LIMIT);
+        let token_assets: AssetListPage<AssetListApiRecord> = api_get(ctx, &token_list_path)?;
+        let object_assets: AssetListPage<AssetListApiRecord> = api_get(ctx, &object_list_path)?;
 
         if token_assets.data.is_empty() && object_assets.data.is_empty() {
             return Ok(CheckResult::pass_with_detail(
@@ -3933,52 +4158,27 @@ impl Check for AssetTopHoldersAddressConsistency {
 
         let mut findings = vec![];
         let mut checked = 0u64;
+        let mut settlement = CountSettlement::default();
         let mut address_cache = std::collections::HashMap::<String, AddressCountSnapshot>::new();
 
         for asset in token_assets.data.iter().take(TOP_ASSET_LIMIT) {
-            let mut asset_details = vec![];
-            if asset.asset_type != "token" {
-                asset_details.push(format!(
-                    "unexpected asset type '{}' in token list",
-                    asset.asset_type
-                ));
-            }
-
-            let detail: TokenDetailApiRecord = api_get(ctx, &format!("tokens/{}", asset.id))?;
-            let detail_id = normalize_hex_key(&detail.type_script_hash);
-            let asset_id = normalize_hex_key(&asset.id);
-            if detail_id != asset_id {
-                asset_details.push(format!(
-                    "detail typeScriptHash mismatch: detail=0x{}, list=0x{}",
-                    detail_id, asset_id
-                ));
-            }
-            if detail.holders_count != asset.holders_count {
-                asset_details.push(format!(
-                    "detail holdersCount={} != list holdersCount={}",
-                    detail.holders_count, asset.holders_count
-                ));
-            }
-
-            let holders: CursorPageWithTotal<TokenHolderApiRecord> = api_get(
-                ctx,
-                &format!("tokens/{}/holders?limit={}", asset.id, TOP_HOLDER_LIMIT),
-            )?;
-            match holders.total {
-                Some(total) if total == detail.holders_count => {}
-                Some(total) => asset_details.push(format!(
-                    "holders total={} != detail holdersCount={}",
-                    total, detail.holders_count
-                )),
-                None => asset_details.push("holders response missing total".to_string()),
-            }
-
-            if !asset_details.is_empty() {
+            let entity = format!("token={}", asset.id);
+            let first = read_token_holder_counts(ctx, asset, token_assets.anchor.clone())?;
+            let live = settlement.resolve(ctx, &entity, first, &mut findings, || {
+                let page: AssetListPage<AssetListApiRecord> = api_get(ctx, &token_list_path)?;
+                page.data
+                    .iter()
+                    .find(|row| row.id == asset.id)
+                    .map(|row| read_token_holder_counts(ctx, row, page.anchor.clone()))
+                    .transpose()
+            })?;
+            if !live.contract.is_empty() {
                 findings.push(Finding {
-                    entity: format!("token={}", asset.id),
-                    details: asset_details,
+                    entity,
+                    details: live.contract,
                 });
             }
+            let holders = live.holders;
 
             for holder in holders.data.iter().take(TOP_HOLDER_LIMIT) {
                 let mut holder_details = vec![];
@@ -4023,65 +4223,23 @@ impl Check for AssetTopHoldersAddressConsistency {
                 progress.inc(1);
                 continue;
             }
-            let mut asset_details = vec![];
-
-            let (detail_id, detail_holders_count, holders): (
-                String,
-                i64,
-                CursorPageWithTotal<NftHolderApiRecord>,
-            ) = if asset.standard.eq_ignore_ascii_case("spore") {
-                let detail: SporeClusterDetailApiRecord =
-                    api_get(ctx, &format!("spore/clusters/{}", asset.id))?;
-                let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
-                    ctx,
-                    &format!(
-                        "spore/clusters/{}/holders?limit={}",
-                        asset.id, TOP_HOLDER_LIMIT
-                    ),
-                )?;
-                (detail.cluster_id, detail.holders_count, holders_page)
-            } else {
-                let detail: NftCollectionDetailApiRecord =
-                    api_get(ctx, &format!("assets/objects/{}", asset.id))?;
-                let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
-                    ctx,
-                    &format!(
-                        "assets/objects/{}/holders?limit={}",
-                        asset.id, TOP_HOLDER_LIMIT
-                    ),
-                )?;
-                (detail.collection_id, detail.holders_count, holders_page)
-            };
-
-            let detail_id_key = normalize_hex_key(&detail_id);
-            let asset_id_key = normalize_hex_key(&asset.id);
-            if detail_id_key != asset_id_key {
-                asset_details.push(format!(
-                    "detail id mismatch: detail=0x{}, list=0x{}",
-                    detail_id_key, asset_id_key
-                ));
-            }
-            if detail_holders_count != asset.holders_count {
-                asset_details.push(format!(
-                    "detail holdersCount={} != list holdersCount={}",
-                    detail_holders_count, asset.holders_count
-                ));
-            }
-            match holders.total {
-                Some(total) if total == detail_holders_count => {}
-                Some(total) => asset_details.push(format!(
-                    "holders total={} != detail holdersCount={}",
-                    total, detail_holders_count
-                )),
-                None => asset_details.push("holders response missing total".to_string()),
-            }
-
-            if !asset_details.is_empty() {
+            let entity = format!("object={} standard={}", asset.id, asset.standard);
+            let first = read_object_holder_counts(ctx, asset, object_assets.anchor.clone())?;
+            let live = settlement.resolve(ctx, &entity, first, &mut findings, || {
+                let page: AssetListPage<AssetListApiRecord> = api_get(ctx, &object_list_path)?;
+                page.data
+                    .iter()
+                    .find(|row| row.id == asset.id && row.asset_type == "object")
+                    .map(|row| read_object_holder_counts(ctx, row, page.anchor.clone()))
+                    .transpose()
+            })?;
+            if !live.contract.is_empty() {
                 findings.push(Finding {
-                    entity: format!("object={} standard={}", asset.id, asset.standard),
-                    details: asset_details,
+                    entity,
+                    details: live.contract,
                 });
             }
+            let holders = live.holders;
 
             for holder in holders.data.iter().take(TOP_HOLDER_LIMIT) {
                 let mut holder_details = vec![];
@@ -4116,25 +4274,143 @@ impl Check for AssetTopHoldersAddressConsistency {
             }
         }
 
-        if checked == 0 && findings.is_empty() {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no holders returned by top token/object assets".to_string(),
-            ));
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass_with_detail(
-                checked,
-                format!(
-                    "{} holder address checks across top {} token + top {} object assets",
-                    checked, TOP_ASSET_LIMIT, TOP_ASSET_LIMIT
-                ),
-            ))
+        let pass_detail = if checked == 0 {
+            "no holders returned by top token/object assets".to_string()
         } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
+            format!(
+                "{} holder address checks across top {} token + top {} object assets",
+                checked, TOP_ASSET_LIMIT, TOP_ASSET_LIMIT
+            )
+        };
+        Ok(settlement.finish(checked, findings, pass_detail))
     }
+}
+
+/// The live side of one asset's holder reading: its top holder page, and the
+/// contract violations no re-read can change.
+struct HolderCountsLive<H> {
+    contract: Vec<String>,
+    holders: CursorPageWithTotal<H>,
+}
+
+/// One reading of a token's holder count: its `/assets` row against its detail
+/// and its holder page.
+fn read_token_holder_counts(
+    ctx: &CheckContext,
+    asset: &AssetListApiRecord,
+    list_anchor: Option<AnchorRecord>,
+) -> anyhow::Result<CountReading<HolderCountsLive<TokenHolderApiRecord>>> {
+    let mut contract = vec![];
+    let mut differences = vec![];
+    if asset.asset_type != "token" {
+        contract.push(format!(
+            "unexpected asset type '{}' in token list",
+            asset.asset_type
+        ));
+    }
+
+    let detail: TokenDetailApiRecord = api_get(ctx, &format!("tokens/{}", asset.id))?;
+    let detail_id = normalize_hex_key(&detail.type_script_hash);
+    let asset_id = normalize_hex_key(&asset.id);
+    if detail_id != asset_id {
+        contract.push(format!(
+            "detail typeScriptHash mismatch: detail=0x{}, list=0x{}",
+            detail_id, asset_id
+        ));
+    }
+    if detail.holders_count != asset.holders_count {
+        differences.push(format!(
+            "detail holdersCount={} != list holdersCount={}",
+            detail.holders_count, asset.holders_count
+        ));
+    }
+
+    let holders: CursorPageWithTotal<TokenHolderApiRecord> = api_get(
+        ctx,
+        &format!("tokens/{}/holders?limit={}", asset.id, TOP_HOLDER_LIMIT),
+    )?;
+    match holders.total {
+        Some(total) if total == detail.holders_count => {}
+        Some(total) => differences.push(format!(
+            "holders total={} != detail holdersCount={}",
+            total, detail.holders_count
+        )),
+        None => contract.push("holders response missing total".to_string()),
+    }
+
+    Ok(CountReading {
+        list_anchor,
+        differences,
+        live: HolderCountsLive { contract, holders },
+    })
+}
+
+/// One reading of an object collection's holder count: its `/assets` row
+/// against its detail and its holder page (a Spore cluster's own endpoints for
+/// the `spore` standard).
+fn read_object_holder_counts(
+    ctx: &CheckContext,
+    asset: &AssetListApiRecord,
+    list_anchor: Option<AnchorRecord>,
+) -> anyhow::Result<CountReading<HolderCountsLive<NftHolderApiRecord>>> {
+    let (detail_id, detail_holders_count, holders): (
+        String,
+        i64,
+        CursorPageWithTotal<NftHolderApiRecord>,
+    ) = if asset.standard.eq_ignore_ascii_case("spore") {
+        let detail: SporeClusterDetailApiRecord =
+            api_get(ctx, &format!("spore/clusters/{}", asset.id))?;
+        let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
+            ctx,
+            &format!(
+                "spore/clusters/{}/holders?limit={}",
+                asset.id, TOP_HOLDER_LIMIT
+            ),
+        )?;
+        (detail.cluster_id, detail.holders_count, holders_page)
+    } else {
+        let detail: NftCollectionDetailApiRecord =
+            api_get(ctx, &format!("assets/objects/{}", asset.id))?;
+        let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
+            ctx,
+            &format!(
+                "assets/objects/{}/holders?limit={}",
+                asset.id, TOP_HOLDER_LIMIT
+            ),
+        )?;
+        (detail.collection_id, detail.holders_count, holders_page)
+    };
+
+    let mut contract = vec![];
+    let mut differences = vec![];
+    let detail_id_key = normalize_hex_key(&detail_id);
+    let asset_id_key = normalize_hex_key(&asset.id);
+    if detail_id_key != asset_id_key {
+        contract.push(format!(
+            "detail id mismatch: detail=0x{}, list=0x{}",
+            detail_id_key, asset_id_key
+        ));
+    }
+    if detail_holders_count != asset.holders_count {
+        differences.push(format!(
+            "detail holdersCount={} != list holdersCount={}",
+            detail_holders_count, asset.holders_count
+        ));
+    }
+    match holders.total {
+        Some(total) if total == detail_holders_count => {}
+        Some(total) => differences.push(format!(
+            "holders total={} != detail holdersCount={}",
+            total, detail_holders_count
+        )),
+        None => contract.push("holders response missing total".to_string()),
+    }
+
+    Ok(CountReading {
+        list_anchor,
+        differences,
+        live: HolderCountsLive { contract, holders },
+    })
 }
 
 /// S23: Identity collection holder counts match aggregate, and top holders'
@@ -7505,14 +7781,17 @@ mod tests {
         items_total: i64,
         holders_total: i64,
     ) {
+        // The list snapshot and every live read stand at one block, so a count
+        // difference in this fixture is the index's.
+        mount_view_anchor(runtime, server, 1);
         runtime.block_on(async {
             for (asset_type, data) in [("token", json!([])), ("object", json!([object]))] {
                 Mock::given(method("GET"))
                     .and(path("/api/v1/assets"))
                     .and(query_param("type", asset_type))
-                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                        "data": data, "total": data.as_array().unwrap().len(), "nextCursor": null
-                    })))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(list_snapshot_json(data, Some(1))),
+                    )
                     .mount(server)
                     .await;
             }
@@ -7702,6 +7981,431 @@ mod tests {
                 result.findings
             );
         }
+    }
+
+    const RACE_TOKEN: &str = "0x797bfd0b7b883bc9dba43678e285999507c6d0b971a2740c76623f70636f4080";
+
+    fn anchor_json(block_number: i64) -> serde_json::Value {
+        json!({ "blockNumber": block_number, "blockHash": format!("0x{block_number:064x}") })
+    }
+
+    /// One answer of the cached `/assets` list: the count it holds and the
+    /// block its snapshot was built at (`None`: built across more than one).
+    #[derive(Clone, Copy)]
+    struct ListSnapshot {
+        count: i64,
+        anchor: Option<i64>,
+    }
+
+    fn list_snapshot_json(rows: serde_json::Value, anchor: Option<i64>) -> serde_json::Value {
+        json!({
+            "data": rows, "total": rows.as_array().unwrap().len(), "nextCursor": null,
+            "anchor": anchor.map(anchor_json)
+        })
+    }
+
+    /// `/assets?type=<asset_type>` answering `stale` for its first
+    /// `stale_reads` reads and `fresh` from then on — the snapshot before and
+    /// after the API rebuilt it. `row` builds the one list row from a count.
+    fn mount_asset_list_snapshots(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        asset_type: &str,
+        row: impl Fn(i64) -> serde_json::Value,
+        stale: Option<(ListSnapshot, u64)>,
+        fresh: ListSnapshot,
+    ) {
+        runtime.block_on(async {
+            if let Some((stale, stale_reads)) = stale {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/assets"))
+                    .and(query_param("type", asset_type))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(list_snapshot_json(
+                            json!([row(stale.count)]),
+                            stale.anchor,
+                        )),
+                    )
+                    .up_to_n_times(stale_reads)
+                    .with_priority(1)
+                    .mount(server)
+                    .await;
+            }
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .and(query_param("type", asset_type))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(list_snapshot_json(json!([row(fresh.count)]), fresh.anchor)),
+                )
+                .with_priority(2)
+                .mount(server)
+                .await;
+        });
+    }
+
+    /// The API's own view: every live read answers at block `view`.
+    fn mount_view_anchor(runtime: &tokio::runtime::Runtime, server: &MockServer, view: i64) {
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets/summary"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "anchor": anchor_json(view) })),
+                )
+                .mount(server)
+                .await;
+        });
+    }
+
+    /// The top token list holds one token; its detail and its holder page
+    /// (no holder rows — only the counts are under test) are read live at
+    /// block `view`; no object collection exists.
+    fn mount_token_count_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        stale: Option<(ListSnapshot, u64)>,
+        fresh: ListSnapshot,
+        live_holders: i64,
+        view: i64,
+    ) {
+        mount_asset_list_snapshots(
+            runtime,
+            server,
+            "token",
+            |count| {
+                json!({
+                    "id": RACE_TOKEN, "assetType": "token", "standard": "sudt",
+                    "holdersCount": count
+                })
+            },
+            stale,
+            fresh,
+        );
+        mount_view_anchor(runtime, server, view);
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .and(query_param("type", "object"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(list_snapshot_json(json!([]), Some(view))),
+                )
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{RACE_TOKEN}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "typeScriptHash": RACE_TOKEN, "holdersCount": live_holders
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{RACE_TOKEN}/holders")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [], "total": live_holders, "nextCursor": null,
+                    "anchor": anchor_json(view)
+                })))
+                .mount(server)
+                .await;
+        });
+    }
+
+    fn finding_details(result: &CheckResult) -> Vec<&str> {
+        result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Regression (mainnet 2026-11-15, run 20261115T023435Z-c99ffc6a): block
+    /// 21016902 gave USDC its 865th holder 22 s before the check read it.
+    /// `/assets` answers from a snapshot the API rebuilds when the tip moves,
+    /// so it still held 864 while the detail, read live, held 865 — two reads
+    /// of two blocks, reported as `detail holdersCount=865 != list
+    /// holdersCount=864`. Once the snapshot reaches the block the detail was
+    /// read at, the two agree.
+    #[test]
+    fn asset_top_holders_list_snapshot_behind_the_tip_is_not_a_count_mismatch() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            Some((
+                ListSnapshot {
+                    count: 864,
+                    anchor: Some(21_016_901),
+                },
+                2,
+            )),
+            ListSnapshot {
+                count: 865,
+                anchor: Some(21_016_902),
+            },
+            865,
+            21_016_902,
+        );
+        let completed = execute_check(
+            &AssetTopHoldersAddressConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Pass, "{completed:?}");
+        let detail = completed.result.unwrap().detail.unwrap();
+        assert!(
+            detail.contains("1 asset(s) agreed on a re-read"),
+            "the re-read must be on the result line: {detail}"
+        );
+    }
+
+    /// The other side of the same rule: a difference seen with the list
+    /// snapshot and every live read at one block is the index's, and fails.
+    #[test]
+    fn asset_top_holders_count_mismatch_at_one_block_is_a_failure() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            None,
+            ListSnapshot {
+                count: 864,
+                anchor: Some(21_016_902),
+            },
+            865,
+            21_016_902,
+        );
+        let result = AssetTopHoldersAddressConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert_eq!(result.status, CheckStatus::Fail, "{result:?}");
+        let details = finding_details(&result);
+        assert!(
+            details.contains(&"detail holdersCount=865 != list holdersCount=864"),
+            "{details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("every read at block 21016902")),
+            "a failure names the block it was read at: {details:?}"
+        );
+    }
+
+    /// A snapshot that never reaches the block the live reads answer at proves
+    /// nothing either way: neither a pass nor a failure.
+    #[test]
+    fn asset_top_holders_mismatch_never_read_at_one_block_is_inconclusive() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            None,
+            ListSnapshot {
+                count: 864,
+                anchor: Some(21_016_901),
+            },
+            865,
+            21_016_902,
+        );
+        let completed = execute_check(
+            &AssetTopHoldersAddressConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Inconclusive, "{completed:?}");
+        let reason = completed.status_reason.unwrap();
+        for expected in [
+            RACE_TOKEN,
+            "detail holdersCount=865 != list holdersCount=864",
+            "list snapshot at block 21016901",
+            "live reads at block 21016902",
+        ] {
+            assert!(reason.contains(expected), "missing {expected}: {reason}");
+        }
+    }
+
+    /// A snapshot built while the tip moved has no single block (`anchor:
+    /// null`); a difference against it is not comparable either.
+    #[test]
+    fn asset_top_holders_mismatch_against_an_unanchored_snapshot_is_inconclusive() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            None,
+            ListSnapshot {
+                count: 864,
+                anchor: None,
+            },
+            865,
+            21_016_902,
+        );
+        let completed = execute_check(
+            &AssetTopHoldersAddressConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Inconclusive, "{completed:?}");
+        assert!(
+            completed
+                .status_reason
+                .as_deref()
+                .unwrap()
+                .contains("list snapshot spans more than one block"),
+            "{completed:?}"
+        );
+    }
+
+    /// What a run reports once its count differences are classified: a
+    /// finding decides the status and keeps the unclassified beside it; with
+    /// no finding, an unclassified difference is inconclusive, never a pass.
+    #[test]
+    fn count_settlement_result_never_drops_an_unclassified_difference() {
+        let settlement = |agreed: u64, unsettled: &[&str]| CountSettlement {
+            agreed,
+            unsettled: unsettled.iter().map(|s| s.to_string()).collect(),
+            waited: std::time::Duration::ZERO,
+        };
+        let finding = || Finding {
+            entity: "token=0xaa".to_string(),
+            details: vec!["detail holdersCount=2 != list holdersCount=1".to_string()],
+        };
+
+        let pass = settlement(0, &[]).finish(4, vec![], "4 checks".to_string());
+        assert_eq!(pass.status, CheckStatus::Pass);
+        assert_eq!(pass.detail.as_deref(), Some("4 checks"));
+
+        let reread = settlement(2, &[]).finish(4, vec![], "4 checks".to_string());
+        assert_eq!(reread.status, CheckStatus::Pass);
+        assert_eq!(
+            reread.detail.as_deref(),
+            Some("4 checks, 2 asset(s) agreed on a re-read (the first read compared two blocks)")
+        );
+
+        let unclassified = settlement(1, &["token=0xbb: x"]).finish(4, vec![], "4".to_string());
+        assert_eq!(unclassified.status, CheckStatus::Inconclusive);
+        assert!(unclassified
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("token=0xbb: x"));
+
+        let failed = settlement(1, &["token=0xbb: x"]).finish(4, vec![finding()], "4".to_string());
+        assert_eq!(failed.status, CheckStatus::Fail);
+        assert_eq!(failed.items_failed, 1);
+        let detail = failed.detail.unwrap();
+        assert!(
+            detail.contains("1 asset(s) agreed on a re-read"),
+            "{detail}"
+        );
+        assert!(detail.contains("token=0xbb: x"), "{detail}");
+    }
+
+    /// `anchor: null` is a statement; a list without the key is an API that
+    /// does not say what it read, and the check cannot classify against it.
+    #[test]
+    fn asset_list_without_an_anchor_key_is_a_contract_error() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [], "total": 0, "nextCursor": null
+                })))
+                .mount(&server)
+                .await;
+        });
+        for check in [
+            &ObjectAssetCollectionConsistency as &dyn Check,
+            &AssetTopHoldersAddressConsistency,
+        ] {
+            let completed = execute_check(check, &mock_ctx(&server), &ProgressReporter::new(None));
+            assert_eq!(completed.status, CheckStatus::Error, "{completed:?}");
+            assert!(
+                completed
+                    .status_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("anchor"),
+                "{completed:?}"
+            );
+        }
+    }
+
+    /// The object list/detail check reads the same snapshot: a collection
+    /// whose live count moved after the snapshot was built is not a mismatch.
+    #[test]
+    fn object_collection_list_snapshot_behind_the_tip_is_not_a_count_mismatch() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let row = |live_count: i64| {
+            json!({
+                "id": "0x1234", "assetType": "object", "standard": "m-nft",
+                "holdersCount": 0, "totalSupply": "7", "liveCount": live_count
+            })
+        };
+        mount_asset_list_snapshots(
+            &runtime,
+            &server,
+            "object",
+            row,
+            Some((
+                ListSnapshot {
+                    count: 2,
+                    anchor: Some(100),
+                },
+                2,
+            )),
+            ListSnapshot {
+                count: 3,
+                anchor: Some(101),
+            },
+        );
+        mount_view_anchor(&runtime, &server, 101);
+        runtime.block_on(async {
+            for (endpoint, response) in [
+                (
+                    "/api/v1/assets/objects/0x1234",
+                    json!({
+                        "collectionId": "0x1234", "totalCount": 7,
+                        "liveCount": 3, "holdersCount": 0
+                    }),
+                ),
+                (
+                    "/api/v1/assets/objects/0x1234/items",
+                    json!({ "data": [], "total": 7, "nextCursor": null }),
+                ),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(endpoint))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .mount(&server)
+                    .await;
+            }
+        });
+        let completed = execute_check(
+            &ObjectAssetCollectionConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Pass, "{completed:?}");
+        let result = completed.result.unwrap();
+        assert_eq!(result.items_checked, 1);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("1 asset(s) agreed on a re-read"),
+            "{result:?}"
+        );
     }
 
     fn mount_burnt_charts(
