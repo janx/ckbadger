@@ -2,7 +2,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { render } from '@testing-library/react';
 import { droppedGenesCaption, traitDisplay, type DroppedGene } from '@/lib/dob-genes';
+import { TraitText } from '@/components/asset/trait-text';
 
 /**
  * The lead's Chrome finding (B3, 2026-11-15): the cluster and object pages of the "秦晖" collection
@@ -144,5 +146,113 @@ describe('third-party text never overflows', () => {
 
   it('prints every trait value where it breaks anywhere, or clips it with its title', () => {
     expect(sources.flatMap(unwrappedPrinters)).toEqual([]);
+  });
+});
+
+/**
+ * The lead's second Chrome pass (B3 round 2, 2026-11-15): on the cluster page at 390 and 360 the
+ * dd of "How an object is read" set "inscription 020172…cb69i0" as "inscription 020172…" /
+ * "cb69i0": after the ellipsis UAX #14 allows a line break. A shortened id inside a trait value is
+ * one unit, made at render (NoBreak), with no character added to the text; the value still wraps
+ * between its words and third-party text still breaks anywhere.
+ */
+describe('a shortened id inside a trait value is one unit', () => {
+  const units = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('[data-nobreak]')).map((el) => el.textContent);
+
+  it('holds an inscription id together and adds nothing to the text', () => {
+    const value = traitDisplay(`btcfs://020172${'89'.repeat(27)}cb69i0`);
+    expect(value).toBe('inscription 020172…cb69i0');
+    const { container } = render(
+      <dd>
+        <TraitText text={value} />
+      </dd>
+    );
+    expect(units(container)).toEqual(['020172…cb69i0']);
+    expect(container.textContent).toBe(value);
+  });
+
+  it('holds every id of a sentence, the words between them free to wrap', () => {
+    const one = traitDisplay(`btcfs://a94617${'95'.repeat(27)}79e0i0`);
+    const text = `${one} for 3 · inscription 020172…cb69i12 for 2`;
+    const { container } = render(
+      <p>
+        <TraitText text={text} />
+      </p>
+    );
+    expect(units(container)).toEqual(['a94617…79e0i0', '020172…cb69i12']);
+    expect(container.textContent).toBe(text);
+  });
+
+  it('leaves third-party text and counts as plain text', () => {
+    const long = `btcfs://${'x'.repeat(292)}`;
+    const mimic = `deadbeef…${'c'.repeat(200)}`;
+    for (const text of [long, '5 inscriptions', mimic, 'wait…what', 'GOLD']) {
+      const { container, unmount } = render(
+        <p>
+          <TraitText text={text} />
+        </p>
+      );
+      expect(units(container)).toEqual([]);
+      expect(container.textContent).toBe(text);
+      unmount();
+    }
+  });
+});
+
+/**
+ * Every place that prints trait text (a trait value or a sentence built from one) prints it
+ * through TraitText, the one rendering point that makes a shortened id inside it a unit; a bare
+ * call printed as a JSX child or in a phone row's lines is refused.
+ */
+const TRAIT_TEXT =
+  /^(traitDisplay|geneCellText|droppedGenesCaption|inscriptionText|foundAcross|ruleWords|valueOf)$/;
+function tagName(el: ts.Node, source: ts.SourceFile): string | null {
+  return ts.isJsxOpeningElement(el) || ts.isJsxSelfClosingElement(el)
+    ? el.tagName.getText(source)
+    : null;
+}
+function bareTraitText(path: string): string[] {
+  const code = readFileSync(path, 'utf8');
+  const source = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && TRAIT_TEXT.test(node.expression.getText(source))) {
+      let up: ts.Node = node.parent;
+      let bare = false;
+      while (up && !ts.isSourceFile(up)) {
+        if (ts.isJsxAttribute(up)) {
+          const name = up.name.getText(source);
+          const el = up.parent.parent;
+          if (name === 'text' && tagName(el, source) === 'TraitText') break;
+          // a phone row's lines print their parts; any other attribute (a title) prints nothing
+          bare = name === 'lines';
+          break;
+        }
+        if (ts.isVariableDeclaration(up) || ts.isBlock(up) || ts.isFunctionDeclaration(up)) break;
+        if (ts.isJsxExpression(up) && (ts.isJsxElement(up.parent) || ts.isJsxFragment(up.parent))) {
+          // SVG text never wraps (its labels are cut to their budgets) and a <title> is a tooltip
+          const tag = ts.isJsxElement(up.parent) ? tagName(up.parent.openingElement, source) : null;
+          bare = !['text', 'tspan', 'title'].includes(tag ?? '');
+          break;
+        }
+        up = up.parent;
+      }
+      if (bare) {
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+        out.push(`${relative(ROOT, path)}:${line} ${node.expression.getText(source)}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+describe('trait text has one rendering point', () => {
+  const sources = [...files(join(ROOT, 'components')), ...files(join(ROOT, 'app'))];
+
+  it('prints every trait value and every sentence built from one through TraitText', () => {
+    expect(sources.flatMap(bareTraitText)).toEqual([]);
   });
 });
