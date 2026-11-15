@@ -44,8 +44,13 @@ const UNIT_ELEMENTS = new Set([
 ]);
 /** Calls that render a string's units (components/ui/units.tsx). */
 const UNIT_RENDERERS = new Set(['unitText', 'unitNode']);
-/** The class in a className's source text (quotes, template or cn() call around it). */
-const NOWRAP = /(^|[\s'"`])whitespace-nowrap([\s'"`]|$)/;
+/**
+ * A class that keeps its text on one line, in a className's source text (quotes, template or cn()
+ * call around it): whitespace-nowrap, or Tailwind's truncate, which is white-space: nowrap with
+ * overflow hidden and an ellipsis (A4 round 4). A breakpoint's (sm:truncate) is not one line at
+ * every width.
+ */
+const NOWRAP = /(^|[\s'"`])(?:whitespace-nowrap|truncate)([\s'"`]|$)/;
 
 function calleeName(call: ts.CallExpression): string {
   const e = call.expression;

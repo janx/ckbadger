@@ -18,7 +18,7 @@ import { unprotectedUnits } from '@/__tests__/utils/unit-scan';
  *
  * unless the string goes through `unitText` / `unitNode` (components/ui/units.tsx) on its way, or
  * an element around it renders it as a unit (NoBreak, ShortId, time, Utc8Date, Utc8DateTime,
- * Utc8Age, a literal whitespace-nowrap) or is SVG text, which never wraps.
+ * Utc8Age, a literal whitespace-nowrap or truncate) or is SVG text, which never wraps.
  *
  * What it cannot see: a string composed elsewhere (a variable, a function's return, a describer)
  * and rendered as `{text}`; a string passed as a prop to a component that writes it — the rendering

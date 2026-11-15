@@ -116,10 +116,10 @@ const plain = (s: string) => s.replaceAll('\u00a0', ' ');
  * bound is plain text, not a unit cut out of its tail). Measured with Node on 200,000 characters:
  * the matcher of 1a8688aa took 25.2 s on a run of digits, 19.5 s on digits grouped by commas and
  * 13.7 s on digits and bare commas (quadratic), and read a unit out of the id, chain and date runs
- * below; a bounded matcher takes under 2 ms on each. One run's budget is 250 ms: over a hundred
- * times what a linear matcher takes, under a fiftieth of what the quadratic one took. A run over
- * the budget but not ten times over gets two more tries, so a pause of the parallel suite is not
- * read as quadratic.
+ * below; the bounded matcher takes 0.1 to 3.1 ms on each (unitText in this suite). One run's
+ * budget is 250 ms: about eighty times the slowest shape's linear time, under a fiftieth of what
+ * the quadratic one took. A run over the budget but not ten times over gets two more tries, so a
+ * pause of the parallel suite is not read as quadratic.
  */
 describe('unitText on text the site does not write (A4 round 4)', () => {
   const LENGTH = 200_000;

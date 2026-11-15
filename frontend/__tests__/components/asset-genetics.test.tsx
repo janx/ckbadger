@@ -312,7 +312,9 @@ describe('How an object is read (C5)', () => {
     );
     // the count is one unit (B3 round 4, task 3): the summary is read across its span
     const all = screen.getByText(fullText('All 12 genes, one row each')).closest('details')!;
-    expect(within(all).getByText('12 genes')).toHaveAttribute('data-count');
+    // re-pinned (A4 round 4): the count unit's marker is data-count-unit since A4 round 3, and its
+    // noun is a span of its own, so the count is read across its span too
+    expect(within(all).getByText(fullText('12 genes'))).toHaveAttribute('data-count-unit');
     expect(within(all).getAllByRole('row')).toHaveLength(13);
     // the ruler still draws one part per gene
     expect(

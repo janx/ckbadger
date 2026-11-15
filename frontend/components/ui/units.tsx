@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
-import { ELLIPSIS } from '@/lib/shorten';
+import { ELLIPSIS, SHORT_FORMS, type IdKind } from '@/lib/shorten';
 
 /**
  * The units a composed string carries, in the exact forms the site's own formatters write them
@@ -16,15 +16,49 @@ import { ELLIPSIS } from '@/lib/shorten';
  *   (`78,675,029 cells`, `795,441 live cells`: formatCount joins a noun's words too, so the unit
  *   holds what formatCount was given, never a guess at where a noun ends). A size written the same
  *   way (`85 B`) is a count by the same rule, on purpose: a number and its unit.
+ *
+ * Linear in its input (A4 round 4): it also reads strings the site does not write — a miner's
+ * witness message, a token's name, a trait value, API text given to a shared component — so every
+ * quantifier is bounded by what the formatters can write, and no unit begins or ends inside a
+ * longer run of its own characters (a lookbehind and a lookahead of one or two characters): a
+ * number, a head or a tail longer than its bound is plain text, never a unit cut out of it. A start
+ * position costs one bounded attempt: 200,000 characters of each shape the units test times take
+ * under 4 ms.
  */
 const DAY = String.raw`(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?`;
 const CLOCK = String.raw`\d{2}:\d{2}(?::\d{2})?`;
 const ZONE = String.raw`(?: UTC\+8)?`;
 const AT = String.raw`(?:${DAY}(?: ${CLOCK}${ZONE})?|${CLOCK} UTC\+8)`;
-const TIME = String.raw`${AT}(?: → ${AT})?`;
-const SHORT_ID = String.raw`(?:0x[0-9a-fA-F]+|ck[bt]1[0-9a-z]+)${ELLIPSIS}[0-9a-zA-Z]+(?::\d+)?`;
-// a count with its sign where it has one ("+3 participants"): the sign is the number's
-const COUNT = String.raw`[+−]?\d[\d,]*(?:\.\d+)?(?:\u00a0[^\s\u00a0]+)+`;
+// not after a digit (or a digit and `:` / `-`), not before one: `12026-11-14` is no date; a
+// label's colon after a date (`Week of 2026-11-09: …`) is not a digit
+const TIME = String.raw`(?<!\d[:-]?)${AT}(?: → ${AT})?(?!\d|[:-]\d)`;
+
+/** `{min,max}` of one part of a kind of id over lib/shorten.ts's three sizes, less its prefix. */
+function spread(kind: IdKind, part: 'head' | 'tail', prefix = 0): string {
+  const counts = Object.values(SHORT_FORMS).map((size) => size[kind][part] - prefix);
+  return `{${Math.min(...counts)},${Math.max(...counts)}}`;
+}
+// a hash: heads 12, 10, 6 with `0x` counted (4–10 hex after it), tails 8, 6, 4
+const HASH_ID = String.raw`0x[0-9a-fA-F]${spread('hash', 'head', 2)}${ELLIPSIS}[0-9a-fA-F]${spread('hash', 'tail')}`;
+// an address: heads 12, 10, 4 with `ckb1` counted (0–8 after it: a tight one is `ckb1…` and its
+// tail), tails 8, 6, 6
+const ADDRESS_ID = String.raw`ck[bt]1[0-9a-z]${spread('address', 'head', 4)}${ELLIPSIS}[0-9a-z]${spread('address', 'tail')}`;
+// an out point's index: shortenOutpoint takes a safe integer, 16 digits at most
+const INDEX_DIGITS = String(Number.MAX_SAFE_INTEGER).length;
+const SHORT_ID = String.raw`(?<![0-9a-zA-Z])(?:${HASH_ID}(?::\d{1,${INDEX_DIGITS}})?|${ADDRESS_ID})(?![0-9a-zA-Z]|:\d)`;
+
+// formatCount's number, in en-US groups: a safe integer has 16 digits, the one bigint it is given
+// (tx-comment's common-knowledge delta in bytes) is a chain quantity, a u64 of 20 at most
+const COUNT_DIGITS = (BigInt(2) ** BigInt(64) - BigInt(1)).toString().length;
+const NUMBER = String.raw`\d{1,3}(?:,\d{3}){0,${Math.ceil(COUNT_DIGITS / 3) - 1}}`;
+// its noun, read from the source (the units test holds every noun literal to it): the noun of the
+// most words, `bytes no field describes`, has 4; the longest word, `confirmations`, has 13, and a
+// composed string sets punctuation against the last (one mark today, `,` `.` `:` `)`): 16
+const NOUN_WORDS = 4;
+const NOUN_WORD = 16;
+// a count with its sign where it has one ("+3 participants"): the sign is the number's; not after a
+// digit, a comma or a point, and its last word followed by neither more of a word nor another word
+const COUNT = String.raw`(?<![\d,.])[+−]?${NUMBER}(?:\u00a0[^\s\u00a0]{1,${NOUN_WORD}}){1,${NOUN_WORDS}}(?![\S\u00a0])`;
 const UNIT = new RegExp(`(${TIME})|(${SHORT_ID})|(${COUNT})`, 'g');
 
 /**
