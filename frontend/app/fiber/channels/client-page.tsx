@@ -298,11 +298,8 @@ export default function FiberChannelsPage() {
             lede={
               <>
                 Channels touch the chain only to open and to close.{' '}
-                <a
-                  href="#evidence"
-                  className="hover:text-text-bright whitespace-nowrap hover:underline"
-                >
-                  How it works ↓
+                <a href="#evidence" className="hover:text-text-bright hover:underline">
+                  How it works<span className="whitespace-nowrap"> ↓</span>
                 </a>
               </>
             }

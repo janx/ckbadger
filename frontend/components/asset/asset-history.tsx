@@ -471,8 +471,9 @@ export function AssetHistory({
                   tx {e.txIndex} · sequence {e.transferSequence}
                 </AppLink>,
               ];
+              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome sweep)
               const party = (
-                <span className="whitespace-nowrap">
+                <span>
                   {e.kind === 'mint' ? 'to ' : 'from '}
                   <AppLink href={`/address/${e.address ?? e.lockHash}`}>
                     <Hash

@@ -6,7 +6,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
-import { HexCode } from '@/components/ui/hex-code';
+import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -89,21 +89,17 @@ export default function AddressDetailPage() {
   return <AddressDetailPageContent key={addr} addr={addr} />;
 }
 /**
- * The address's id line: the full address and its copy button. It sets no size or ink of its own
- * (`inherit`): the name plate's id line gives it the plate's quiet voice (seals by kind, C10 round
- * 2); the address wraps anywhere, as the line does.
+ * The address's id line: the full address and its copy button, in the plate's quiet voice (seals
+ * by kind, C10 round 2). The address is the head's full id (A4 Chrome F3): one line where the
+ * measured line holds it (97 characters, 698.4 px at 12 px), else in equal unbroken lines — at 390
+ * the line beside the button is 328 px, three lines of 33, 33 and 31; at 640, 578 px, two of 49 and
+ * 48 — never the own-box scroller it was. Without an address the page is its lock hash, a hash.
  */
-function AddressIdentity({ value }: { value: string }) {
+function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
   const [copyState, setCopyState] = useState('Copy address');
   return (
     <span className="flex min-w-0 items-start gap-2">
-      <HexCode
-        value={value}
-        truncate={false}
-        copyable={false}
-        variant="inherit"
-        className="min-w-0"
-      />
+      <HeadId value={value} kind={kind} />
       <button
         aria-label={copyState}
         title={copyState}
@@ -259,7 +255,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               a.address ? titleAddress(a.address) : titleHash(a.lockScriptHash),
               'address',
             ]}
-            identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
+            identity={
+              a.address ? (
+                <AddressIdentity value={a.address} kind="address" />
+              ) : (
+                <AddressIdentity value={a.lockScriptHash} kind="hash" />
+              )
+            }
             // An address is its lock script: the page presses the script's stone (the tall rounded
             // one) of the lock script's hash, which the address read already carries; nothing else
             // is fetched for the seal. Its name plate (seals by kind, C10) opens on "Address".

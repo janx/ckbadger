@@ -91,9 +91,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Touch**: anything a hover reveals must also be reachable by a tap that pins a readout under the
   figure; hints say "tap or hover".
 - **Non-breaking units**: an address with its lock label, a number with its unit, an outpoint with
-  its index, a date, a hyphenated term — never broken inside. A name plate's full hash stands on
-  one line where the measured line holds it, else in two halves (`0x` and 32 digits, then the last
-  32 indented 2ch), each half one unit, never a scroller.
+  its index, a date, a hyphenated term — never broken inside. A full id in a page's head (a name
+  plate, an asset's id under its title) stands on one line where the measured line holds it, else
+  in equal lines, each one unit (a hash as `0x` and 32 digits, then the last 32 indented 2ch; an
+  address in as few equal lines as hold it), never a scroller; full ids in the evidence tier and in
+  tables keep their own-box scroller.
 - **Formats** (`frontend/lib/shorten.ts`, `frontend/lib/format-unit.ts`; UI review 2026-11-14,
   U-09, CH-14, PA-22): a shortened id has three sizes, counted in characters of the value as
   written (`0x` and `ckb1` included) — `head` 12…8 for an h1 or a lede, `row` 10…6 in tables, feeds

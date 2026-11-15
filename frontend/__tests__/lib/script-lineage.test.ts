@@ -5,6 +5,7 @@ import {
   codeHolders,
   deploymentOnDay,
   holderName,
+  holderParts,
   orderedVersions,
   signerOf,
   signingText,
@@ -79,5 +80,35 @@ describe('script lineage (JoyID, five binaries under one Type ID)', () => {
     expect(deploymentOnDay(lineage, '2023-10-06')).toBeNull();
     expect(deploymentOnDay(lineage, '2024-06-01')!.blockNumber).toBe(11133523);
     expect(deploymentOnDay(lineage, '2026-10-29')!.blockNumber).toBe(17894900);
+  });
+
+  // A4 Chrome F2: a holder is named either by a kind and its id ("multisig 0xd1db…b95c", a label
+  // with its id, one unit) or by a phrase ("an unspendable lock", words a line may break). The
+  // name says which where the kind is known, so a renderer keeps only the id form whole.
+  it('names a holder in parts: a kind with its id, or a phrase with none', () => {
+    const custody = markers.at(-1)!.custody;
+    expect(holderParts(custody, 'tight')).toEqual({ label: 'multisig', id: '0x6598…d696' });
+    expect(holderParts({ ...custody, class: 'one_key' }, 'tight')).toEqual({
+      label: 'one key',
+      id: '0x6598…d696',
+    });
+    expect(holderParts({ ...custody, class: 'unspendable' }, 'tight')).toEqual({
+      label: 'an unspendable lock',
+      id: null,
+    });
+    expect(holderParts({ ...custody, class: 'fixed' }, 'tight')).toEqual({
+      label: 'no one (pinned by data hash)',
+      id: null,
+    });
+    expect(holderParts({ ...custody, class: 'other' as never }, 'tight')).toEqual({
+      label: 'lock',
+      id: shortenHash(custody.lockCodeHash!, 'tight'),
+    });
+    expect(
+      holderParts({ ...custody, class: 'other' as never, lockCodeHash: null }, 'tight')
+    ).toEqual({ label: 'an unrecorded holder', id: null });
+    // the one string form joins the two with a space
+    expect(holderName(custody, 'tight')).toBe('multisig 0x6598…d696');
+    expect(holderName({ ...custody, class: 'unspendable' }, 'tight')).toBe('an unspendable lock');
   });
 });

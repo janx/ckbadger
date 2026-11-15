@@ -1,10 +1,6 @@
 import type { ReactNode } from 'react';
-import { NoBreak } from '@/components/ui/no-break';
 import { Seal } from '@/components/ui/seal';
-import { useCopy } from '@/hooks/useCopy';
-import { useElementWidth } from '@/hooks/useElementWidth';
 import { assertSealId, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
-import { TYPE_SCALE } from '@/lib/type-scale';
 import { cn } from '@/lib/utils';
 
 /**
@@ -151,56 +147,5 @@ export function SealedHead({
         </div>
       )}
     </div>
-  );
-}
-
-/** The id line's monospace advance: the plate sets it in text-small, JetBrains Mono's 0.6 em. */
-const ID_ADVANCE = 0.6 * parseFloat(TYPE_SCALE.small[0]);
-const FULL_HASH = /^0x[0-9a-fA-F]{64}$/;
-
-/**
- * A full hash on a name plate's id line (the lead's ruling a, 2026-11-14): never a scroller (the
- * plate is the page's name, the head its first screen) and never wrapped in the middle. It sits on
- * ONE line where the measured line holds it (66 characters, 475.2 px at 12 px); otherwise it is set
- * in TWO HALVES, a designed break: `0x` and the first 32 digits, then the last 32 indented 2ch so
- * the digits stand under the digits (34 characters each, 244.8 px), each half one unit. Measured
- * (RESPONSIVE_LAYOUT principle 4), not a breakpoint. The text and the title give the whole id once;
- * with `copyable` a click copies it whole. The span takes the free width of its line (`flex-1` in a
- * row, a block alone), so its measured width is the line's, not the text's.
- */
-export function PlateHash({ hash, copyable = false }: { hash: string; copyable?: boolean }) {
-  if (!FULL_HASH.test(hash)) throw new Error(`PlateHash: ${hash} is not a full hash`);
-  const [ref, width] = useElementWidth<HTMLSpanElement>();
-  // the one copy path (hooks/useCopy): a copy that cannot work shows no tick
-  const { copied, copy } = useCopy(hash);
-  const oneLine = width === null || width >= hash.length * ID_ADVANCE;
-  return (
-    <span
-      ref={ref}
-      data-plate-hash=""
-      title={hash}
-      onClick={copyable ? copy : undefined}
-      className={cn(
-        'relative block min-w-0 flex-1 font-mono',
-        copyable && 'hover-lit cursor-pointer transition-colors'
-      )}
-    >
-      {/* Copied, the ✓ stands where the hash starts while the hash keeps its lines (invisible), so
-          a two-line plate does not shut to one for the moment and move the page under it. */}
-      <span className={cn(copied && 'invisible')}>
-        {oneLine ? (
-          <NoBreak data-plate-half="">{hash}</NoBreak>
-        ) : (
-          <>
-            <NoBreak data-plate-half="">{hash.slice(0, 34)}</NoBreak>
-            <br />
-            <NoBreak data-plate-half="" className="pl-[2ch]">
-              {hash.slice(34)}
-            </NoBreak>
-          </>
-        )}
-      </span>
-      {copied && <span className="absolute left-0 top-0">✓</span>}
-    </span>
   );
 }

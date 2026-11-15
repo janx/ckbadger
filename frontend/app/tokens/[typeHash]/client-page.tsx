@@ -16,6 +16,7 @@ import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
 import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { LockKind } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
 import { formatCkbAmount } from '@/lib/utils';
@@ -150,13 +151,15 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       ]}
       identity={
         <>
-          <span className="text-body">
+          <span className="text-body block">
             {formatStandard(t.standard)} ·{' '}
             {t.decimals === null ? 'Decimals unknown' : formatCount(t.decimals, 'decimal')}
             {t.name && t.name !== t.symbol && <> · {t.name}</>}
-          </span>{' '}
-          {/* C7: the type hash the rail listed names the token under its title, as an id does. */}
-          <Hash hash={t.typeScriptHash} truncate={false} className="text-meta" />
+          </span>
+          {/* C7: the type hash the rail listed names the token under its title, as an id does;
+              the head's full id on a line of its own (A4 Chrome F3): one line from 435.6 px
+              (66 characters at 11 px), else the two halves */}
+          <HeadId value={t.typeScriptHash} kind="hash" copyable />
         </>
       }
       intro={

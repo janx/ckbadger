@@ -76,7 +76,11 @@ describe('ActivityFeed', () => {
     expect(activity).toHaveClass('text-body');
     expect(activity).not.toHaveClass('sm:text-section');
     expect(transactions).toHaveClass('whitespace-nowrap');
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveClass('whitespace-nowrap');
+    // re-pinned (A4 Chrome sweep): the phrase may break; only its arrow is held to its last word
+    const viewAll = screen.getByRole('link', { name: 'view all →' });
+    expect(viewAll).not.toHaveClass('whitespace-nowrap');
+    expect(viewAll.lastElementChild).toHaveClass('whitespace-nowrap');
+    expect(viewAll.lastElementChild!.textContent).toBe(' →');
     expect(transactions).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
       'href',

@@ -128,7 +128,9 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     whole(within(metrics).getByText('2023-10-07'));
     whole(within(metrics).getByText('2025-11-21'));
-    whole(within(metrics).getByText('multisig 0x6598…d696'));
+    // re-pinned (A4 Chrome F2): the holder's id is the unit, its kind a word before it
+    // ("multisig 0x6598…d696" whole is 204 px at 17 px, wider than the tile's 163 px at 390)
+    whole(within(metrics).getByText('0x6598…d696'));
     // the count and its noun, one unit; "Upgradable" and its versions, two items of one list
     expect(metrics.textContent).toContain('2,707,778\u00a0cells');
     expect(metrics.textContent).toContain('5\u00a0versions');

@@ -101,7 +101,9 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
       'occupied',
     ]);
     expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda0c…3x8k26');
-    expect(within(row).getByText('Default Lock')).toHaveClass('whitespace-nowrap');
+    // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping row, so it moves to
+    // the next line whole; its words are not made one unit
+    expect(within(row).getByText('Default Lock')).not.toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).not.toHaveClass('basis-full');
@@ -140,7 +142,9 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     expect(kind).toHaveTextContent('JoyID');
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
     expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
-    expect(kind).toHaveClass('whitespace-nowrap', 'small-caps', 'text-text-dim');
+    // re-pinned (A4 Chrome sweep): no nowrap; an item of the wrapping line moves whole
+    expect(kind).toHaveClass('small-caps', 'text-text-dim');
+    expect(kind).not.toHaveClass('whitespace-nowrap');
     expect(kind).not.toHaveClass('border');
     // Not repeated in the party cell.
     expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
@@ -162,7 +166,9 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     const line = container.querySelector('[data-role="participant"]') as HTMLElement;
     expect(line).toHaveClass('flex-wrap');
     expect(line.querySelector('[data-party]')).toHaveClass('max-w-full');
-    expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
+    // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping line, so it moves to
+    // the next line whole; a registered name is words, never made nowrap
+    expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('whitespace-nowrap');
   });
 });
 

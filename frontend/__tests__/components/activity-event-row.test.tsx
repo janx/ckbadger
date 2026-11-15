@@ -291,10 +291,13 @@ describe('ItemDeltaFact', () => {
         />
       </>
     );
-    // "object <id>" is one unbreakable run; only the verb may wrap onto the next line.
-    const run = screen.getByText(/^object/);
-    expect(run).toHaveClass('whitespace-nowrap');
-    expect(run.parentElement).toHaveTextContent('object 0x51c75a00…0096f2 departed');
+    // re-pinned (A4 Chrome sweep): the id is the one unbreakable unit; "object", the id and the
+    // verb are the line's words (it was "object <id>" as one nowrap run)
+    const id = screen.getByText('0x51c75a00…0096f2');
+    expect(id).toHaveAttribute('data-nobreak');
+    const run = id.closest('.text-text-bright') as HTMLElement;
+    expect(run).not.toHaveClass('whitespace-nowrap');
+    expect(run).toHaveTextContent('object 0x51c75a00…0096f2 departed');
     expect(screen.getByText(/^\.bit/).parentElement).toHaveTextContent(
       '.bit 0xabc00000…000def arrived'
     );
@@ -363,6 +366,27 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
     // No field, no badge and no guessed name.
     expect(container.querySelector('[data-composition]')).toBeNull();
     expect(container).toHaveTextContent('object 0x51c75a00…0096f2 departed');
+  });
+
+  // A4 Chrome sweep: the collection's name and the object's id were one nowrap unit, so a name of
+  // several words ("Spore Blind Box Series 2") and its id could not break: a phrase is not a unit.
+  // The id is the unit (ShortId); the name's words and the space before the id may break.
+  it('keeps the object’s id whole, never its collection’s name with it (A4 Chrome sweep)', () => {
+    const { container } = render(
+      <ItemDeltaFact
+        size="row"
+        item={{
+          kind: 'object',
+          objectId: '0x51c75a0000000000000096f2',
+          delta: -1,
+          collection: { id: '0xd585', name: 'Spore Blind Box Series 2' },
+        }}
+      />
+    );
+    expect(container).toHaveTextContent('Spore Blind Box Series 2 0x51c75a00…0096f2 departed');
+    const id = screen.getByText('0x51c75a00…0096f2');
+    expect(id).toHaveAttribute('data-nobreak');
+    expect(id.parentElement!.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
   });
 });
 

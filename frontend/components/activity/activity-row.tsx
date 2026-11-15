@@ -647,7 +647,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
  * The lock kind as dim small caps after the address (material pass v2, move 5: boxes stay on
  * controls; the words are LockKind's default form, `.small-caps`), never a chip.
  */
-const LOCK_KIND = 'text-text-dim small-caps lowercase whitespace-nowrap';
+const LOCK_KIND = 'text-text-dim small-caps lowercase';
 /** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
 const LINE_BUTTON =
   'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap border bg-transparent px-[5px] leading-4';

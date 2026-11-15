@@ -52,9 +52,9 @@ export function ActivityFeed() {
           note={
             <Link
               href={active.viewAll}
-              className="text-interactive hover:text-jade text-small whitespace-nowrap transition-colors"
+              className="text-interactive hover:text-jade text-small transition-colors"
             >
-              view all →
+              view all<span className="whitespace-nowrap"> →</span>
             </Link>
           }
         />

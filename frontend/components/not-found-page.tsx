@@ -196,22 +196,23 @@ export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPa
       <nav aria-label="Find another route" className="flex flex-wrap gap-x-4 gap-y-1">
         <Link
           href="/"
-          className="text-jade focus-visible:outline-jade whitespace-nowrap underline-offset-4 hover:underline focus-visible:outline"
+          className="text-jade focus-visible:outline-jade underline-offset-4 hover:underline focus-visible:outline"
         >
-          ← back to the explorer
+          <span className="whitespace-nowrap">← </span>back to the explorer
         </Link>
         {back ? (
           <Link
             href={back.href}
-            className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+            className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
           >
-            ← {back.label}
+            <span className="whitespace-nowrap">← </span>
+            {back.label}
           </Link>
         ) : (
           <>
             <Link
               href="/blocks"
-              className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+              className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
             >
               browse blocks
             </Link>

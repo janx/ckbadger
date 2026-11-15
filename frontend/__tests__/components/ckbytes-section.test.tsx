@@ -44,9 +44,11 @@ describe('CkbytesSection', () => {
     // what the figure is, quiet beside it, where "at #N" stood (the board's label)
     const label = within(total).getByTestId('ckbytes-label');
     expect(label).toHaveTextContent(/^in circulation$/);
-    expect(label).toHaveClass('text-text-dim', 'text-small', 'ml-3');
-    // one unit, never broken inside, at its own tracking (not the display figure's)
-    expect(label).toHaveClass('whitespace-nowrap', 'tracking-normal');
+    // at its own tracking (not the display figure's); re-pinned (A4 Chrome F1): no margin of its
+    // own (the row's gap stands between the two), and no nowrap — as an item of a wrapping row it
+    // moves under the figure whole
+    expect(label).toHaveClass('text-text-dim', 'text-small', 'tracking-normal');
+    expect(label.className).not.toMatch(/(^|\s)m[lx]?-/);
     expect(total.lastElementChild).toBe(label);
     expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
     // Lane L: the block the total is exact at is a link.
@@ -75,6 +77,25 @@ describe('CkbytesSection', () => {
     expect(figure).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
     expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-body');
     expect(total.lastElementChild).toBe(within(total).getByTestId('ckbytes-label'));
+  });
+
+  // A4 Chrome F1: the figure (nowrap) and the label (nowrap) followed each other with no
+  // whitespace between, so the line had no break between two unbreakable units and the label ran
+  // off the page (+52 px at 390, +56 at 640). The two are items of a wrapping row: the label goes
+  // to the next line when the figure's line cannot hold both, starting it with no indent; neither
+  // sits in a nowrap parent that holds both.
+  it('sets the figure and its label as two items of a wrapping row (A4 Chrome F1)', async () => {
+    render(<CkbytesSection />);
+    const total = await screen.findByTestId('ckbytes-circulating');
+    expect(total).toHaveClass('flex', 'flex-wrap', 'gap-x-3');
+    expect(total).not.toHaveClass('whitespace-nowrap');
+    const [figure, label] = [...total.children] as HTMLElement[];
+    expect(figure).toHaveClass('whitespace-nowrap');
+    expect(label).toBe(within(total).getByTestId('ckbytes-label'));
+    expect(figure).not.toContainElement(label);
+    // nothing between the row and the page lays the two out on one unbreakable line
+    for (let el: HTMLElement | null = total; el; el = el.parentElement)
+      expect(el).not.toHaveClass('whitespace-nowrap');
   });
 
   // Rubbing × Song print, phase 5 (H3, the Main board): `■ supply`, the block the allocation was

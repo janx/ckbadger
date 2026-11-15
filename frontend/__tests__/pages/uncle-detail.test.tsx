@@ -60,7 +60,7 @@ describe('Uncle detail page', () => {
     Object.assign(navigator, { clipboard: { writeText } });
     const { container } = render(<UncleDetailPage />);
     await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
-    fireEvent.click(container.querySelector('[data-plate-hash]') as HTMLElement);
+    fireEvent.click(container.querySelector('[data-head-id]') as HTMLElement);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(blockUncle.hash));
     expect(blockUncle.hash).toBe(`0x${'ee'.repeat(32)}`);
   });
