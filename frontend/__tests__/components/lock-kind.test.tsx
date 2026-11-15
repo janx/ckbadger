@@ -36,20 +36,10 @@ describe('LockKind (R-2)', () => {
   });
 
   // A4 Chrome sweep (re-pinned): a registered name is words ("Nervape Shadow Lock"), not a unit, so
-  // no form makes it nowrap; only the unregistered "lock <code hash>" (a label with its id) is.
-  it('lets a registered name break between its words, in either form (A4 Chrome sweep)', () => {
-    const { rerender } = render(
-      <LockKind size="row" lockKind="Nervape Shadow Lock" lockCodeHash={CODE} />
-    );
-    expect(screen.getByText('Nervape Shadow Lock')).not.toHaveClass('whitespace-nowrap');
-    rerender(
-      <LockKind
-        size="row"
-        lockKind="Nervape Shadow Lock"
-        lockCodeHash={CODE}
-        className={rowTagClass()}
-      />
-    );
+  // LockKind makes it nowrap in no form; only the unregistered "lock <code hash>" (a label with its
+  // id) is. A row chip is a box whose own class keeps its words on one line (rowTagClass).
+  it('lets a registered name break between its words (A4 Chrome sweep)', () => {
+    render(<LockKind size="row" lockKind="Nervape Shadow Lock" lockCodeHash={CODE} />);
     expect(screen.getByText('Nervape Shadow Lock')).not.toHaveClass('whitespace-nowrap');
   });
 

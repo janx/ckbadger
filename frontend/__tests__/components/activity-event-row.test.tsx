@@ -291,10 +291,13 @@ describe('ItemDeltaFact', () => {
         />
       </>
     );
-    // "object <id>" is one unbreakable run; only the verb may wrap onto the next line.
-    const run = screen.getByText(/^object/);
-    expect(run).toHaveClass('whitespace-nowrap');
-    expect(run.parentElement).toHaveTextContent('object 0x51c75a00…0096f2 departed');
+    // re-pinned (A4 Chrome sweep): the id is the one unbreakable unit; "object", the id and the
+    // verb are the line's words (it was "object <id>" as one nowrap run)
+    const id = screen.getByText('0x51c75a00…0096f2');
+    expect(id).toHaveAttribute('data-nobreak');
+    const run = id.closest('.text-text-bright') as HTMLElement;
+    expect(run).not.toHaveClass('whitespace-nowrap');
+    expect(run).toHaveTextContent('object 0x51c75a00…0096f2 departed');
     expect(screen.getByText(/^\.bit/).parentElement).toHaveTextContent(
       '.bit 0xabc00000…000def arrived'
     );

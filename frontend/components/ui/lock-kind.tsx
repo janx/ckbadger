@@ -34,8 +34,11 @@ export function LockKind({
   }
   return (
     <span
+      // A registered name is words, never kept whole (A4 Chrome sweep); the unregistered
+      // "lock <code hash>" is a label with its id, one unit
       className={cn(
-        className ? 'whitespace-nowrap' : 'text-text-dim small-caps whitespace-nowrap lowercase',
+        !className && 'text-text-dim small-caps lowercase',
+        lockKind === null && 'whitespace-nowrap',
         className
       )}
       title={lockCodeHash}
