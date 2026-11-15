@@ -256,12 +256,15 @@ describe('Address v3', () => {
     // C10 round 2: the id line in the plate's one quiet voice, set by the plate: the full address
     // (it was text-body in the text ink) takes it; the copy button keeps its own classes
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const full = within(idLine).getByText(addressText);
-    // U-16 (re-pinned): a full value is one line in its own box, scrolled when it must
-    expect(full.className).toBe(
-      'font-mono inline-block max-w-full overflow-x-auto whitespace-nowrap align-top min-w-0'
-    );
+    // A4 Chrome F3 (re-pinned): a full id in a head is the head's HeadId, one line where the
+    // measured line holds it, else equal unbreakable lines — never the own-box scroller it was
+    // (box 328 px for 698 px at 390)
+    const full = idLine.querySelector('[data-head-id]') as HTMLElement;
+    expect(full).not.toBeNull();
+    expect(full.textContent).toBe(addressText);
     expect(full).toHaveAttribute('title', addressText);
+    expect(full).toHaveClass('text-small');
+    expect(idLine.querySelector('.overflow-x-auto')).toBeNull();
     expect(full.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     expect(screen.getByRole('button', { name: 'Copy address' })).toHaveClass(
       'hover:text-jade',

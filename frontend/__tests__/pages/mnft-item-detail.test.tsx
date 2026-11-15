@@ -10,6 +10,7 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import {
   api,
@@ -138,6 +139,14 @@ describe('MnftItemDetailPage', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A4 Chrome F3: the token id under the title was HexCode's own-box scroller (break-all with
+  // nowrap: box 358 px for its content at 390, the first screen); it is the head's HeadId.
+  it('prints the token id in its head as the head’s full id, never a scroller', async () => {
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+    expectHeadId(id, 'meta');
   });
 
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {

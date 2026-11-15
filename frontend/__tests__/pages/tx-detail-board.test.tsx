@@ -443,9 +443,11 @@ describe('Transaction board, tier 1', () => {
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
     // the lead's ruling a: the hash is the plate's PlateHash, one line or two halves, never a
     // scroller (re-pinned: it was a bare span, 'min-w-0'); still no size or ink of its own
-    const hash = idLine.querySelector('[data-plate-hash]') as HTMLElement;
+    // re-pinned (A4 Chrome F3): the piece is every head's HeadId; it sets the plate's 12 px
+    // itself, the step it measures with, and no ink
+    const hash = idLine.querySelector('[data-head-id]') as HTMLElement;
     expect(hash).toHaveAttribute('title', TX_HASH);
-    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
+    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono text-small tracking-normal');
     expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
     expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(

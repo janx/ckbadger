@@ -363,8 +363,8 @@ describe('Block board · first tier', () => {
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
     // The lead's ruling a (re-pinned): the plate's id line is never a scroller; the full hash is
     // the plate's PlateHash, one line where the line holds it, else two halves; click to copy as
-    // before, the whole hash its title.
-    const hash = idLine.querySelector('[data-plate-hash]') as HTMLElement;
+    // before, the whole hash its title. Re-pinned (A4 Chrome F3): the piece is every head's HeadId.
+    const hash = idLine.querySelector('[data-head-id]') as HTMLElement;
     expect(hash).not.toBeNull();
     expect(hash.textContent).toBe(block.hash);
     expect(hash).toHaveAttribute('title', block.hash);
@@ -382,7 +382,7 @@ describe('Block board · first tier', () => {
     Object.assign(navigator, { clipboard: { writeText } });
     const { container } = render(<BlockDetailPage />);
     await screen.findByRole('heading', { level: 1 });
-    const id = container.querySelector('[data-sealed-id] [data-plate-hash]') as HTMLElement;
+    const id = container.querySelector('[data-sealed-id] [data-head-id]') as HTMLElement;
     fireEvent.click(id);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(block.hash));
     expect(writeText).toHaveBeenCalledTimes(1);
