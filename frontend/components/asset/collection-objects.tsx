@@ -43,6 +43,7 @@ import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
 import { TraitText } from '@/components/asset/trait-text';
 import { LockKind } from '@/components/ui/lock-kind';
 import { formatCount } from '@/lib/format-count';
+import { unitText } from '@/components/ui/units';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 // Consistency round C11 (Main.dc.html): twenty objects a page.
@@ -268,9 +269,11 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
             <span>
               Newest first ·{' '}
               <span className="text-text tabular-nums">
-                {shown !== undefined && filtered
-                  ? `${shown.toLocaleString('en-US')} of ${formatCount(total, 'object')}`
-                  : formatCount(shown ?? total, 'object')}
+                {unitText(
+                  shown !== undefined && filtered
+                    ? `${shown.toLocaleString('en-US')} of ${formatCount(total, 'object')}`
+                    : formatCount(shown ?? total, 'object')
+                )}
               </span>
             </span>
             {filtered && (

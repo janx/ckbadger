@@ -14,6 +14,7 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { CurrentPattern, ObjectGenetics, ItemProtocol } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fullText } from '@/__tests__/utils/full-text';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import {
@@ -67,7 +68,10 @@ describe('Independent DOB evidence', () => {
     expect(container.querySelector('[data-nibble="2"]')).toHaveAttribute('opacity', '0.15');
     expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
     render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
-    expect(screen.getByText(/decoded 2023-11-15 06:13:20 UTC\+8/)).toBeInTheDocument();
+    // B3 round 4, task 3: the decode time is one unit of its sentence (unitText), so the sentence
+    // is read across that unit's span; the date-time itself never breaks.
+    expect(screen.getByText(fullText(/decoded 2023-11-15 06:13:20 UTC\+8/))).toBeInTheDocument();
+    expect(screen.getByText('2023-11-15 06:13:20 UTC+8')).toHaveAttribute('data-nobreak');
     expect(screen.queryByText(/Unix second/)).not.toBeInTheDocument();
     expect(screen.getByText(/original decoder binary hash was not recorded/)).toBeInTheDocument();
     expect(screen.getByText(/Clipped to the actual DNA shown/)).toBeInTheDocument();
@@ -306,7 +310,9 @@ describe('How an object is read (C5)', () => {
     expect(within(table).getByRole('row', { name: /^_m0 – _m11/ })).toHaveTextContent(
       'bytes 0–11 · 12 × 1'
     );
-    const all = screen.getByText('All 12 genes, one row each').closest('details')!;
+    // the count is one unit (B3 round 4, task 3): the summary is read across its span
+    const all = screen.getByText(fullText('All 12 genes, one row each')).closest('details')!;
+    expect(within(all).getByText('12 genes')).toHaveAttribute('data-count');
     expect(within(all).getAllByRole('row')).toHaveLength(13);
     // the ruler still draws one part per gene
     expect(

@@ -50,6 +50,7 @@ import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
 import { TraitText } from '@/components/asset/trait-text';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
+import { unitText } from '@/components/ui/units';
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
@@ -149,8 +150,8 @@ export function DnaParagraph({
   // Set in the object page's "in words" Prose: the paragraph carries no classes of its own.
   return (
     <p>
-      The object’s traits are not stored as text. It carries {formatCount(bytes, 'byte')} of DNA,
-      and the collection’s decoder reads each gene to express a trait.
+      The object’s traits are not stored as text. It carries {unitText(formatCount(bytes, 'byte'))}{' '}
+      of DNA, and the collection’s decoder reads each gene to express a trait.
       {pointer
         ? ` Its ${pointer} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
         : ''}
@@ -241,7 +242,7 @@ export function ObjectGeneticsView({
         </GelPlate>
         {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
         <p data-role="caption" className="text-text text-body max-w-[640px]">
-          Its traits are read from {formatCount(words.bytes, 'byte')} of DNA
+          Its traits are read from {unitText(formatCount(words.bytes, 'byte'))} of DNA
           {words.pointer
             ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
             : ''}
@@ -340,8 +341,10 @@ export function ObjectGeneticsEvidence({
       </h2>
       <p className="text-text-dim text-meta">
         The byte map describes the current decoder. Trait values are cached VM results
-        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
-        the original decoder binary hash was not recorded. These are separate pieces of evidence.
+        {cached.decodedAt !== null
+          ? unitText(`, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}`)
+          : ''}
+        ; the original decoder binary hash was not recorded. These are separate pieces of evidence.
       </p>
       {layout && (
         <ObjectDnaReading
@@ -352,7 +355,8 @@ export function ObjectGeneticsEvidence({
       {dnaHex !== null && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
-            All {layout ? formatCount(layout.bytes.length, 'byte') : 'bytes'} of DNA as hex
+            All {layout ? unitText(formatCount(layout.bytes.length, 'byte')) : 'bytes'} of DNA as
+            hex
           </summary>
           <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
             {dnaHex}
@@ -365,7 +369,7 @@ export function ObjectGeneticsEvidence({
             // words break between them; a media type anyone can mint breaks anywhere if it must
             <li key={`${m.hash}:${m.step ?? 'x'}`} className="[overflow-wrap:anywhere]">
               <span className="text-text">
-                {m.mediaType} · {formatCount(m.size, 'byte')}
+                {m.mediaType} · {unitText(formatCount(m.size, 'byte'))}
                 {m.step !== null ? ` · step ${m.step + 1}` : ''}
                 {m.role ? ` · ${m.role}` : ''}
               </span>{' '}
@@ -775,13 +779,17 @@ function PatternReading({
         {[
           {
             title: 'Each object',
-            body: dna
-              ? `${formatCount(dna.length, 'byte')} of DNA in its cell data.`
-              : 'its DNA, in its cell data.',
+            body: unitText(
+              dna
+                ? `${formatCount(dna.length, 'byte')} of DNA in its cell data.`
+                : 'its DNA, in its cell data.'
+            ),
           },
           {
             title: 'The pattern',
-            body: `stored in this cluster’s description: ${count(genes.length)} ${countNoun(genes.length, 'gene')}, each a byte range and a rule.`,
+            body: unitText(
+              `stored in this cluster’s description: ${formatCount(genes.length, 'gene')}, each a byte range and a rule.`
+            ),
           },
           { title: steps.length > 1 ? 'The decoders' : 'The decoder', body: null },
         ].map((tile, i) => (
@@ -933,7 +941,7 @@ function PatternReading({
       {folded && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
-            All {formatCount(genes.length, 'gene')}, one row each
+            All {unitText(formatCount(genes.length, 'gene'))}, one row each
           </summary>
           <div className="mt-2">{geneTable(everyGene, 'DOB blueprint, every gene')}</div>
         </details>
@@ -951,7 +959,7 @@ function PatternReading({
                 <ShortId value={sample.id} kind="hash" size="row" />
               </AppLink>
             </span>
-            {dna && <span>{formatCount(dna.length, 'byte')}</span>}
+            {dna && <span>{unitText(formatCount(dna.length, 'byte'))}</span>}
           </div>
           {sample.decodeStatus !== 'decoded' ? (
             <p className="text-text-dim text-small mt-2">

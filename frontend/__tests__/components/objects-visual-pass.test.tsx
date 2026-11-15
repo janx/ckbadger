@@ -18,6 +18,7 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fullText } from '@/__tests__/utils/full-text';
 
 it('reads the latest complete week by default instead of "No completed weekly total" (OB-C6)', () => {
   render(
@@ -47,7 +48,8 @@ it('writes the allele gel caption as wrapping text, not clipped SVG text', () =>
   render(<AlleleGel lanes={lanes} total={90} subject="Nervape 3x" />);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  const caption = screen.getByText(/band thickness = share of all 90 objects/);
+  // the count is one unit (B3 round 4, task 3): the caption is read across its span
+  const caption = screen.getByText(fullText(/band thickness = share of all 90 objects/));
   expect(caption.closest('svg')).toBeNull();
 });
 
@@ -72,7 +74,7 @@ it('styles tier-2 evidence headings as tier 2 and names one byte as "byte N"', (
   // the DNA drawn to scale, one part per gene that owns bytes
   expect(within(evidence).getByRole('group', { name: 'Object DNA byte map' })).toBeInTheDocument();
   expect(
-    within(evidence).getByText('All 53 bytes of DNA as hex').closest('details')
+    within(evidence).getByText(fullText('All 53 bytes of DNA as hex')).closest('details')
   ).not.toHaveAttribute('open');
 });
 

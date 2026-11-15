@@ -7,6 +7,7 @@ import { BITCOIN_COLORS, GENE_COLORS } from '@/lib/design-tokens';
 import type { AlleleLane } from '@/lib/dob-genes';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fullText } from '@/__tests__/utils/full-text';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const layout = sequencingGenes(nervape3xGenetics, 'Nervape 3x');
@@ -134,7 +135,10 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
     expect(
       container.querySelector('[data-lane="Color"] [data-allele="Water Veins"] title')!.textContent
     ).toBe('Color = Water Veins: 20 of 90 (22.22%)');
-    expect(screen.getByText(/band thickness = share of all 90 objects/)).toBeInTheDocument();
+    // the count is one unit (B3 round 4, task 3): the caption is read across its span
+    expect(
+      screen.getByText(fullText(/band thickness = share of all 90 objects/))
+    ).toBeInTheDocument();
   });
 
   it('draws a persistent genotype overlay for "this one" across every lane', () => {
