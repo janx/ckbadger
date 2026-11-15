@@ -276,3 +276,46 @@ it('follows the page network: no mainnet links from a testnet object (#8)', () =
     `https://test.omiga.io/info/dobs/${object.typeScriptHash}`
   );
 });
+
+// B3 round 3 (the lead's sweep for plain words cut in the middle): the inscription reading took
+// break-all, so "inscription i0" was set "inscript / ion i0" in the media box at 390 and 1280, and
+// the notice "Not a recognisable btcfs inscription reference." inherited it from its list item.
+// Only a raw URI line breaks anywhere; a label or a sentence of words never takes break-all, own
+// or inherited, and the reading's two units hold: "Bitcoin tx" with its id, "inscription i<n>".
+it('keeps break-all to the raw URI lines; the readings and the notice break between words', () => {
+  const malformed = 'btcfs://abc123i0';
+  const { container } = render(
+    <ObjectMedia
+      object={{
+        ...object,
+        mediaProfile: {
+          tier: 'btc_ckb',
+          sources: [
+            ...object.mediaProfile!.sources,
+            { uri: malformed, scheme: 'btcfs', sourceLocation: 'DNA', dependencyTier: 'btc_ckb' },
+          ],
+          issues: [],
+        },
+      }}
+      contentHex={null}
+    />
+  );
+  const breaksAll = (el: Element) => Boolean(el.closest('.break-all'));
+  // the raw URIs keep it
+  const uris = [...screen.getAllByText(`btcfs://${txid}i0`), screen.getByText(malformed)];
+  for (const uri of uris) expect(uri).toHaveClass('break-all');
+  // the reading and the notice never take it, their own or a parent's
+  const reading = screen.getByRole('link', { name: /inscription i0 ↗$/ });
+  expect(breaksAll(reading)).toBe(false);
+  const notice = screen.getByText('Not a recognisable btcfs inscription reference.');
+  expect(breaksAll(notice)).toBe(false);
+  // the words of each dependency's head line neither
+  for (const head of screen.getAllByText(/^btcfs · /)) expect(breaksAll(head)).toBe(false);
+  // the reading's units: "Bitcoin tx" with its id, and "inscription i0", each one NoBreak
+  const units = Array.from(reading.querySelectorAll(':scope > [data-nobreak]')).map(
+    (u) => u.textContent
+  );
+  expect(units).toEqual(['Bitcoin tx 0bfb6dd6b0…f15719', 'inscription i0']);
+  expect(reading).toHaveTextContent(/^Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗$/);
+  expect(container.querySelector('figure')).not.toBeNull();
+});
