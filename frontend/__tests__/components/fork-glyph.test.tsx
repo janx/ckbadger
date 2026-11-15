@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '../utils/test-utils';
 import { ForkGlyph } from '@/components/forks/fork-glyph';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 describe('ForkGlyph (Forks V67 row shape, FF-L3)', () => {
   it('draws the spine, the dropped block dashed, and a jade curve to the block that took it as an uncle', () => {
@@ -24,6 +25,18 @@ describe('ForkGlyph (Forks V67 row shape, FF-L3)', () => {
     const back = render(<ForkGlyph forkPoint={10} depth={1} uncleIn={null} fate="canonical_now" />);
     expect(back.container.querySelector('[data-uncle-link]')).toBeNull();
     expect(back.container.querySelector('[data-came-back]')).not.toBeNull();
+  });
+
+  it('draws its block tiles and the dropped blocks square (U-02, R1)', () => {
+    const { container } = render(
+      <ForkGlyph forkPoint={10} depth={2} uncleIn={13} fate="included_as_uncle" />
+    );
+    // four slots on the spine, two dropped blocks above it
+    expect(rects(container)).toHaveLength(6);
+    expect(roundedRects(container)).toEqual([]);
+    const back = render(<ForkGlyph forkPoint={10} depth={1} uncleIn={null} fate="canonical_now" />);
+    expect(back.container.querySelector('[data-came-back] rect')).not.toBeNull();
+    expect(roundedRects(back.container)).toEqual([]);
   });
 
   it('refuses an uncle inclusion that is not after the fork point', () => {

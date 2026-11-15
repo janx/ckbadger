@@ -1,6 +1,7 @@
 'use client';
 
 import Link from '@/components/ui/link';
+import { usePathname } from '@/src/navigation';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
@@ -16,45 +17,68 @@ import { cn } from '@/lib/utils';
  * (Main.dc.html, TX-01). It replaces the homepage's old hero numbers, epoch card and floating LIVE
  * pill.
  *
- * From md up it is one wrapping row. Below md it is three lines grouped by meaning, never a row to
- * pan (docs/superpowers/plans/2026-11-01-narrow-widths/SPEC.md): the block with Live at the right
- * end, the epoch with its block-character bar, then the three mining figures — inline pairs
- * packed to the left from 640 px, three equal columns with the label over the value below it. One
- * grid places the items in document order, so from md up the same items flow as the row.
+ * From md up it is one wrapping row on every page. Below md (UI review 2026-11-14, PA-14; the
+ * rule in docs/RESPONSIVE_LAYOUT.md "Vitals strip") the home page has the whole strip in three
+ * lines grouped by meaning, never a row to pan: the block with Live at the right end, the epoch
+ * with its block-character bar, then the three mining figures — inline pairs packed to the left
+ * from 640 px, three equal columns with the label over the value below it. One grid places the
+ * items in document order, so from md up the same items flow as the row. Every other page has one
+ * line below md, the block, the epoch's number and bar, and the live mark at the end (its dot
+ * alone below 640): the mining figures and the epoch's position and time left are the home page's
+ * there. The three lines took 212 of an 844 px first screen with the header and the status line.
  */
 export function VitalsStrip() {
   const { data: stats, error } = useNetworkStats();
   const isConnected = useRealtimeStore((s) => s.isConnected);
   const held = useRealtimeStore((s) => s.socketHeld);
+  const form: PhoneForm = usePathname() === '/' ? 'lines' : 'line';
 
   return (
     <section
       aria-label="Chain vitals"
       data-testid="vitals-strip"
-      className="grid min-w-0 flex-1 grid-cols-3 items-baseline gap-x-4 gap-y-2 py-2.5 font-mono sm:grid-cols-[max-content_max-content_max-content_1fr] md:flex md:flex-wrap md:gap-x-6 md:gap-y-2.5 md:py-3"
+      data-phone-form={form}
+      className={cn(
+        'min-w-0 flex-1 items-baseline gap-y-2 py-2.5 font-mono md:flex md:flex-wrap md:gap-x-6 md:gap-y-2.5 md:py-3',
+        form === 'lines'
+          ? 'grid grid-cols-3 gap-x-4 sm:grid-cols-[max-content_max-content_max-content_1fr]'
+          : 'flex flex-wrap gap-x-3'
+      )}
     >
       {error ? (
-        <VitalsError message={error.message} />
+        <VitalsError message={error.message} form={form} />
       ) : stats ? (
-        <Vitals stats={stats} />
+        <Vitals stats={stats} form={form} />
       ) : (
-        <VitalsLoading />
+        <VitalsLoading form={form} />
       )}
-      {held && <LiveMark connected={isConnected} />}
+      {held && <LiveMark connected={isConnected} form={form} />}
     </section>
   );
 }
 
 /**
- * Where each item sits below md (ignored from md up, where the strip is a flex row): the block
- * spans the tracks left of Live on line 1, the epoch and any strip-wide message take a whole line,
- * and each mining figure takes one track of line 3.
+ * The strip below md: `lines`, the home page's three lines, or `line`, every other page's one.
+ * From md up both are the same row.
  */
-const PLACE = {
-  block: 'col-span-2 sm:col-span-3',
-  line: 'col-span-3 sm:col-span-4',
-  live: 'row-start-1 col-start-3 sm:col-start-4',
-} as const;
+type PhoneForm = 'lines' | 'line';
+
+/**
+ * Where each item sits below md (ignored from md up, where the strip is a flex row). In the three
+ * lines the block spans the tracks left of Live on line 1, the epoch and any strip-wide message
+ * take a whole line, and each mining figure takes one track of line 3. The one line places
+ * nothing: its items follow each other, Live pushed to the end, and what is the home page's is
+ * not drawn below md.
+ */
+const PLACE: Record<PhoneForm, { block: string; line: string; live: string; homeOnly: string }> = {
+  lines: {
+    block: 'col-span-2 sm:col-span-3',
+    line: 'col-span-3 sm:col-span-4',
+    live: 'row-start-1 col-start-3 sm:col-start-4',
+    homeOnly: '',
+  },
+  line: { block: '', line: '', live: '', homeOnly: 'max-md:hidden' },
+};
 
 /** A mining figure: label over value below 640 px, label beside value from 640 px up. */
 const STACKED = 'flex flex-col gap-px sm:flex-row sm:items-baseline sm:gap-1.5 md:gap-2';
@@ -70,12 +94,14 @@ function Vital({
   href,
   layout,
   value,
+  form,
 }: {
   label: string;
   href?: string;
   /** `block` is line 1's inline pair; a mining figure stacks below 640 px. */
   layout: 'block' | 'mining';
   value: string;
+  form: PhoneForm;
 }) {
   const flare = usePhosphor(value);
   const body = (
@@ -84,7 +110,10 @@ function Vital({
       <span className={cn(VALUE, flare)}>{value}</span>
     </>
   );
-  const cls = `group ${layout === 'block' ? `${INLINE} ${PLACE.block}` : STACKED}`;
+  const cls = cn(
+    'group',
+    layout === 'block' ? [INLINE, PLACE[form].block] : [STACKED, PLACE[form].homeOnly]
+  );
   return href ? (
     <Link href={href} className={cls}>
       {body}
@@ -100,20 +129,24 @@ const DOT_BOX = 'h-[7px] w-[7px] shrink-0 self-center rounded-full';
  * The API's average block time is a seconds string ("8.43s"); the board writes the unit apart
  * ("8.43 s", TX-05). Anything else is refused, not reshaped.
  */
-function BlockTime({ value }: { value: string | null }) {
-  if (value === null) return <Vital label="Block time" layout="mining" value="—" />;
+function BlockTime({ value, form }: { value: string | null; form: PhoneForm }) {
+  if (value === null) return <Vital label="Block time" layout="mining" value="—" form={form} />;
   const seconds = /^(\d+(?:\.\d+)?)s$/.exec(value);
   if (!seconds)
     return (
-      <div role="alert" data-testid="vitals-block-time-error" className={STACKED}>
+      <div
+        role="alert"
+        data-testid="vitals-block-time-error"
+        className={cn(STACKED, PLACE[form].homeOnly)}
+      >
         <span className={LABEL}>Block time</span>
         <span className="text-rouge text-small">{`block time ${JSON.stringify(value)} is not <seconds>s`}</span>
       </div>
     );
-  return <Vital label="Block time" layout="mining" value={`${seconds[1]} s`} />;
+  return <Vital label="Block time" layout="mining" value={`${seconds[1]} s`} form={form} />;
 }
 
-function Vitals({ stats }: { stats: NetworkStats }) {
+function Vitals({ stats, form }: { stats: NetworkStats; form: PhoneForm }) {
   return (
     <>
       <Vital
@@ -121,24 +154,28 @@ function Vitals({ stats }: { stats: NetworkStats }) {
         href={`/blocks/${stats.latestBlock}`}
         layout="block"
         value={formatBlockNumber(stats.latestBlock)}
+        form={form}
       />
       <EpochVital
         raw={stats.epoch}
         block={stats.latestBlock}
         estimatedLeft={stats.estimatedEpochTime}
+        form={form}
       />
-      <BlockTime value={stats.avgBlockTime} />
+      <BlockTime value={stats.avgBlockTime} form={form} />
       <Vital
         label="Hash rate"
         href="/charts/hash-rate"
         layout="mining"
         value={stats.hashRate ?? '—'}
+        form={form}
       />
       <Vital
         label="Difficulty"
         href="/charts/difficulty"
         layout="mining"
         value={stats.difficulty}
+        form={form}
       />
     </>
   );
@@ -163,10 +200,12 @@ function EpochVital({
   raw,
   block,
   estimatedLeft,
+  form,
 }: {
   raw: string;
   block: number;
   estimatedLeft: string | null;
+  form: PhoneForm;
 }) {
   const read = readEpoch(raw, block);
   const flare = usePhosphor('error' in read ? null : read.epoch.number);
@@ -175,7 +214,7 @@ function EpochVital({
       <div
         role="alert"
         data-testid="vitals-epoch-error"
-        className={`flex items-baseline gap-2 ${PLACE.line}`}
+        className={cn('flex items-baseline gap-2', PLACE[form].line)}
       >
         <span className={LABEL}>Epoch</span>
         <span className="text-rouge text-small">{`unreadable: ${read.error}`}</span>
@@ -194,7 +233,10 @@ function EpochVital({
       href="/charts/epoch-time-length"
       data-testid="vitals-epoch"
       aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, ${position}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
-      className={`group flex items-center gap-x-1.5 whitespace-nowrap md:gap-x-2 ${PLACE.line}`}
+      className={cn(
+        'group flex items-center gap-x-1.5 whitespace-nowrap md:gap-x-2',
+        PLACE[form].line
+      )}
     >
       <span className={LABEL}>Epoch</span>
       <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
@@ -205,10 +247,14 @@ function EpochVital({
       ) : (
         <EpochBar fraction={epoch.index / epoch.length} />
       )}
-      <span className="text-text text-meta md:text-small tabular-nums">
+      {/* the epoch's position and time left: the home page's below md (the link's label says
+          them on every page) */}
+      <span className={cn('text-text text-meta md:text-small tabular-nums', PLACE[form].homeOnly)}>
         {index} / {length}
       </span>
-      <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
+      <span className={cn(LABEL, PLACE[form].homeOnly)}>
+        {estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}
+      </span>
     </Link>
   );
 }
@@ -256,9 +302,13 @@ function EpochBar({ fraction }: { fraction: number }) {
  * A failed /statistics/network, said plainly: no stale or placeholder numbers. Like the homepage
  * figures, an error wins over data until a fetch succeeds again.
  */
-function VitalsError({ message }: { message: string }) {
+function VitalsError({ message, form }: { message: string; form: PhoneForm }) {
   return (
-    <span role="alert" data-testid="vitals-error" className={`text-rouge text-small ${PLACE.line}`}>
+    <span
+      role="alert"
+      data-testid="vitals-error"
+      className={cn('text-rouge text-small', PLACE[form].line)}
+    >
       {`Chain vitals unavailable: ${message}`}
     </span>
   );
@@ -266,30 +316,27 @@ function VitalsError({ message }: { message: string }) {
 
 /** The labels in the places their figures will take. */
 const LOADING_SLOTS = [
-  { label: 'Block', cls: `${INLINE} ${PLACE.block}` },
-  { label: 'Epoch', cls: `${INLINE} ${PLACE.line}` },
-  { label: 'Block time', cls: STACKED },
-  { label: 'Hash rate', cls: STACKED },
-  { label: 'Difficulty', cls: STACKED },
+  { label: 'Block', cls: (form: PhoneForm) => cn(INLINE, PLACE[form].block) },
+  { label: 'Epoch', cls: (form: PhoneForm) => cn(INLINE, PLACE[form].line) },
+  { label: 'Block time', cls: (form: PhoneForm) => cn(STACKED, PLACE[form].homeOnly) },
+  { label: 'Hash rate', cls: (form: PhoneForm) => cn(STACKED, PLACE[form].homeOnly) },
+  { label: 'Difficulty', cls: (form: PhoneForm) => cn(STACKED, PLACE[form].homeOnly) },
 ] as const;
 
 function LoadingVital({ label, cls }: { label: string; cls: string }) {
   return (
     <div className={cls}>
       <span className={LABEL}>{label}</span>
-      <span
-        aria-hidden="true"
-        className="bg-base-elevated inline-block h-3 w-16 animate-pulse rounded"
-      />
+      <span aria-hidden="true" className="bg-base-elevated inline-block h-3 w-16 animate-pulse" />
     </div>
   );
 }
 
-function VitalsLoading() {
+function VitalsLoading({ form }: { form: PhoneForm }) {
   return (
     <>
       {LOADING_SLOTS.map((slot) => (
-        <LoadingVital key={slot.label} label={slot.label} cls={slot.cls} />
+        <LoadingVital key={slot.label} label={slot.label} cls={slot.cls(form)} />
       ))}
     </>
   );
@@ -298,9 +345,12 @@ function VitalsLoading() {
 /**
  * Whether the page's realtime socket is up (Main.dc.html "● Live", TX-01): a jade dot and "Live"
  * when it is, a dim dot and "Not live" while it is not yet or no longer connected. Only a page
- * that holds the socket shows it.
+ * that holds the socket shows it. On the one line below 640 (PA-14) it is its dot: at 360 the line
+ * holds the block (124.8 px), the epoch and its bar (124.8 px) and the dot with two 12 px gaps,
+ * 280.6 of 328 px, where "Not live" (72.6 px with its dot) would make it 346.2. The word stays for a
+ * screen reader and in the title, and the status line's mode block says it on every page.
  */
-function LiveMark({ connected }: { connected: boolean }) {
+function LiveMark({ connected, form }: { connected: boolean; form: PhoneForm }) {
   return (
     <span
       role="status"
@@ -309,13 +359,19 @@ function LiveMark({ connected }: { connected: boolean }) {
       title={
         connected ? 'Live: realtime updates connected' : 'Not live: realtime updates not connected'
       }
-      className={`text-small ml-auto flex items-center gap-2 ${PLACE.live} ${connected ? 'text-jade' : 'text-text-dim'}`}
+      className={cn(
+        'text-small ml-auto flex items-center gap-2',
+        PLACE[form].live,
+        connected ? 'text-jade' : 'text-text-dim'
+      )}
     >
       <span
         aria-hidden="true"
         className={`${DOT_BOX} ${connected ? 'bg-jade' : 'bg-base-border'}`}
       />
-      {connected ? 'Live' : 'Not live'}
+      <span className={form === 'line' ? 'max-sm:sr-only' : undefined}>
+        {connected ? 'Live' : 'Not live'}
+      </span>
     </span>
   );
 }

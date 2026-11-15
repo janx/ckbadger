@@ -2,21 +2,33 @@
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
-import { Chart, type ChartValueAxisInput } from '@/components/ui/chart';
+import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { LockKind } from '@/components/ui/lock-kind';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { exactUnsignedInteger, formatExactDecimal, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 const DAY = 86400000;
+/** The weekly noun for one (the one plural rule, U-15). */
+const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
 /** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
 export const HISTORY_PLOT_HEIGHT = 280;
+/**
+ * The name of every CKB-held history plot — a token's, a collection's, a script's — and its unit,
+ * said once (the ticks are bare). A fixed form: SVG text does not wrap, so a name carries no free
+ * length part (the page's h1 says whose CKB); its fit at 328 px is pinned by plot-name-fit.test.
+ */
+export const HELD_PLOT_NAME = 'CKB held · occupied, free';
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
   /** Completed weekly totals, or why this page has none to draw. */
@@ -32,13 +44,15 @@ export interface AssetHistoryProps {
   footnote?: ReactNode;
   /** Paging controls for the supply events; replaces the "newest N are listed" note. */
   supplyPager?: ReactNode;
+  /** PB-12: the page's class, whose colour its weekly bars are drawn in. */
+  assetClass: 'tokens' | 'objects' | 'identities';
 }
 /** A small colour swatch for the readout (Token board), the same ink as its chart. */
 function Swatch({ color }: { color: string }) {
   return (
     <span
       aria-hidden
-      className="mr-1.5 inline-block h-2 w-2 rounded-sm align-middle"
+      className="mr-1.5 inline-block h-2 w-2 align-middle"
       style={{ backgroundColor: color }}
     />
   );
@@ -65,7 +79,10 @@ export function AssetHistory({
   supplyEvents,
   footnote,
   supplyPager,
+  assetClass,
 }: AssetHistoryProps) {
+  if (token && assetClass !== 'tokens')
+    throw new Error(`A token's history is drawn in the token class, not ${assetClass}`);
   const [range, setRange] = useState<'1W' | '1M' | '1Y' | 'All'>('All');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const end = time(completeThrough),
@@ -135,7 +152,10 @@ export function AssetHistory({
     ],
     unit: 'CKB',
     kind: 'stacked',
+    // U-19 (lane A5): bare values in the gutter; the plot's name says the unit once.
+    bareTicks: true,
   };
+  const supplyUnit = token ? (token.decimals === null ? 'raw' : (token.symbol ?? 'tokens')) : null;
   const supplyAxis: ChartValueAxisInput | null = token
     ? {
         title: 'Supply',
@@ -145,7 +165,8 @@ export function AssetHistory({
           values: { supply: formatTokenBalance(p.supply!, token.decimals).replace(/,/g, '') },
         })),
         series: [{ key: 'supply', label: 'Supply', assetClass: 'tokens' }],
-        unit: token.decimals === null ? 'raw' : (token.symbol ?? 'tokens'),
+        unit: supplyUnit!,
+        bareTicks: true,
       }
     : null;
   const weeklyAxis: ChartValueAxisInput | null =
@@ -161,15 +182,22 @@ export function AssetHistory({
             {
               key: 'count',
               label: weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions',
-              assetClass: token ? 'tokens' : 'objects',
+              assetClass,
             },
           ],
           unit: weeklyNoun,
           kind: 'bars',
+          bareTicks: true,
+          // a count of transfers or transactions: whole-number ticks only
+          integerTicks: true,
         }
       : null;
-  // Lane P (R13, Main.dc.html): every plot writes its round values inside itself from its left
-  // edge in ghost ink, so the three share the left edge 0 — no axis column, no shared gutter.
+  // U-19 / DY-05 (UI review 2026-11-14): the round values sit in one gutter left of the plots, in
+  // the dim ink — inside a plot the line crossed them, the bars stood in front of them and, by day,
+  // the filled area buried them — and the three plots share it, as they share the time axis.
+  const plotLeft = alignedPlotLeft(
+    [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
+  );
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
@@ -230,15 +258,19 @@ export function AssetHistory({
           <AppLink href={`/address/${e.address ?? e.lockHash}`}>
             <Hash
               hash={e.address ?? e.lockHash}
+              kind={e.address ? 'address' : 'hash'}
+              size="row"
               copyable={false}
-              startChars={8}
-              endChars={4}
               className="text-small"
             />
           </AppLink>
-          <span className="text-text-dim text-meta block">
-            {e.lockKind ?? 'Lock kind unavailable'}
-          </span>
+          {/* U-15: a lock the registry does not name reads "lock <code hash>". */}
+          <LockKind
+            lockKind={e.lockKind}
+            lockCodeHash={e.lockCodeHash}
+            size="row"
+            className="text-text-dim text-meta block"
+          />
         </>
       ),
     },
@@ -246,17 +278,17 @@ export function AssetHistory({
   const peakItem = peak && (
     <span title="the most CKB its cells held on any complete day">
       peak <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
-      {peak.date}
+      {unitNode(peak.date)}
     </span>
   );
   const weekText =
     weeklyUnavailable ??
     (week
-      ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
+      ? `Week of ${week.weekStart}: ${formatCount(week.count, WEEKLY_ONE[weeklyNoun], weeklyNoun)}`
       : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
         // complete yet; it names the latest complete week instead of nothing.
         selectedDate === null && weekly.length > 0
-        ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
+        ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${formatCount(weekly[weekly.length - 1].count, WEEKLY_ONE[weeklyNoun], weeklyNoun)}`
         : 'No completed weekly total for this day');
   const readoutItems: ReactNode[] = point
     ? [
@@ -266,7 +298,7 @@ export function AssetHistory({
           className="text-text-bright"
           title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
         >
-          {point.date}
+          {unitNode(point.date)}
         </span>,
         <>
           held <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
@@ -278,12 +310,7 @@ export function AssetHistory({
           {BigInt(point.capacity) > BigInt(0) && (
             <span className="text-text-dim">
               {' '}
-              {formatScaledInteger(
-                BigInt(point.occupiedCapacity) * BigInt(100),
-                BigInt(point.capacity),
-                2
-              )}{' '}
-              %
+              {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
             </span>
           )}
         </>,
@@ -319,7 +346,7 @@ export function AssetHistory({
             <button
               key={r}
               aria-pressed={range === r}
-              className={`border-base-border text-small rounded border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
+              className={`border-base-border text-small border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
               onClick={() => {
                 setRange(r);
                 setSelectedDate(null);
@@ -338,10 +365,9 @@ export function AssetHistory({
             subtitle="Occupied and free"
             // The page's picture (R13): at least 280 px, its name inside it.
             height={HISTORY_PLOT_HEIGHT}
-            // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
-            plotName="CKB held in its cells · occupied, free above it"
-            // written over the stacked area, which would bury a label drawn under it
-            insideYTicks="over"
+            // SVG text cannot wrap: the name fits beside the gutter on a 360 px phone (U-19).
+            plotName={HELD_PLOT_NAME}
+            plotLeft={plotLeft}
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
             xDomain={domain}
             activeIndex={active}
@@ -354,9 +380,12 @@ export function AssetHistory({
             <Chart
               {...supplyAxis}
               subtitle="Exact total supply"
+              // the unit once, as the ticks are bare (U-19)
+              // a fixed form: the symbol has no length bound, the page's h1 names the token
+              plotName={supplyUnit === 'raw' ? 'supply in raw units' : 'supply in tokens'}
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
-              insideYTicks
+              plotLeft={plotLeft}
               xDomain={domain}
               activeIndex={active}
               onActiveIndexChange={onDaily}
@@ -369,9 +398,11 @@ export function AssetHistory({
             <Chart
               {...weeklyAxis}
               subtitle="Completed UTC+8 weeks"
+              // the unit once, as the ticks are bare (U-19)
+              plotName={`${weeklyNoun} per week`}
               formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
-              insideYTicks="over"
+              plotLeft={plotLeft}
               xDomain={domain}
               activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
               onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}
@@ -384,14 +415,10 @@ export function AssetHistory({
           <div
             aria-live="polite"
             aria-label="History readout"
-            className="border-base-border-subtle text-small mt-2 flex flex-wrap gap-y-1 border-t pt-2"
+            className="border-row-rule text-small mt-2 border-t pt-2"
           >
-            {readoutItems.map((item, i) => (
-              <span key={i}>
-                {i > 0 && <span className="text-text-dim whitespace-pre"> · </span>}
-                {item}
-              </span>
-            ))}
+            {/* PB-23: one separated list, so a wrapped item never opens its line with a "·" */}
+            <Dotted className="gap-y-1" parts={readoutItems} />
           </div>
         </>
       ) : (
@@ -445,19 +472,25 @@ export function AssetHistory({
                   tx {e.txIndex} · sequence {e.transferSequence}
                 </AppLink>,
               ];
+              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome sweep)
               const party = (
-                <span className="whitespace-nowrap">
+                <span>
                   {e.kind === 'mint' ? 'to ' : 'from '}
                   <AppLink href={`/address/${e.address ?? e.lockHash}`}>
                     <Hash
                       hash={e.address ?? e.lockHash}
+                      kind={e.address ? 'address' : 'hash'}
+                      size="tight"
                       copyable={false}
-                      startChars={8}
-                      endChars={4}
                       className="text-meta"
                     />
                   </AppLink>{' '}
-                  {e.lockKind ?? 'Lock kind unavailable'}
+                  <LockKind
+                    lockKind={e.lockKind}
+                    lockCodeHash={e.lockCodeHash}
+                    size="tight"
+                    className="text-text-dim text-meta"
+                  />
                 </span>
               );
               return (

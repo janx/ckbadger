@@ -5,9 +5,11 @@ import {
   useContext,
   useId,
   useLayoutEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -36,20 +38,18 @@ export function tapOrHover(what?: string, { capital = false }: TapOrHoverOptions
 
 /**
  * Material pass v2 (move 5): "tap or hover" appears once per page. The registry under
- * `TapOrHoverHintProvider` (mounted at the route root) orders every mounted hint by the moment it
- * first registered; only the earliest still mounted renders its words. A hint keeps its place
- * across React's strict-mode remount (the ordinal is kept by its stable id), and when a page
+ * `TapOrHoverHintProvider` (mounted at the route root) knows every mounted hint by its element; the
+ * first in document order renders its words (DY-11: the first registered followed data arrival, so
+ * the DAO page's hint sat on a different chart per load). A hint that does not render its words
+ * keeps an empty, hidden element in its place, so its place in the document is known. When a page
  * unmounts its hints leave the registry, so the next page's first hint is first again.
  */
 class HintRegistry {
-  private seq = 0;
-  private readonly ordinal = new Map<string, number>();
-  private readonly mounted = new Set<string>();
+  private readonly mounted = new Map<string, Element>();
   private readonly listeners = new Set<() => void>();
 
-  register(id: string): () => void {
-    if (!this.ordinal.has(id)) this.ordinal.set(id, this.seq++);
-    this.mounted.add(id);
+  register(id: string, element: Element): () => void {
+    this.mounted.set(id, element);
     this.emit();
     return () => {
       this.mounted.delete(id);
@@ -57,20 +57,16 @@ class HintRegistry {
     };
   }
 
-  /** The id of the earliest-registered hint still mounted; null while none is. */
+  /** The id of the mounted hint that comes first in the document; null while none is. */
   first(): string | null {
-    let best: string | null = null;
-    let bestOrdinal = Infinity;
-    for (const id of this.mounted) {
-      const n = this.ordinal.get(id);
-      if (n === undefined)
-        throw new Error(`tap-or-hover registry: ${id} mounted without an ordinal`);
-      if (n < bestOrdinal) {
-        best = id;
-        bestOrdinal = n;
-      }
+    let best: [string, Element] | null = null;
+    for (const entry of this.mounted) {
+      if (!entry[1].isConnected)
+        throw new Error(`tap-or-hover registry: hint ${entry[0]} is not in the document`);
+      if (!best || entry[1].compareDocumentPosition(best[1]) & Node.DOCUMENT_POSITION_FOLLOWING)
+        best = entry;
     }
-    return best;
+    return best ? best[0] : null;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -93,11 +89,18 @@ export function TapOrHoverHintProvider({ children }: { children: ReactNode }) {
 
 const noSubscribe = () => () => {};
 
-/** Whether this hint is the page's one: the first registered under the provider, else always. */
-function useIsFirstHint(): boolean {
+/**
+ * Whether this hint is the page's one: the first in the document under the provider, else always.
+ * `place` is the hint's element, rendered whether or not it says its words.
+ */
+function useIsFirstHint(place: RefObject<HTMLSpanElement | null>): boolean {
   const registry = useContext(HintRegistryContext);
   const id = useId();
-  useLayoutEffect(() => (registry ? registry.register(id) : undefined), [registry, id]);
+  useLayoutEffect(() => {
+    if (!registry) return undefined;
+    if (!place.current) throw new Error('tap-or-hover hint: its element is not mounted');
+    return registry.register(id, place.current);
+  }, [registry, id, place]);
   const first = useSyncExternalStore(
     registry ? registry.subscribe : noSubscribe,
     () => (registry ? registry.first() : id),
@@ -109,18 +112,28 @@ function useIsFirstHint(): boolean {
 export interface TapOrHoverHintProps extends TapOrHoverOptions {
   /** What the reader taps or hovers, e.g. "a day" or "for its name"; omitted, the bare words. */
   what?: string;
+  /**
+   * Led by " · " after the sentence it follows (PB-23): the dot belongs to the hint, drawn only
+   * when the hint is, and kept on its first word's line (a no-break space after it).
+   */
+  dotted?: boolean;
   className?: string;
 }
 
 /**
- * The touch hint as an inline element: "tap or hover a day". Under `TapOrHoverHintProvider` only
- * the page's first mounted hint renders; the later ones render nothing.
+ * The touch hint as an inline element: "tap or hover a day", in the dim ink wherever it stands (a
+ * hint is information, never the ghost: R4). Under `TapOrHoverHintProvider` only the page's first
+ * hint in the document says its words; the later ones keep an empty, hidden element in their
+ * place.
  */
-export function TapOrHoverHint({ what, capital, className }: TapOrHoverHintProps) {
-  const first = useIsFirstHint();
-  if (!first) return null;
+export function TapOrHoverHint({ what, capital, dotted = false, className }: TapOrHoverHintProps) {
+  const place = useRef<HTMLSpanElement>(null);
+  const first = useIsFirstHint(place);
+  // a later hint keeps only its place: an empty element that draws no box
+  if (!first) return <span ref={place} data-hint-place="" hidden />;
   return (
-    <span data-hint="tap-or-hover" className={cn(className)}>
+    <span ref={place} data-hint="tap-or-hover" className={cn('text-text-dim', className)}>
+      {dotted && ' ·\u00a0'}
       {tapOrHover(what, { capital })}
     </span>
   );

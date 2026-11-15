@@ -10,6 +10,8 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
+import { expectHeadId } from '@/__tests__/utils/head-id';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import {
   api,
   ApiRequestError,
@@ -111,6 +113,42 @@ beforeEach(() => {
 });
 
 describe('MnftItemDetailPage', () => {
+  // Lane E4: how long ago the item was issued, the life sentence's hover, reads the page's one
+  // clock, so it moves with no data change; it was written once, from the time the page mounted.
+  // The clock stops with the page.
+  it('moves the life sentence’s issued age with no data change (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    try {
+      const [version] = mnftProtocolProducer.versions;
+      vi.mocked(api.getItemProtocol).mockResolvedValue({
+        ...mnftProtocolProducer,
+        versions: [{ ...version, cell: { ...version.cell, timestamp: String(T0 - 20_000) } }],
+      } as ItemProtocol);
+      const { unmount } = render(<MnftItemDetailPage objectId={id} />);
+      const ages = () => screen.getByText(/^Issued by Issuer A/).getAttribute('title');
+      await loadUnderStillClock(() => screen.queryByText(/^Issued by Issuer A/) !== null);
+      expect(ages()).toBe('issued 20\u00a0seconds ago');
+      tick(1000);
+      expect(ages()).toBe('issued 21\u00a0seconds ago');
+      tick(38_000);
+      expect(ages()).toBe('issued 59\u00a0seconds ago');
+      tick(1000);
+      expect(ages()).toBe('issued 1\u00a0minute ago');
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A4 Chrome F3: the token id under the title was HexCode's own-box scroller (break-all with
+  // nowrap: box 358 px for its content at 390, the first screen); it is the head's HeadId.
+  it('prints the token id in its head as the head’s full id, never a scroller', async () => {
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+    expectHeadId(id);
+  });
+
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
@@ -237,10 +275,13 @@ describe('MnftItemDetailPage', () => {
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: "no object at this address. the local index was asked; it holds none. honey badger don't care.",
+        name: "no object with this id. the local index was asked; it holds none. honey badger don't care.",
       })
     ).toBeInTheDocument();
-    expect(screen.getByText(`/assets/objects/items/${id}`)).toBeInTheDocument();
+    // U-18: the facts name the checked endpoint with the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/assets/objects/items/${id.slice(0, 10)}…${id.slice(-6)}`
+    );
     expect(api.getItemProtocol).not.toHaveBeenCalled();
   });
 
@@ -298,7 +339,9 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId={id} />);
     await screen.findByRole('region', { name: 'Raw item evidence' });
     expect(screen.getByText('Burned')).toBeInTheDocument();
-    expect(screen.getAllByText('No live cell')).toHaveLength(2);
+    // the owner field says 'No live owner', as every object's owner field does (U-15)
+    expect(screen.getByText('No live owner')).toBeInTheDocument();
+    expect(screen.getAllByText('No live cell')).toHaveLength(1);
     expect(screen.getByRole('link', { name: 'Consumed in transaction →' })).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })

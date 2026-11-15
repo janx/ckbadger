@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { T0, tick } from '@/__tests__/utils/still-clock';
 import {
-  FIXTURE_NOW,
   FIXTURE_TIP,
   buildPipelineSnapshot,
   pipelineSnapshot,
@@ -10,13 +10,29 @@ import {
 import type { PipelineBlock, PipelineSnapshot } from '@/lib/api';
 import {
   PipelineTooltip,
+  pct,
   cellbaseTip,
   txTip,
+  uncleTip,
   windowTip,
   type TipContent,
 } from '@/components/pipeline/pipeline-tooltip';
 
 const T = FIXTURE_TIP;
+
+// CH-14 and the review's item I: the tooltip's share of a block's room is the one percentage, two
+// decimals (it wrote one from 1 %, two below), never a false 0.00% or 100.00%
+describe('pct: the share of a block’s room through percentOf', () => {
+  it('writes two decimals and bounds the two false results', () => {
+    expect(pct(1, 3)).toBe('33.33%');
+    expect(pct(25, 1000)).toBe('2.50%');
+    expect(pct(5, 1000)).toBe('0.50%');
+    expect(pct(0, 1000)).toBe('0.00%');
+    expect(pct(1, 1_000_000)).toBe('<0.01%');
+    expect(pct(999_999, 1_000_000)).toBe('>99.99%');
+    expect(pct(1000, 1000)).toBe('100.00%');
+  });
+});
 const snapshot = buildPipelineSnapshot();
 
 function renderTip(content: TipContent) {
@@ -30,11 +46,7 @@ describe('PipelineTooltip', () => {
   it('keeps fee shannons beyond the safe Number range exact', () => {
     const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
     const tx = pool.pending[0];
-    const tip = txTip(
-      { kind: 'pending', tx: { ...tx, fee: '9007199254740993' } },
-      snapshot,
-      FIXTURE_NOW
-    );
+    const tip = txTip({ kind: 'pending', tx: { ...tx, fee: '9007199254740993' } }, snapshot);
     expect(tip.rows).toContainEqual(['fee', '9,007,199,254,740,993 sh']);
   });
   // jsdom does not lay out, so the contract is in the classes: values never wrap, and the tooltip
@@ -53,9 +65,7 @@ describe('PipelineTooltip', () => {
     const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
     const early = pool.proposed.find((t) => t.hash === poolTxHash('e0'));
     if (!early) throw new Error('fixture: e0 is not proposed');
-    const tip = renderTip(
-      txTip({ kind: 'proposed', tx: early, tooEarly: true }, snapshot, FIXTURE_NOW)
-    );
+    const tip = renderTip(txTip({ kind: 'proposed', tx: early, tooEarly: true }, snapshot));
     expect(within(tip).getByText('not yet: proposed in the last block')).toHaveClass(
       'whitespace-nowrap'
     );
@@ -73,6 +83,33 @@ describe('PipelineTooltip', () => {
     expect(foot).toHaveClass('w-0');
     expect(foot).toHaveClass('min-w-full');
     expect(foot).not.toHaveClass('whitespace-nowrap');
+  });
+});
+
+// Lane E4: a pending transaction's wait, a running duration, reads the page's one clock while the
+// tooltip is up. The panel keeps one tooltip per hovered transaction (the same key keeps the same
+// content), so the wait was written once, at the first pointer move, and stood still for as long
+// as the pointer rested on the square. The clock stops with the tooltip.
+describe('a pending transaction’s wait (E4)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('moves with no data change while the tooltip is up, and leaves no timer behind', () => {
+    vi.useFakeTimers({ now: T0 });
+    const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
+    const tip = renderTip(
+      txTip({ kind: 'pending', tx: { ...pool.pending[0], arrivedAt: T0 - 20_000 } }, snapshot)
+    );
+    const waiting = () => within(tip).getByText('waiting').nextElementSibling!.textContent;
+    expect(waiting()).toBe('20.0 s');
+    tick(1000);
+    expect(waiting()).toBe('21.0 s');
+    tick(38_000);
+    expect(waiting()).toBe('59.0 s');
+    tick(1000);
+    expect(waiting()).toBe('60.0 s');
+    expect(vi.getTimerCount()).toBe(1);
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -165,5 +202,19 @@ describe('cellbase tooltip', () => {
       ).toBe(BigInt(r.total));
       expect(r.paid).toBe(true);
     }
+  });
+});
+
+// Lane E2 follow-up (ruling R4 covers the muted ink): an uncle's tag, "not on the chain", is words,
+// so it takes the dim ink (4.57:1 or more on every ground) as its colour and its frame, never the
+// pipeline's muted ink (--pipeline-ink-dim, 3.17–3.76:1 by night, 3.84–4.70:1 by day).
+describe('the uncle tooltip', () => {
+  it('writes its tag in the dim ink, never the muted', () => {
+    const block = snapshot.blocks.find((b) => b.number === T - 1) as PipelineBlock;
+    const tip = uncleTip(block, 0);
+    expect(tip.tag).toBe('not on the chain');
+    expect(tip.tone).toBe('var(--c-text-dim)');
+    const tag = within(renderTip(tip)).getByText('not on the chain');
+    expect(tag.style.color).toBe('var(--c-text-dim)');
   });
 });

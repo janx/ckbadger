@@ -98,6 +98,12 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'most-utilized-scripts' || definition.slug === 'most-utilized-assets')
     return utilized;
   if (definition.slug === 'miner-address-distribution') return miners;
+  // The API's own size buckets: an unknown bucket fails (re-pinned for CH-12).
+  if (definition.slug === 'cell-size-distribution')
+    return {
+      ...simple,
+      data: simple.data.map((point, i) => ({ ...point, date: ['<100 CKB', '>=1m CKB'][i] })),
+    };
   if (
     [
       'cell-count',
@@ -109,16 +115,21 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
     ].includes(definition.slug)
   )
     return stacked;
+  // A second value belongs only to a chart that names it (a second unit, or two named series of
+  // one); any other chart takes the value alone (re-pinned for CH-21: an unnamed companion fails,
+  // where it was drawn as "Companion").
+  const single = { ...simple, data: simple.data.map(({ date, value }) => ({ date, value })) };
   if (definition.slug === 'uncle-rate')
-    return { ...simple, orphanRateTarget: { numerator: 1, denominator: 40 } };
-  return simple;
+    return { ...single, orphanRateTarget: { numerator: 1, denominator: 40 } };
+  return definition.secondary || definition.seriesNames ? simple : single;
 }
 
-describe('28 chart variants', () => {
-  it('keeps every existing route and exactly 28 approved previews', () => {
+describe('29 chart variants', () => {
+  // Re-pinned for CH-22 (UI review 2026-11-14): the index lists every chart, circulation ratio too.
+  it('keeps every existing route and a preview for each of the 29', () => {
     expect(CHARTS).toHaveLength(29);
-    expect(INDEX_CHARTS).toHaveLength(28);
-    expect(CHART_BY_SLUG.get('circulation-ratio')?.supplemental).toBe(true);
+    expect(INDEX_CHARTS).toHaveLength(29);
+    expect(INDEX_CHARTS.map((chart) => chart.slug)).toContain('circulation-ratio');
     expect(new Set(CHARTS.map((chart) => chart.slug)).size).toBe(29);
     for (const chart of CHARTS)
       expect(chart.related.every((slug) => CHART_BY_SLUG.has(slug))).toBe(true);
@@ -150,9 +161,10 @@ describe('28 chart variants', () => {
     expect(formatChartReadout('622', 'epochs')).toBe('622');
     // A whole count under 100,000 reads exactly, grouped, as charts.json does ("16,826"; F2 charts).
     expect(formatChartReadout('1234', 'transactions')).toBe('1,234');
-    expect(formatChartReadout('123456', 'transactions')).toBe('123.46K');
+    expect(formatChartReadout('123456', 'transactions')).toBe('123.46k');
     expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.01B');
-    expect(formatChartReadout('-1234.5', 'CKB')).toBe('-1.23K');
+    // A negative takes the minus sign (re-pinned for CH-21: was the hyphen).
+    expect(formatChartReadout('-1234.5', 'CKB')).toBe('−1.23k');
     // Rates and durations at two decimals, as charts.json shows them (91.34 PH/s, 1.34%).
     expect(formatChartReadout('12.5', '%')).toBe('12.50');
     expect(formatChartReadout('93.685105781336746', 'PH/s')).toBe('93.69');
@@ -214,7 +226,7 @@ describe('28 chart variants', () => {
       usedShare: zero,
       capacityShare: zero,
     });
-    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—' }]);
+    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—', width: 0 }]);
     const single = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       ...miners,
       totalBlocks: 50,
@@ -245,13 +257,24 @@ describe('28 chart variants', () => {
       'ckb1qzda0c…cccccc',
       'Others',
     ]);
-    // 1,123 of 66,477 blocks, floored at four decimals like the API's own percentages.
-    expect(preview.rows.at(-1)?.share).toBe('1.6893%');
+    // 1,123 of 66,477 blocks at two decimals, the one share form (re-pinned for CH-03 / CH-14:
+    // was floored at the API's four decimals, 1.6893%).
+    expect(preview.rows.at(-1)?.share).toBe('1.69%');
     expect(preview.rows[0].title).toBe(rows[0].address);
-    expect(preview.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
-    // The detail fact names the miner in the same short form; the ranking links the full one (CH-04).
-    expect(model.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
-    expect(model.rankedRows?.[0].label).toBe(rows[0].address);
+    // The detail names the miner in the same short form as a fact and as its ranked row; the full
+    // address is the row's link title (re-pinned for CH-03: the row printed all 97 characters).
+    expect(model.facts?.[0]).toEqual({
+      label: 'Leading miner',
+      name: 'ckb1qzda0c…93hhsj',
+      // the review's item I (re-pinned): the share is the miner's blocks in the window's, 41,743 of
+      // 66,477 (the fixture's API percentage, '0', was a placeholder the model read before)
+      // the review's item C (re-pinned): the count through formatCount, a no-break space
+      value: '41,743\u00a0blocks · 62.79%',
+    });
+    expect(model.rankedRows?.[0]).toMatchObject({
+      label: 'ckb1qzda0c…93hhsj',
+      title: rows[0].address,
+    });
   });
 
   it('summarises nominal APC at its single current sample and rejects a missing one (CH-03)', () => {
@@ -268,7 +291,8 @@ describe('28 chart variants', () => {
     });
     const model = chartModel(definition, timeline(['past', 'past', 'current', 'future', 'future']));
     expect(model.latest).toEqual({ label: 'year 6.5', raw: '2.3297', display: '2.33' });
-    expect(model.summaryLabel).toBe('Today');
+    // Re-pinned for CH-18: the head reads today; no "Today" fact repeats it.
+    expect(model.facts).toBeUndefined();
     expect(model.projectedAfter).toBe(2);
     expect(model.delta).toBeNull();
     expect(model.series).toHaveLength(1);
@@ -389,7 +413,8 @@ describe('28 chart variants', () => {
   it('summarizes live cells, the largest HODL band, and bucket distributions semantically', () => {
     const cells = chartModel(CHART_BY_SLUG.get('cell-count')!, stacked);
     expect(cells.latest?.raw).toBe('3');
-    expect(cells.summaryLabel).toBe('Live cells');
+    // Re-pinned for CH-18: no "Live cells" fact repeats the head figure.
+    expect(cells.facts).toBeUndefined();
     const hodl = chartModel(CHART_BY_SLUG.get('hodl-wave')!, {
       title: 'HODL',
       series: HODL_KEYS.map((key) => ({ key, label: key, color: '#a' })),
@@ -419,7 +444,8 @@ describe('28 chart variants', () => {
         { date: '>=1m CKB', value: '1', value2: '10' },
       ],
     });
-    expect(buckets.latest?.label).toBe('<100 CKB');
+    // In the axis' words (re-pinned for CH-12: was the API's '<100 CKB').
+    expect(buckets.latest?.label).toBe('< 100 CKB');
     expect(buckets.delta).toBeNull();
   });
 
@@ -429,15 +455,19 @@ describe('28 chart variants', () => {
     expect(script.historicalShares?.[0].points[0].values.top0).toBe('9007199254.740993');
     expect(script.historicalShares?.[1].points[0].values.top0).toBe('0.00000001');
     expect(script.latest?.display).not.toContain('Alpha');
-    expect(script.summaryLabel).toContain('Alpha');
+    // Re-pinned for CH-18: the leader is the named fact (was the label "Largest script: Alpha").
+    expect(script.facts?.[0]).toMatchObject({ label: 'Largest script', name: 'Alpha' });
     const miner = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, miners);
     expect(miner.latest?.display).toBe('50');
-    expect(miner.summaryLabel).toContain('50%');
+    // Re-pinned for CH-03: the leader is a named fact at the one share form.
+    expect(miner.facts?.[0].value).toContain('50.00%');
+    // One value per day, as the API sends it (re-pinned for CH-21: an unnamed companion fails).
     const uncle = chartModel(CHART_BY_SLUG.get('uncle-rate')!, {
       ...simple,
+      data: simple.data.map(({ date, value }) => ({ date, value })),
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
-    expect(uncle.contextFacts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);
+    expect(uncle.facts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);
   });
 
   it('links to the actual source endpoint for client-derived activity charts', () => {
@@ -479,7 +509,8 @@ describe('28 chart variants', () => {
       ],
     });
     expect(model.latest?.raw).toBe('4.00000001');
-    expect(model.contextFacts).toContainEqual({ label: 'Frozen phase-1 overlap', value: '1 CKB' });
+    // Re-pinned for CH-18: a developer fact, in the evidence tier.
+    expect(model.evidence).toContainEqual({ label: 'Frozen phase-1 overlap', value: '1 CKB' });
     expect(model.points[0].values).toEqual({ compensation: '2', burnt: '3' });
   });
 
@@ -497,6 +528,59 @@ describe('28 chart variants', () => {
       { label: '2026-02-19', values: { flow: '-0.00000002' } },
     ]);
     expect(model.secondary?.title).toBe('Utilization');
+  });
+
+  // The review's item I: a miner's share is its blocks in the window's blocks through the one
+  // percentage (it was the API's floored four decimals rounded to two: 1 block of 1,000,000 read
+  // 0.00%, 999,999 read 100.00%)
+  it('reads each miner’s share from its blocks through the one percentage', () => {
+    const at = (blocksMined: number[]) =>
+      chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+        title: 'Miners',
+        totalBlocks: 1_000_000,
+        windowDays: 7,
+        fromDate: '2026-07-23',
+        toDate: '2026-07-29',
+        data: blocksMined.map((n, i) => ({
+          minerLockHash: `0x${String(i).repeat(64)}`,
+          address: null,
+          minerName: `Pool ${i}`,
+          blocksMined: n,
+          percentage: ((n / 1_000_000) * 100).toFixed(4),
+        })),
+      });
+    const model = at([999_999, 1]);
+    expect(model.rankedRows?.map((row) => row.share)).toEqual(['>99.99%', '<0.01%']);
+    expect(model.headline).toMatchObject({ display: '>99.99', unit: '%' });
+    // the leading miner's fact ends on the same share (its count's form is the review's item C)
+    expect(model.facts?.[0].value).toMatch(/ · >99\.99%$/);
+    expect(at([600_000, 400_000]).rankedRows?.map((row) => row.share)).toEqual([
+      '60.00%',
+      '40.00%',
+    ]);
+  });
+
+  // The review's item C: the leading miner's blocks go through the one plural rule; a leader of
+  // one block read "1 blocks"
+  it('names a leading miner of one block in the singular', () => {
+    const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+      title: 'Miners',
+      totalBlocks: 2,
+      windowDays: 7,
+      fromDate: '2026-07-23',
+      toDate: '2026-07-29',
+      data: [0, 1].map((i) => ({
+        minerLockHash: `0x${String(i).repeat(64)}`,
+        address: null,
+        minerName: `Pool ${i}`,
+        blocksMined: 1,
+        percentage: '50.0000',
+      })),
+    });
+    expect(model.facts?.[0]).toMatchObject({
+      label: 'Leading miner',
+      value: '1\u00a0block · 50.00%',
+    });
   });
 
   it('retains miner address and unresolved lock-hash identities in ranking links', () => {
@@ -523,14 +607,20 @@ describe('28 chart variants', () => {
         },
       ],
     });
+    // Re-pinned for CH-03: no bracketed kind word; a lock-hash miner is marked for the one note.
     expect(model.rankedRows?.[0]).toMatchObject({
       href: '/address/ckb1resolved',
-      identity: 'Address',
+      title: 'ckb1resolved',
     });
+    expect(model.rankedRows?.[0].lockHashOnly).toBeUndefined();
     expect(model.rankedRows?.[1]).toMatchObject({
       href: `/address/${'b'.repeat(64)}`,
-      identity: 'Lock hash',
+      label: `0x${'b'.repeat(8)}…${'b'.repeat(6)}`,
+      lockHashOnly: true,
     });
-    expect(model.coverage).toContain('2026-07-23–2026-07-29');
+    expect(model.facts).toContainEqual({
+      label: 'Window',
+      value: '2026-07-23 → 2026-07-29 · 10\u00a0blocks',
+    });
   });
 });

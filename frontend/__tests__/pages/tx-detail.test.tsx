@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { onlineManager } from '@tanstack/react-query';
 import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -11,6 +13,7 @@ import { CELL_COLORS } from '@/lib/design-tokens';
 import { expectOnePageSeal } from '@/__tests__/utils/seals';
 import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 import type { SealState } from '@/lib/seal/stones';
+import { fullText } from '@/__tests__/utils/full-text';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -314,8 +317,6 @@ vi.mock('@/lib/api', async () => {
     },
     ApiRequestError: actual.ApiRequestError,
     isServiceUnavailableError: actual.isServiceUnavailableError,
-    isWarmupPendingError: vi.fn(() => false),
-    isNetworkInitializingError: vi.fn(() => false),
   };
 });
 
@@ -446,7 +447,11 @@ describe('TransactionDetailPage', () => {
       Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
         (l) => l.textContent
       )
-    ).toEqual(['1 cell became 1.', '0.00064119 ckb to the miner.', 'common knowledge unchanged.']);
+    ).toEqual([
+      '1\u00a0cell became 1.',
+      '0.00064119 ckb to the miner.',
+      'common knowledge unchanged.',
+    ]);
   });
 
   it('requests missing executed-group cycles without discarding the measured transaction total', async () => {
@@ -504,8 +509,8 @@ describe('TransactionDetailPage', () => {
     await waitFor(() =>
       expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/)
     );
-    expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
-    expect(screen.getByText(/\d confirmations?$/)).toBeInTheDocument();
+    expect(screen.queryByText(fullText(/\b1 cells\b/))).toBeNull();
+    expect(screen.getByText(fullText(/\d confirmations?$/))).toBeInTheDocument();
   });
 
   it('shows commit time as UTC+8 with a relative age, not a raw ISO Z string (TX-10)', async () => {
@@ -533,6 +538,44 @@ describe('TransactionDetailPage', () => {
     expect(row).toHaveTextContent(/0s ago$/);
   });
 
+  // Lane E4: the facts' ages (the commit time's, a pool transaction's pending-since) read the
+  // page's one clock, so they move with no data change; they were written once at render. The
+  // clock stops with the page.
+  it.each([
+    ['the commit time', 'Time', { timestamp: new Date(T0 - 20_000).toISOString() }],
+    [
+      'the pending-since time',
+      'Pending since',
+      { ...createPendingTransactionDetail(), pendingSince: new Date(T0 - 20_000).toISOString() },
+    ],
+  ])(
+    'moves %s’s age with no data change, and leaves no timer behind (E4)',
+    async (_, label, patch) => {
+      vi.useFakeTimers({ now: T0 });
+      try {
+        vi.mocked(api.getTransactionDetail).mockResolvedValue({
+          ...createCommittedTransactionDetail(),
+          ...patch,
+        } as Awaited<ReturnType<typeof api.getTransactionDetail>>);
+        const { unmount } = render(<TransactionDetailPage />);
+        const fact = () => screen.queryByText(label, { selector: 'dt' })?.parentElement;
+        await loadUnderStillClock(() => fact() != null);
+        const age = () => within(fact()!).getByText(/ ago$/).textContent;
+        expect(age()).toBe('20s ago');
+        tick(1000);
+        expect(age()).toBe('21s ago');
+        tick(38_000);
+        expect(age()).toBe('59s ago');
+        tick(1000);
+        expect(age()).toBe('1m ago');
+        unmount();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it.each([null, 1000])('shows deep-fork replay pause with scalar cycles %s', async (cycles) => {
     vi.mocked(useCyclesCalculation).mockReturnValue({
       cycles,
@@ -544,7 +587,7 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByText('Paused: indexer is on a deep fork')).toBeInTheDocument();
     expect(screen.queryByText('Calculation failed')).not.toBeInTheDocument();
-    expect(screen.queryByText('Calculating...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Calculating…')).not.toBeInTheDocument();
   });
   it('marks genesis transactions as outside canonical replay and keeps zero cycles', async () => {
     const tx = createCommittedTransactionDetail();
@@ -575,7 +618,7 @@ describe('TransactionDetailPage', () => {
     const from = flows[0].querySelector('[data-flow-side="from"]')!;
     const to = flows[0].querySelector('[data-flow-side="to"]')!;
     expect([...from.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
-      expect.stringMatching(/^ckb1qpcf\.\.\.gh76tz.*234\.00000000 CKB$/),
+      expect.stringMatching(/^ckb1qpcf70…gh76tz.*234\.00000000 CKB$/),
     ]);
     expect([...to.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
       expect.stringMatching(/4maw7d.*234\.00000000 CKB$/),
@@ -594,10 +637,10 @@ describe('TransactionDetailPage', () => {
         (l) => l.textContent
       )
     ).toEqual([
-      '1 cell became 2.',
+      '1\u00a0cell became 2.',
       '0 ckb to the miner.',
       // 61 occupied bytes in, 117 + 117 out
-      'common knowledge grew by 173 bytes.',
+      'common knowledge grew by 173\u00a0bytes.',
     ]);
   });
 
@@ -664,7 +707,7 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     expect((await screen.findAllByText('Pending')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Cell deps' })).toBeInTheDocument();
     expect(screen.getByText('Cell graph')).toBeInTheDocument();
 
@@ -692,7 +735,7 @@ describe('TransactionDetailPage', () => {
     // confirmation count are not known yet and are shown as pending.
     expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Confirming').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.queryByText(/confirmations?$/i)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
     // C2: in a block the store has not indexed yet, its stone is dashed; no cells, no seam seal.
@@ -707,7 +750,7 @@ describe('TransactionDetailPage', () => {
     // Indexed: `poolStatus` is gone, the committed view renders, polling stops.
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
-    expect(await screen.findByText(/4\s+confirmations/)).toBeInTheDocument();
+    expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
     expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
     // Indexed: the same stone, pressed, and pressed again across its cells (C11: its two halves,
     // one on each sheet).
@@ -774,7 +817,10 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
+    // U-06: the one failed-read line, not a "Failed to load transaction" h1
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this transaction: HTTP 503 · the API is not available'
+    );
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(document.querySelector('.comment')).toBeNull();
     // C2: nothing was read, so no stone.
@@ -814,11 +860,11 @@ describe('TransactionDetailPage', () => {
   it('links every input and output tile to its cell page by its out point (L1)', async () => {
     render(<TransactionDetailPage />);
     const input = await screen.findByTestId('tx-io-input-0');
-    const inputLink = within(input).getByRole('link', { name: '0xbbbb...bbbb:0' });
+    const inputLink = within(input).getByRole('link', { name: '0xbbbb…bbbb:0' });
     expect(inputLink).toHaveAttribute('href', `/mainnet/cell/0x${'b'.repeat(64)}-0`);
     expect(inputLink).toHaveAttribute('title', `0x${'b'.repeat(64)}:0`);
     const output = screen.getByTestId('tx-io-output-0');
-    const outputLink = within(output).getByRole('link', { name: '0x57a5...8e0f:0' });
+    const outputLink = within(output).getByRole('link', { name: '0x57a5…8e0f:0' });
     expect(outputLink).toHaveAttribute('href', `/mainnet/cell/${TX_HASH}-0`);
     expect(outputLink).toHaveAttribute('title', `${TX_HASH}:0`);
     // the script matrix names the same cells, and links them too
@@ -844,14 +890,14 @@ describe('TransactionDetailPage', () => {
     fireEvent.mouseEnter(output);
     expect(output).toHaveAttribute('data-highlighted', 'true');
     const replaces = mockReplace.mock.calls.length;
-    fireEvent.click(within(output).getByRole('link', { name: '0x57a5...8e0f:0' }));
+    fireEvent.click(within(output).getByRole('link', { name: '0x57a5…8e0f:0' }));
     fireEvent.click(output);
     expect(mockReplace.mock.calls.length).toBe(replaces);
     // with a witness selected, the tile body still clears the selection; the link still does not
     fireEvent.click(screen.getByTestId('tx-witness-item-0'));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=0');
     const selected = mockReplace.mock.calls.length;
-    fireEvent.click(within(output).getByRole('link', { name: '0x57a5...8e0f:0' }));
+    fireEvent.click(within(output).getByRole('link', { name: '0x57a5…8e0f:0' }));
     expect(mockReplace.mock.calls.length).toBe(selected);
     fireEvent.click(output);
     expect(mockReplace.mock.calls.length).toBe(selected + 1);
@@ -1299,7 +1345,8 @@ describe('TransactionDetailPage', () => {
         noAmountReason: null,
         compositionTier: 'btc_ckb',
       } satisfies TransactionCellDisplay,
-      expected: ['Spore', 'Nervape 3x', '0x55555555...555555', 'BTC+CKB'],
+      // U-09 (re-pinned): a tile's id at the tight size
+      expected: ['Spore', 'Nervape 3x', '0x5555…5555', 'BTC+CKB'],
       href: `/mainnet/objects/0x${'5'.repeat(64)}`,
     },
     {
@@ -1353,7 +1400,7 @@ describe('TransactionDetailPage', () => {
         noAmountReason: null,
         compositionTier: null,
       } satisfies TransactionCellDisplay,
-      expected: ['.bit', 'alice.bit', '0x99999999...999999'],
+      expected: ['.bit', 'alice.bit', '0x9999…9999'],
       href: `/mainnet/identities/dotbit/0x${'9'.repeat(40)}`,
     },
   ])('renders $label from the per-cell API descriptor', async ({ display, expected, href }) => {
@@ -1389,9 +1436,12 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText(`/transactions/${TX_HASH}/detail`)).toBeInTheDocument();
-    expect(screen.getByText('no transaction at this address.')).toBeInTheDocument();
-    expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+    expect(await screen.findByText('no transaction with this hash.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/transactions/${TX_HASH.slice(0, 10)}…${TX_HASH.slice(-6)}/detail`
+    );
+    expect(screen.queryByText(/Could not read this transaction/)).not.toBeInTheDocument();
   });
 
   it('does not infer HTTP 404 from a transport error message containing 404', async () => {
@@ -1399,8 +1449,10 @@ describe('TransactionDetailPage', () => {
       new Error('upstream request 404 timed out')
     );
     render(<TransactionDetailPage />);
-    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
-    expect(screen.queryByText('no transaction at this address.')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this transaction: upstream request 404 timed out'
+    );
+    expect(screen.queryByText('no transaction with this hash.')).not.toBeInTheDocument();
   });
 
   it('shows detailed message for non-404 transaction errors', async () => {
@@ -1412,11 +1464,51 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42/
-      )
-    ).toBeInTheDocument();
+    // U-06: the one failed-read line carries the API's own words
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^Could not read this transaction: API error: 500 - transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42$/
+    );
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false; the page took that for a read that had completed
+  // without a transaction, threw, and the crash page did not recover when the read came back.
+  it('waits while its read is paused offline, then shows the transaction once back online', async () => {
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByRole('status', { name: 'Loading …' })).toBeInTheDocument();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(api.getTransactionDetail).not.toHaveBeenCalled();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+      expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it('still fails loudly when its read completes with no transaction', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValueOnce(null as never);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      expect(
+        await screen.findByText(
+          `crashed: Transaction ${TX_HASH}: request completed without a transaction`
+        )
+      ).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });

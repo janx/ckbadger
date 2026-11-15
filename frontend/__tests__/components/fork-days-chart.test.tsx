@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '../utils/chart-width';
 import { act, fireEvent, render, screen } from '../utils/test-utils';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const days = [
   { date: '2026-10-20', canonicalBlocks: 9000, uncles: 230, nodeSwitches: 0 },
@@ -51,14 +52,23 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     );
     // a round scale: 100, 200, 300 (its top in the name's band, unwritten)
     expect(screen.getByText('200')).toBeInTheDocument();
-    // visual finish V13(b): the scale's lines are grid — solid, in the row-rule ink #1a1f30
+    // visual finish V13(b): the scale's lines are grid — solid, in the row-rule ink (R5, ruling 4c;
+    // re-pinned on purpose: it was the hair)
     const grid = [...container.querySelectorAll('svg line[data-role="grid"]')];
     expect(grid).toHaveLength(3);
     for (const line of grid) {
-      expect(line).toHaveAttribute('stroke', 'var(--c-base-border-subtle)');
+      expect(line).toHaveAttribute('stroke', 'var(--c-row-rule)');
       expect(line).not.toHaveAttribute('stroke-dasharray');
     }
     expect(container.querySelectorAll('svg line[stroke-dasharray]')).toHaveLength(0);
+  });
+
+  it('draws its day bars and its key swatches with square ends (U-02, R1)', () => {
+    const { container } = render(<Chart days={days} />);
+    const svg = container.querySelector('svg')!;
+    expect(svg.querySelectorAll('[data-uncles], [data-switches]')).toHaveLength(5);
+    expect(rects(svg.querySelector('[data-role="chart-name"]')!)).toHaveLength(2);
+    expect(roundedRects(svg)).toEqual([]);
   });
 
   it('is the hero’s picture: at least 280 px tall, its name and key inside the plot, ticks inside in ghost ink (R13)', () => {
@@ -75,13 +85,14 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       expect(Number(text.getAttribute('y'))).toBeLessThanOrEqual(20);
     }
     expect(name.querySelectorAll('rect')).toHaveLength(2);
-    // ticks: ghost ink, written inside the plot's own gridlines (no axis column); the top value
+    // ticks: dim ink, written inside the plot's own gridlines (no axis column); the top value
     // would sit in the name's band, so it is not written (as the DAO page's charts)
     const ticks = Array.from(svg.querySelectorAll('[data-role="y-tick"]'));
     expect(ticks.map((t) => t.textContent)).toEqual(['100', '200']);
     for (const t of ticks) expect(Number(t.getAttribute('y')) - 11).toBeGreaterThanOrEqual(28);
     for (const t of ticks) {
-      expect(t).toHaveAttribute('fill', 'var(--c-text-ghost)');
+      // R4 (re-pinned on purpose): a tick is a value, in the dim ink, never the ghost
+      expect(t).toHaveAttribute('fill', 'var(--c-text-dim)');
       expect(Number(t.getAttribute('x'))).toBe(0);
     }
     // the bars start right of the ticks, and the data clears the name's band

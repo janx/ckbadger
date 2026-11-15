@@ -115,6 +115,30 @@ describe('Header', () => {
     expect(screen.queryByTestId('vitals-logo-notch')).toBeNull();
   });
 
+  // PA-04 / PB-26 (UI review 2026-11-14): the celadon section word stood between the menu button
+  // and the search field on the pages the nav links to only, and its length set the field's
+  // width. Kept at a fixed slot for every route, the longest word ("Transactions", 12 characters
+  // at 13 px, 93.6 px, and its 8 px gap) would leave the field 78 px at 360 — 38 px of text, under
+  // five characters. So the word is drawn from 640 only; below it the field is what the row
+  // leaves on every page, 326 − 90 (wordmark) − 8 − 40 (menu) − 8 = 180 px at 360. From 640 the
+  // field is its 288 px cap on every page (608 − 248 px of the row = 360 px free).
+  it('draws the section word from 640 only, so the phone field is one width on every page (PA-04, PB-26)', () => {
+    for (const [path, word] of [
+      ['/', 'Home'],
+      ['/blocks', 'Blocks'],
+      ['/transactions', 'Transactions'],
+      ['/inventory/identities', 'Identities'],
+      ['/dao', 'DAO'],
+    ] as const) {
+      usePathnameMock.mockReturnValue(path);
+      const { unmount } = render(<Header />);
+      const span = screen.getByText(word, { selector: 'span' });
+      expect(span, path).toHaveClass('hidden', 'sm:inline', 'text-jade');
+      expect(span.parentElement, path).toHaveClass('md:hidden');
+      unmount();
+    }
+  });
+
   it('keeps only the header row sticky on phones and the row plus the vitals strip from md up', () => {
     usePathnameMock.mockReturnValue('/');
     render(<Header />);
@@ -131,6 +155,52 @@ describe('Header', () => {
     expect(wrapper).toContainElement(strip);
     // The wordmark is in the sticky row in both layouts.
     expect(banner).toContainElement(screen.getByTestId('wordmark'));
+  });
+
+  // U-01 (UI review 2026-11-14), R2: the boards' header (lib.js `header()`) sets the nav in
+  // lowercase: dao · activities ∨ · inventory ∨ · scripts · charts, and the menus' items too. The
+  // case is the rendering's (`lowercase` on the element that holds the label), so the label text,
+  // and with it every accessible name, keeps its case: DAO is still read as DAO.
+  it('draws every nav label in lowercase, the names as they were (U-01)', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    for (const name of ['DAO', 'Scripts', 'Charts'])
+      expect(within(nav).getByRole('link', { name }), name).toHaveClass('lowercase');
+    for (const [name, views] of [
+      ['Activities', ['Activities', 'Transactions', 'Blocks', 'Forks']],
+      ['Inventory', ['Tokens', 'Objects', 'Identities']],
+    ] as const) {
+      const button = within(nav).getByRole('button', { name });
+      expect(button, name).toHaveClass('lowercase');
+      fireEvent.click(button);
+      const menu = within(nav).getByRole('menu', { name });
+      for (const view of views)
+        expect(within(menu).getByRole('menuitem', { name: view }), view).toHaveClass('lowercase');
+      fireEvent.click(button);
+    }
+    // the phone header's section word follows the same case
+    expect(screen.getByText('Blocks', { selector: 'span' })).toHaveClass('lowercase');
+    // the phone menu: every row, the Inventory heading too
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle menu' }));
+    const phoneNav = screen
+      .getAllByRole('navigation')
+      .find((n) => n.getAttribute('aria-label') !== 'Main')!;
+    for (const name of [
+      'Home',
+      'DAO',
+      'Activities',
+      'Transactions',
+      'Blocks',
+      'Forks',
+      'Tokens',
+      'Objects',
+      'Identities',
+      'Scripts',
+      'Charts',
+    ])
+      expect(within(phoneNav).getByRole('link', { name }), name).toHaveClass('lowercase');
+    expect(within(phoneNav).getByText('Inventory')).toHaveClass('lowercase');
   });
 
   it('labels the nav in sentence case with normal tracking', () => {

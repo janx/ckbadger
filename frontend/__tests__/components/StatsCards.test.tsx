@@ -1,24 +1,11 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { StatsCards } from '@/components/stats-cards';
-import { http, HttpResponse } from 'msw';
-import { server } from '../msw/server';
+import { render, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { SyncBanner } from '@/components/stats-cards';
+import type { NetworkStats } from '@/lib/api';
 
-const API_BASE = '/api/:network/v1';
-
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-  return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-}
+// The sync banner the home page shows over its figures (components/stats-cards.tsx). Lane E3
+// removed the six-card StatsCards grid that no page rendered, and its tests; the banner's tests,
+// which reached it through that grid, render it directly.
 
 function createNetworkResponse(syncStatus?: Record<string, unknown>) {
   return {
@@ -29,7 +16,7 @@ function createNetworkResponse(syncStatus?: Record<string, unknown>) {
     epoch: '500 (45%)',
     tps: '1.23',
     syncStatus,
-  };
+  } as unknown as NetworkStats;
 }
 
 function createBulkSyncStatus(overrides?: Record<string, unknown>) {
@@ -47,75 +34,25 @@ function createBulkSyncStatus(overrides?: Record<string, unknown>) {
   };
 }
 
-describe('StatsCards', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('renders stat cards with network data', async () => {
-    render(<StatsCards />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('LATEST BLOCK')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('AVG BLOCK TIME')).toBeInTheDocument();
-    expect(screen.getByText('HASH RATE')).toBeInTheDocument();
-    expect(screen.getByText('DIFFICULTY')).toBeInTheDocument();
-    expect(screen.getByText('CURRENT EPOCH')).toBeInTheDocument();
-    expect(screen.getByText('TPS (24H)')).toBeInTheDocument();
-  });
-
-  it('shows an em dash when average block time is undefined', async () => {
-    server.use(
-      http.get(`${API_BASE}/statistics/network`, () =>
-        HttpResponse.json({ ...createNetworkResponse(), avgBlockTime: null })
-      )
-    );
-    render(<StatsCards />, { wrapper: createWrapper() });
-    await waitFor(() =>
-      expect(screen.getByText('AVG BLOCK TIME').parentElement).toHaveTextContent('—')
-    );
-  });
-
-  it('shows an em dash for an unavailable transaction rate', async () => {
-    server.use(
-      http.get(`${API_BASE}/statistics/network`, () =>
-        HttpResponse.json({
-          ...createNetworkResponse({ isSyncing: false, syncMode: 'synced' }),
-          tps: null,
-        })
-      )
-    );
-    render(<StatsCards />, { wrapper: createWrapper() });
-    await waitFor(() => expect(screen.getByText('TPS (24H)').parentElement).toHaveTextContent('—'));
-  });
-
-  it('shows bulk sync progress details when available', async () => {
-    server.use(
-      http.get(`${API_BASE}/statistics/network`, () => {
-        return HttpResponse.json(
-          createNetworkResponse(
-            createBulkSyncStatus({
-              elapsedTime: '1h 10m',
-              txsPerSecond: 10500.0,
-              emaTxsPerSecond: 9800.0,
-            })
-          )
-        );
-      })
+describe('SyncBanner', () => {
+  it('shows bulk sync progress details when available', () => {
+    render(
+      <SyncBanner
+        stats={createNetworkResponse(
+          createBulkSyncStatus({
+            elapsedTime: '1h 10m',
+            txsPerSecond: 10500.0,
+            emaTxsPerSecond: 9800.0,
+          })
+        )}
+      />
     );
 
-    render(<StatsCards />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('BULK SYNCING...')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('1.2K')).toBeInTheDocument();
+    expect(screen.getByText('BULK SYNCING…')).toBeInTheDocument();
+    expect(screen.getByText('1.2k')).toBeInTheDocument();
     expect(screen.getByText('blocks/s')).toBeInTheDocument();
     expect(screen.getByText('Elapsed: 1h 10m')).toBeInTheDocument();
-    expect(screen.getByText('9.8K')).toBeInTheDocument();
+    expect(screen.getByText('9.8k')).toBeInTheDocument();
     expect(screen.getByText('txns/s')).toBeInTheDocument();
     expect(screen.getByText('ETA: 2h 30m')).toBeInTheDocument();
 
@@ -127,42 +64,25 @@ describe('StatsCards', () => {
     expect(screen.getByTestId('sync-banner-live')).toHaveAttribute('aria-hidden', 'true');
   });
 
-  it('sets each stat in a plain well: no glowing card, no flicker while it loads', async () => {
-    const { container } = render(<StatsCards />, { wrapper: createWrapper() });
-    const cards = screen.getAllByTestId('stats-card');
-    expect(cards).toHaveLength(6);
-    for (const card of cards) expect(card).toHaveClass('well');
-    expect(container.querySelector('.terminal-card, .terminal-border-glow')).toBeNull();
-    expect(container.querySelector('.animate-terminal-flicker')).toBeNull();
-    await waitFor(() => expect(screen.getByText('LATEST BLOCK')).toBeInTheDocument());
-  });
-
-  it('does not show sync banner during non-bulk syncing', async () => {
-    server.use(
-      http.get(`${API_BASE}/statistics/network`, () => {
-        return HttpResponse.json(
-          createNetworkResponse(
-            createBulkSyncStatus({
-              syncedBlock: 999100,
-              progress: 99.9,
-              estimatedTime: '3m',
-              elapsedTime: '15m',
-              blocksPerSecond: 20,
-              emaBlocksPerSecond: 18,
-              syncMode: 'normal',
-            })
-          )
-        );
-      })
+  it('does not show sync banner during non-bulk syncing', () => {
+    const { container } = render(
+      <SyncBanner
+        stats={createNetworkResponse(
+          createBulkSyncStatus({
+            syncedBlock: 999100,
+            progress: 99.9,
+            estimatedTime: '3m',
+            elapsedTime: '15m',
+            blocksPerSecond: 20,
+            emaBlocksPerSecond: 18,
+            syncMode: 'normal',
+          })
+        )}
+      />
     );
 
-    render(<StatsCards />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('LATEST BLOCK')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText('BULK SYNCING...')).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText('BULK SYNCING…')).not.toBeInTheDocument();
     expect(screen.queryByText(/Elapsed:/)).not.toBeInTheDocument();
   });
 });

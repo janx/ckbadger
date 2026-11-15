@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import {
   FiberGraphNotes,
@@ -18,7 +19,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
@@ -26,6 +27,9 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash } from '@/lib/shorten';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 type StateFilter = 'all' | FiberChannelState;
 
@@ -59,14 +63,17 @@ const filters: {
 ];
 /** R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), 6 px above and below. */
 const ROW = 'text-body py-1.5';
-const shortId = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 
 /**
- * A party in the table, by the last six characters the graph names it with (board L8; R16: the
- * table reads like the graph above it); its whole address or lock hash is its title and link.
+ * A party in the table, by its address or lock hash at the row size (U-09; it was the last six
+ * characters alone, a form of its own); its whole address or lock hash is its title and link.
  */
 function Party({ party }: { party: FiberChannel['observedParties'][number] }) {
-  const text = `…${(party.address ?? party.lockScriptHash).slice(-6)}`;
+  const text = party.address ? (
+    <ShortId value={party.address} kind="address" size="row" />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size="row" />
+  );
   return party.address ? (
     <Link
       href={`/address/${party.address}`}
@@ -87,7 +94,7 @@ function openNowFigure(summary: FiberNetwork['summary']): TopicDisplayFigure {
   return {
     label: 'open now',
     value: summary.openChannels.toLocaleString('en-US'),
-    unit: summary.openChannels === 1 ? 'channel' : 'channels',
+    unit: countNoun(summary.openChannels, 'channel', 'channels'),
     companion: (
       <>
         locking{' '}
@@ -115,7 +122,7 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
           : 'none yet',
         ...summary.channelsByToken.map(
           (token) =>
-            `${token.channels.toLocaleString('en-US')} in ${token.symbol ?? `${token.udtTypeHash.slice(0, 10)}…`}`
+            `${token.channels.toLocaleString('en-US')} in ${token.symbol ?? shortenHash(token.udtTypeHash, 'row')}`
         ),
       ].join(' · '),
     },
@@ -135,10 +142,13 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
   ];
 }
 
-/** A party as the fiber graph labels it (board L8): the last six characters of its address. */
+/** A party in the phone row: its address or lock hash at the tight size (U-09). */
 function PartySuffix({ party }: { party: FiberChannel['observedParties'][number] }) {
-  const id = party.address ?? party.lockScriptHash;
-  const text = `…${id.slice(-6)}`;
+  const text = party.address ? (
+    <ShortId value={party.address} kind="address" size="tight" />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size="tight" />
+  );
   return party.address ? (
     <Link
       href={`/address/${party.address}`}
@@ -194,7 +204,7 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
       style={inkStyle(BOARD_INKS.link)}
       title={channel.channelId}
     >
-      {shortId(channel.channelId)}
+      <ShortId value={channel.channelId} kind="hash" size="tight" />
     </Link>
   );
   const pair = (
@@ -288,11 +298,8 @@ export default function FiberChannelsPage() {
             lede={
               <>
                 Channels touch the chain only to open and to close.{' '}
-                <a
-                  href="#evidence"
-                  className="hover:text-text-bright whitespace-nowrap hover:underline"
-                >
-                  How it works ↓
+                <a href="#evidence" className="hover:text-text-bright hover:underline">
+                  How it works<span className="whitespace-nowrap"> ↓</span>
                 </a>
               </>
             }
@@ -340,7 +347,7 @@ export default function FiberChannelsPage() {
                       pagination.reset();
                     }}
                     className={cn(
-                      'text-small h-[30px] rounded border px-[11px]',
+                      'text-small h-[30px] border px-[11px]',
                       on
                         ? 'bg-base-elevated text-text-bright'
                         : 'border-base-border-subtle text-text hover:text-text-bright'
@@ -363,7 +370,7 @@ export default function FiberChannelsPage() {
                 Channel list could not be loaded: {String(channels.error)}
               </p>
             )}
-            {channels.isLoading && (
+            {isAwaited(channels) && (
               <p className="text-text-dim text-body py-7">Loading channels…</p>
             )}
             {channels.data && (
@@ -387,7 +394,7 @@ export default function FiberChannelsPage() {
                             className="text-text-bright hover:underline"
                             title={channel.channelId}
                           >
-                            {shortId(channel.channelId)}
+                            <ShortId value={channel.channelId} kind="hash" size="row" />
                           </Link>
                           {stateFilter === 'all' && (
                             <span className="text-text-dim text-meta block">
@@ -437,7 +444,11 @@ export default function FiberChannelsPage() {
                       label: 'Opened',
                       minWidth: 120,
                       className: cn(ROW, 'text-text-dim'),
-                      render: (channel) => <span>{formatUtc8Date(channel.openTimestamp)}</span>,
+                      render: (channel) => (
+                        <span>
+                          <Utc8Date timestamp={channel.openTimestamp} />
+                        </span>
+                      ),
                     },
                     {
                       key: 'lifetime',

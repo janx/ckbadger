@@ -13,8 +13,6 @@ vi.mock('@/lib/api', () => ({
     getScriptCapacityChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -191,7 +189,9 @@ describe('ScriptByCodeHashPage', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Ambiguous script reference' })
     ).toBeInTheDocument();
-    const heading = screen.getByRole('heading', { name: 'Conflicting live bytecode 2 versions' });
+    const heading = screen.getByRole('heading', {
+      name: 'Conflicting live bytecode 2 versions',
+    });
     expect(heading.lastElementChild).toHaveTextContent(/^2 versions$/);
     for (const version of versions) expect(screen.getByText(version)).toBeInTheDocument();
   });

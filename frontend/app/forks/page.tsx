@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
@@ -9,6 +10,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { ClockText, useClockTime } from '@/components/ui/utc8-date';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
 import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
@@ -18,7 +20,8 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { BOARD_INKS, FORK_COLORS, inkStyle } from '@/lib/design-tokens';
+import type { ShortSize } from '@/lib/shorten';
+import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
   forkEventHref,
@@ -29,6 +32,7 @@ import {
 } from '@/lib/fork-format';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { unitNode, unitText } from '@/components/ui/units';
 
 type Overview = Awaited<ReturnType<typeof api.getForkOverview>>;
 
@@ -150,14 +154,14 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
     <span>
       {href ? (
         <Link href={href} className="text-text hover:text-jade">
-          {when}
+          {unitText(when)}
         </Link>
       ) : (
-        <span className="text-text">{when}</span>
+        <span className="text-text">{unitText(when)}</span>
       )}
       {!compact && (
         <span className="text-text-dim text-meta block w-fit">
-          {formatTimeAgo(event.detectedAt)}
+          <ClockText text={(now) => formatTimeAgo(event.detectedAt, now)} />
         </span>
       )}
       {!compact && !href && (
@@ -169,10 +173,13 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
   );
 }
 
-/** A switch row's title: what left its one-line "Seen" cell (T1), then its key. */
-function switchTitle(event: ReorgEvent): string {
+/**
+ * A switch row's title: what left its one-line "Seen" cell (T1), then its key. Its age is the
+ * clock's, at `now` (lane E4).
+ */
+function switchTitle(event: ReorgEvent, now: number): string {
   return [
-    `seen ${seenWhen(event)} UTC+8, ${formatTimeAgo(event.detectedAt)}`,
+    `seen ${seenWhen(event)} UTC+8, ${formatTimeAgo(event.detectedAt, now)}`,
     ...(forkEventHref(event) ? [] : [missingAddressWords(event.firstOrphanStatus)]),
     `fork point ${formatBlockNumber(event.forkPointNumber)}, depth ${event.depth}`,
   ].join(' · ');
@@ -202,7 +209,8 @@ function Shape({ event }: { event: ReorgEvent }) {
   );
 }
 
-function Miners({ event }: { event: ReorgEvent }): ReactNode {
+/** The two miners, at the size of the form the row is drawn in (U-09). */
+function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactNode {
   if (event.eventType === 'deep') return <span className="text-text-dim">—</span>;
   if (!event.preview)
     return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
@@ -227,7 +235,7 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
       );
     return address ? (
       // T5: the fork point is the row's one bright thing; the miners read in body ink.
-      <MinerLink address={address} pool={pool} className="text-text" />
+      <MinerLink address={address} pool={pool} size={size} className="text-text" />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
@@ -235,9 +243,7 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
   return (
     <span>
       {side(dropped, oldMinerAddress, oldMinerPool, 'witness unavailable')}{' '}
-      <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
-        vs
-      </span>{' '}
+      <span className="text-text-dim">vs</span>{' '}
       {side(
         winner,
         competingMinerAddress,
@@ -311,7 +317,6 @@ function ShapeKey() {
             y="1"
             width="12"
             height="8"
-            rx="2"
             fill="none"
             stroke={FORK_COLORS.dropped}
             strokeDasharray="2 2"
@@ -356,6 +361,14 @@ export default function ForksPage() {
     !hasPrevious &&
     events.data !== undefined &&
     events.data.data.length > PREVIEW_ROWS;
+  const shown = events.data
+    ? collapsed
+      ? events.data.data.slice(0, PREVIEW_ROWS)
+      : events.data.data
+    : [];
+  // The rows' titles hold their ages (T1): the page reads the one clock through them, so it renders
+  // again only when one of the titles shown changes (lane E4).
+  const now = useClockTime((t) => shown.map((e) => switchTitle(e, t)).join('\n'));
   const total = events.data?.total;
   return (
     <div className="min-h-screen">
@@ -369,17 +382,14 @@ export default function ForksPage() {
             lede={
               <>
                 Two blocks, one height: one stays, one is an uncle.{' '}
-                <a
-                  href="#evidence"
-                  className="hover:text-text-bright whitespace-nowrap hover:underline"
-                >
-                  How it works ↓
+                <a href="#evidence" className="hover:text-text-bright hover:underline">
+                  How it works<span className="whitespace-nowrap"> ↓</span>
                 </a>
               </>
             }
             figure={data ? uncleRate(data) : undefined}
             picture={
-              overview.isLoading ? (
+              isAwaited(overview) ? (
                 <p role="status" className="text-text-dim text-small">
                   Loading fork history…
                 </p>
@@ -419,7 +429,7 @@ export default function ForksPage() {
               />
               <ShapeKey />
             </div>
-            {events.isLoading && <p role="status">Loading branch switches…</p>}
+            {isAwaited(events) && <p role="status">Loading branch switches…</p>}
             {events.error && (
               <p role="alert" className="text-rouge text-small">
                 Branch switches unavailable: {(events.error as Error).message}
@@ -429,9 +439,9 @@ export default function ForksPage() {
               <>
                 <ListTable
                   label="Branch switches on this node"
-                  rows={collapsed ? events.data.data.slice(0, PREVIEW_ROWS) : events.data.data}
+                  rows={shown}
                   rowKey={(event) => String(event.id)}
-                  rowTitle={switchTitle}
+                  rowTitle={(event) => switchTitle(event, now)}
                   empty="No branch switches observed by this node. Chain uncles above can still exist."
                   columns={spanHeads<ReorgEvent>([
                     {
@@ -459,8 +469,10 @@ export default function ForksPage() {
                       key: 'miners',
                       className: ROW,
                       label: 'Dropped block’s miner vs winner’s',
-                      minWidth: 260,
-                      render: (e) => <Miners event={e} />,
+                      // two unnamed miners at the row size: 17 + 4 + 17 characters at 13 px
+                      // (296 px) and the padding
+                      minWidth: 312,
+                      render: (e) => <Miners event={e} size="row" />,
                     },
                     {
                       key: 'apart',
@@ -486,7 +498,7 @@ export default function ForksPage() {
                       </div>
                       <Shape event={event} />
                       <div>
-                        <Miners event={event} /> · <FoundApart event={event} />
+                        <Miners event={event} size="tight" /> · <FoundApart event={event} />
                       </div>
                       <Fate event={event} />
                     </div>
@@ -535,12 +547,12 @@ export default function ForksPage() {
                   </p>
                   {data && data.days.length > 0 && (
                     <p>
-                      The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
-                      {formatCount(data.days.length, 'day')}; this node switched branches{' '}
-                      {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only
-                      notices a fork when the losing block reached it first and it had to switch.
-                      The uncles are the complete record, and they are on chain for anyone to
-                      recount.
+                      The chain recorded {unitNode(formatCount(data.unclesInWindow, 'uncle'))} in
+                      these {unitNode(formatCount(data.days.length, 'day'))}; this node switched
+                      branches {unitNode(formatCount(data.nodeSwitchesInWindow, 'time'))} in the
+                      same days. It only notices a fork when the losing block reached it first and
+                      it had to switch. The uncles are the complete record, and they are on chain
+                      for anyone to recount.
                     </p>
                   )}
                 </Prose>

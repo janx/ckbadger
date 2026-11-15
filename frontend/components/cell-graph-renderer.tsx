@@ -15,7 +15,7 @@ const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
   loading: () => (
     <div className="bg-base-surface/50 flex h-full w-full items-center justify-center">
-      <div className="text-text-dim">Loading graph...</div>
+      <div className="text-text-dim">Loading graph…</div>
     </div>
   ),
 });
@@ -215,10 +215,10 @@ export function CellGraphRenderer({
     return (
       <div
         ref={containerRef}
-        className="border-base-border bg-base-surface/50 flex w-full items-center justify-center rounded-lg border"
+        className="border-base-border bg-base-surface/50 flex w-full items-center justify-center border"
         style={{ width: width ?? '100%', height }}
       >
-        <p className="text-text-dim">No graph data available</p>
+        <p className="text-text-dim">No graph data.</p>
       </div>
     );
   }
@@ -226,7 +226,7 @@ export function CellGraphRenderer({
   return (
     <div
       ref={containerRef}
-      className="border-base-border w-full overflow-hidden rounded-lg border"
+      className="border-base-border w-full overflow-hidden border"
       style={{ width: width ?? '100%', height }}
     >
       <ForceGraph2D

@@ -11,6 +11,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { PAGE_SEAL_HEIGHTS } from '@/components/ui/page-seal';
 import { api, type Block, type GlobalActivity, type Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
+import { fullText } from '@/__tests__/utils/full-text';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -32,8 +33,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getGlobalActivities: vi.fn(),
   },
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/src/navigation', () => ({
@@ -363,14 +362,31 @@ describe('Block board · first tier', () => {
     // C10 round 2: the id line in the plate's one quiet voice, the hash taking it (it was text-body
     // in the text ink); its click-to-copy, the block's copy control, stays as it was
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const hash = within(idLine).getByText(block.hash);
-    expect(hash.parentElement).toBe(idLine);
-    expect(hash.className).toBe('font-mono hover-lit cursor-pointer transition-colors');
-    expect(hash).toHaveAttribute('title', 'Click to copy');
+    // The lead's ruling a (re-pinned): the plate's id line is never a scroller; the full hash is
+    // the plate's PlateHash, one line where the line holds it, else two halves; click to copy as
+    // before, the whole hash its title. Re-pinned (A4 Chrome F3): the piece is every head's HeadId.
+    const hash = idLine.querySelector('[data-head-id]') as HTMLElement;
+    expect(hash).not.toBeNull();
+    expect(hash.textContent).toBe(block.hash);
+    expect(hash).toHaveAttribute('title', block.hash);
+    expect(idLine.querySelector('.overflow-x-auto')).toBeNull();
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
     expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
+  });
+
+  // The review's item E: the plate's id is the block's copy control; a click writes the WHOLE hash
+  // to the clipboard (the test of its class and "Click to copy" title went with the old id line)
+  it('copies the whole block hash when the plate’s id is clicked', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const { container } = render(<BlockDetailPage />);
+    await screen.findByRole('heading', { level: 1 });
+    const id = container.querySelector('[data-sealed-id] [data-head-id]') as HTMLElement;
+    fireEvent.click(id);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(block.hash));
+    expect(writeText).toHaveBeenCalledTimes(1);
   });
 
   // The hardfork activation is the block's status: on the kind line, after "Block".
@@ -480,7 +496,7 @@ describe('Block board · first tier', () => {
       expect(within(tab).getByText('4')).toHaveClass('text-small');
     }
     expect(
-      await screen.findByText("3 committed from #20,827,930's proposals, 2 blocks later")
+      await screen.findByText(fullText("3 committed from #20,827,930's proposals, 2 blocks later"))
     ).toBeInTheDocument();
   });
 
@@ -526,7 +542,8 @@ describe('Block board · second tier', () => {
     );
     const bar = within(section).getByRole('img', { name: /^Reward shares:/ });
     expect(bar).toHaveAccessibleName(
-      'Reward shares: primary issuance 95.19%, secondary issuance 4.80%, committed fees 0.00%, proposal fees 0.00%'
+      // the review's item I (re-pinned): fees above nothing read <0.01%, never a false 0.00%
+      'Reward shares: primary issuance 95.19%, secondary issuance 4.80%, committed fees <0.01%, proposal fees <0.01%'
     );
     const parts = bar.querySelectorAll('[data-reward-part]');
     expect(parts).toHaveLength(4);
@@ -800,7 +817,7 @@ describe('Block board · R2b-a fields', () => {
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
     const row = uncles.querySelector('article')!;
     expect(row).toHaveClass('flex-col');
-    await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x9595\.\.\.9595,/));
+    await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x95959595…959595,/));
   });
 
   it('lists the block bytes in the raw data (BA-19)', async () => {

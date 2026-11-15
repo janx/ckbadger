@@ -19,11 +19,14 @@ import {
 } from '@/lib/api';
 import { FIBER_STATE_WORDS, epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { ShortId } from '@/components/ui/short-id';
+import type { ShortSize } from '@/lib/shorten';
+import { unitNode } from '@/components/ui/units';
 
 type Party = FiberChannel['observedParties'][number];
 
@@ -53,19 +56,25 @@ export function formatEpochDelay(delay: FiberEpochDelay, raw: string): string {
 /** A hash or output link in the boards' link cyan; the global `a:hover` jade still wins. */
 const LINK = inkStyle(BOARD_INKS.link);
 
-const shortAddress = (party: Party) =>
-  party.address
-    ? `${party.address.slice(0, 10)}…${party.address.slice(-6)}`
-    : `${party.lockScriptHash.slice(0, 10)}…${party.lockScriptHash.slice(-6)}`;
-const tail = (party: Party) => (party.address ?? party.lockScriptHash).slice(-6);
+/**
+ * A party by its address, else its lock hash, at a size (U-09; it was 10…6 here and the last six
+ * characters alone on the split bar and the received lines).
+ */
+const partyId = (party: Party, size: ShortSize) =>
+  party.address ? (
+    <ShortId value={party.address} kind="address" size={size} />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size={size} />
+  );
 
+/** A party in a sentence or a row: the row size. */
 function PartyLink({ party, className }: { party: Party; className?: string }) {
   return party.address ? (
     <Link href={`/address/${party.address}`} className={className ?? 'hover:text-jade'}>
-      {shortAddress(party)}
+      <ShortId value={party.address} kind="address" size="row" />
     </Link>
   ) : (
-    <span title={party.lockScriptHash}>{shortAddress(party)}</span>
+    <ShortId title={party.lockScriptHash} value={party.lockScriptHash} kind="hash" size="row" />
   );
 }
 
@@ -188,7 +197,7 @@ function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
         {parts.integer}
         <span className="text-hero text-text-dim font-normal">
           {parts.fraction}
-          <span className="opacity-50">{parts.ghost}</span>
+          <span className="text-text-ghost">{parts.ghost}</span>
         </span>
       </span>
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
@@ -203,7 +212,7 @@ const STEP_WORDS = ['no', 'one', 'two', 'three', 'four'];
 function receivedLines(channel: FiberChannelDetail, stage: Stage | undefined): ReactNode[] {
   return stageAmounts(channel, stage, 1).map(({ party, amount }) => (
     <span key={party.lockScriptHash}>
-      {tail(party)} received {ckb(amount)} net
+      {partyId(party, 'row')} received {ckb(amount)} net
     </span>
   ));
 }
@@ -375,7 +384,7 @@ function StageWitnesses({ stage }: { stage: FiberChannelEvidence['stages'][numbe
   const sizes = tx.data?.witnessDetails?.map((witness) => witness.size);
   return (
     <span>
-      {formatCount(stage.witnessCount, 'witness', 'witnesses')}
+      {unitNode(formatCount(stage.witnessCount, 'witness', 'witnesses'))}
       {sizes && sizes.length > 0 && `, ${sizes.join(', ')} B`}
       {` · fee ${BigInt(stage.fee).toLocaleString('en-US')} shannons, ${
         stage.feeSource === 'channel_only' ? 'out of the channel' : 'from outside inputs'
@@ -450,7 +459,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
       <div data-tier="1" className="min-w-0">
         <section aria-labelledby={titleId} className="min-w-0">
           <div className="flex flex-wrap items-baseline gap-3">
-            <h1 id={titleId} className="text-text-bright text-entity font-medium">
+            {/* PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px). */}
+            <h1 id={titleId} className="text-text-bright text-entity max-md:text-index font-medium">
               Fiber channel
             </h1>
             <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.state]}</span>
@@ -486,7 +496,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </div>
           </div>
           {evidenceError && (
-            <p role="alert" className="text-rouge text-small mt-3 break-all">
+            <p role="alert" className="text-rouge text-small mt-3 [overflow-wrap:anywhere]">
               Local node evidence unavailable: {evidenceError}
             </p>
           )}
@@ -497,14 +507,17 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             <DetailSection title="What moved inside the channel">
               <div className="flex flex-col gap-4">
                 <FiberSplitBar
-                  left={{ name: tail(atOpen[0].party), shannons: atOpen[0].amount }}
-                  right={{ name: tail(atOpen[1].party), shannons: atOpen[1].amount }}
+                  left={{ name: partyId(atOpen[0].party, 'tight'), shannons: atOpen[0].amount }}
+                  right={{ name: partyId(atOpen[1].party, 'tight'), shannons: atOpen[1].amount }}
                   note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
                 />
                 {atClose && closing && (
                   <FiberSplitBar
-                    left={{ name: tail(atClose[0].party), shannons: atClose[0].amount }}
-                    right={{ name: tail(atClose[1].party), shannons: atClose[1].amount }}
+                    left={{ name: partyId(atClose[0].party, 'tight'), shannons: atClose[0].amount }}
+                    right={{
+                      name: partyId(atClose[1].party, 'tight'),
+                      shannons: atClose[1].amount,
+                    }}
                     note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${
                       closing.stage === STAGE_KEYS.settle ? 'settlement' : 'closing'
                     } transaction, payout and change alike`}
@@ -523,8 +536,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             title="On chain"
             args={
               channel.state === 'open' || channel.state === 'forceClosed'
-                ? `${STEP_WORDS[steps.length]} step${steps.length === 1 ? '' : 's'} so far`
-                : `${STEP_WORDS[steps.length]} steps`
+                ? `${STEP_WORDS[steps.length]} ${countNoun(steps.length, 'step')} so far`
+                : `${STEP_WORDS[steps.length]} ${countNoun(steps.length, 'step')}`
             }
           >
             <div className="flex flex-col gap-[22px]">
@@ -560,7 +573,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                     <div className="text-small flex flex-col gap-3">
                       <div>
                         <div className="text-text-dim">
-                          Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
+                          Fiber Funding Lock · args,{' '}
+                          {unitNode(formatCount(argsBytes(evidence.funding.lockArgs), 'byte'))}
                         </div>
                         <div className="text-text-bright break-all">
                           {evidence.funding.lockArgs}
@@ -579,7 +593,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                       {tracked ? (
                         <div>
                           <div className="text-text-dim mb-1">
-                            Fiber Commitment Lock · args, {argsBytes(tracked.lockArgs)} bytes ·{' '}
+                            Fiber Commitment Lock · args,{' '}
+                            {unitNode(formatCount(argsBytes(tracked.lockArgs), 'byte'))} ·{' '}
                             {tracked.lockFormat}
                           </div>
                           <Grid>
@@ -681,7 +696,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                             {party ? (
                               <PartyLink party={party} />
                             ) : (
-                              `${flow.lockScriptHash.slice(0, 10)}…`
+                              <ShortId value={flow.lockScriptHash} kind="hash" size="row" />
                             )}
                           </span>
                           <span className="text-text">
@@ -731,8 +746,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                               <PartyLink party={party} />
                             ) : (
                               <span title={output.ownerLockHash}>
-                                Other lock · {output.ownerLockHash.slice(0, 10)}…
-                                {output.ownerLockHash.slice(-6)}
+                                Other lock ·{' '}
+                                <ShortId value={output.ownerLockHash} kind="hash" size="row" />
                               </span>
                             )}{' '}
                             · {ckb(output.capacity)}

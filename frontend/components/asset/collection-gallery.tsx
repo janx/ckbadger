@@ -26,11 +26,12 @@ export interface CollectionItemsProps {
  * never passed off as an address, and a named owner is never reported as "No live owner".
  */
 function ItemOwner({ item }: { item: CollectionItem }) {
-  if (item.ownerAddress) return <Address address={item.ownerAddress} className="text-meta" />;
+  if (item.ownerAddress)
+    return <Address address={item.ownerAddress} size="row" className="text-meta" />;
   if (item.ownerLockHash)
     return (
       <span className="text-meta">
-        <Hash hash={item.ownerLockHash} copyable={false} className="text-meta" />
+        <Hash hash={item.ownerLockHash} size="row" copyable={false} className="text-meta" />
         <span className="text-text-dim block">address not indexed</span>
       </span>
     );
@@ -124,7 +125,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
               setSearch(e.target.value);
             }}
             className="bg-base-bg border-base-border max-w-full border-b py-2"
-            placeholder="Search names or IDs"
+            placeholder="search names or ids"
           />
           <select
             aria-label="Item status"
@@ -157,7 +158,12 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
                       ? mnftRowTitle(item)
                       : (item.name ??
                         item.did ?? (
-                          <Hash hash={item.nftId} copyable={false} className="text-meta" />
+                          <Hash
+                            hash={item.nftId}
+                            size="row"
+                            copyable={false}
+                            className="text-meta"
+                          />
                         ))}
                   </AppLink>
                   <span className="text-text-dim text-meta mt-1 block">
@@ -173,7 +179,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
               </article>
             ))}
           </div>
-          {query.data.data.length === 0 && <p className="text-text-dim">No matching items.</p>}
+          {query.data.data.length === 0 && <p className="text-text-dim">No items.</p>}
           <CursorPagination
             total={query.data.total}
             totalLabel="items"
@@ -187,7 +193,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
           />
         </>
       ) : (
-        <AssetReadState label="collection items" error={query.error} loading={query.isLoading} />
+        <AssetReadState label="collection items" error={query.error} read={query} />
       )}
     </section>
   );

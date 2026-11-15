@@ -31,6 +31,20 @@ const dark = {
   'base-elevated': '#241f1a',
   'base-border': '#2a231d',
   'base-border-subtle': '#221c17',
+  /**
+   * The 1 px rule between the rows of a list or a table (and under its head): the hair by night;
+   * by day the hair stepped down until it clears the paper and a ruled line by 1.25:1 (R5).
+   */
+  'row-rule': '#221c17',
+  /** A bar's empty track: the elevated tint by night; by day stepped down as the row rule (R5). */
+  'bar-track': '#241f1a',
+  /**
+   * The row rule and the bar track on the tier-2 ground (ruling 4b), where `.tier2-ground`
+   * re-points the two keys to these: the same by night (they clear that ground by 1.14 / 1.18);
+   * by day L −0.030 until they clear the tier-2 ground and a ruled line on it by 1.25:1.
+   */
+  'row-rule-deep': '#221c17',
+  'bar-track-deep': '#241f1a',
   // inks (lib.js: moon, text, dim — lightened from #8a8073 to 4.5:1 — ghost)
   'text-bright': '#e8e2d6',
   text: '#b9b0a2',
@@ -54,7 +68,12 @@ const dark = {
   'gold-dim': '#a38750',
   'gold-bright': '#e3bd75',
   rouge: '#d9634a',
-  'rouge-dim': '#aa503c',
+  /**
+   * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
+   * the board's dim moved in lightness until it reads at 4.5:1. It is also the fraction digits of
+   * a negative amount (R4), as jade-dim is a positive one's and text-dim a neutral one's.
+   */
+  'rouge-dim': '#ca6c57',
   'rouge-bright': '#f57c62',
   lavender: '#a797c4',
   'lavender-dim': '#8e82a5',
@@ -104,6 +123,12 @@ const dark = {
   'pipeline-well': '#0f0d0b',
   /** What a stage hue is mixed toward as cycles rise: lighter at night, inkier by day. */
   'pipeline-step-to': '#f6f2ea',
+  /**
+   * The gold of a word on a pipeline tile (a block number inside the drawn window): the plain gold
+   * by night (6.11:1 on the tile), the gold's bright step by day (5.57:1, where the gold is 4.15:1).
+   * Equal to `gold` here and to `gold-bright` by day, pinned equal in palette.test.ts.
+   */
+  'pipeline-word-gold': '#c9a45c',
   // chrome
   'search-panel': '#0c0a09',
   'search-selected': '#1a1b19',
@@ -124,7 +149,6 @@ const dark = {
   'elf-meta': '#b8acd0',
   // the sequencing gel
   'gel-overlay': '#f6f2ea',
-  'gel-band-text': '#0e0c0a',
   'gel-ink-btc-0': '#f1dece',
   'gel-ink-btc-1': '#cc8a5e',
   'gel-ink-btc-2': '#b7d9d0',
@@ -132,17 +156,7 @@ const dark = {
   'gel-ink-pure-1': '#b7d9d0',
   'gel-ink-pure-2': '#93c1b6',
   // storage tiers
-  'tier-btc-ink': '#a7bc8a',
-  'tier-btc-ink-lit': '#bdd3a0',
-  'tier-btc-edge': '#485036',
-  'tier-btc-edge-lit': '#5f6c47',
-  'tier-btc-wash': '#473b25',
-  'tier-pure-ink': '#87b4a9',
   'tier-pure-ink-lit': '#b7d9d0',
-  'tier-pure-edge': '#404e48',
-  'tier-pure-edge-lit': '#546a63',
-  'tier-pure-wash': '#292e2a',
-  'tier-centralized-edge': '#57251a',
   // composition badges
   'badge-inner-pure': '#181a17',
   'badge-inner-btc': '#1a1510',
@@ -152,11 +166,6 @@ const dark = {
   'badge-copper-pale': '#f1dece',
   'bitcoin-light': '#edd6c3',
   'bitcoin-dark': '#945d36',
-  // the storage "gem" text
-  'gem-gold-0': '#e3bd75',
-  'gem-gold-1': '#c9a45c',
-  'gem-jade-0': '#93c1b6',
-  'gem-jade-1': '#b7d9d0',
   // the Game of Life tile
   'life-bg-ckb': '#141412',
   'life-bg-dual': '#15120d',
@@ -191,6 +200,10 @@ const light: Palette = {
   'base-elevated': '#e9e2d4',
   'base-border': '#d4cab8',
   'base-border-subtle': '#e3dbcc',
+  'row-rule': '#d5cdbf',
+  'bar-track': '#d4cdc0',
+  'row-rule-deep': '#cbc3b5',
+  'bar-track-deep': '#cac3b6',
   'text-bright': '#1f1b17',
   text: '#4a433b',
   'text-dim': '#6c6356',
@@ -208,7 +221,7 @@ const light: Palette = {
   'gold-dim': '#786234',
   'gold-bright': '#684e0d',
   rouge: '#a8392a',
-  'rouge-dim': '#a6594c',
+  'rouge-dim': '#9b4f43',
   'rouge-bright': '#902214',
   lavender: '#5e4d9a',
   'lavender-dim': '#675d93',
@@ -244,6 +257,7 @@ const light: Palette = {
   'pipeline-drop-neutral': '#6e6b67',
   'pipeline-well': '#eee8dc',
   'pipeline-step-to': '#1f1b17',
+  'pipeline-word-gold': '#684e0d',
   'search-panel': '#fffdf8',
   'search-selected': '#e6e9e2',
   'search-hover': '#f2f1ea',
@@ -253,31 +267,24 @@ const light: Palette = {
   'reward-secondary': '#91ada4',
   'code-fixed-fill': '#7a7163',
   'code-unspendable-fill': '#bbb1a0',
+  // An ELF region's hue paints its hex digits on the cell page: text grade on the four grounds and
+  // the tier-2 ground, moved in OKLCH lightness only where short (lane E2 round 3). The program
+  // headers are the header's hue and chroma a step darker by day (a step lighter by night), as far
+  // from it as the night pair: a lighter step at 4.5:1 would land on the header (round 4).
   'elf-header': '#416a7a',
-  'elf-program-headers': '#588192',
-  'elf-rodata': '#3d7249',
-  'elf-eh-frame': '#5f7362',
-  'elf-data': '#82672c',
-  'elf-meta': '#7468a7',
+  'elf-program-headers': '#2d5665',
+  'elf-rodata': '#3b7047',
+  'elf-eh-frame': '#576a5a',
+  'elf-data': '#7c6126',
+  'elf-meta': '#695c9a',
   'gel-overlay': '#1f1b17',
-  'gel-band-text': '#faf7f0',
   'gel-ink-btc-0': '#b78c70',
   'gel-ink-btc-1': '#93522b',
   'gel-ink-btc-2': '#346e65',
   'gel-ink-pure-0': '#346e65',
   'gel-ink-pure-1': '#2f6b63',
   'gel-ink-pure-2': '#185750',
-  'tier-btc-ink': '#4b6e2e',
-  'tier-btc-ink-lit': '#3b5d1c',
-  'tier-btc-edge': '#a5b58b',
-  'tier-btc-edge-lit': '#88a06a',
-  'tier-btc-wash': '#d1c3a4',
-  'tier-pure-ink': '#2f6b63',
   'tier-pure-ink-lit': '#185750',
-  'tier-pure-edge': '#a9bcb3',
-  'tier-pure-edge-lit': '#87a69d',
-  'tier-pure-wash': '#ccd4ca',
-  'tier-centralized-edge': '#dba799',
   'badge-inner-pure': '#e6e9e2',
   'badge-inner-btc': '#f2eae0',
   'badge-jade-pale': '#346e65',
@@ -286,10 +293,6 @@ const light: Palette = {
   'badge-copper-pale': '#b78c70',
   'bitcoin-light': '#c19c84',
   'bitcoin-dark': '#7a3b11',
-  'gem-gold-0': '#80600f',
-  'gem-gold-1': '#684e0d',
-  'gem-jade-0': '#346e65',
-  'gem-jade-1': '#2f6b63',
   'life-bg-ckb': '#e7e6dc',
   'life-bg-dual': '#ede7d9',
   'sky-top': '#f5f1e8',
@@ -484,4 +487,60 @@ export function contrastRatio(a: string, b: string): number {
   const lb = relativeLuminance(b);
   const [hi, lo] = la >= lb ? [la, lb] : [lb, la];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+// ---- the ink of words inside a filled segment (DY-03, UI review 2026-11-14) ----
+
+/**
+ * The two inks a word inside a filled bar segment can take, in either theme: the darkest ground
+ * (the well) and the brightest text. By night the well is the dark one, by day the light one.
+ */
+export const FILL_INKS = ['base-void', 'text-bright'] as const satisfies readonly PaletteKey[];
+export type FillInk = (typeof FILL_INKS)[number];
+
+/** A palette colour at `alpha` laid over a ground key, as the eye sees it (sRGB "over"). */
+export function overGround(
+  theme: ThemeName,
+  key: PaletteKey,
+  a: number,
+  ground: PaletteKey = 'base-bg'
+): string {
+  if (!(a >= 0 && a <= 1)) throw new Error(`palette: alpha ${a} of ${key} is not in 0..1`);
+  const fill = hexToRgb(PALETTE[theme][key]);
+  const under = hexToRgb(PALETTE[theme][ground]);
+  const channel = (f: number, g: number) =>
+    Math.round(a * f + (1 - a) * g)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(fill.r, under.r)}${channel(fill.g, under.g)}${channel(fill.b, under.b)}`;
+}
+
+/**
+ * The ink for words on a fill of `key` at `alpha` over `ground` in `theme`: of `FILL_INKS`, the one
+ * with the higher contrast on that fill — chosen from the fill's own luminance, so a light fill
+ * takes the dark ink and a dark fill the light one, whatever the segment's rank.
+ */
+export function inkOnFill(
+  theme: ThemeName,
+  key: PaletteKey,
+  a: number,
+  ground: PaletteKey = 'base-bg'
+): { ink: FillInk; contrast: number } {
+  return inkOnColours(theme, [overGround(theme, key, a, ground)]);
+}
+
+/**
+ * The ink for words that stand on several colours at once (a gradient fill under one label, as
+ * the eye sees each over its ground): of `FILL_INKS`, the one whose lowest contrast over them is
+ * the highest. `inkOnFill` is the one-colour case.
+ */
+export function inkOnColours(
+  theme: ThemeName,
+  colours: readonly string[]
+): { ink: FillInk; contrast: number } {
+  if (colours.length === 0) throw new Error('palette: an ink on no colour');
+  return FILL_INKS.map((ink) => ({
+    ink,
+    contrast: Math.min(...colours.map((c) => contrastRatio(PALETTE[theme][ink], c))),
+  })).reduce((best, next) => (next.contrast > best.contrast ? next : best));
 }

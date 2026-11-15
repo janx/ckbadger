@@ -5,7 +5,9 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetHistory } from '@/components/asset/asset-history';
@@ -14,14 +16,21 @@ import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
 import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
+import { LockKind } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
-import { formatCkbAmount, truncateHash } from '@/lib/utils';
+import { formatCkbAmount } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { ShortId } from '@/components/ui/short-id';
+import { Dotted } from '@/components/ui/phone-row';
+import { formatCount } from '@/lib/format-count';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 /** The supply-event route always reports its total; a page without one is a contract break. */
 function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
@@ -49,8 +58,6 @@ function provenanceText(metadata: Token['metadata']): string {
     ? `${source}. Its Unique Cell on chain says ${said}.`
     : `${source}; its Unique Cell on chain says the same.`;
 }
-const PLURAL = (n: number, one: string, many: string) =>
-  `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
 export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   const token = useQuery({ queryKey: ['token', typeHash], queryFn: () => api.getToken(typeHash) });
@@ -88,17 +95,20 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       />
     );
   }
-  if (!t && token.isLoading) return <DetailSkeletonPage />;
-  if (!t)
+  if (!t && isBadRequestApiError(token.error))
+    return <NotFoundPage notAnId={{ kind: 'token', reason: token.error.apiMessage }} />;
+  if (!t) {
+    if (!token.error) return <DetailSkeletonPage />;
     return (
       <AssetDetailShell
         title="Token"
         kind="tokens"
         breadcrumb={[{ label: 'Inventory', href: '/inventory/tokens' }]}
       >
-        <AssetReadState error={token.error} loading={token.isLoading} label="token" />
+        <ReadFailure what="token" error={token.error} />
       </AssetDetailShell>
     );
+  }
   const held =
     t.totalCapacity === null ? null : exactUnsignedInteger(t.totalCapacity, 'token held capacity');
   const occupied =
@@ -142,13 +152,17 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       ]}
       identity={
         <>
-          <span className="text-body">
+          <span className="text-body block">
             {formatStandard(t.standard)} ·{' '}
-            {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
+            {unitNode(
+              t.decimals === null ? 'Decimals unknown' : formatCount(t.decimals, 'decimal')
+            )}
             {t.name && t.name !== t.symbol && <> · {t.name}</>}
-          </span>{' '}
-          {/* C7: the type hash the rail listed names the token under its title, as an id does. */}
-          <Hash hash={t.typeScriptHash} truncate={false} className="text-meta" />
+          </span>
+          {/* C7: the type hash the rail listed names the token under its title, as an id does;
+              the head's full id on a line of its own (A4 Chrome F3): one line from 435.6 px
+              (66 characters at 11 px), else the two halves */}
+          <HeadId value={t.typeScriptHash} kind="hash" copyable />
         </>
       }
       intro={
@@ -192,11 +206,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               )}
             </>
           ) : (
-            <AssetReadState
-              error={latest.error}
-              loading={latest.isLoading}
-              label="last token movement"
-            />
+            <AssetReadState error={latest.error} read={latest} label="last token movement" />
           )}
           {t.metadata?.conflict && t.metadata.chain && (
             // F2 objects (IV-26): a relabelled token says what the chain calls it.
@@ -220,12 +230,19 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
-                      <Hash hash={other.typeScriptHash} copyable={false} className="text-small" />
+                      <Hash
+                        hash={other.typeScriptHash}
+                        size="head"
+                        copyable={false}
+                        className="text-small"
+                      />
                     </AppLink>
-                    , <AssetCount value={other.holdersCount} /> holders
+                    , {unitNode(formatCount(other.holdersCount, 'holder'))}
                   </span>
                 ))}
-                {`. Tell them apart by type hash; this one is ${truncateHash(t.typeScriptHash, 10, 4).replace('...', '…')}.`}
+                . Tell them apart by type hash; this one is{' '}
+                {/* U-16: the shortened type hash is one unit; the head's note (U-09: head) */}
+                <ShortId value={t.typeScriptHash} kind="hash" size="head" />.
               </p>
             )
           )}
@@ -237,12 +254,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             {
               label: 'Supply',
               value: <AssetAmount amount={t.totalSupply} decimals={t.decimals} />,
-              note: (
-                <>
-                  {t.symbol && <>{t.symbol} · </>}
-                  {maximum}
-                </>
-              ),
+              note: [t.symbol, maximum],
             },
             {
               label: 'Holders',
@@ -266,19 +278,31 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               size: 'body',
               value: t.issuer ? (
                 <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
-                  <Hash
-                    hash={t.issuer.address ?? t.issuer.lockHash}
-                    startChars={12}
-                    endChars={6}
-                    copyable={false}
-                    className="text-body"
+                  <ShortId
+                    value={t.issuer.address ?? t.issuer.lockHash}
+                    kind={t.issuer.address ? 'address' : 'hash'}
+                    size="row"
+                    title={t.issuer.address ?? t.issuer.lockHash}
+                    className="text-body font-mono"
                   />
                 </AppLink>
               ) : (
                 <span title={NOT_ESTABLISHED_ISSUER}>Not established</span>
               ),
+              // U-15: a lock the registry does not name reads "lock <code hash>"; a lock that is
+              // not indexed has no kind to write, so the note is the proof alone.
               note: t.issuer
-                ? `${t.issuer.lockKind ?? 'Lock kind unavailable'} · owner lock proven by token script`
+                ? [
+                    t.issuer.lockCodeHash !== null && (
+                      <LockKind
+                        lockKind={t.issuer.lockKind}
+                        lockCodeHash={t.issuer.lockCodeHash}
+                        size="row"
+                        className="text-text-dim text-small"
+                      />
+                    ),
+                    'owner lock proven by token script',
+                  ]
                 : undefined,
             },
             {
@@ -294,7 +318,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span
                     title={`occupied ${formatCkbAmount(occupied).full} CKB · free ${formatCkbAmount(held - occupied).full} CKB`}
                   >
-                    {formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied
+                    {percentOf(occupied, held)} occupied
                   </span>
                 ) : undefined,
             },
@@ -371,6 +395,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               }))}
               weeklyNoun="transactions"
               completeThrough={history.data.completeThrough}
+              assetClass="tokens"
               supplyEvents={
                 supplyEvents.data
                   ? { rows: supplyEvents.data.data, total: supplyEventsTotal(supplyEvents.data) }
@@ -393,24 +418,24 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               }
               footnote={
                 // F2 objects (IV-17): the board's line, singular and plural as they come.
-                <>
-                  {PLURAL(history.data.mintCount, 'mint', 'mints')} ·{' '}
-                  {PLURAL(history.data.burnCount, 'burn', 'burns')} ·{' '}
-                  {PLURAL(history.data.transfersCount, 'transfer', 'transfers')}
-                  {held !== null && occupied !== null && occupied > BigInt(0) && (
-                    <>
-                      {' '}
-                      · <HMultiplierReading held={held} occupied={occupied} />
-                    </>
-                  )}
-                </>
+                // PA-25: one separated list
+                <Dotted
+                  parts={[
+                    formatCount(history.data.mintCount, 'mint'),
+                    formatCount(history.data.burnCount, 'burn'),
+                    formatCount(history.data.transfersCount, 'transfer'),
+                    held !== null && occupied !== null && occupied > BigInt(0) && (
+                      <HMultiplierReading held={held} occupied={occupied} />
+                    ),
+                  ]}
+                />
               }
               token={{ symbol: t.symbol, decimals: t.decimals }}
             />
             <AssetReadState error={supplyEvents.error} label="supply events" retained />
           </>
         ) : (
-          <AssetReadState error={history.error} loading={history.isLoading} label="token history" />
+          <AssetReadState error={history.error} read={history} label="token history" />
         )}
       </div>
       <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />

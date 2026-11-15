@@ -11,6 +11,7 @@ import {
 import network from '../fixtures/fiber-network.json';
 import mainnet from '../fixtures/fiber-network-mainnet.json';
 import type { FiberNetwork } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const node = (tail: string) => screen.getByRole('button', { name: new RegExp(`^Party …${tail},`) });
 const panel = () => screen.getByRole('complementary', { name: 'Party or pair' });
@@ -104,7 +105,7 @@ describe('FiberNetworkGraph', () => {
 
   it('a pair shows open CKB with its unit, lifetime, and block range with separators (FF-F3, FF-F7)', () => {
     const { container } = render(<Graph network={network as FiberNetwork} />);
-    const edge = screen.getByRole('button', { name: /^Pair …aaaaaa and …bbbbbb, 2 channels/ });
+    const edge = screen.getByRole('button', { name: /^Pair …aaaaaa and …bbbbbb, 2\schannels/ });
     fireEvent.click(edge);
     const p = panel();
     expect(within(p).getByText('…aaaaaa ↔ …bbbbbb')).toBeInTheDocument();
@@ -112,7 +113,7 @@ describe('FiberNetworkGraph', () => {
       Array.from(p.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
     ).toContain('3,000.00000000 CKB');
     expect(within(p).getByText('0 settled · 0 not yet')).toBeInTheDocument();
-    expect(within(p).getByText('1 m 40 s')).toBeInTheDocument();
+    expect(within(p).getByText('1m 40s')).toBeInTheDocument();
     expect(within(p).getAllByRole('link', { name: '#10' })).toHaveLength(2);
     // R2b-b: first · last opening dates beside the blocks (FF-F3)
     expect(within(p).getByText('2023-11-15 · 2023-11-15')).toBeInTheDocument();
@@ -137,11 +138,13 @@ describe('FiberNetworkGraph', () => {
     expect(screen.getByText(/^Each line is a pair that opened channels\./)).toBeInTheDocument();
     expect(
       screen.getByText(
-        /^Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not which node ran it\. 1 channel with more or fewer than two parties is not drawn\.$/
+        fullText(
+          /^Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not which node ran it\. 1 channel with more or fewer than two parties is not drawn\.$/
+        )
       )
     ).toBeInTheDocument();
     // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece (.prose-tier2:
-    // 14 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
+    // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
     // explainer carries its own Prose; the parties note is one paragraph set in the page's.
     const notes = screen.getByText(/^Each circle is a party: the address that funded/);
     expect(notes.closest('[data-prose]')).toHaveClass('prose-tier2');
@@ -161,7 +164,7 @@ describe('FiberNetworkGraph', () => {
       expect(frame).not.toBeNull();
       expect(frame).toHaveAttribute('aria-label', 'The Fiber network on chain');
       // a flat tile since rubbing × Song print: no lit top edge
-      expect(frame).toHaveClass('glass', 'rounded-lg');
+      expect(frame).toHaveClass('glass');
       expect(frame).not.toHaveClass('neon-edge-top');
       // the detail column stays outside the frame
       expect(frame.contains(panel())).toBe(false);

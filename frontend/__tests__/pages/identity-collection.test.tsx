@@ -11,7 +11,7 @@ it('shows a collection 404 with its exact identity endpoint', async () => {
   );
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByText('/assets/identities/dotbit')).toBeInTheDocument();
-  expect(screen.getByText('no identity at this address.')).toBeInTheDocument();
+  expect(screen.getByText('no identity with this id.')).toBeInTheDocument();
 });
 it('does not turn a collection source failure into 404', async () => {
   vi.mocked(api.getIdentityCollection).mockRejectedValue(
@@ -19,7 +19,7 @@ it('does not turn a collection source failure into 404', async () => {
   );
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByRole('alert')).toHaveTextContent('collection mismatch');
-  expect(screen.queryByText('no identity at this address.')).not.toBeInTheDocument();
+  expect(screen.queryByText('no identity with this id.')).not.toBeInTheDocument();
 });
 it('shows identities, exact created/live counts, capacity history and parallel record layers', async () => {
   render(<Page collectionId="dotbit" />);
@@ -153,7 +153,7 @@ it('names each identity owner by address, a .cell owner by its prefix when unres
   );
   render(<Page collectionId="dotbit" />);
   const region = await screen.findByRole('region', { name: 'Collection items' });
-  const alice = await within(region).findByRole('link', { name: /ckb1qzowner/ });
+  const alice = await within(region).findByRole('link', { name: 'ckb1qzowne…falice' });
   expect(alice).toHaveAttribute('href', '/mainnet/address/ckb1qzownerofalice');
   // A named prefix with no indexed lock is shown as exactly that, never "No live owner".
   const bob = within(region).getByText('bob.cell').closest('article')!;

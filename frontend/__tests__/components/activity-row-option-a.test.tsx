@@ -180,7 +180,8 @@ describe('option A: the headline line', () => {
     const details = [...head(container).querySelectorAll('[data-role="detail"]')].map(
       (e) => e.textContent
     );
-    expect(details).toEqual(['CKBFS', 'lock Nervape Shadow Lock']);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
     expect(
       within(head(container)).getByRole('link', { name: 'Nervape Shadow Lock' })
     ).toHaveAttribute('title', `Nervape Shadow Lock(0x0131da${'00'.repeat(28)}5d74)`);
@@ -206,7 +207,8 @@ describe('option A: the headline line', () => {
       />
     );
     const detail = head(container).querySelector('[data-role="detail"]') as HTMLElement;
-    expect(detail).toHaveTextContent(/^lock \.bit Lock ×2$/);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(detail).toHaveTextContent(/^· lock \.bit Lock ×2$/);
     expect(within(detail).getAllByRole('link')).toHaveLength(1);
     expect(within(detail).getByRole('link', { name: '.bit Lock' })).toHaveAttribute(
       'title',
@@ -235,7 +237,7 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(shown).toHaveLength(activity.participants.length);
     expect(container.querySelectorAll('[data-party]')).toHaveLength(activity.participants.length);
     for (const p of activity.participants)
-      expect(container).toHaveTextContent(`${p.address!.slice(0, 8)}...${p.address!.slice(-6)}`);
+      expect(container).toHaveTextContent(`${p.address!.slice(0, 10)}…${p.address!.slice(-6)}`);
   });
 
   it('puts CKB, every asset delta and occupied on the participant’s own line, in that order', () => {
@@ -268,6 +270,16 @@ describe('option A: every participant, one line each (D1)', () => {
 
   // Material pass v2 (move 5): the lock kind is dim small caps after the address, not a chip —
   // boxes stay on controls.
+  // UI review 2026-11-14 (U-08, ruling R4): "occupied ±N" is a figure; the dim ink at 60 % read
+  // 2.7:1 by night and 2.5:1 by day. It is the dim ink itself, never thinned.
+  it('writes "occupied ±N" in the dim ink, not the dim ink thinned', () => {
+    const { container } = render(<ActivityRow activity={transfer} />);
+    const occupied = container.querySelector('[data-role="occupied"]') as HTMLElement;
+    expect(occupied).toHaveTextContent(/^occupied [+−]/);
+    expect(occupied).toHaveClass('text-meta', 'text-text-dim');
+    expect([...occupied.classList].filter((c) => c.includes('/'))).toEqual([]);
+  });
+
   it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind in small caps', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
     for (const line of lines(container)) {
@@ -278,21 +290,18 @@ describe('option A: every participant, one line each (D1)', () => {
       expect(line).toHaveClass('pl-[30px]');
       expect(line.querySelector('[data-role="party"]')).toHaveClass('-ml-3');
       expect([...line.classList].filter((c) => /^(sm|md|lg):/.test(c))).toEqual([]);
+      // re-pinned (A4 Chrome sweep): a lock name is words, never made one unit
       expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass(
         'text-text-dim',
         'small-caps',
-        'lowercase',
-        'whitespace-nowrap'
+        'lowercase'
       );
-      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass(
-        'border',
-        'rounded-sm',
-        'text-meta'
-      );
+      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('whitespace-nowrap');
+      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('border', 'text-meta');
     }
-    // Occupied last, 11 px, in the board's ghost tone (≈ #4a5268), readable — not the 1.7:1 token.
+    // Occupied last, 11 px, in the dim ink (R4, re-pinned on purpose: the dim at 60 % read 2.7:1).
     const occupied = container.querySelector('[data-role="occupied"]');
-    expect(occupied).toHaveClass('text-meta', 'text-text-dim/60', 'whitespace-nowrap');
+    expect(occupied).toHaveClass('text-meta', 'text-text-dim', 'whitespace-nowrap');
     expect(occupied).not.toHaveClass('text-text-ghost');
     // The three/four/five-track participant grid is gone.
     const box = container.querySelector('[data-role="participants"]') as HTMLElement;
@@ -356,7 +365,8 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     expect(head(container)).not.toHaveTextContent('deposited at');
     expect(within(head(container)).queryByRole('button')).toBeNull();
     const total = head(container).querySelector('[data-role="protocol-total"]') as HTMLElement;
-    expect(total).toHaveAttribute('title', '132,600.00000000 CKB, the sum of 51 deposits');
+    // U-16 (re-pinned): the count and its noun, one unit
+    expect(total).toHaveAttribute('title', '132,600.00000000 CKB, the sum of 51\u00a0deposits');
   });
 
   it('folds the list by default and opens one deposit per 18 px line, folding back with "fewer ↑"', () => {

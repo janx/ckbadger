@@ -19,6 +19,9 @@ import { ScriptFamilyPage } from '@/components/scripts/script-family-page';
 import type { NewestCellsState } from '@/components/scripts/script-newest-cells';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { ReadFailure } from '@/components/read-failure';
+import { isAwaited } from '@/lib/query-state';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -372,11 +375,7 @@ export default function ScriptDetailPage({
   const [selectedDeploymentOutpoint, setSelectedDeploymentOutpoint] = useState<string | null>(null);
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
-  const {
-    data: namedScriptDetail,
-    isLoading: isNamedScriptDetailLoading,
-    error: namedScriptDetailError,
-  } = useQuery({
+  const namedScriptDetailRead = useQuery({
     queryKey: ['script-family-detail', name],
     queryFn: () => {
       if (!name) throw new Error('script name is required');
@@ -384,11 +383,8 @@ export default function ScriptDetailPage({
     },
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const {
-    data: usage,
-    isLoading: isUsageLoading,
-    error: usageError,
-  } = useQuery({
+  const { data: namedScriptDetail, error: namedScriptDetailError } = namedScriptDetailRead;
+  const usageRead = useQuery({
     queryKey: ['script-usage', name],
     queryFn: () => {
       if (!name) throw new Error('script name is required');
@@ -396,20 +392,14 @@ export default function ScriptDetailPage({
     },
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const {
-    data: familyCapacityChart,
-    isLoading: isFamilyCapacityChartLoading,
-    error: familyCapacityChartError,
-  } = useQuery({
+  const { data: usage, error: usageError } = usageRead;
+  const familyCapacityChartRead = useQuery({
     queryKey: ['script-capacity-chart', 'family', name, capacityRange],
     queryFn: () => api.getScriptCapacityChart(name!, capacityRangeParams ?? undefined),
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const {
-    data: codeHashLookup,
-    isLoading: isCodeHashLookupLoading,
-    error: codeHashLookupError,
-  } = useQuery({
+  const { data: familyCapacityChart, error: familyCapacityChartError } = familyCapacityChartRead;
+  const codeHashLookupRead = useQuery({
     queryKey: ['script-lookup-detail', normalizedCodeHash],
     queryFn: async () => {
       const result = await api.lookupScripts([normalizedCodeHash!]);
@@ -418,6 +408,7 @@ export default function ScriptDetailPage({
     enabled: isCodeHashMode,
     staleTime: Infinity,
   });
+  const { data: codeHashLookup, error: codeHashLookupError } = codeHashLookupRead;
   const codeHashDeploymentQueryHashType = useMemo<ScriptRefHashType | null>(() => {
     if (!isCodeHashMode) {
       return null;
@@ -443,16 +434,13 @@ export default function ScriptDetailPage({
     isCodeHashMode,
     selectedRefHashType,
   ]);
-  const {
-    data: codeHashCodeCells,
-    isLoading: isCodeHashCodeCellsLoading,
-    error: codeHashCodeCellsError,
-  } = useQuery({
+  const codeHashCodeCellsRead = useQuery({
     queryKey: ['script-code-cells-unified', normalizedCodeHash, codeHashDeploymentQueryHashType],
     queryFn: () => api.getCodeCells(normalizedCodeHash!, codeHashDeploymentQueryHashType!),
     enabled: Boolean(isCodeHashMode && normalizedCodeHash && codeHashDeploymentQueryHashType),
     staleTime: Infinity,
   });
+  const { data: codeHashCodeCells, error: codeHashCodeCellsError } = codeHashCodeCellsRead;
   const deployments = useMemo<KnownScript[] | null>(() => {
     if (!isCodeHashMode) {
       if (!namedScriptDetail) {
@@ -809,7 +797,7 @@ export default function ScriptDetailPage({
     selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
       ? selectedVersion.scriptKind
       : undefined;
-  const { data: selectedCapacityChart, isLoading: isSelectedCapacityChartLoading } = useQuery({
+  const selectedCapacityChartRead = useQuery({
     queryKey: [
       'script-capacity-chart',
       'version',
@@ -830,6 +818,7 @@ export default function ScriptDetailPage({
           ),
     enabled: isCodeHashMode && Boolean(selectedVersion),
   });
+  const selectedCapacityChart = selectedCapacityChartRead.data;
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
   // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
   const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
@@ -1020,10 +1009,12 @@ export default function ScriptDetailPage({
     versionCellsCursorState,
     cellReferences,
   ]);
-  const isLoading = isCodeHashMode
-    ? isCodeHashLookupLoading || isCodeHashCodeCellsLoading
-    : isNamedScriptDetailLoading || isUsageLoading;
-  if (isLoading) {
+  // The page waits while its reads are awaited: fetching, or paused (offline, or a hidden tab
+  // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
+  const isAwaiting = isCodeHashMode
+    ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
+    : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
+  if (isAwaiting) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
@@ -1032,26 +1023,31 @@ export default function ScriptDetailPage({
       </div>
     );
   }
-  const rawRequestFailures = [
-    codeHashLookupError ? { source: 'reference lookup', error: codeHashLookupError } : null,
-    codeHashCodeCellsError ? { source: 'code-cell query', error: codeHashCodeCellsError } : null,
-  ].filter((failure): failure is { source: string; error: Error } => failure !== null);
+  const rawRequestFailures = [codeHashLookupError, codeHashCodeCellsError].filter(
+    (error): error is Error => error !== null
+  );
   const failedRequest = isCodeHashMode
-    ? (rawRequestFailures.find((failure) => !isNotFoundApiError(failure.error)) ??
+    ? (rawRequestFailures.find((error) => !isNotFoundApiError(error)) ??
       (codeHashLookup ? rawRequestFailures[0] : null) ??
       null)
     : namedScriptDetailError && !isNotFoundApiError(namedScriptDetailError)
-      ? { source: 'script family detail', error: namedScriptDetailError }
+      ? namedScriptDetailError
       : null;
+  if (isBadRequestApiError(failedRequest)) {
+    return (
+      <NotFoundPage
+        notAnId={{
+          kind: isCodeHashMode ? 'script' : 'script-family',
+          reason: failedRequest.apiMessage,
+        }}
+      />
+    );
+  }
   if (failedRequest) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
-          <DetailLayout title="Script data unavailable" identity={normalizedCodeHash ?? name}>
-            <p role="alert" className="text-negative text-small break-words py-8">
-              Failed to load {failedRequest.source}: {failedRequest.error.message}
-            </p>
-          </DetailLayout>
+          <ReadFailure what="script" error={failedRequest} />
         </main>
       </div>
     );
@@ -1100,7 +1096,7 @@ export default function ScriptDetailPage({
   if (
     isCodeHashMode &&
     (!deployments || deployments.length === 0) &&
-    rawRequestFailures.some((failure) => isNotFoundApiError(failure.error))
+    rawRequestFailures.some((error) => isNotFoundApiError(error))
   ) {
     const failedEndpoint = isNotFoundApiError(codeHashCodeCellsError)
       ? `/scripts/code-cells?${new URLSearchParams({ code_hash: normalizedCodeHash!, hash_type: codeHashDeploymentQueryHashType! })}`
@@ -1215,7 +1211,7 @@ export default function ScriptDetailPage({
       references: deploymentReferenceHashes(deployment, deploymentLookup?.[deployment.codeHash]),
     };
   });
-  const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => query.isLoading);
+  const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => isAwaited(query));
 
   const handleVersionClick = (versionRow: (typeof versionRows)[number]) => {
     if (selectedVersion?.codeHash !== versionRow.codeHash) {
@@ -1254,7 +1250,7 @@ export default function ScriptDetailPage({
         family={namedScriptDetail}
         deprecated={pageDeprecated}
         chart={familyCapacityChart}
-        chartLoading={isFamilyCapacityChartLoading}
+        chartLoading={isAwaited(familyCapacityChartRead)}
         chartError={familyCapacityChartError}
         capacityRange={capacityRange}
         onCapacityRange={setCapacityRange}
@@ -1502,7 +1498,7 @@ export default function ScriptDetailPage({
                         )}
                       </div>
                     )}
-                    empty="No deployments observed for this code version"
+                    empty="No deployments observed for this code version."
                   />
                 </DetailSection>
               )}
@@ -1516,7 +1512,7 @@ export default function ScriptDetailPage({
                   }
                 >
                   {isVersionCellsLoading ? (
-                    <p className="text-text-dim text-small py-6">Loading cells...</p>
+                    <p className="text-text-dim text-small py-6">Loading cells…</p>
                   ) : (
                     <ListTable
                       label="Its cells"
@@ -1628,7 +1624,7 @@ export default function ScriptDetailPage({
                           <CellAnatomyBar cell={cell} />
                         </div>
                       )}
-                      empty="No live cells currently use this version"
+                      empty="No live cells currently use this version."
                     />
                   )}
                   {selectedVersionCellsData.data.length > 0 && (
@@ -1655,15 +1651,15 @@ export default function ScriptDetailPage({
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
             <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
-            {(isCodeHashMode ? isSelectedCapacityChartLoading : isFamilyCapacityChartLoading) ? (
-              <p className="text-text-dim text-small py-6">Loading capacity history...</p>
+            {isAwaited(isCodeHashMode ? selectedCapacityChartRead : familyCapacityChartRead) ? (
+              <p className="text-text-dim text-small py-6">Loading capacity history…</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
               <ScriptCapacityEvidenceChart
                 chart={(isCodeHashMode ? selectedCapacityChart : familyCapacityChart)!}
                 markers={namedScriptDetail?.history ?? []}
               />
             ) : (
-              <p className="text-text-dim text-small py-6">No capacity history yet</p>
+              <p className="text-text-dim text-small py-6">No capacity history.</p>
             )}
             {!isCodeHashMode && familyCapacityChartError && (
               <p role="alert" className="text-negative text-small">
@@ -1695,7 +1691,7 @@ export default function ScriptDetailPage({
                     minWidth: 210,
                     width: '30%',
                     render: (row) => (
-                      <span className="text-text-dim break-all">
+                      <span className="text-text-dim [overflow-wrap:anywhere]">
                         {row.currentVersionHash ?? 'Retired · no current code cell'}
                       </span>
                     ),
@@ -1718,7 +1714,7 @@ export default function ScriptDetailPage({
                     <div className="break-all">
                       {row.hashType} · {row.referenceHash}
                     </div>
-                    <div className="break-all">
+                    <div className="[overflow-wrap:anywhere]">
                       Current code: {row.currentVersionHash ?? 'retired'}
                     </div>
                     {row.custody ? (

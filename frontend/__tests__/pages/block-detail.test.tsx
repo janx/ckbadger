@@ -1,7 +1,11 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { render } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 
@@ -10,7 +14,9 @@ const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
 const pushMock = vi.hoisted(() => vi.fn());
 const paramsIdRef = vi.hoisted(() => ({ current: '8775638' }));
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // the error class itself: the page's failed-read line reads a gateway status off it
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: {
     getBlock: vi.fn(),
     getBlocks: vi.fn(),
@@ -24,8 +30,6 @@ vi.mock('@/lib/api', () => ({
   },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -152,11 +156,11 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_HASH;
     vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
     render(<BlockDetailPage />);
-    // the checked endpoint stands in the facts (the eyebrow shows the route, which here reads the same)
-    expect(
-      (await screen.findAllByText(`/blocks/${BLOCK_HASH}`)).some((el) => el.closest('.error-facts'))
-    ).toBe(true);
-    expect(screen.getByText('no block at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no block with this number or hash.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/blocks/${BLOCK_HASH.slice(0, 10)}…${BLOCK_HASH.slice(-6)}`
+    );
   });
 
   // Visual finish V8: the page loads as the shared detail skeleton, not a "Loading…" line.
@@ -174,7 +178,7 @@ describe('BlockDetailPage', () => {
     );
     render(<BlockDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('missing canonical header');
-    expect(screen.queryByText('no block at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no block with this number or hash.')).not.toBeInTheDocument();
   });
 
   it('shows exact decoded DAO fields alongside the raw 32-byte header', async () => {
@@ -400,7 +404,7 @@ describe('BlockDetailPage', () => {
       '[data-testid="block-proposal-row"]'
     ) as HTMLElement;
     expect(row).toHaveTextContent('uncle #8,775,637');
-    expect(screen.queryByText('No proposals in this block')).not.toBeInTheDocument();
+    expect(screen.queryByText('No proposals in this block.')).not.toBeInTheDocument();
   });
 
   it('links every included uncle to its uncle page by position (BA-10)', async () => {
@@ -443,8 +447,8 @@ describe('BlockDetailPage', () => {
     render(<BlockDetailPage />);
     await screen.findByRole('heading', { name: 'Proposals' });
 
-    expect(await screen.findByText('No proposals in this block')).toBeInTheDocument();
-    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+    expect(await screen.findByText('No proposals in this block.')).toBeInTheDocument();
+    expect(screen.queryByText('Loading proposals…')).not.toBeInTheDocument();
   });
 
   it('shows an error row instead of loading forever when the proposals request fails', async () => {
@@ -458,7 +462,7 @@ describe('BlockDetailPage', () => {
 
     const row = await screen.findByTestId('block-proposals-error');
     expect(row).toHaveTextContent('ckb_db_path');
-    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading proposals…')).not.toBeInTheDocument();
   });
 
   it('loads block transactions by resolved block number when route id is hash', async () => {
@@ -507,5 +511,92 @@ describe('BlockDetailPage', () => {
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false; the page took that for a read that had completed
+  // without a block and threw.
+  it('waits while its read is paused offline, then shows the block once back online', async () => {
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByRole('status', { name: 'Loading …' })).toBeInTheDocument();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(api.getBlock).not.toHaveBeenCalled();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByText('Position in the chain')).toBeInTheDocument();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it('still fails loudly when its read completes with no block', async () => {
+    vi.mocked(api.getBlock).mockResolvedValueOnce(null as never);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(
+        await screen.findByText(
+          `crashed: Block ${BLOCK_ID}: request completed without block evidence`
+        )
+      ).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  // Lane E4: the Time fact's age reads the page's one clock, so it moves with no data change (it
+  // was written once at render and said "20s ago" for as long as the page stood), and the clock
+  // stops with the page.
+  it('moves the Time fact’s age with no data change, and leaves no timer behind (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    try {
+      vi.mocked(api.getBlock).mockResolvedValue({
+        ...mockBlock,
+        timestamp: new Date(T0 - 20_000).toISOString(),
+      });
+      const { unmount } = render(<BlockDetailPage />);
+      const facts = () => screen.queryByRole('complementary', { name: 'Block facts' });
+      await loadUnderStillClock(() => facts() !== null);
+      const age = () => within(facts()!).getByText(/ ago/).textContent;
+      expect(age()).toMatch(/^20s ago · /);
+      tick(1000);
+      expect(age()).toMatch(/^21s ago · /);
+      tick(38_000);
+      expect(age()).toMatch(/^59s ago · /);
+      tick(1000);
+      expect(age()).toMatch(/^1m ago · /);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A1 review fix, round 2: the block has answered; its sections' reads paused offline, or in a
+  // hidden tab between retries, are still awaited: each says it is loading, never a blank, and a
+  // real empty answer still says so once back online.
+  it('says its activities and transactions are loading while their reads are paused', async () => {
+    const { resume } = renderPaused(<BlockDetailPage />, (client) =>
+      client.setQueryData(['block', BLOCK_ID], mockBlock)
+    );
+    expect(await screen.findByText('Loading activities…')).toHaveAttribute('role', 'status');
+    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
+    resume();
+    expect(
+      await screen.findByRole('table', { name: 'Transactions in this block' })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Activities/ }));
+    expect(await screen.findByText('No activities in this block.')).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import { server } from '@/__tests__/msw/server';
 import FiberChannelDetailPage from '@/app/fiber/channels/[id]/client-page';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import fixture from '@/__tests__/fixtures/fiber-channel-c07e.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const id = fixture.channel.channelId;
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -48,6 +49,11 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
       'text-entity'
     );
     expect(await screen.findByText('force-closed · settled')).toBeInTheDocument();
+    // PB-06 / PA-32: the board's h1 is an entity h1, one type step smaller below md (30 → 26 px).
+    expect(screen.getByRole('heading', { level: 1, name: 'Fiber channel' })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
     // Consistency plan C1: the tab names the page.
     await waitFor(() =>
       expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · Fiber channel · CKBadger$/)
@@ -62,7 +68,9 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
     expect(screen.getByRole('heading', { name: /^3 · Settle/ })).toBeInTheDocument();
     // the tier-2 witnesses row reads the step's own transaction (sizes and fee)
     expect(
-      await screen.findByText('2 witnesses, 85, 85 B · fee 920 shannons, from outside inputs')
+      await screen.findByText(
+        fullText('2 witnesses, 85, 85 B · fee 920 shannons, from outside inputs')
+      )
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^2 · Force close/ })).toHaveTextContent(
       'epoch 11,639 · 836 / 1,434'

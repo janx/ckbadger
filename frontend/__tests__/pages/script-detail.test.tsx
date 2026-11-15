@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { renderPaused } from '@/__tests__/utils/paused-read';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
@@ -9,7 +11,9 @@ import { formatCapacity } from '@/lib/utils';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // the error class itself: the page's failed-read line reads a gateway status off it
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: {
     getScriptFamilyDetail: vi.fn(),
     getScriptUsage: vi.fn(),
@@ -22,8 +26,6 @@ vi.mock('@/lib/api', () => ({
   },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -493,6 +495,24 @@ describe('ScriptDetailPage', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the page said "No script deployments" while it
+  // waited.
+  it('waits while its reads are paused offline, then shows the script once back online', async () => {
+    onlineManager.setOnline(false);
+    try {
+      render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+      expect(await screen.findByRole('status', { name: 'Loading …' })).toBeInTheDocument();
+      expect(screen.queryByText('No script deployments')).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(
+        await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })
+      ).toBeInTheDocument();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   it('follows the board order: the hero with its history, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
@@ -580,31 +600,33 @@ describe('ScriptDetailPage', () => {
     expect(current.previousElementSibling).toHaveTextContent('current code');
   });
 
-  it.each([
-    { status: 500, expectedTitle: 'Script data unavailable' },
-    {
+  // U-06: a failed read is the one shared line ("Could not read this script: …"), in place of a
+  // "Script data unavailable" h1 and "Failed to load script family detail: …".
+  it('distinguishes named script HTTP 500 from not found', async () => {
+    vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
+      status: 500,
+      message: 'family endpoint 500',
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^Could not read this script: family endpoint 500$/
+    );
+    expect(screen.queryByText(/no script with this name/)).toBeNull();
+  });
+
+  it('distinguishes named script HTTP 404 from not found', async () => {
+    vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
       status: 404,
-      expectedTitle:
-        "no script family at this address. the local index was asked; it holds none. honey badger don't care.",
-    },
-  ])(
-    'distinguishes named script HTTP $status from not found',
-    async ({ status, expectedTitle }) => {
-      vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
-        status,
-        message: `family endpoint ${status}`,
-      });
-      render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-      expect(await screen.findByRole('heading', { name: expectedTitle })).toBeInTheDocument();
-      if (status !== 404) {
-        expect(screen.getByRole('alert')).toHaveTextContent('family endpoint 500');
-      } else {
-        expect((await screen.findAllByText('/scripts/SECP256K1_BLAKE160')).length).toBeGreaterThan(
-          0
-        );
-      }
-    }
-  );
+      message: 'family endpoint 404',
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    expect(
+      await screen.findByRole('heading', {
+        name: "no script with this name. the local index was asked; it holds none. honey badger don't care.",
+      })
+    ).toBeInTheDocument();
+    expect((await screen.findAllByText('/scripts/SECP256K1_BLAKE160')).length).toBeGreaterThan(0);
+  });
 
   it.each(['lookup', 'code cells'])(
     'shows a raw reference %s request failure instead of not found',
@@ -616,11 +638,10 @@ describe('ScriptDetailPage', () => {
         vi.mocked(api.getCodeCells).mockRejectedValue(new Error('code cells invariant failed'));
       }
       render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
-      expect(
-        await screen.findByRole('heading', { name: 'Script data unavailable' })
-      ).toBeInTheDocument();
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        failedRequest === 'lookup' ? 'lookup transport failed' : 'code cells invariant failed'
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        `Could not read this script: ${
+          failedRequest === 'lookup' ? 'lookup transport failed' : 'code cells invariant failed'
+        }`
       );
       expect(screen.queryByText('No script matched this name or reference.')).toBeNull();
     }
@@ -629,11 +650,10 @@ describe('ScriptDetailPage', () => {
   it('keeps a resolved raw reference visible as an error when its code-cell query returns 404', async () => {
     vi.mocked(api.getCodeCells).mockRejectedValue({ status: 404, message: 'reference missing' });
     render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
-    expect(
-      await screen.findByRole('heading', { name: 'Script data unavailable' })
-    ).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('reference missing');
-    expect(screen.queryByText('no script at this address.')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this script: reference missing'
+    );
+    expect(screen.queryByText('no script with this code hash.')).not.toBeInTheDocument();
   });
 
   it('marks deprecated family and versions without calling them unlabeled', async () => {
@@ -812,5 +832,23 @@ describe('ScriptDetailPage', () => {
       ).length
     ).toBeGreaterThan(0);
     expect(screen.queryByTitle(/5\.04B/)).toBeNull();
+  });
+
+  // A1 review fix, round 2: the family has answered; its capacity history and its cells read
+  // paused offline, or in a hidden tab between retries, are still awaited: each says it is
+  // loading, never "No capacity history." or "No live cells use …", and draws once back online.
+  it('says its capacity history and cells are loading while their reads are paused', async () => {
+    const { resume } = renderPaused(<ScriptDetailPage name="SECP256K1_BLAKE160" />, (client) => {
+      client.setQueryData(['script-family-detail', 'SECP256K1_BLAKE160'], mockScriptFamilyDetail);
+      client.setQueryData(['script-usage', 'SECP256K1_BLAKE160'], mockUsage);
+    });
+    expect(await screen.findByText('Loading capacity history…')).toBeInTheDocument();
+    expect(screen.getByText('Loading cells…')).toBeInTheDocument();
+    expect(screen.queryByText('No capacity history.')).toBeNull();
+    expect(screen.queryByText('No live cells use SECP256K1_BLAKE160')).toBeNull();
+    resume();
+    await waitFor(() => expect(screen.queryByText('Loading capacity history…')).toBeNull());
+    expect(screen.queryByText('No capacity history.')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Loading cells…')).toBeNull());
   });
 });

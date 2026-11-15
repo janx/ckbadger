@@ -25,8 +25,7 @@ import {
   ObjectTraits,
   cellLifeSentence,
   ckbText,
-  itemLifeSentence,
-  itemLifeAges,
+  ItemLife,
   lockFootnote,
 } from '@/components/asset/object-hero';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
@@ -35,7 +34,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { BlockLink } from '@/components/ui/block-link';
-import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { Address } from '@/components/ui/address';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
@@ -44,6 +43,9 @@ import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -55,7 +57,6 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   const client = useQueryClient();
   // F2 objects (OB-5): one gene lit across the trait list, the sequencing gel and the allele gel.
   const [activeGene, setActiveGene] = useState<string | null>(null);
-  const [now] = useState(() => Date.now());
   const versions = useQuery({
     queryKey: ['item-versions', 'spore', id],
     queryFn: () => api.getItemCellVersions('spore', id),
@@ -133,7 +134,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Owner',
       size: 'body',
       value: object.ownerLockHash ? (
-        <Address address={object.ownerAddress ?? object.ownerLockHash} className="text-body" />
+        <Address
+          address={object.ownerAddress ?? object.ownerLockHash}
+          size="row"
+          className="text-body"
+        />
       ) : (
         'No live owner'
       ),
@@ -149,9 +154,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             value: (
               <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
             ),
-            note: collection.data
-              ? `${collection.data.liveCount.toLocaleString('en-US')} objects`
-              : undefined,
+            note: collection.data ? formatCount(collection.data.liveCount, 'object') : undefined,
           },
         ]
       : []),
@@ -172,8 +175,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           <AppLink href={`/blocks/${first.blockNumber}`}>
             {formatBlockNumber(first.blockNumber)}
           </AppLink>{' '}
-          · by{' '}
-          <Address address={first.ownerAddress} startChars={8} endChars={6} className="inline" />
+          · by <Address address={first.ownerAddress} size="row" className="inline" />
         </>
       ) : undefined,
     },
@@ -199,7 +201,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               <AppLink href={`/blocks/${last.blockNumber}`}>
                 {formatBlockNumber(last.blockNumber)}
               </AppLink>{' '}
-              · <span>{`${moves} transfer${moves === 1 ? '' : 's'} since minting`}</span>
+              · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
             </>
           )
         ) : undefined,
@@ -219,7 +221,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Content',
       size: 'body',
       value: <span className="break-all">{object.contentType}</span>,
-      note: `${object.contentSize.toLocaleString('en-US')} bytes`,
+      note: formatCount(object.contentSize, 'byte'),
     },
   ];
   const coll = collection.data;
@@ -230,13 +232,13 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       <Prose>
         {(history || coll) && (
           <p>
-            {history && history.length > 0 && (
-              <span title={itemLifeAges(history, now)}>{itemLifeSentence(history, now)}</span>
-            )}
+            {history && history.length > 0 && <ItemLife versions={history} />}
             {coll && collectionName && (
               <span>
                 {' '}
-                {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${coll.holdersCount.toLocaleString('en-US')} addresses`}.`}
+                {unitNode(
+                  `One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`
+                )}
               </span>
             )}
           </p>
@@ -266,7 +268,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           : []),
       ]}
       status={<LiveBadge live={object.isLive} gone="Burned" />}
-      identity={<Hash hash={id} truncate={false} className="text-meta" />}
+      identity={<HeadId value={id} kind="hash" copyable />}
       // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
       // moved to tier 2 ("This object, in words").
       lede={
@@ -333,11 +335,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   description={cluster.data?.description}
                 />
               ) : (
-                <AssetReadState
-                  label="DNA evidence"
-                  error={genetics.error}
-                  loading={genetics.isLoading}
-                />
+                <AssetReadState label="DNA evidence" error={genetics.error} read={genetics} />
               )}
             </div>
           )}
@@ -349,11 +347,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 <ItemEvidence protocol={data} />
               </>
             ) : (
-              <AssetReadState
-                label="raw object data"
-                error={protocol.error}
-                loading={protocol.isLoading}
-              />
+              <AssetReadState label="raw object data" error={protocol.error} read={protocol} />
             )}
           </div>
         </div>
@@ -366,7 +360,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             label="DOB execution"
             error={decoded.error}
             retained={!!decoded.data}
-            loading={decoded.isLoading}
+            read={decoded}
           />
           {genetics.data ? (
             <>
@@ -387,16 +381,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   label="collection variants"
                   error={collectionGenes.error}
                   retained={!!collectionGenes.data}
-                  loading={collectionGenes.isLoading}
+                  read={collectionGenes}
                 />
               )}
             </>
           ) : (
-            <AssetReadState
-              label="DNA evidence"
-              error={genetics.error}
-              loading={genetics.isLoading}
-            />
+            <AssetReadState label="DNA evidence" error={genetics.error} read={genetics} />
           )}
         </>
       )}
@@ -432,11 +422,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             />
           </>
         ) : (
-          <AssetReadState
-            label="cell versions"
-            error={versions.error}
-            loading={versions.isLoading}
-          />
+          <AssetReadState label="cell versions" error={versions.error} read={versions} />
         )}
         <CapacityPartition
           subject={`Object ${id}`}
@@ -502,12 +488,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 coll.liveCount > 0 &&
                 (coll.composition.tier === 'btc_ckb' || coll.composition.tier === 'pure_ckb') && (
                   <div
-                    aria-label={`${formatPercent(BigInt(onchain), BigInt(coll.liveCount))}% fully on-chain`}
+                    aria-label={`${percentOf(BigInt(onchain), BigInt(coll.liveCount))} fully on-chain`}
                     role="img"
-                    className="bg-base-elevated h-2 overflow-hidden rounded"
+                    className="bg-bar-track h-2 overflow-hidden"
                   >
                     <span
-                      className="block h-full rounded"
+                      className="block h-full"
                       style={{
                         width: `${formatPercent(BigInt(onchain), BigInt(coll.liveCount))}%`,
                         backgroundImage: COMPOSITION_BADGES[coll.composition.tier].bar,
@@ -521,8 +507,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   {cluster.data.ownerAddress || cluster.data.ownerLockHash ? (
                     <Address
                       address={cluster.data.ownerAddress ?? cluster.data.ownerLockHash!}
-                      startChars={10}
-                      endChars={6}
+                      size="row"
                       className="inline"
                     />
                   ) : (
@@ -538,11 +523,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               )}
             </>
           ) : (
-            <AssetReadState
-              label="collection"
-              error={collection.error}
-              loading={collection.isLoading}
-            />
+            <AssetReadState label="collection" error={collection.error} read={collection} />
           )}
         </section>
       )}

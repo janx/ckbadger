@@ -14,7 +14,7 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
 /**
  * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"),
  * a flat tile since rubbing × Song print: the surface under its own 1 px border in the line ink,
- * an 8 px radius, `.glass` (its materials now the opaque surface with no sheen, no edges, no ring;
+ * square corners, `.glass` (its materials now the opaque surface with no sheen, no edges, no ring;
  * see globals.css) and inset scanlines — no lit edge along the top. The transaction pipeline, the
  * tx page's two sheets of cells (one frame each, the seam between), the cell page's byte dump, the
  * DNA gel and the network map sit in it; prose, tables and charts stay unframed.
@@ -28,11 +28,9 @@ export function TerminalPanel({
   ...props
 }: TerminalPanelProps) {
   const variantClasses = {
-    // Glass frames take the glass radius (visual finish V10: `rounded-lg`, 8 px); the flat
-    // variants keep the default 4 px.
-    default: 'glass border-base-border rounded-lg',
-    elevated: 'bg-base-elevated border-base-border rounded',
-    inset: 'bg-base-bg border-base-border shadow-glow-inset rounded',
+    default: 'glass border-base-border',
+    elevated: 'bg-base-elevated border-base-border',
+    inset: 'bg-base-bg border-base-border shadow-glow-inset',
   };
 
   return (
@@ -163,32 +161,6 @@ export function TerminalPanelFooter({ children, className }: TerminalPanelFooter
   );
 }
 
-interface TerminalDividerProps {
-  className?: string;
-  label?: string;
-}
-
-export function TerminalDivider({ className, label }: TerminalDividerProps) {
-  if (label) {
-    return (
-      <div className={cn('flex items-center gap-3 py-2', className)}>
-        <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
-        <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        'via-base-border h-px bg-gradient-to-r from-transparent to-transparent',
-        className
-      )}
-    />
-  );
-}
-
 interface TerminalRowProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   className?: string;
@@ -201,7 +173,7 @@ export function TerminalRow({ children, className, hoverable = true, ...props }:
       {...props}
       className={cn(
         // a row rule is the subtle ink, #1a1f30 (material pass v2, move 6)
-        'border-base-border-subtle border-b px-3 py-2 last:border-b-0',
+        'border-row-rule border-b px-3 py-2 last:border-b-0',
         hoverable && 'row-scan hover:bg-base-elevated/50 transition-colors',
         className
       )}

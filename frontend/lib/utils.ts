@@ -1,9 +1,8 @@
 import { clsx, type ClassValue } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 import { formatScaledInteger } from '@/lib/exact-integer';
-import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { TYPE_STEPS } from '@/lib/type-scale';
-import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
+import { formatAgeOneUnit, formatSpan } from '@/lib/format-age';
 
 // tailwind-merge reads an unknown `text-<word>` as a colour; the scale's steps are sizes, so
 // `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last.
@@ -15,26 +14,14 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function truncateHash(hash: string, start = 10, end = 8): string {
-  if (hash.length <= start + end) return hash;
-  return `${hash.slice(0, start)}...${hash.slice(-end)}`;
-}
-
 /** Raw block timestamp displayed in the indexer's fixed UTC+8 calendar timezone. */
 export function formatUtc8Date(timestamp: string | number): string {
   return utc8Iso(timestampMs(timestamp, 'block timestamp')).slice(0, 10);
 }
 
-/** A feed row's relative age in one unit ("5m ago"), by the same rule as `formatAgeTwoUnits`. */
-export function formatTimeAgo(timestamp: string | number | Date): string {
-  const age = ageSeconds(timestamp);
-  if (age.kind === 'clock-behind') return CLOCK_BEHIND;
-  const { seconds } = age;
-
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+/** A feed row's relative age in one unit ("5m ago"): format-age's one form (U-15). */
+export function formatTimeAgo(timestamp: string | number | Date, now: number): string {
+  return formatAgeOneUnit(timestamp, now);
 }
 
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -81,21 +68,16 @@ export function formatUnixSecondsUtc8(seconds: string): string {
   return formatUtc8DateTime(Number(ms));
 }
 
-/** Human duration from an exact millisecond count (SC-C1: not raw "… ms"). */
+/**
+ * Human duration from an exact millisecond count (SC-C1: not raw "… ms"), in format-age's one
+ * form (U-15): "26m 14s", "52s"; under a second "450ms".
+ */
 export function formatDurationMs(ms: number): string {
   if (!Number.isSafeInteger(ms) || ms < 0) {
     throw new Error(`invalid duration ms ${ms}`);
   }
-  if (ms < 1000) return `${ms} ms`;
-  const totalSeconds = Math.floor(ms / 1000);
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (days > 0) return hours > 0 ? `${days} d ${hours} h` : `${days} d`;
-  if (hours > 0) return minutes > 0 ? `${hours} h ${minutes} m` : `${hours} h`;
-  if (minutes > 0) return seconds > 0 ? `${minutes} m ${seconds} s` : `${minutes} m`;
-  return `${seconds} s`;
+  if (ms < 1000) return `${ms}ms`;
+  return formatSpan(Math.floor(ms / 1000));
 }
 
 export function formatCkbAmount(shannons: string | bigint): {
@@ -118,18 +100,32 @@ export function formatCkbAmount(shannons: string | bigint): {
   return { integer, decimal, full, isNegative };
 }
 
-export function formatCkbValue(ckbValue: string): {
-  integer: string;
-  decimal: string;
-  full: string;
-  isNegative: boolean;
-} {
-  return formatCkbAmount(parseCkbDecimal(ckbValue));
-}
-
 export function formatCapacity(capacity: string | bigint): string {
   const { full } = formatCkbAmount(capacity);
   return `${full} CKB`;
+}
+
+/** The compact CKB units in shannons, largest first (CH-14). */
+const CKB_COMPACT_UNITS = [
+  ['T', BigInt('100000000000000000000')],
+  ['B', BigInt('100000000000000000')],
+  ['M', BigInt('100000000000000')],
+  ['k', BigInt('100000000000')],
+] as const;
+const ONE_CKB = BigInt(100000000);
+
+/**
+ * A non-negative shannon amount in the largest compact unit it REACHES once rounded at two
+ * decimals of the unit below (the review's item J, as formatCompactInteger chooses): an amount from
+ * 999.995 of the unit below is 1.00 of this one, so 999,995 CKB is 1.00M, never 1000.00k. The
+ * threshold is the divisor less 1/200,000 of it. No unit reached, null.
+ */
+function compactCkbUnits(abs: bigint): string | null {
+  for (const [suffix, divisor] of CKB_COMPACT_UNITS) {
+    if (abs >= divisor - divisor / BigInt(200000))
+      return `${formatScaledInteger(abs, divisor, 2)}${suffix}`;
+  }
+  return null;
 }
 
 export function formatCkbCompact(shannons: string | bigint): {
@@ -139,62 +135,9 @@ export function formatCkbCompact(shannons: string | bigint): {
   const amount = BigInt(shannons);
   if (amount < BigInt(0)) throw new Error(`negative capacity ${amount} shannons`);
   const full = formatCkbAmount(shannons).full;
-  for (const [suffix, divisor] of [
-    ['T', BigInt('100000000000000000000')],
-    ['B', BigInt('100000000000000000')],
-    ['M', BigInt('100000000000000')],
-    ['K', BigInt('100000000000')],
-  ] as const) {
-    if (amount >= divisor)
-      return { value: `${formatScaledInteger(amount, divisor, 2)}${suffix}`, full };
-  }
-  return { value: formatScaledInteger(amount, BigInt(100000000), 2), full };
+  return { value: compactCkbUnits(amount) ?? formatScaledInteger(amount, ONE_CKB, 2), full };
 }
 
 export function formatNumber(num: number | bigint): string {
   return num.toLocaleString();
-}
-
-export function formatCompactCkbDelta(ckbDelta: string): {
-  compact: string;
-  direction: 'up' | 'down' | 'neutral';
-} {
-  const shannons = parseCkbDecimal(ckbDelta);
-  if (shannons === BigInt(0)) return { compact: '0', direction: 'neutral' };
-
-  const direction = shannons > BigInt(0) ? 'up' : 'down';
-  const abs = shannons < BigInt(0) ? -shannons : shannons;
-
-  let compact: string;
-  if (abs >= BigInt('100000000000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000000000'), 2)}B`;
-  } else if (abs >= BigInt('100000000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000000'), 2)}M`;
-  } else if (abs >= BigInt('100000000000')) {
-    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}K`;
-  } else if (abs >= BigInt(100000000)) {
-    compact = formatScaledInteger(abs, BigInt(100000000), 2);
-  } else {
-    compact = formatScaledInteger(abs, BigInt(100000000), 4);
-  }
-
-  return { compact, direction };
-}
-
-export function hexToBytes(hex: string): Uint8Array {
-  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const bytes = new Uint8Array(cleanHex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(cleanHex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-export function bytesToHex(bytes: Uint8Array): string {
-  return (
-    '0x' +
-    Array.from(bytes)
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('')
-  );
 }

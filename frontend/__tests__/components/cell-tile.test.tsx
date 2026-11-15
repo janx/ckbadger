@@ -178,7 +178,7 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     );
     // it overhangs the 18 px line by 6 px above and below, so the first line keeps its height
     expect(seal).toHaveClass('-my-[6px]');
-    const outPoint = within(tile).getByRole('link', { name: /^0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:1$/ });
+    const outPoint = within(tile).getByRole('link', { name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:1$/ });
     expect(outPoint).toHaveAttribute('href', `/mainnet/cell/${HASH}-1`);
     expectBefore(seal, outPoint);
     // the first thing in the tile
@@ -206,7 +206,7 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const [mark, text] = Array.from(holder.children);
     expect(mark.children).toHaveLength(1);
     expect(mark.firstElementChild).toBe(stone);
-    const address = within(tile).getByRole('link', { name: /^ckb1qzda0c/ });
+    const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
     expect(text).toContainElement(address);
     // one line: the stone at the line's height (20 px, 1 px over above and below)
@@ -425,13 +425,13 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(seal).toHaveClass('-my-[6px]');
     // the out point with its index is one unit, never broken, and the cell's link
     const outPoint = within(cell.text).getByRole('link', {
-      name: /^0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:0$/,
+      name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:0$/,
     });
     expect(outPoint).toHaveClass('whitespace-nowrap');
     expect(outPoint).toHaveAttribute('title', `${HASH}:0`);
     expect(cell.text).toHaveClass('flex', 'min-w-0', 'flex-wrap', 'items-baseline', 'gap-x-2');
     expect(cell.text.children).toHaveLength(1);
-    expect(cell.text).toHaveTextContent(/^output 0 0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}:0$/);
+    expect(cell.text).toHaveTextContent(/^output 0 0x[0-9a-f]{4}…[0-9a-f]{4}:0$/);
     expect(cell.text.querySelector('[data-tile-end]')).toBeNull();
   });
 
@@ -444,7 +444,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expectOwnerSealOf(owner.mark, LOCK, IN_MARK_COLUMN);
     const name = owner.text.firstElementChild as HTMLElement;
     expect(name).toHaveClass('whitespace-nowrap');
-    expect(within(name).getByRole('link', { name: /^ckb1qzda0c/ })).toHaveAttribute(
+    expect(within(name).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
     );

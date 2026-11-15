@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import {
   api,
   ApiRequestError,
@@ -10,6 +11,7 @@ import {
   type TokenHistory,
   type GlobalActivity,
 } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -21,8 +23,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getTokenActivityFeed: vi.fn(),
     getTokenTransactions: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
@@ -139,8 +139,11 @@ describe('TokenDetailPage', () => {
       new ApiRequestError(404, 'not_found', 'token absent')
     );
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(`/tokens/${hash}`)).toBeInTheDocument();
-    expect(screen.getByText('no token at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no token with this type hash.')).toBeInTheDocument();
+    // U-18: the facts name the checked endpoint with the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/tokens/${hash.slice(0, 10)}…${hash.slice(-6)}`
+    );
   });
 
   // Visual finish V8: the page loads as the shared detail skeleton, in the page's main, not the
@@ -161,7 +164,16 @@ describe('TokenDetailPage', () => {
     );
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('token index mismatch');
-    expect(screen.queryByText('no token at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
+  });
+
+  // A4 Chrome F3: the type hash under the title was HexCode's own-box scroller (box 358 px for
+  // 436 px of content at 390, on the first screen); it is the head's HeadId in the head's 11 px,
+  // on its own line under the standard.
+  it('prints the type hash in its head as the head’s full id, never a scroller', async () => {
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
+    expectHeadId(hash);
   });
 
   it('keeps the token visible and names the distribution endpoint when that secondary read fails', async () => {
@@ -173,7 +185,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       `Could not load holder distribution from /tokens/${hash}/distribution: API error: 404 - distribution unavailable`
     );
-    expect(screen.queryByText('no token at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no token with this type hash.')).not.toBeInTheDocument();
   });
   it('consumes unmodified router responses across history, distribution, holders and full transactions', async () => {
     const p = tokenProducer;
@@ -199,7 +211,7 @@ describe('TokenDetailPage', () => {
   it('renders token overview, exact capacity partition and tier-one history', async () => {
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
-    expect(screen.getByText(/xUDT · 8 decimals/)).toBeInTheDocument();
+    expect(screen.getByText(fullText(/xUDT · 8 decimals/))).toBeInTheDocument();
     expect(screen.getByText('A test token')).toBeInTheDocument();
     const facts = screen.getByRole('region', { name: 'Metrics' });
     // F2 objects (D8): not established, with the one sentence that says why (C7: in its title).
@@ -279,7 +291,12 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
-      issuer: { lockHash: other, address: null, lockKind: 'JoyID' },
+      issuer: {
+        lockHash: other,
+        address: null,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'JoyID',
+      },
     });
     vi.mocked(api.getTokenSupplyEvents).mockResolvedValue({
       ...empty,
@@ -296,6 +313,7 @@ describe('TokenDetailPage', () => {
           supplyAfter: '1000000000000',
           lockHash: other,
           address: null,
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
           lockKind: 'JoyID',
         },
       ],
@@ -316,11 +334,107 @@ describe('TokenDetailPage', () => {
       `/mainnet/tx/${other}`
     );
   });
+  // U-16, PB-05 (UI review 2026-11-14): the same-symbol note broke this token's shortened type hash
+  // at its ellipsis ("this one is 0x797bfd0b…" / "4080."); the metrics row left a "·" at a line's
+  // end ("644,078.845914 · USDC ·") and opened one ("· 3.82% occupied").
+  it('keeps the note’s shortened ids whole and every metric note’s dot with its note (U-16, PA-25)', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
+      issuer: {
+        lockHash: other,
+        address: null,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'JoyID',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    const note = await screen.findByText(/Another token also calls itself/);
+    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8
+    const self = within(note).getByText(`${hash.slice(0, 12)}…${hash.slice(-8)}`);
+    expect(self.closest('[data-nobreak]')).not.toBeNull();
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    // every dot of the metrics row belongs to the item after it: none is loose text
+    const loose = [...metrics.querySelectorAll('*')].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !el.hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose.map((n) => n.textContent)).toEqual([]);
+    expect(metrics).toHaveTextContent('JoyID · owner lock proven by token script');
+  });
+  // U-15 / lane A4b (UI review 2026-11-14): an issuer whose lock the scripts registry does not name
+  // read "Lock kind unavailable · owner lock proven by token script"; the answer now carries the
+  // lock's code hash, and the note names the lock by it, linked to that code hash's script page.
+  // U-09 (re-pinned): the code hash and the issuer's lock hash take the row size, 10…6.
+  it('names an unregistered issuer lock by its code hash, a link to its script page (U-15)', async () => {
+    const unregistered = `0x${'43'.repeat(32)}`;
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+        lockCodeHash: unregistered,
+        lockKind: null,
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveTextContent('lock 0x43434343…434343 · owner lock proven by token script');
+    expect(within(metrics).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/script/${unregistered}$`))
+    );
+    expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+  it('writes no lock kind for an issuer lock that is not indexed (U-15)', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: { lockHash: other, address: null, lockCodeHash: null, lockKind: null },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    // the issuer's lock hash, then the note with no empty part before it
+    expect(metrics).toHaveTextContent(/0x34343434…343434 · owner lock proven by token script/);
+    expect(metrics.querySelector('[data-lock-kind]')).toBeNull();
+    expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+  // A4b review: an issuer whose lock has no address form (args longer than an address can carry)
+  // comes with a null address and its lock's code hash and kind: the metrics name it by its lock
+  // hash, linked to the address page that takes a lock hash, and by its lock kind.
+  it('names an issuer whose lock has no address form by its lock hash and kind (A4b review)', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address: null,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'SECP256K1/blake160',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(within(metrics).getByRole('link', { name: /^0x3434/ })).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/address/${other}$`))
+    );
+    expect(metrics).toHaveTextContent(
+      /343434 · SECP256K1\/blake160 · owner lock proven by token script/
+    );
+  });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));
     vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
       ...empty,
-      data: [{ lockScriptHash: hash, address: null, balance: '1', lockKind: null }],
+      data: [
+        { lockScriptHash: hash, address: null, balance: '1', lockCodeHash: null, lockKind: null },
+      ],
       total: 2,
       totalSupply: '2',
       anchor: null,

@@ -77,7 +77,7 @@ describe('Inventory rows', () => {
     // Table-rows L2-1: the row shows 2 dp; every digit and the standard are in its title.
     expect(row).toHaveAttribute(
       'title',
-      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.0%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
+      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
     );
     expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent('1.00');
     expect(table).not.toHaveTextContent('xUDT');
@@ -92,9 +92,21 @@ describe('Inventory rows', () => {
     const breaks = Array.from(root.querySelectorAll('wbr'));
     expect(breaks.length).toBe(3);
     for (const wbr of breaks) expect(wbr.previousSibling?.textContent?.endsWith(',')).toBe(true);
-    expect(screen.getByText('00000000000000000000')).toHaveClass('text-text-ghost');
+    // the point joins its zeros when no decimal is significant, as ExactCkb's ghost does (R4,
+    // re-pinned on purpose: the point stood alone in the amount's ink)
+    expect(screen.getByText('.00000000000000000000')).toHaveClass('text-text-ghost');
     expect(container.querySelector('.text-text-muted')).toBeNull();
   });
+  // UI review 2026-11-14 (DY-06, ruling R4): a token amount's significant decimals are the neutral
+  // fraction ink (text-dim, 4.5:1), never the amount's ink at 80 %.
+  it('sets the significant decimals in the neutral fraction ink, with no opacity', () => {
+    const { container } = render(<AssetAmount amount="123450000" decimals={8} />);
+    const fraction = container.querySelector('[data-fraction]');
+    expect(fraction).toHaveTextContent(/^\.2345$/);
+    expect(fraction).toHaveClass('text-text-dim');
+    expect(container.innerHTML).not.toMatch(/opacity-/);
+  });
+
   it('labels unknown decimals as raw instead of guessing the unit', () => {
     render(<AssetAmount amount="12345678901234567890" decimals={null} />);
     expect(screen.getByText('12,345,678,901,234,567,890 (raw)')).toBeInTheDocument();
@@ -118,9 +130,9 @@ describe('Inventory rows', () => {
       />
     );
     const table = screen.getByRole('table', { name: 'Object collections' });
-    // Table-rows L2-2: minted ≠ live shows as a ghost "/ 7" beside the live count; the words
-    // are the row's title.
-    expect(within(table).getByText('/ 7', { exact: false })).toHaveClass('text-text-ghost');
+    // Table-rows L2-2: minted ≠ live shows as a dim "/ 7" beside the live count (R4, re-pinned
+    // on purpose: a count is never the ghost); the words are the row's title.
+    expect(within(table).getByText('/ 7', { exact: false })).toHaveClass('text-text-dim');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
       '3 live of 7 minted'
     );
@@ -213,10 +225,11 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const tags = (row: HTMLElement) =>
       Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => t.textContent);
     expect(tags(token)).toEqual(['T']);
-    // A token with only a symbol shows it once, as its name; sUDT is set back in ghost ink.
+    // A token with only a symbol shows it once, as its name; sUDT is set back in the dim ink (R4,
+    // re-pinned on purpose: the standard is a word, never the ghost).
     expect(within(sealRow).getByRole('link', { name: 'SEAL' })).toBeInTheDocument();
     expect(tags(sealRow)).toEqual(['sUDT']);
-    expect(within(sealRow).getByText('sUDT')).toHaveClass('text-text-ghost', 'border-base-border');
+    expect(within(sealRow).getByText('sUDT')).toHaveClass('text-text-dim', 'border-base-border');
     expect(token.querySelector('svg[data-class="tokens"]')).not.toBeNull();
   });
 
@@ -254,7 +267,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.8%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
+      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.75%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
     );
   });
 });
@@ -353,7 +366,7 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.0%) · H-mult. ×1.00`
+      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.00%) · H-mult. ×1.00`
     );
   });
 });
@@ -432,7 +445,7 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.3%)'
+      'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.25%)'
     );
   });
 });
@@ -490,7 +503,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
         'figures',
         'quiet',
         // Every digit of the supply, the CKB held and occupied with its exact share.
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.0%)',
+        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
         null,
       ],
     ]);
@@ -505,7 +518,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'T Token · xUDT', '2 holders'],
       [
         'figures',
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.0%)',
+        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
         '4 transfers · 0 in 24 h · ×1.6393442625',
       ],
     ]);
@@ -522,7 +535,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       [
         'figures',
         expect.stringMatching(
-          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.0%\) · ×1\.6393442625 · 0xabab/
+          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
         ),
         null,
       ],
@@ -551,7 +564,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '.bit', '5 live'],
       ['activity', '9 ever registered · 2 holders', null],
-      ['figures', '100.00000001 CKB held · 61 occupied (61.0%)', null],
+      ['figures', '100.00000001 CKB held · 61 occupied (61.00%)', null],
     ]);
   });
 });

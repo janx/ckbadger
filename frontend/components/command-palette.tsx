@@ -9,7 +9,7 @@ import {
   OPEN_SHORTCUTS_EVENT,
 } from '@/lib/search-focus';
 import { resolveSearchRoute } from '@/lib/search-routing';
-import { localZone } from '@/lib/clock';
+import { zoned } from '@/lib/clock';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { SHORTCUT_HINTS } from '@/lib/shortcuts';
 
@@ -321,7 +321,7 @@ export function CommandPalette() {
       role="presentation"
     >
       <div
-        className="border-base-border bg-base-surface w-full max-w-2xl rounded-lg border shadow-2xl"
+        className="border-base-border bg-base-surface w-full max-w-2xl border shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         {mode === 'commands' ? (
@@ -333,7 +333,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleInputKeyDown}
-                placeholder="Type a command, or search block / tx / address"
+                placeholder="type a command, or search block / tx / address"
                 className="focus:border-jade focus:ring-jade well text-text-bright text-body w-full px-3 py-2 font-mono focus:ring-1 focus-visible:outline-none"
                 aria-label="Command palette input"
               />
@@ -346,7 +346,7 @@ export function CommandPalette() {
                     <li key={command.id}>
                       <button
                         type="button"
-                        className={`text-body w-full rounded px-3 py-2 text-left font-mono transition-colors ${
+                        className={`text-body w-full px-3 py-2 text-left font-mono transition-colors ${
                           index === selectedIndex
                             ? 'text-jade bg-base-elevated'
                             : 'text-text hover:bg-base-elevated/60'
@@ -363,7 +363,7 @@ export function CommandPalette() {
                   ))}
                 </ul>
               ) : (
-                <div className="text-text-dim text-body rounded px-3 py-2 font-mono">
+                <div className="text-text-dim text-body px-3 py-2 font-mono">
                   No command matched. Press Enter to run search.
                 </div>
               )}
@@ -372,7 +372,7 @@ export function CommandPalette() {
         ) : (
           <>
             <div className="border-base-border border-b px-4 py-3">
-              <h2 className="eyebrow text-text-bright text-body font-mono">Keyboard Shortcuts</h2>
+              <h2 className="eyebrow text-text-bright text-meta font-mono">Keyboard Shortcuts</h2>
             </div>
 
             <div className="max-h-[360px] overflow-auto p-2">
@@ -380,18 +380,19 @@ export function CommandPalette() {
                 {SHORTCUT_HINTS.map((shortcut) => (
                   <li
                     key={shortcut.keys}
-                    className="flex items-center justify-between gap-4 rounded px-3 py-2"
+                    className="flex items-center justify-between gap-4 px-3 py-2"
                   >
                     <span className="text-text">{shortcut.description}</span>
-                    <span className="border-base-border text-text text-small rounded border px-2 py-0.5 font-mono">
+                    <span className="border-base-border text-text text-small border px-2 py-0.5 font-mono">
                       {shortcut.keys}
                     </span>
                   </li>
                 ))}
               </ul>
             </div>
-            {/* What the status line shows only from md up, for every width (a phone opens this
-                from the footer): the release, and which time its clock tells. */}
+            {/* What the status line shows only from md up: the release, and which time its
+                clock tells (opened by the `?` key or, from md, the footer's button; below md the
+                footer's last row says both). */}
             <p
               data-testid="shortcuts-about"
               className="border-base-border text-text-dim text-small border-t px-4 py-3 font-mono"
@@ -399,7 +400,7 @@ export function CommandPalette() {
               <span title={`ckbadger ${resolveBuildVersion()}`}>
                 {`ckbadger ${releaseOf(resolveBuildVersion())}`}
               </span>
-              {` · the status line's clock is local time, ${localZone()}`}
+              {` · ${zoned("the status line's clock is local time")}`}
             </p>
           </>
         )}

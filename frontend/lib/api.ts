@@ -2,7 +2,6 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { color } from '@/lib/palette';
-export { resolveApiBase } from '@/lib/runtime-config';
 
 // The active network is derived from the URL path per call (not module-init): the
 // network can change as the user navigates, so the API base must be recomputed each
@@ -104,16 +103,6 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// The 503 kinds live in `@/lib/api-errors` (kept apart so the query client's retry rule does not
-// depend on how a test mocks this module); re-exported here for every other caller.
-export {
-  isDerivePendingError,
-  isNetworkInitializingError,
-  isStoreCatchingUpError,
-  isTransientApiError,
-  isWarmupPendingError,
-} from '@/lib/api-errors';
-
 /**
  * The resource exists but cannot be served YET (503 `service_unavailable`):
  * something it derives from has not reached the node — e.g. a pending
@@ -129,13 +118,6 @@ export function isServiceUnavailableError(error: unknown): error is ApiRequestEr
 }
 
 export { isNotFoundApiError } from '@/lib/api-errors';
-
-interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-}
 
 interface CursorPaginatedResponse<T> {
   data: T[];
@@ -1301,30 +1283,6 @@ interface AddressToken {
   balance: string;
 }
 
-interface AssetTransfer {
-  txHash: string;
-  blockNumber: number;
-  txIndex: number;
-  eventIndex: number;
-  assetCategory: 'token' | 'object' | 'identity' | 'dao';
-  assetType: string;
-  assetId: string | null;
-  direction: 'in' | 'out';
-  peerAddress: string | null;
-  amount: string | null;
-  eventType: string | null;
-  timestamp: string;
-  tokenName: string | null;
-  tokenSymbol: string | null;
-  tokenDecimals: number | null;
-}
-
-interface AssetTransferParams {
-  limit?: number;
-  cursor?: string;
-  category?: 'token' | 'object' | 'identity' | 'dao';
-}
-
 /** The identity standards, spelled as the indexer's `IdentityStandard::as_str()` puts them on the wire. */
 type IdentityStandard = 'dotbit' | 'bit_cell' | 'did_ckb' | 'dotcell';
 
@@ -1400,8 +1358,6 @@ interface ActivityProtocolAction {
 const TAG_TOKEN = 1;
 const TAG_OBJECT = 2;
 const TAG_IDENTITY = 4;
-const TAG_DAO = 8;
-const TAG_PROTOCOL = 16;
 const TAG_CELLBASE = 32;
 
 /** Address activity response (GET /addresses/{addr}/activities). */
@@ -1627,6 +1583,9 @@ export interface TokenSupplyEvent {
   supplyAfter: string;
   lockHash: string;
   address: string | null;
+  /** U-15: the party lock's code hash; null only when the lock script is not indexed. */
+  lockCodeHash: string | null;
+  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
   lockKind: string | null;
 }
 export interface TokenDistribution {
@@ -1984,7 +1943,14 @@ interface Token {
   sameSymbolTokens?: { typeScriptHash: string; holdersCount: number }[];
   /** Token detail only; null when neither a label nor a Unique Cell named the token. */
   metadata?: TokenMetadataProvenance | null;
-  issuer: { lockHash: string; address: string | null; lockKind: string | null } | null;
+  issuer: {
+    lockHash: string;
+    address: string | null;
+    /** U-15: the issuer lock's code hash; null only when the lock script is not indexed. */
+    lockCodeHash: string | null;
+    /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+    lockKind: string | null;
+  } | null;
   totalCapacity: string | null;
   totalCommonKnowledgeSize: string | null;
 }
@@ -1993,6 +1959,9 @@ interface TokenHolder {
   lockScriptHash: string;
   address: string | null;
   balance: string;
+  /** U-15: the holder lock's code hash; null only when the lock script is not indexed. */
+  lockCodeHash: string | null;
+  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
   lockKind: string | null;
 }
 
@@ -3781,8 +3750,6 @@ export type {
   ActiveAddress,
   AddressTransaction,
   AddressToken,
-  AssetTransfer,
-  AssetTransferParams,
   SearchResult,
   SearchResponse,
   Asset,
@@ -3839,7 +3806,6 @@ export type {
   MostUtilizedScriptsChartResponse,
   MostUtilizedAssetsChartResponse,
   CursorPaginatedResponse,
-  PaginatedResponse,
   PoolSummary,
   PoolStatus,
   AddressPendingSummary,
@@ -3925,7 +3891,7 @@ export type {
   FiberChannelQueryParams,
 };
 
-export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_PROTOCOL, TAG_CELLBASE };
+export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE };
 
 export interface LabelCount {
   label: string;

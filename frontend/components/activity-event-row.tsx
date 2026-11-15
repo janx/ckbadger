@@ -1,28 +1,21 @@
 'use client';
 
-import { Fragment, type ReactElement, type ReactNode } from 'react';
-import { lockArgsLine } from '@/lib/lock-args';
+import { type ReactElement, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ErrorBoundary } from '@/components/error-boundary';
 import {
-  getScriptDetailHref,
   getObjectDetailHref,
   getIdentityItemDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
-export type { ActivityBody } from '@/lib/activity-classify';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
-import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
-import { ParticipantRefView } from '@/components/participant-ref';
 import type {
-  Activity,
-  GlobalActivity,
-  ParticipantInfo,
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
@@ -32,13 +25,9 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { AssetClass } from '@/lib/design-tokens';
-
-/** A row that is not a pool row sits in a block; an absent number is a contract violation. */
-function committedActivityBlock(activity: { blockNumber: number | null; txHash: string }): number {
-  if (activity.blockNumber === null)
-    throw new Error(`Activity ${activity.txHash} has neither a block nor a pool status`);
-  return activity.blockNumber;
-}
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import type { PaletteKey } from '@/lib/palette';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -57,216 +46,16 @@ export function formatStandard(standard: string): string {
   return standard.charAt(0).toUpperCase() + standard.slice(1);
 }
 
-export function capitalizeAction(action: string): string {
-  if (!action) return '';
-  return action.charAt(0).toUpperCase() + action.slice(1);
-}
-
-export const TYPE_SCRIPT_CALL_LABEL = 'Script Call (type)';
-export const LOCK_SCRIPT_CALL_LABEL = 'Script Call (lock)';
-
 /**
  * A call's script as a reader names it: the registry name, else its code hash (what kind of
  * script it is), never the script hash, which reads as `code(args)` (F2-tx, TX-31).
  */
-export function formatScriptRef(sc: { codeHash: string; scriptName?: string }): string {
+export function formatScriptRef(
+  sc: { codeHash: string; scriptName?: string },
+  size: ShortSize
+): string {
   if (sc.scriptName?.trim()) return sc.scriptName!.trim();
-  return truncateHash(sc.codeHash, 8, 4);
-}
-
-// ---------------------------------------------------------------------------
-// CkbDelta — color-coded CKB amount
-// ---------------------------------------------------------------------------
-
-export function CkbDelta({ delta }: { delta: string }) {
-  const value = BigInt(delta);
-  const formatted = formatCkbAmount(delta);
-  const isPositive = value > BigInt(0);
-  const isNegative = value < BigInt(0);
-
-  return (
-    <span
-      className={cn(
-        'text-small whitespace-nowrap font-mono tabular-nums',
-        isPositive && 'text-positive',
-        isNegative && 'text-negative',
-        !isPositive && !isNegative && 'text-text-dim'
-      )}
-    >
-      {isPositive ? '+' : ''}
-      {formatted.full} CKB
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// TypeCallExpr — script name link with args
-// ---------------------------------------------------------------------------
-
-/** A call's name and args; `quiet` draws the name as an ink link and the args dim (no gold). */
-function CallExpr({
-  name,
-  href,
-  args,
-  quiet,
-}: {
-  name: string;
-  href: string;
-  /** Null when the script has empty args: the boards print the name alone (F2-tx). */
-  args: string | null;
-  quiet: boolean;
-}) {
-  return (
-    <>
-      <Link
-        href={href}
-        className={cn(
-          'transition-colors',
-          quiet ? 'text-text hover:text-jade' : 'text-gold hover:text-gold/80'
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {name}
-      </Link>
-      {args !== null && (
-        <>
-          <span className="text-text-dim">(</span>
-          <span className={quiet ? 'text-text-dim' : 'text-aqua/70'}>{args}</span>
-          <span className="text-text-dim">)</span>
-        </>
-      )}
-    </>
-  );
-}
-
-export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quiet?: boolean }) {
-  return (
-    <CallExpr
-      name={formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })}
-      href={getScriptDetailHref({
-        name: sc.scriptName,
-        codeHash: sc.typeCodeHash,
-        hashType: sc.typeHashType,
-        scriptKind: 'type',
-      })}
-      args={sc.typeArgs === '0x' ? null : truncateHash(sc.typeArgs, 6, 4)}
-      quiet={quiet}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// LockCallExpr — lock script name link with args
-// ---------------------------------------------------------------------------
-
-export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quiet?: boolean }) {
-  // Revised R-8: args that do not fit the lock's registry layout carry the API's reason; it is
-  // said once, quietly, after the call (decoded fields are not drawn on activity rows).
-  const notDecoded = lockArgsLine(lc.decoded, lc.decodeError);
-  const call = (
-    <CallExpr
-      name={formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName })}
-      href={getScriptDetailHref({
-        name: lc.scriptName,
-        codeHash: lc.lockCodeHash,
-        hashType: lc.lockHashType,
-        scriptKind: 'lock',
-      })}
-      args={lc.lockArgs === '0x' ? null : truncateHash(lc.lockArgs, 6, 4)}
-      quiet={quiet}
-    />
-  );
-  if (!lc.decodeError) return call;
-  return (
-    <>
-      {call} <span className="text-text-dim">{notDecoded}</span>
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// EventParts — badge (left) and value (right) as separate elements
-// ---------------------------------------------------------------------------
-
-export interface EventParts {
-  badge: React.ReactNode;
-  value: React.ReactNode;
-}
-
-function getItemDeltaEventParts(item: ItemDelta): EventParts {
-  switch (item.kind) {
-    case 'token': {
-      const delta = BigInt(item.delta);
-      const isPositive = delta > BigInt(0);
-      const isZero = delta === BigInt(0);
-      const prefix = isZero ? '' : isPositive ? '+' : '-';
-      const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
-      const formatted = formatTokenBalanceWithRawMarker(absDelta, item.decimals ?? null);
-      const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
-      const symbol = item.symbol?.trim();
-      const label = symbol || truncateHash(item.typeScriptHash, 8, 6);
-      return {
-        badge: (
-          <span className="text-token text-small font-mono">
-            {'\u25CF'} {label} Transfer
-          </span>
-        ),
-        value: (
-          <Link
-            href={getTokenDetailHref(item.typeScriptHash)}
-            className={cn(
-              'text-small font-mono tabular-nums transition-colors hover:underline',
-              color
-            )}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {prefix}
-            {formatted} {label}
-          </Link>
-        ),
-      };
-    }
-    case 'object': {
-      const isAdd = item.delta > 0;
-      const actionLabel = isAdd ? 'Received' : 'Sent';
-      return {
-        badge: (
-          <span className="text-lavender text-small font-mono">
-            {'\u2B21'} Object {actionLabel}
-          </span>
-        ),
-        value: (
-          <Link
-            href={getObjectDetailHref(item.objectId)}
-            className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {truncateHash(item.objectId, 8, 6)}
-          </Link>
-        ),
-      };
-    }
-    case 'identity': {
-      const isAdd = item.delta > 0;
-      const actionLabel = isAdd ? 'Registered' : 'Released';
-      return {
-        badge: (
-          <span className="text-aqua text-small font-mono">
-            {'\u2736'} Identity {actionLabel}
-          </span>
-        ),
-        value: (
-          <Link
-            href={getIdentityItemDetailHref(item.standard, item.identityId)}
-            className="text-text-bright decoration-aqua/35 text-small font-mono underline underline-offset-[3px] transition-colors"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {truncateHash(item.identityId, 8, 6)}
-          </Link>
-        ),
-      };
-    }
-  }
+  return shortenHash(sc.codeHash, size);
 }
 
 /** The label of a DAO step, as its badge and the compact summary both print it. */
@@ -281,106 +70,6 @@ function daoActionLabel(action: string): string {
     default:
       return 'DAO';
   }
-}
-
-function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
-  // protocolActionMeta throws when a deposit / withdraw step lacks its capacity (or a completed
-  // withdraw its compensation), so below those are present; nothing is ever shown as 0 instead.
-  const { capacity, compensation } = protocolActionMeta(pa);
-  const label = daoActionLabel(pa.action);
-
-  switch (pa.action) {
-    case 'deposit':
-      return {
-        badge: (
-          <span className="text-gold text-small font-mono">
-            {'\u25C6'} {label}
-          </span>
-        ),
-        value: (
-          <span className="text-positive text-small font-mono tabular-nums">
-            +{formatCkbAmount(capacity as bigint).full} CKB locked
-          </span>
-        ),
-      };
-    case 'withdraw_request':
-      return {
-        badge: (
-          <span className="text-gold text-small font-mono">
-            {'\u25C6'} {label}
-          </span>
-        ),
-        value: (
-          <span className="text-gold text-small font-mono tabular-nums">
-            {formatCkbAmount(capacity as bigint).full} CKB
-          </span>
-        ),
-      };
-    case 'withdraw_complete':
-      return {
-        badge: (
-          <span className="text-positive text-small font-mono">
-            {'\u25C6'} {label}
-          </span>
-        ),
-        value: (
-          <div className="flex flex-col items-end gap-0.5">
-            <span className="text-positive text-small font-mono tabular-nums">
-              +{formatCkbAmount(capacity as bigint).full} CKB
-            </span>
-            {compensation !== null && (
-              <span className="text-positive text-meta font-mono tabular-nums">
-                +{formatCkbAmount(compensation).full} CKB compensation
-              </span>
-            )}
-          </div>
-        ),
-      };
-    default:
-      return {
-        badge: (
-          <span className="text-gold text-small font-mono">
-            {'\u25C6'} {label}
-          </span>
-        ),
-        value:
-          capacity !== null ? (
-            <span className="text-gold text-small font-mono tabular-nums">
-              {formatCkbAmount(capacity).full} CKB
-            </span>
-          ) : null,
-      };
-  }
-}
-
-function getTypeEventParts(sc: ActivityTypeCall): EventParts {
-  return {
-    badge: (
-      <span className="text-amber text-small font-mono">
-        {'\u2699'} {TYPE_SCRIPT_CALL_LABEL}
-      </span>
-    ),
-    value: (
-      <span className="text-small font-mono">
-        <TypeCallExpr sc={sc} />
-      </span>
-    ),
-  };
-}
-
-function getLockEventParts(lc: ActivityLockCall): EventParts {
-  return {
-    badge: (
-      <span className="text-violet text-small font-mono">
-        {'\u26A1'} {LOCK_SCRIPT_CALL_LABEL}
-      </span>
-    ),
-    value: (
-      <span className="text-small font-mono">
-        <LockCallExpr lc={lc} />
-      </span>
-    ),
-  };
 }
 
 function formatProtocolAction(action: string): string {
@@ -437,7 +126,7 @@ export function ActivityReadError({ txHash, error }: { txHash: string; error: un
     <span
       role="alert"
       data-testid="activity-read-error"
-      className="text-rouge text-small block whitespace-normal break-all font-mono"
+      className="text-rouge text-small block whitespace-normal font-mono [overflow-wrap:anywhere]"
     >
       {`Cannot read tx ${txHash}: ${message}`}
     </span>
@@ -466,296 +155,14 @@ export function readable(txHash: string, render: () => ReactNode): ReactElement 
   );
 }
 
-/** A protocol action's row parts, or — when its metadata cannot be read — an error in their place. */
-function readProtocolActionEventParts(pa: ActivityProtocolAction, txHash: string): EventParts {
-  try {
-    return getProtocolActionEventParts(pa);
-  } catch (e) {
-    return { badge: <ActivityReadError txHash={txHash} error={e} />, value: null };
-  }
-}
-
-function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
-  // DAO is handled separately via getDaoEventParts
-  if (pa.protocol === 'dao') {
-    return getDaoEventParts(pa);
-  }
-
-  const isFiber = pa.protocol === 'fiber';
-  const label = protocolActionLabel(pa);
-  const { btcTxid, capacity } = protocolActionMeta(pa);
-
-  return {
-    badge: (
-      <span className={cn('text-small font-mono', isFiber ? 'text-violet' : 'text-orange')}>
-        {isFiber ? '\u26A1' : '\u2B21'} {label}
-      </span>
-    ),
-    value: btcTxid ? (
-      <span className="text-text-dim text-small font-mono">btc:{truncateHash(btcTxid, 8, 6)}</span>
-    ) : isFiber && capacity !== null ? (
-      <span className="text-text-dim text-small font-mono">
-        {formatCkbAmount(capacity).full} CKB
-      </span>
-    ) : null,
-  };
-}
-
 /** `Cellbase` for a cellbase (the site's word), `CKB Transfer` when CKB is all the tx moves, else `CKB`. */
 export function ckbEventLabel(isCellbase: boolean, isPrimaryAction: boolean): string {
   return isCellbase ? 'Cellbase' : isPrimaryAction ? 'CKB Transfer' : 'CKB';
 }
 
-/**
- * CKB event parts.
- * - "Cellbase" for cellbase transactions
- * - "CKB Transfer" when this is the primary action (no L2/L3 events)
- * - "CKB" when the CKB change is just a position side-effect of L2/L3 (fee + capacity)
- */
-function getCkbEventParts(
-  delta: string,
-  isCellbase: boolean,
-  isPrimaryAction: boolean
-): EventParts {
-  const icon = isCellbase ? '\u2605' : '\u2197';
-  const label = ckbEventLabel(isCellbase, isPrimaryAction);
-  const colorClass = isCellbase ? 'text-gold' : 'text-jade';
-
-  return {
-    badge: (
-      <span className={cn('text-small font-mono', colorClass)}>
-        {icon} {label}
-      </span>
-    ),
-    value: <CkbDelta delta={delta} />,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// ActivityEventGroup — full TX group: tx hash + all event sub-rows
-// ---------------------------------------------------------------------------
-
-export interface ActivityEventGroupProps {
-  activity: Activity;
-  formatTimeAgo: (timestamp: string | number) => string;
-  /** Whether this is the first group — controls the top separator line. */
-  isFirst?: boolean;
-}
-
-/**
- * Renders a TX group as both:
- *  - Narrow (< md): a self-contained stacked card
- *  - Wide (>= md): bare grid cells — the **parent** must be the grid container
- *    (`md:grid` with `gridTemplateColumns: '13rem 1fr auto 5rem'`)
- */
-export function ActivityEventGroup({
-  activity,
-  formatTimeAgo,
-  isFirst = true,
-}: ActivityEventGroupProps) {
-  const events: EventParts[] = [];
-
-  activity.protocolActions.forEach((pa) => {
-    events.push(readProtocolActionEventParts(pa, activity.txHash));
-  });
-  activity.itemDeltas.forEach((item) => {
-    events.push(getItemDeltaEventParts(item));
-  });
-  activity.typeCalls.forEach((sc) => {
-    events.push(getTypeEventParts(sc));
-  });
-  const protocolNames = new Set(
-    activity.protocolActions.map((pa: ActivityProtocolAction) => pa.protocol)
-  );
-  activity.lockCalls.forEach((lc) => {
-    const decodedProtocol = lc.decoded?.protocol as string | undefined;
-    if (decodedProtocol && protocolNames.has(decodedProtocol)) return;
-    events.push(getLockEventParts(lc));
-  });
-  // CKB is "Transfer" only when there are no L2/L3 events — otherwise it's
-  // just the position side-effect (capacity change + fee).
-  const isPrimaryCkb = events.length === 0;
-  events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase, isPrimaryCkb));
-
-  const txLink = `/tx/${activity.txHash}`;
-  // A transaction still in the node's pool has no block and no block time. It
-  // reports where it stands and how long it has waited instead — never a
-  // block link, and never a timestamp it does not have.
-  const isInPool = activity.blockNumber === null;
-  const blockLink = `/blocks/${activity.blockNumber}`;
-  const time = activity.timestamp === null ? null : formatTimeAgo(Number(activity.timestamp));
-
-  const position =
-    isInPool && activity.poolStatus ? (
-      <PoolStatusBadge status={activity.poolStatus} />
-    ) : (
-      <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
-        {formatBlockNumber(committedActivityBlock(activity))}
-      </Link>
-    );
-
-  const when =
-    isInPool && activity.timeAddedToPool ? (
-      <TimeInPool since={activity.timeAddedToPool} className="text-warning text-meta font-mono" />
-    ) : (
-      <span className="text-text-dim text-meta font-mono">{time}</span>
-    );
-
-  // Vertical padding helper — first/last rows of a group get more padding
-  const cellPy = (i: number): string => {
-    const first = i === 0;
-    const last = i === events.length - 1;
-    if (first && last) return 'py-2';
-    if (first) return 'pt-2 pb-0.5';
-    if (last) return 'pt-0.5 pb-2';
-    return 'py-0.5';
-  };
-
-  return (
-    <>
-      {/* === Narrow viewport (< md): self-contained stacked card === */}
-      <div className="border-base-border/50 border-b px-4 py-2 last:border-b-0 md:hidden">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-small flex items-center gap-1.5 font-mono">
-            <Link href={txLink} className="text-text hover:text-jade transition-colors">
-              {truncateHash(activity.txHash, 8, 6)}
-            </Link>
-            <span className="text-text-dim">{'\u00B7'}</span>
-            {position}
-          </div>
-          <span className="shrink-0">{when}</span>
-        </div>
-        <PoolInterpretationNotice
-          interpretation={activity.interpretation}
-          className="text-warning text-meta mt-1 block font-mono"
-        />
-        <div className="mt-1 space-y-0.5 pl-2">
-          {events.map((event, i) => (
-            <div key={i} className="flex items-center justify-between gap-2">
-              <div className="min-w-0 truncate">{event.badge}</div>
-              <div className="shrink-0">{event.value}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* === Wide viewport (>= md): bare grid cells — parent provides the grid === */}
-      {/* Group separator — full-width border between TX groups */}
-      {!isFirst && (
-        <div
-          className="border-base-border/50 hidden border-t md:block"
-          style={{ gridColumn: '1 / -1' }}
-        />
-      )}
-      {events.map((event, i) => (
-        <Fragment key={i}>
-          {/* Col 1: TX hash — first row only */}
-          <div className={cn('hidden items-center pl-4 md:flex', cellPy(i))}>
-            {i === 0 ? (
-              <div className="text-small flex items-center gap-1.5 font-mono">
-                <Link href={txLink} className="text-text hover:text-jade transition-colors">
-                  {truncateHash(activity.txHash, 8, 6)}
-                </Link>
-                <span className="text-text-dim">{'\u00B7'}</span>
-                {position}
-              </div>
-            ) : null}
-          </div>
-
-          {/* Col 2: Badge — right-aligned to sit close to value column */}
-          <div className={cn('hidden min-w-0 truncate text-right md:block', cellPy(i))}>
-            {event.badge}
-          </div>
-
-          {/* Col 3: Value — right-aligned, auto-sized */}
-          <div className={cn('hidden text-right md:block', cellPy(i))}>{event.value}</div>
-
-          {/* Col 4: Time — first row only */}
-          <div className={cn('hidden pr-4 text-right md:block', cellPy(i))}>
-            {i === 0 ? when : null}
-          </div>
-        </Fragment>
-      ))}
-      {activity.interpretation?.status === 'partial' && (
-        <div className="hidden px-4 pb-2 text-right md:block" style={{ gridColumn: '1 / -1' }}>
-          <PoolInterpretationNotice interpretation={activity.interpretation} />
-        </div>
-      )}
-    </>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Global activity helpers — tx-centric layered view for multi-participant
 // ---------------------------------------------------------------------------
-
-/** Inline item delta: compact signed amount + label, for participant summary lines. */
-function InlineItemDelta({ item }: { item: ItemDelta }) {
-  switch (item.kind) {
-    case 'token': {
-      const delta = BigInt(item.delta);
-      const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
-      const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
-      const formatted = formatTokenBalanceWithRawMarker(absDelta, item.decimals ?? null);
-      const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
-      const color =
-        delta > BigInt(0) ? 'text-positive' : delta < BigInt(0) ? 'text-negative' : 'text-text-dim';
-      return (
-        <Link
-          href={getTokenDetailHref(item.typeScriptHash)}
-          className={cn('text-small font-mono tabular-nums hover:underline', color)}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {prefix}
-          {formatted} {label}
-        </Link>
-      );
-    }
-    case 'object': {
-      const prefix = item.delta > 0 ? '+' : '';
-      return (
-        <Link
-          href={getObjectDetailHref(item.objectId)}
-          className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {prefix}
-          {item.delta} {truncateHash(item.objectId, 8, 6)}
-        </Link>
-      );
-    }
-    case 'identity': {
-      const prefix = item.delta > 0 ? '+' : '';
-      return (
-        <Link
-          href={getIdentityItemDetailHref(item.standard, item.identityId)}
-          className="text-text-bright decoration-aqua/35 text-small font-mono underline underline-offset-[3px] transition-colors"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {prefix}
-          {item.delta} {truncateHash(item.identityId, 8, 6)}
-        </Link>
-      );
-    }
-  }
-}
-
-/** Single participant line: party + CKB delta + item deltas (L1 + L2). */
-export function ParticipantLine({ participant }: { participant: ParticipantInfo }) {
-  const showCkb = participant.ckbDelta !== '0';
-
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <ParticipantRefView participant={participant} compact />
-      <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
-        {showCkb && <CkbDelta delta={participant.ckbDelta} />}
-        {participant.itemDeltas.map((item, i) => (
-          <InlineItemDelta key={i} item={item} />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /** One tx-level event of a global activity: an L3 protocol action or an L2 type / lock call. */
 export type TxEvent =
@@ -783,21 +190,6 @@ export function globalTxEvents(activity: ActivityBody): TxEvent[] {
     events.push({ kind: 'lock', call });
   }
   return events;
-}
-
-/**
- * Build tx-level event rows for a GlobalActivity.
- * Returns L3 protocol actions + L2 catch-all type/lock calls.
- * Per-participant data should be rendered separately via ParticipantLine.
- */
-export function buildGlobalTxEvents(activity: GlobalActivity): EventParts[] {
-  return globalTxEvents(activity).map((e) =>
-    e.kind === 'protocol'
-      ? readProtocolActionEventParts(e.action, activity.txHash)
-      : e.kind === 'type'
-        ? getTypeEventParts(e.call)
-        : getLockEventParts(e.call)
-  );
 }
 
 /** Net change of the same item across every participant decides mint/burn/transfer. */
@@ -871,10 +263,37 @@ export function activityHeadline(activity: ActivityBody): string {
 }
 
 /**
+ * The ink of an amount by its sign: the integer in the sign's own ink, the fraction digits a step
+ * quieter in a named ink of that sign (UI review 2026-11-14, R4, DY-06) — each at 4.5:1 on every
+ * ground in both themes (`__tests__/lib/palette.test.ts`), never the sign's ink at an opacity.
+ * The one table every amount renderer reads: HTML takes the class (`fraction`), SVG text the
+ * palette key as a fill (`color(fractionKey)`); the type keeps the class the key's.
+ */
+export const AMOUNT_INK = {
+  positive: { integer: 'text-positive', fraction: 'text-jade-dim', fractionKey: 'jade-dim' },
+  negative: { integer: 'text-negative', fraction: 'text-rouge-dim', fractionKey: 'rouge-dim' },
+  neutral: { integer: 'text-text', fraction: 'text-text-dim', fractionKey: 'text-dim' },
+} as const satisfies Record<string, AmountInk>;
+/** An amount's inks: the fraction's class is its palette key's text class, a literal for Tailwind. */
+type AmountInk = {
+  [K in PaletteKey]: { integer: string; fraction: `text-${K}`; fractionKey: K };
+}[PaletteKey];
+export type AmountSign = keyof typeof AMOUNT_INK;
+
+/** The sign of a split amount (`+`, `−` or none) as an {@link AMOUNT_INK} key. */
+export function amountSign(sign: string): AmountSign {
+  if (sign === '+') return 'positive';
+  if (sign === MINUS) return 'negative';
+  if (sign === '') return 'neutral';
+  throw new Error(`amount sign "${sign}" is not +, ${MINUS} or none`);
+}
+
+/**
  * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
- * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign. Zero is
- * "0 CKB" with the 0 ghosted and no fraction, for every caller (consistency plan C4): nothing
- * moved, so there are no decimals to read.
+ * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign, the
+ * fraction in the sign's quieter ink (`AMOUNT_INK`). Zero is "0 CKB" with no fraction, for every
+ * caller (consistency plan C4): nothing moved, so there are no decimals to read. That 0 is a
+ * datum, in the dim ink; the ghost is only for the padding zeros of a non-zero amount (R4).
  */
 export function ExactCkb({
   shannons,
@@ -886,7 +305,10 @@ export function ExactCkb({
   shannons: bigint;
   signed?: boolean;
   tone?: 'sign' | 'plain';
-  /** Allow a line break before the decimal or unit, preserving every digit. */
+  /**
+   * Allow a line break before the decimal, preserving every digit. The unit stays with the last
+   * digits: a number never parts from its unit (U-16).
+   */
   wrap?: boolean;
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
@@ -895,21 +317,14 @@ export function ExactCkb({
   if (shannons === BigInt(0))
     return (
       <span data-ckb-amount className="whitespace-nowrap tabular-nums">
-        <span data-ghost className="text-text-ghost">
+        <span data-zero className="text-text-dim">
           0
         </span>
         {unitEl}
       </span>
     );
   const parts = splitCkbAmount(shannons);
-  const color =
-    tone === 'plain'
-      ? 'text-text'
-      : parts.sign === '+'
-        ? 'text-positive'
-        : parts.sign === MINUS
-          ? 'text-negative'
-          : 'text-text';
+  const ink = AMOUNT_INK[tone === 'plain' ? 'neutral' : amountSign(parts.sign)];
   return (
     <span
       data-ckb-amount
@@ -917,7 +332,7 @@ export function ExactCkb({
         wrap
           ? 'inline-flex max-w-full flex-wrap justify-end tabular-nums'
           : 'whitespace-nowrap tabular-nums',
-        color
+        ink.integer
       )}
     >
       <span className="whitespace-nowrap">
@@ -925,12 +340,14 @@ export function ExactCkb({
         {parts.integer}
       </span>
       <span className="whitespace-nowrap">
-        <span className="opacity-[0.78]">{parts.fraction}</span>
+        <span data-fraction className={ink.fraction}>
+          {parts.fraction}
+        </span>
         <span data-ghost className="text-text-ghost">
           {parts.ghost}
         </span>
+        {unitEl}
       </span>
-      {unitEl}
     </span>
   );
 }
@@ -942,14 +359,17 @@ export function ExactCkb({
  * unit beside an exact CKB amount; the default keeps it in the amount's ink.
  * `showComposition={false}` (consistency C3) leaves an object's composition badge to its caller,
  * which says a tier shared by a whole participant line once; the default draws it per object.
+ * `size` is the size of the row the fact stands in, for an id it writes (U-09).
  */
 export function ItemDeltaFact({
   item,
+  size,
   tone = 'plain',
   symbol = 'same',
   showComposition = true,
 }: {
   item: ItemDelta;
+  size: ShortSize;
   tone?: 'plain' | 'sign';
   symbol?: 'same' | 'dim';
   showComposition?: boolean;
@@ -959,7 +379,9 @@ export function ItemDeltaFact({
       const delta = BigInt(item.delta);
       const sign = delta > BigInt(0) ? '+' : delta < BigInt(0) ? MINUS : '';
       const abs = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
-      const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
+      const label = item.symbol?.trim() || (
+        <ShortId value={item.typeScriptHash} kind="hash" size={size} />
+      );
       return (
         <span className="inline-flex items-baseline gap-1.5">
           <ClassMark kind="tokens" size={12} className="self-center" />
@@ -989,16 +411,15 @@ export function ItemDeltaFact({
       return (
         <span className="text-text-bright">
           <ClassMark kind="objects" size={12} className="mr-1.5" />
-          <span className="whitespace-nowrap">
-            {collectionName ? `${collectionName} ` : 'object '}
-            <Link
-              href={getObjectDetailHref(item.objectId)}
-              className="hover:text-jade transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {truncateHash(item.objectId, 8, 4)}
-            </Link>
-          </span>{' '}
+          {/* the id is the unit (ShortId); the collection's name is words (A4 Chrome sweep) */}
+          {collectionName ? `${collectionName} ` : 'object '}
+          <Link
+            href={getObjectDetailHref(item.objectId)}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ShortId value={item.objectId} kind="hash" size={size} />
+          </Link>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
           {showComposition && item.composition && (
             <CompositionBadge tier={item.composition} size="sm" className="ml-1.5 align-middle" />
@@ -1010,16 +431,15 @@ export function ItemDeltaFact({
       return (
         <span className="text-text-bright">
           <ClassMark kind="identities" size={12} className="mr-1.5" />
-          <span className="whitespace-nowrap">
-            {`${formatStandard(item.standard)} `}
-            <Link
-              href={getIdentityItemDetailHref(item.standard, item.identityId)}
-              className="hover:text-jade transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {truncateHash(item.identityId, 8, 4)}
-            </Link>
-          </span>{' '}
+          {/* the id is the unit (ShortId); the standard's name is words (A4 Chrome sweep) */}
+          {`${formatStandard(item.standard)} `}
+          <Link
+            href={getIdentityItemDetailHref(item.standard, item.identityId)}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ShortId value={item.identityId} kind="hash" size={size} />
+          </Link>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
         </span>
       );
@@ -1040,7 +460,10 @@ export type ProtocolNoteFact =
  * What a protocol action's metadata says, as quiet parts of one line: DAO amounts and the deposit
  * block, a Fiber channel and its capacity, an RGB++ BTC txid. Empty when the action carries none.
  */
-export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNoteFact[] {
+export function protocolActionNoteFacts(
+  pa: ActivityProtocolAction,
+  size: ShortSize
+): ProtocolNoteFact[] {
   const meta = protocolActionMeta(pa);
   const facts: ProtocolNoteFact[] = [];
   if (meta.channelOutpoint) {
@@ -1051,7 +474,9 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
       kind: 'other',
       node:
         index === undefined ? (
-          `channel ${truncateHash(hash, 10, 4)}`
+          <>
+            channel <ShortId value={hash} kind="hash" size={size} />
+          </>
         ) : (
           <>
             channel{' '}
@@ -1060,7 +485,8 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
               className="hover:text-jade transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
-              {truncateHash(hash, 10, 4)}:{index}
+              <ShortId value={hash} kind="hash" size={size} />
+              <OutpointIndex index={index} />
             </Link>
           </>
         ),
@@ -1124,34 +550,17 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
       kind: 'other',
       node: (
         <span className="text-copper" title={meta.btcTxid}>
-          Bitcoin tx {truncateHash(meta.btcTxid, 8, 6)}
-          {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
+          Bitcoin tx <ShortId value={meta.btcTxid} kind="hash" size={size} />
+          {meta.btcOutputIndex !== null && <OutpointIndex index={meta.btcOutputIndex.toString()} />}
         </span>
       ),
     });
   return facts;
 }
 
-export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
-  return protocolActionNoteFacts(pa).map((f) => f.node);
-}
-
-/** Parts joined with a dim middle dot. */
-export function DotJoined({ parts }: { parts: React.ReactNode[] }) {
-  return (
-    <>
-      {parts.map((part, i) => (
-        <Fragment key={i}>
-          {i > 0 && <span className="text-text-dim">{' \u00B7 '}</span>}
-          {part}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
-/** A protocol action's metadata as one quiet line, or nothing when it carries none. */
-export function ProtocolActionNote({ pa }: { pa: ActivityProtocolAction }) {
-  const parts = protocolActionNoteParts(pa);
-  return parts.length === 0 ? null : <DotJoined parts={parts} />;
+export function protocolActionNoteParts(
+  pa: ActivityProtocolAction,
+  size: ShortSize
+): React.ReactNode[] {
+  return protocolActionNoteFacts(pa, size).map((f) => f.node);
 }

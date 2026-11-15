@@ -88,12 +88,12 @@ describe('Address v3 components', () => {
       render(<AddressBalance holdings={board} />);
       const bar = screen.getByRole('img', { name: /^Balance partition:/ });
       expect(bar).toHaveAccessibleName(
-        'Balance partition: occupied 291,486.00000000 CKB (91.16 %), free 28,256.66879443 CKB (8.84 %), nothing in the Nervos DAO'
+        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.84%), nothing in the Nervos DAO'
       );
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16 %', 'free 8.84 %']);
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
       expect(screen.getByTestId('balance-parts')).toHaveTextContent(
         /^occupied 291,486\.00000000 pays for the bytes its cells keep · free 28,256\.66879443 · no CKB in the Nervos DAO$/
       );
@@ -106,7 +106,7 @@ describe('Address v3 components', () => {
         .getByRole('img', { name: /^Balance partition:/ })
         .querySelector('[data-part="free"]')!;
       expect(free).toHaveTextContent(/^$/);
-      expect(free).toHaveAttribute('title', 'free 8.84 % · 28,256.66879443 CKB');
+      expect(free).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
     });
 
     it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {
@@ -135,7 +135,8 @@ describe('Address v3 components', () => {
       );
       const figure = document.querySelector('[data-role="balance-figure"]')!;
       expect(figure).toHaveTextContent(/^0 CKB$/);
-      expect(within(figure as HTMLElement).getByText('0')).toHaveClass('text-text-ghost');
+      // R4 (re-pinned on purpose): a zero balance is a datum, in the dim ink, not the ghost
+      expect(within(figure as HTMLElement).getByText('0')).toHaveClass('text-text-dim');
       expect(screen.queryByRole('img', { name: /^Balance partition:/ })).toBeNull();
     });
   });
@@ -153,6 +154,7 @@ describe('Address v3 components', () => {
         'Lock',
       ]);
       expect(items.map((i) => i.querySelector('dd')!.textContent)).toEqual([
+        // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
         '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
         '40 · 5 DAO cells + 15 token cells + 14 objects + 1 identity + 3 other-script cells + 2 plain CKB',
         '1,021',
@@ -264,7 +266,8 @@ describe('Address v3 components', () => {
           'href',
           `/mainnet/cell/${cell.txHash}-${cell.outputIndex}`
         );
-        expect(outPoint).toHaveTextContent(`0xdce40476...3993e1:${cell.outputIndex}`);
+        // U-09 (re-pinned): the table's out point at the row size
+        expect(outPoint).toHaveTextContent(`0xdce40476…3993e1:${cell.outputIndex}`);
         expectBefore(seal, outPoint);
         expect(row.querySelector('[data-owner-seal]')).toBeNull();
       });
@@ -286,7 +289,8 @@ describe('Address v3 components', () => {
           expect(seal).not.toHaveClass('-my-[6px]');
           // the head line is the out point alone, the seal in its own column
           const lines = phoneLines(row);
-          expect(lines[0].left).toBe(`0xdce40476...3993e1:${cell.outputIndex}`);
+          // U-09 (re-pinned): the phone row's out point at the tight size
+          expect(lines[0].left).toBe(`0xdce4…93e1:${cell.outputIndex}`);
           expectBefore(seal, within(row).getAllByRole('link')[0]);
           expect(row.querySelector('[data-owner-seal]')).toBeNull();
         });
@@ -427,7 +431,7 @@ describe('Address activity is the shared activity row (C3)', () => {
     );
     const row = article(container);
     const a = addressActivitiesFixture[0];
-    expect(within(row).getByRole('link', { name: /Received 9 objects/ })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: /Received 9\sobjects/ })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
     );

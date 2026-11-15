@@ -2,11 +2,11 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
-import { HexCode } from '@/components/ui/hex-code';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -25,19 +25,20 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
-import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { formatCompactInteger } from '@/lib/exact-integer';
-import {
-  formatTimeAgo,
-  formatUtc8Date,
-  formatUtc8DateTime,
-  formatUtc8Time,
-  truncateHash,
-} from '@/lib/utils';
+import { formatTimeAgo, formatUtc8Time } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
+import { ShortId } from '@/components/ui/short-id';
+import { ClockText, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { HeadId } from '@/components/ui/head-id';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
 function committedBlock(block: number | null, txHash: string): number {
@@ -53,15 +54,12 @@ export default function BlockDetailPage() {
   const pagination = useCursorPagination();
   const activityPagination = useCursorPagination();
   const pageSize = usePageSize(100);
-  const {
-    data: block,
-    isLoading,
-    error,
-  } = useQuery({
+  const read = useQuery({
     queryKey: ['block', id],
     queryFn: () => api.getBlock(id as string),
     refetchInterval: (query) => (query.state.data?.cyclesStatus === 'pending' ? 3000 : false),
   });
+  const { data: block, error } = read;
   const transactions = useQuery({
     queryKey: ['block-transactions', id, block?.number, pagination.cursor, pageSize],
     queryFn: () =>
@@ -137,7 +135,9 @@ export default function BlockDetailPage() {
     return () => window.removeEventListener('keydown', navigate);
   }, [block, router]);
 
-  if (isLoading)
+  // Awaited, fetching or paused (offline, or a hidden tab between retries): isLoading is pending
+  // AND fetching, so a paused read would fall through as if it had completed.
+  if (isAwaited(read))
     return (
       <div>
         <main className="container mx-auto py-8">
@@ -156,14 +156,17 @@ export default function BlockDetailPage() {
       />
     );
   }
+  if (!block && isBadRequestApiError(error))
+    return <NotFoundPage notAnId={{ kind: 'block', reason: error.apiMessage }} />;
   if (error && !block)
     return (
       <div>
         <main className="container mx-auto py-8">
-          <p role="alert">Unable to read block: {error.message}</p>
+          <ReadFailure what="block" error={error} />
         </main>
       </div>
     );
+  // past pending, no error means the read succeeded: with no block, an API invariant broke
   if (!block) throw new Error(`Block ${id}: request completed without block evidence`);
   const activation = block.hardforkActivation;
   const resources = activation?.resources?.length
@@ -258,8 +261,9 @@ export default function BlockDetailPage() {
             </span>
           }
           // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
-          // voice (C10 round 2: `inherit` writes no ink or size), click to copy as before.
-          identity={<HexCode value={block.hash} truncate={false} variant="inherit" />}
+          // voice (C10 round 2), click to copy as before; one line or two halves, never a
+          // scroller (the lead's ruling a).
+          identity={<HeadId value={block.hash} kind="hash" copyable />}
           // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
           // hash, and the transactions it holds in rods. A count the API did not serve is refused
           // (the summary below reads it first), never filled in.
@@ -271,26 +275,30 @@ export default function BlockDetailPage() {
           // plate from the page's left edge, where the tab row and the sections start (C10).
           lede={
             <p data-testid="block-summary" className="text-body max-w-[80ch] leading-relaxed">
-              {formatCount(block.transactionsCount, 'transaction')}
+              {unitNode(formatCount(block.transactionsCount, 'transaction'))}
               {block.minerAddress && (
                 <>
                   , mined by{' '}
                   <MinerLink
                     address={block.minerAddress}
                     pool={block.minerPool}
-                    unnamed={<Address address={block.minerAddress} />}
+                    size="head"
+                    unnamed={<Address address={block.minerAddress} size="head" />}
                   />
                 </>
               )}{' '}
-              on {formatUtc8Date(block.timestamp)} at {formatUtc8Time(block.timestamp)}.
+              on <Utc8Date timestamp={block.timestamp} /> at{' '}
+              {unitNode(formatUtc8Time(block.timestamp))}.
               {block.miningReward !== null ? (
                 <>
                   {' '}
                   The miner earns {amount(block.miningReward, 'reward')} for this block
-                  {paidIn !== null && <>, paid {formatCount(paidIn, 'block')} later</>}.
+                  {paidIn !== null && <>, paid {unitNode(formatCount(paidIn, 'block'))} later</>}.
                 </>
               ) : (
-                paidIn !== null && <> Its reward is paid {formatCount(paidIn, 'block')} later.</>
+                paidIn !== null && (
+                  <> Its reward is paid {unitNode(formatCount(paidIn, 'block'))} later.</>
+                )
               )}
             </p>
           }
@@ -362,7 +370,7 @@ export default function BlockDetailPage() {
                     )}
                   </dd>
                   <dd className="text-text-dim mt-1">
-                    {formatPercent(BigInt(block.size), BigInt(block.maxBlockBytes))}% of{' '}
+                    {percentOf(BigInt(block.size), BigInt(block.maxBlockBytes))} of{' '}
                     {block.maxBlockBytes.toLocaleString('en-US')} · overhead{' '}
                     {block.overheadSize.toLocaleString('en-US')} · transactions{' '}
                     {block.userTransactionsSize.toLocaleString('en-US')}
@@ -385,14 +393,14 @@ export default function BlockDetailPage() {
                   </dd>
                   {block.cycles !== null && (
                     <dd className="text-text-dim mt-1">
-                      {formatPercent(BigInt(block.cycles), BigInt(block.maxBlockCycles))}% of{' '}
+                      {percentOf(BigInt(block.cycles), BigInt(block.maxBlockCycles))} of{' '}
                       {BigInt(block.maxBlockCycles).toLocaleString('en-US')}
                     </dd>
                   )}
                 </div>
                 <div className="min-w-0">
                   <dt className="text-text-dim mb-1">Miner client</dt>
-                  <dd className="text-text-bright break-all">{client.line}</dd>
+                  <dd className="text-text-bright [overflow-wrap:anywhere]">{client.line}</dd>
                   {client.decoded && (
                     <dd className="text-text-dim">decoded from the cellbase message</dd>
                   )}
@@ -467,7 +475,7 @@ export default function BlockDetailPage() {
                       <article
                         key={`${proposal.uncle?.hash}:${proposal.proposalIndex}`}
                         data-testid="block-proposal-row"
-                        className="border-base-border-subtle text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5"
+                        className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5"
                       >
                         <p className="flex flex-wrap items-baseline gap-2">
                           <span className="text-gold">●</span>
@@ -495,6 +503,7 @@ export default function BlockDetailPage() {
                             <Link href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
                                 hash={proposal.committedTxHash}
+                                size="row"
                                 copyable={false}
                                 className="text-small"
                               />
@@ -511,7 +520,7 @@ export default function BlockDetailPage() {
                           </p>
                         ) : (
                           <p className="text-text-dim">
-                            No indexed commitment in its proposal window
+                            No indexed commitment in its proposal window.
                           </p>
                         )}
                       </article>
@@ -520,12 +529,12 @@ export default function BlockDetailPage() {
                   {!proposalsError &&
                     (proposals?.length === 0 ||
                       (block.proposalsCount === 0 && block.unclesCount === 0)) && (
-                      <p className="text-text-dim text-small">No proposals in this block</p>
+                      <p className="text-text-dim text-small">No proposals in this block.</p>
                     )}
                   {!proposalsError &&
                     proposals === undefined &&
                     (block.proposalsCount > 0 || block.unclesCount > 0) && (
-                      <p className="text-text-dim text-small">Loading proposals...</p>
+                      <p className="text-text-dim text-small">Loading proposals…</p>
                     )}
                 </DetailSection>
               </div>
@@ -569,11 +578,11 @@ export default function BlockDetailPage() {
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Block bytes</dt>
                 {/* R2b-a 5: `size` is the molecule-serialized block. */}
-                <dd>{block.size.toLocaleString('en-US')} bytes, molecule-serialized</dd>
+                <dd>{unitNode(formatCount(block.size, 'byte'))}, molecule-serialized</dd>
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
-                <dd className="break-all">
+                <dd className="[overflow-wrap:anywhere]">
                   {block.minerMessage ?? 'None: genesis has no miner message'}
                 </dd>
               </div>
@@ -605,19 +614,23 @@ export default function BlockDetailPage() {
           )}
           <div className="grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]">
             <div className="min-w-0">
-              <div className="border-base-border-subtle mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
-                <div role="group" aria-label="Block contents" className="flex flex-wrap gap-6">
+              <div className="border-row-rule mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+                <div
+                  role="group"
+                  aria-label="Block contents"
+                  className="flex flex-wrap gap-6 max-md:gap-x-4"
+                >
                   {(['activities', 'transactions'] as const).map((tab) => (
                     <button
                       type="button"
                       key={tab}
                       aria-pressed={view === tab}
                       onClick={() => setView(tab)}
-                      className={`text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+                      className={`text-section max-md:text-body -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                     >
                       <span>{tab === 'activities' ? 'Activities' : 'Transactions'}</span>
                       {/* One activity row per transaction of the block (the block feed's contract). */}
-                      <span className="text-text-dim text-small font-normal">
+                      <span className="text-text-dim text-small max-md:text-meta font-normal">
                         {block.transactionsCount.toLocaleString('en-US')}
                       </span>
                     </button>
@@ -629,7 +642,7 @@ export default function BlockDetailPage() {
               </div>
               {view === 'activities' ? (
                 <>
-                  {activities.isLoading && <p role="status">Loading activities…</p>}
+                  {isAwaited(activities) && <p role="status">Loading activities…</p>}
                   {activities.error && (
                     <p role="alert">Unable to read activities: {activities.error.message}</p>
                   )}
@@ -649,7 +662,7 @@ export default function BlockDetailPage() {
                                 href={`/tx/${activity.txHash}`}
                                 className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
                               >
-                                {truncateHash(activity.txHash, 10, 6)}
+                                <ShortId value={activity.txHash} kind="hash" size="row" />
                               </Link>
                             </>
                           }
@@ -675,7 +688,7 @@ export default function BlockDetailPage() {
                 </>
               ) : (
                 <>
-                  {transactions.isLoading && <p role="status">Loading transactions…</p>}
+                  {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
                   {transactions.error && (
                     <p role="alert">Unable to read transactions: {transactions.error.message}</p>
                   )}
@@ -710,9 +723,11 @@ export default function BlockDetailPage() {
               <dl className="space-y-5">
                 <div>
                   <dt className="text-text-dim mb-1">Time</dt>
-                  <dd>{formatUtc8DateTime(block.timestamp)}</dd>
+                  <dd>
+                    <Utc8DateTime timestamp={block.timestamp} />
+                  </dd>
                   <dd className="text-text-dim mt-1">
-                    {formatTimeAgo(block.timestamp)}
+                    <ClockText text={(now) => formatTimeAgo(block.timestamp, now)} />
                     {parentElapsedMs !== null && (
                       <> · {parentElapsedMs / 1000} s after its parent</>
                     )}
@@ -725,7 +740,8 @@ export default function BlockDetailPage() {
                       <MinerLink
                         address={block.minerAddress}
                         pool={block.minerPool}
-                        unnamed={<Address address={block.minerAddress} />}
+                        size="row"
+                        unnamed={<Address address={block.minerAddress} size="row" />}
                       />
                     ) : (
                       'Genesis'
@@ -775,7 +791,7 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
     <Link
       href={href}
       aria-label={label}
-      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center rounded border"
+      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -808,7 +824,7 @@ function EpochBar({
     <span
       role="img"
       aria-label={String(Array.isArray(children) ? children.join('') : children)}
-      className="bg-base-border flex h-1 w-[72px] shrink-0 overflow-hidden rounded-sm"
+      className="bg-base-border flex h-1 w-[72px] shrink-0 overflow-hidden"
     >
       <span className="bg-text h-full" style={{ width: `${((index + 1) / length) * 100}%` }} />
     </span>
@@ -882,9 +898,11 @@ function CommittedFrom({
   const [only] = origins.keys();
   return (
     <span className="text-text-dim text-small">
-      {origins.size === 1
-        ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
-        : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${origins.size.toLocaleString('en-US')} blocks`}
+      {unitNode(
+        origins.size === 1
+          ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
+          : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${formatCount(origins.size, 'block')}`
+      )}
     </span>
   );
 }
@@ -908,14 +926,14 @@ function UncleRow({
       `Uncle ${index} of block ${formatBlockNumber(blockNumber)}: sibling facts disagree`
     );
   return (
-    <article className="border-base-border-subtle text-small flex flex-col gap-0.5 border-b py-2.5">
+    <article className="border-row-rule text-small flex flex-col gap-0.5 border-b py-2.5">
       <span className="flex flex-wrap items-baseline gap-x-2">
         <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
           {formatBlockNumber(uncle.number)}
         </Link>
         <span className="text-text-dim">uncle</span>
         <Link href={getUncleDetailHref(blockNumber, index)}>
-          <Hash hash={uncle.hash} copyable={false} className="text-small" />
+          <Hash hash={uncle.hash} size="row" copyable={false} className="text-small" />
         </Link>
       </span>
       <span className="text-text-dim">
@@ -940,8 +958,7 @@ function UncleRow({
             <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
               <Hash
                 hash={detail.canonicalAtHeight.hash}
-                startChars={6}
-                endChars={4}
+                size="row"
                 copyable={false}
                 className="text-small"
               />
@@ -952,10 +969,10 @@ function UncleRow({
         )}
       </span>
       <span className="text-text-dim">
-        {formatUtc8Time(uncle.timestamp)}
+        {unitNode(formatUtc8Time(uncle.timestamp))}
         {detail?.msAfterSibling != null &&
           `, ${detail.msAfterSibling >= 0 ? `${detail.msAfterSibling.toLocaleString('en-US')} ms after` : `${(-detail.msAfterSibling).toLocaleString('en-US')} ms before`} its sibling`}{' '}
-        · {formatCount(uncle.proposalIds.length, 'proposal')}
+        · {unitNode(formatCount(uncle.proposalIds.length, 'proposal'))}
       </span>
     </article>
   );

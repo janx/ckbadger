@@ -1,12 +1,14 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatUtc8Date } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
+import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
@@ -16,13 +18,9 @@ vi.mock('@/lib/api', () => ({
   api: {
     getGlobalActivities: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
   TAG_TOKEN: 1,
   TAG_OBJECT: 2,
   TAG_IDENTITY: 4,
-  TAG_DAO: 8,
-  TAG_PROTOCOL: 16,
   TAG_CELLBASE: 32,
 }));
 
@@ -100,6 +98,9 @@ function emitIntersection(isIntersecting: boolean) {
 
 describe('ActivitiesStreamExplorer', () => {
   beforeEach(() => {
+    // the clock stands still (Date only; timers stay real): a row's age and its expectation read
+    // one time (the lead's addendum 3)
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.clearAllMocks();
     intersectionCallback = null;
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
@@ -301,6 +302,43 @@ describe('ActivitiesStreamExplorer', () => {
     ).toBeInTheDocument();
   });
 
+  // Lane E4: a day divider's "Today" / "Yesterday" is relative to the reader's day on the UTC+8
+  // clock, read from the page's one clock: at midnight the dividers move on with no data change
+  // (they were read once per render from the wall clock). The clock stops with the stream.
+  it('moves its day dividers on at UTC+8 midnight with no data change (E4)', async () => {
+    vi.useRealTimers();
+    // 23:59:59 on 2026-11-14 in UTC+8, a whole second
+    vi.useFakeTimers({ now: Date.parse('2026-11-14T15:59:59Z') });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        makeActivity({
+          txHash: '0xlate',
+          timestamp: String(Date.parse('2026-11-14T15:59:40Z')),
+          participants: [makeParticipant({ address: 'ckb1qlate', ckbDelta: '-1' })],
+        }),
+        makeActivity({
+          txHash: '0xeve',
+          timestamp: String(Date.parse('2026-11-13T15:00:00Z')),
+          participants: [makeParticipant({ address: 'ckb1qeve', ckbDelta: '-1' })],
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { unmount } = render(<ActivitiesStreamExplorer />);
+    const dividers = () =>
+      Array.from(document.querySelectorAll('[data-testid^="activity-day-divider"]')).map(
+        (d) => d.textContent
+      );
+    await loadUnderStillClock(() => dividers().length === 2);
+    expect(dividers()).toEqual(['Today', 'Yesterday']);
+    tick(1000);
+    expect(dividers()).toEqual(['Yesterday', 'Nov 13']);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('renders each activity row with tx hash, event rows, and participant lines', async () => {
     const timestamp = String(Date.now() - 23_000);
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
@@ -346,10 +384,13 @@ describe('ActivitiesStreamExplorer', () => {
     );
     // Block number shown
     expect(within(row).getByText('#123,456')).toBeInTheDocument();
-    // Time shown: consistency C3, the absolute UTC+8 date (was the age, /ago$/), the age its hover.
-    const date = formatUtc8Date(timestamp);
-    expect(within(row).getByText(date)).toHaveAttribute('title', expect.stringMatching(/ago$/));
-    expect(row.querySelector('[data-role="evidence"]')).not.toHaveTextContent('ago');
+    // PA-22 (re-pinned): a live feed's row says its age, the full date-time its hover (it was the
+    // date, consistency C3, which left a row of seconds ago reading only today's date)
+    const evidence = row.querySelector('[data-role="evidence"]') as HTMLElement;
+    expect(within(evidence).getByText(formatTimeAgo(timestamp, Date.now()))).toHaveAttribute(
+      'title',
+      formatUtc8DateTime(timestamp)
+    );
     // Script call event row (badge includes icon prefix)
     expect(within(row).getByText('Script call')).toBeInTheDocument();
     expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();
@@ -754,6 +795,26 @@ describe('ActivitiesStreamExplorer', () => {
 
     expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
     expect(await screen.findByText('Could not refresh: refresh failed')).toBeInTheDocument();
+  });
+
+  // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+  // awaited: the stream says it is reading, never "Nothing of this kind", and a real empty answer
+  // still says so once back online.
+  it('says it is reading while its read is paused, then the true empty state once back online', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      hasMore: false,
+      nextCursor: null,
+      total: 0,
+      limit: 20,
+    });
+    const { resume } = renderPaused(<ActivitiesStreamExplorer />);
+    expect(await screen.findByText('Reading activities…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('Nothing of this kind in the latest activities.')).toBeNull();
+    resume();
+    expect(
+      await screen.findByText('Nothing of this kind in the latest activities.')
+    ).toBeInTheDocument();
   });
 });
 

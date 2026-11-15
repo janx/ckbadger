@@ -1,19 +1,25 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount } from '@/lib/api';
-import { DATA_COLOR } from '@/lib/design-tokens';
-import { fade } from '@/lib/palette';
-import { formatPercent } from '@/lib/ckb-decimal';
+import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
+import { color, fade, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { formatCount } from '@/lib/format-count';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { cn } from '@/lib/utils';
 import { TopicSection } from '@/app/network/topic-section';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 const TOP_N = 8;
-/** The hosting bar's segments: one hue, the largest strongest (Network board). */
-const PROVIDER_OPACITY = [0.9, 0.6, 0.5, 0.42, 0.34, 0.2] as const;
+/**
+ * The hosting bar's segments: one hue, the largest strongest (Network board). DY-03: each step
+ * keeps the jade where one of the two fill inks reads at 4.5:1 in both themes (0.6 and 0.5 sat in
+ * the mid-tone band where neither does by night: 4.24 and 4.36:1).
+ */
+export const PROVIDER_OPACITY = [0.9, 0.66, 0.46, 0.38, 0.3, 0.2] as const;
 /** The in-segment words (hierarchy v3 R15): 12 px monospace, 10 px padding each side. */
 const LABEL_ADVANCE = 7.2;
 const LABEL_PAD = 10;
@@ -23,6 +29,10 @@ function dataHue(alpha: number): string {
   return fade(DATA_COLOR, alpha);
 }
 
+/**
+ * The three parts wait while the read is awaited — fetching, or paused (offline, or a hidden tab
+ * between retries), which isLoading leaves out — and only then read its error or data.
+ */
 function useDistributions() {
   // Shares the ['network', 'distributions'] key with the MaxMind attribution: one fetch.
   return useQuery({
@@ -39,7 +49,7 @@ function useDistributions() {
 function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
-  if (top.length === 0) return <p className="text-text-dim text-small">No data yet</p>;
+  if (top.length === 0) return <p className="text-text-dim text-small">No data.</p>;
   return (
     <div className="flex max-w-[720px] flex-col gap-1">
       {top.map((it, i) => (
@@ -53,10 +63,9 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
           >
             {it.label}
           </span>
-          <span aria-hidden="true" className="bg-base-elevated flex h-1.5 rounded-full">
+          <span aria-hidden="true" className="bg-bar-track flex h-1.5">
             <span
               {...{ [attr]: '' }}
-              className="rounded-full"
               style={{
                 width: `${(100 * it.count) / max}%`,
                 backgroundColor: DATA_COLOR,
@@ -73,8 +82,9 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
 
 /** "Which software they run": the client versions of the verified peers (CH-54). */
 export function NetworkDistributions() {
-  const { data, isLoading, error } = useDistributions();
-  if (isLoading) return <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />;
+  const read = useDistributions();
+  const { data, error } = read;
+  if (isAwaited(read)) return <div className="bg-base-elevated h-40 w-full animate-pulse" />;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -91,8 +101,9 @@ export function NetworkDistributions() {
 
 /** The protocols the verified peers speak: developer evidence (tier 2, CH-54). */
 export function NetworkProtocols() {
-  const { data, isLoading, error } = useDistributions();
-  if (isLoading) return null;
+  const read = useDistributions();
+  const { data, error } = read;
+  if (isAwaited(read)) return null;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -117,8 +128,9 @@ function asnOrganisation(label: string): string {
  * share alone, else nothing), the exact counts in one quiet line under it, then one caption.
  */
 export function HostingBar() {
-  const { data, isLoading, error } = useDistributions();
-  if (isLoading) return null;
+  const read = useDistributions();
+  const { data, error } = read;
+  if (isAwaited(read)) return null;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -133,7 +145,8 @@ export function HostingBar() {
   if (total !== data.verifiedRetained)
     return (
       <p role="alert" className="text-negative text-small">
-        Hosting networks cover {total} peers, not the {data.verifiedRetained} verified.
+        Hosting networks cover {unitNode(formatCount(total, 'peer'))}, not the{' '}
+        {data.verifiedRetained} verified.
       </p>
     );
   const ranked = [...byOrg.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -165,6 +178,7 @@ function HostingSection({
   caption: string | undefined;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  const { resolved: theme } = useTheme();
   const spans = partitionSpans(
     segments.map(([, count]) => BigInt(count)),
     BigInt(total),
@@ -172,7 +186,7 @@ function HostingSection({
     100,
     'hosting networks'
   );
-  const share = (count: number) => `${formatPercent(BigInt(count), BigInt(total))}%`;
+  const share = (count: number) => percentOf(BigInt(count), BigInt(total));
   /** The words a segment holds: name and share, else the share alone, else none. */
   const inside = (org: string, count: number, i: number): string => {
     if (width === null) return '';
@@ -188,17 +202,19 @@ function HostingSection({
         role="img"
         aria-label="Verified nodes by hosting network"
         title={segments.map(([org, count]) => `${org} ${share(count)}`).join(' · ')}
-        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden rounded tabular-nums"
+        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden tabular-nums"
       >
         {segments.map(([org, count], i) => (
           <span
             key={org}
             data-provider={org}
-            className={cn(
-              'flex items-center overflow-hidden whitespace-nowrap rounded px-2.5',
-              PROVIDER_OPACITY[i] >= 0.6 ? 'text-base-bg' : 'text-text-bright'
-            )}
-            style={{ width: `${spans[i].width}%`, backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}
+            className="flex items-center overflow-hidden whitespace-nowrap px-2.5"
+            style={{
+              width: `${spans[i].width}%`,
+              backgroundColor: dataHue(PROVIDER_OPACITY[i]),
+              // DY-03: the share takes the ink its fill's own luminance calls for, in this theme.
+              color: color(inkOnFill(theme, DATA_KEY, PROVIDER_OPACITY[i]).ink),
+            }}
           >
             {inside(org, count, i) && <span>{inside(org, count, i)}</span>}
           </span>

@@ -34,10 +34,11 @@ describe('CompositionSet', () => {
       ['centralized_mixture', '0'],
       ['unknown', '0'],
     ]);
-    // Zero tiers stay in the legend, in the ghost ink; the held tier is bright.
+    // Zero tiers stay in the legend, their 0 a datum in the dim ink (R4, re-pinned on purpose:
+    // it was the ghost); the held tier is bright.
     const items = within(group).getAllByRole('listitem');
     expect(items[0]).toHaveAttribute('data-zero', 'true');
-    expect(items[0].querySelector('[data-count]')).toHaveClass('text-text-ghost');
+    expect(items[0].querySelector('[data-count]')).toHaveClass('text-text-dim');
     expect(items[1]).not.toHaveAttribute('data-zero');
     expect(items[1].querySelector('[data-count]')).toHaveClass('text-text-bright');
   });

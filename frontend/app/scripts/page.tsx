@@ -3,13 +3,14 @@
 import { TopicCharts } from '@/components/charts/topic-charts';
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { ListTable, type ListColumn, type ListTableForm } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
@@ -22,7 +23,6 @@ import {
   immutableHow,
   isImmutableClass,
   scriptClassLabel,
-  scriptShare,
 } from '@/components/scripts/script-code-evidence';
 import { HeroFigure } from '@/components/scripts/script-hero';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -32,10 +32,13 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
-import { formatCkbAmount, formatUtc8Date, truncateHash } from '@/lib/utils';
+import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
+import { shortenHash } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import { percentOf, withUnit } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -194,7 +197,7 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
   );
   const description = hasName(s)
     ? s.description
-    : `${getScriptRefBadgeLabel(s.hashType)} · ${truncateHash(s.codeHash, 10, 8)}`;
+    : `${getScriptRefBadgeLabel(s.hashType)} · ${shortenHash(s.codeHash, 'tight')}`;
   return (
     <PhoneRow
       testId="script-row-mobile"
@@ -238,7 +241,7 @@ function heldCapacity(script: KnownScript): { total: bigint; occupied: bigint } 
 
 function occupiedShare(script: KnownScript): { share: string } {
   const { total, occupied } = heldCapacity(script);
-  return { share: total === BigInt(0) ? '0%' : scriptShare(occupied, total) };
+  return { share: total === BigInt(0) ? '0.00%' : percentOf(occupied, total) };
 }
 
 function capacityText(value: string) {
@@ -249,13 +252,23 @@ function countText(value: number | undefined): string {
   return value === undefined ? 'unavailable' : value.toLocaleString('en-US');
 }
 
+/**
+ * A row's live and ever cells for its hover: "1,234 live of 5,678 cells ever", the noun by the one
+ * plural rule (U-15), or a plain sentence when the API states no count.
+ */
+function cellsEverText(script: KnownScript): string {
+  if (script.liveCellsCount === undefined || script.cellsCount === undefined)
+    return 'cell counts unavailable';
+  return `${script.liveCellsCount.toLocaleString('en-US')} live of ${formatCount(script.cellsCount, 'cell')} ever`;
+}
+
 function roleText(script: KnownScript): string {
   return script.scriptKind ? script.scriptKind.replace('+', ' + ') : 'unregistered';
 }
 
-/** An unlabeled family's identity: its reference, short. */
+/** An unlabeled family's identity in the table: its reference at the row size (U-09). */
 function refText(script: KnownScript): string {
-  return `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
+  return `${getScriptRefBadgeLabel(script.hashType)} · ${shortenHash(script.codeHash, 'row')}`;
 }
 
 /**
@@ -356,10 +369,10 @@ function occupiedPpm(script: KnownScript): number {
   return Number((occupied * scale + total - BigInt(1)) / total);
 }
 
-/** "0 · 50 · 100 %": the occupied-share scale's ticks. */
+/** "0 · 50 · 100%": the occupied-share scale's ticks, the sign on the last (CH-14). */
 function shareTick(ppm: number): string {
   const percent = (ppm / SHARE_SCALE) * 100;
-  return ppm === SHARE_SCALE ? `${percent} %` : String(percent);
+  return ppm === SHARE_SCALE ? withUnit(String(percent), '%') : String(percent);
 }
 
 /**
@@ -376,7 +389,7 @@ function scriptRowTitle(script: KnownScript): string {
     ...(script.deprecated ? ['deprecated'] : []),
     ...(hasName(script) && script.description?.trim() ? [script.description.trim()] : []),
     codeStatusText(script),
-    `${countText(script.liveCellsCount)} live of ${countText(script.cellsCount)} cells ever`,
+    cellsEverText(script),
     `${formatCkbAmount(total).full} CKB`,
     `${formatCkbAmount(occupied).full} occupied (${occupiedShare(script).share})`,
   ].join(' · ');
@@ -401,7 +414,11 @@ function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
       <HeroFigure
         label="CKB under these scripts"
         shannons={total}
-        companion={`locked by ${formatCount(counts.locks, 'lock script')} · ${formatCount(counts.all, 'script')} in all · ${formatCount(counts.types, 'type')}`}
+        companion={[
+          `locked by ${formatCount(counts.locks, 'lock script')}`,
+          `${formatCount(counts.all, 'script')} in all`,
+          formatCount(counts.types, 'type'),
+        ]}
       />
       <p className="text-text-dim text-meta mb-1.5 mt-[18px]">who can change the code</p>
       <ScriptCodeClassBar classes={summary.classSummary} />
@@ -439,8 +456,11 @@ export default function ScriptsPage() {
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // PA-03: the bar switch belongs to the table's bar column; the rows the list takes below the
+  // table's minimum width draw no bar, so the switch is drawn with the form the list chose.
+  const [listForm, setListForm] = useState<ListTableForm | null>(null);
   // The table's page (declared first: its request goes first).
-  const { data, isLoading, isError, error } = useQuery({
+  const read = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
     queryFn: () =>
       api.getScripts({
@@ -454,6 +474,7 @@ export default function ScriptsPage() {
       }),
     placeholderData: keepPreviousData,
   });
+  const { data, isError, error } = read;
   // The hero's figure and bar (hierarchy v3): every script the search matches, never the role tab
   // under it (the API's class summary follows the role filter), so one row is enough.
   const summary = useQuery({
@@ -493,13 +514,7 @@ export default function ScriptsPage() {
       header: <Head label="Live cells" />,
       minWidth: 110,
       numeric: true,
-      render: (s) => (
-        <span
-          title={`${countText(s.liveCellsCount)} live of ${countText(s.cellsCount)} cells ever`}
-        >
-          {countText(s.liveCellsCount)}
-        </span>
-      ),
+      render: (s) => <span title={cellsEverText(s)}>{countText(s.liveCellsCount)}</span>,
     },
     {
       key: 'capacity',
@@ -557,9 +572,9 @@ export default function ScriptsPage() {
       <input
         value={searchInput}
         onChange={(event) => setSearchInput(event.target.value)}
-        placeholder="Search by name or code hash"
+        placeholder="search by name or code hash"
         aria-label="Search scripts"
-        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 rounded border px-3 align-middle sm:w-64"
+        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 border px-3 align-middle sm:w-64"
       />
       {search && (
         <button
@@ -577,7 +592,7 @@ export default function ScriptsPage() {
       )}
       <button
         type="submit"
-        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center rounded border px-3 align-middle"
+        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center border px-3 align-middle"
       >
         Search
       </button>
@@ -597,11 +612,8 @@ export default function ScriptsPage() {
               </div>
               <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
                 Locks decide who can spend a cell; types, what it is.{' '}
-                <a
-                  href="#evidence"
-                  className="hover:text-text-bright whitespace-nowrap hover:underline"
-                >
-                  How it works ↓
+                <a href="#evidence" className="hover:text-text-bright hover:underline">
+                  How it works<span className="whitespace-nowrap"> ↓</span>
                 </a>
               </p>
               {summary.isError ? (
@@ -630,7 +642,7 @@ export default function ScriptsPage() {
               <div
                 role="group"
                 aria-label="Role"
-                className="border-base-border mb-[18px] flex flex-wrap gap-7 border-b"
+                className="border-base-border mb-[18px] flex flex-wrap gap-7 border-b max-md:gap-x-4"
               >
                 {(
                   [
@@ -647,11 +659,11 @@ export default function ScriptsPage() {
                       setRole(value);
                       pagination.reset();
                     }}
-                    className={`text-section -mb-px flex h-11 items-center gap-2 border-b-2 font-medium ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
+                    className={`text-section max-md:text-body -mb-px flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
                   >
                     {label}{' '}
                     {count !== undefined && (
-                      <span className="text-text-dim text-small font-normal">
+                      <span className="text-text-dim text-small max-md:text-meta font-normal">
                         {count.toLocaleString('en-US')}
                       </span>
                     )}
@@ -668,7 +680,7 @@ export default function ScriptsPage() {
                     const next = event.target.value as SortKey;
                     sortBy(next, next === 'name' ? 'asc' : 'desc');
                   }}
-                  className="border-base-border bg-base-surface text-text text-small rounded border px-2 py-1"
+                  className="border-base-border bg-base-surface text-text text-small border px-2 py-1"
                 >
                   <option value="capacity">CKB in their cells</option>
                   <option value="used">Occupied CKB</option>
@@ -684,31 +696,34 @@ export default function ScriptsPage() {
                 >
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </button>
-                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. */}
-                <span
-                  role="group"
-                  aria-label="Bar shows"
-                  className="ml-3 inline-flex items-center whitespace-nowrap"
-                >
-                  <span className="mr-2">bar:</span>
-                  {BAR_FIELDS.map((field, i) => (
-                    <button
-                      key={field.value}
-                      type="button"
-                      aria-pressed={bar === field.value}
-                      onClick={() => chooseBar(field.value)}
-                      className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l' : '-ml-px rounded-r'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
-                    >
-                      {field.label}
-                    </button>
-                  ))}
-                </span>
+                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. Only
+                    with the table, the one form that draws the bar (PA-03). */}
+                {listForm === 'table' && (
+                  <span
+                    role="group"
+                    aria-label="Bar shows"
+                    className="ml-3 inline-flex items-center whitespace-nowrap"
+                  >
+                    <span className="mr-2">bar:</span>
+                    {BAR_FIELDS.map((field, i) => (
+                      <button
+                        key={field.value}
+                        type="button"
+                        aria-pressed={bar === field.value}
+                        onClick={() => chooseBar(field.value)}
+                        className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? '' : '-ml-px'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+                      >
+                        {field.label}
+                      </button>
+                    ))}
+                  </span>
+                )}
                 {data?.total !== undefined && data.total !== null && (
-                  <span className="ml-auto">{formatCount(data.total, 'script')}</span>
+                  <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
                 )}
               </div>
-              {isLoading ? (
-                <div className="text-text-dim text-small py-8">Loading scripts...</div>
+              {isAwaited(read) ? (
+                <div className="text-text-dim text-small py-8">Loading scripts…</div>
               ) : isError ? (
                 <div role="alert" className="text-negative text-small py-8">
                   <strong>Failed to load scripts</strong>:{' '}
@@ -720,12 +735,13 @@ export default function ScriptsPage() {
                   columns={columns}
                   rows={rows}
                   rowKey={(s) => s.codeHash}
-                  empty="No scripts found"
+                  empty="No scripts."
                   density="row"
                   rowTitle={scriptRowTitle}
                   // T5: body ink for the row, the name alone bright.
                   rowClassName={() => 'text-text'}
                   mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
+                  onForm={setListForm}
                 />
               )}
               {data && data.data.length > 0 && (

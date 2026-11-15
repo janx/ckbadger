@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
@@ -9,6 +10,8 @@ import { api, type Cell } from '@/lib/api';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -22,8 +25,6 @@ vi.mock('@/lib/api', () => ({
     lookupScripts: vi.fn(),
   },
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/src/navigation', () => ({
@@ -90,6 +91,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
+    // re-pinned (A4 round 2): a count is a unit of its own, its number and noun joined by a plain
+    // space inside it (it was formatCount's no-break space in the text)
     expect(summary).toContain('it has been replaced 4 times, last on 2025-11-21');
     expect(summary).toContain('now sits under a multisig that has never signed');
     // The former facts rail: its figures are the hero's figure, companion and metric row.
@@ -105,10 +108,47 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('In use since2023-10-07');
     // Lane L: the first deployment's transaction is named, and links to its page.
     const DEPLOY = '0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5';
-    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0f6…f433f5');
-    const deployer = within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' });
+    // U-09 (re-pinned): a hero tile's note at the tight size (it was 8…6)
+    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0…33f5');
+    const deployer = within(metrics).getByRole('link', { name: '0xbac0…33f5' });
     expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
     expect(deployer).toHaveAttribute('title', DEPLOY);
+  });
+
+  // U-16, PA-05 (UI review 2026-11-14): the figures row broke its units on a phone and in a 300 px
+  // column ("deployed in 0xe2fb19…" / "73ff5c", "2019-" / "11-16", "78,647,937" / "cells") and
+  // left a "·" at a line's end. Each unit is whole; a note's dot goes with the note.
+  it('keeps every unit of the figures row whole, a note’s dot with its note (U-16, PA-05)', async () => {
+    await renderJoyid();
+    const hero = screen.getByRole('region', { name: 'JoyID' });
+    const metrics = within(hero.parentElement!).getByLabelText('Script figures');
+    const whole = (el: Element) =>
+      expect(el.closest('[data-nobreak], .whitespace-nowrap')).not.toBeNull();
+    // the deployment's shortened hash, the first day, the replacement day, the holder's name
+    whole(
+      within(metrics).getByRole('link', { name: '0xbac0…33f5' }).firstElementChild ??
+        within(metrics).getByRole('link', { name: '0xbac0…33f5' })
+    );
+    whole(within(metrics).getByText('2023-10-07'));
+    whole(within(metrics).getByText('2025-11-21'));
+    // re-pinned (A4 Chrome F2): the holder's id is the unit, its kind a word before it
+    // ("multisig 0x6598…d696" whole is 204 px at 17 px, wider than the tile's 163 px at 390)
+    whole(within(metrics).getByText('0x6598…d696'));
+    // the count and its noun, one unit; "Upgradable" and its versions, two items of one list
+    // re-pinned (A4 round 2): one unit each, number and noun joined by a plain space inside it,
+    // so a tile narrower than the count breaks between them, never inside a word
+    expect(metrics.textContent).toContain('2,707,778 cells');
+    expect(metrics.textContent).toContain('5 versions');
+    // every dot belongs to the item after it (the one separated list): none is loose text
+    const loose = [...metrics.querySelectorAll('*')].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !(el as Element).hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose.map((n) => n.textContent)).toEqual([]);
   });
 
   it('draws History with occupied in jade, a separate occupied panel and the version days in the plot (SC-S2, SC-S3, L1-3 ruling)', async () => {
@@ -120,10 +160,13 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(fills).toContain(DATA_COLOR);
     expect(fills).toContain(HELD_CAPACITY_COLOR);
     expect(fills).not.toContain('#58a5b5');
-    // Hierarchy v3: each panel's name is written inside its plot (R13).
+    // Hierarchy v3: each panel's name is written inside its plot (R13). Re-pinned with the lane A5
+    // follow-up (U-19): the ticks are bare, so the occupied panel's name says its unit, CKB.
     expect(
       [...document.querySelectorAll('[data-role="chart-name"]')].map((t) => t.textContent)
-    ).toEqual(['CKB in JoyID cells · occupied and free', "occupied by those cells' own bytes"]);
+      // Re-pinned with the plot-name fit (lane A5, Chrome at 360): the token and collection plots'
+      // fixed name, as a script's name has no length bound; the h1 says which script.
+    ).toEqual(['CKB held · occupied, free', "CKB occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
@@ -139,7 +182,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(timeline).toHaveTextContent('multisig 0xd1db…b95c · 3 of 5 signatures');
     expect(
       [...timeline.querySelectorAll<HTMLElement>('[data-holder]')].map((s) => s.title).join(' ')
-    ).toContain('multisig 0x65983f…d696 · signers not on chain yet');
+    ).toContain('multisig 0x65983f1d…eed696 · signers not on chain yet');
     expect(document.body.textContent).not.toMatch(/common knowledge/i);
   });
 
@@ -168,7 +211,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     expect(segments[0].title.match(/0x[0-9a-f]{40}/g)).toHaveLength(6);
     expect(segments[1].title).toContain(
-      'kept 2 of 5 keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+      'kept 2 of 5\u00a0keys of multisig 0xd1dbde92…0cb95c at the handover on 2025-08-28'
     );
     expect(screen.getByRole('status', { name: 'Code cell holder reading' })).toHaveTextContent(
       '3 holders · 5 versions · 2 handovers'
@@ -195,11 +238,14 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(rows[4]).toHaveTextContent('#11,132,140');
     expect(title(rows[4])).toContain('consumed by v2');
     expect(title(rows[4])).toContain('first deployed');
-    expect(title(rows[4])).toContain('into multisig 0xd1db…b95c');
-    expect(title(rows[2])).toContain('hands it to 0x07a2…68ca');
+    expect(title(rows[4])).toContain('into multisig 0xd1dbde92…0cb95c');
+    expect(title(rows[2])).toContain('hands it to 0x07a21dc2…9d68ca');
     expect(rows[0]).toHaveTextContent('live · current');
     expect(title(rows[0])).toContain('100,438.00000000');
-    expect(screen.getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)).toBeInTheDocument();
+    // re-pinned (A4 round 2): the id and the count are units of their own in the sentence
+    expect(
+      screen.getByText(fullText(/one type id, 0xd00c84f0…318323, 5 binaries/))
+    ).toBeInTheDocument();
   });
 
   // Table-rows L1-5: the recipe is "The script" facts (board ScriptDetail's tier 2).
@@ -227,7 +273,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
     const table = screen.getByRole('table', { name: 'Its cells' });
     const rows = within(table).getAllByRole('row').slice(1);
-    expect(rows[0]).toHaveTextContent('0x44e5e9…517f:1');
+    expect(rows[0]).toHaveTextContent('0x44e5e96c…f8517f:1');
     expect(rows[0]).toHaveTextContent('63 B');
     expect(rows[0]).toHaveTextContent('—');
     expect(rows[1]).toHaveTextContent('COTA');
@@ -286,6 +332,35 @@ describe('JoyID script page · visual pass', () => {
     vi.restoreAllMocks();
   });
 
+  // U-19 (UI review 2026-11-14): the history's round values sat inside the plots in the ghost
+  // ink, crossed by a spike ("200M CKB"); both plots write them in one dim gutter, and the upgrade
+  // lines and labels sit on the plots' x, after it.
+  // Lane A5 follow-up: a tick is the bare value ("200M"), the unit said once in each plot's name,
+  // so the shared gutter is at most 56 px.
+  it('writes bare values in a gutter of at most 56 px, each plot naming CKB once (U-19)', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    const plots = [...history.querySelectorAll('svg[role="img"]')];
+    for (const plot of plots) {
+      for (const t of yTickLabels(plot)) expect(t.textContent).toMatch(/^[\d.,]+[kMB]?$/);
+      expect(plot.querySelector('[data-role="chart-name"]')?.textContent).toContain('CKB');
+      expect(plotLeftOf(plot)).toBeLessThanOrEqual(56);
+    }
+  });
+
+  it('writes the history values in one dim gutter left of both plots (U-19)', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
+    expectTicksInGutter(main, 'CKB in JoyID cells');
+    expectTicksInGutter(occupied, 'occupied', 1);
+    const left = plotLeftOf(main);
+    expect(plotLeftOf(occupied)).toBe(left);
+    expect(left).toBeGreaterThan(0);
+    const lines = history.querySelector('[data-upgrade-line]')!.parentElement as HTMLElement;
+    expect(lines.style.left).toBe(`${left}px`);
+  });
+
   it('draws the upgrade days as dashed lines through every panel, not as a link list', async () => {
     await renderJoyid();
     const history = screen.getByTestId('script-history');
@@ -303,17 +378,19 @@ describe('JoyID script page · visual pass', () => {
     expect(labels.map((l) => l.dataset.upgradeLabel)).toEqual(['2025-08-28', '2025-11-21']);
     expect(labels.map((l) => l.style.left)).toEqual(['60%', '80%']);
     for (const l of labels) {
-      // the quiet slate (#4b5266), a text ink with no theme token (visual finish V11)
-      expect(l).toHaveClass('text-meta', 'text-[color:var(--ink)]');
-      expect(l.style.getPropertyValue('--ink')).toBe('var(--c-ink-quiet)');
+      // re-pinned with lane E2's follow-up (ruling R4 covers the quiet ink): a day label is a
+      // figure, so the dim ink, no longer the quiet slate
+      expect(l).toHaveClass('text-meta', 'text-text-dim');
+      expect(l.style.getPropertyValue('--ink')).toBe('');
     }
     // The first day sits under the plot's name at the left edge: its line, not its label.
     expect(history.querySelector('[data-upgrade-label="2023-10-07"]')).toBeNull();
     expect(history.querySelectorAll('[data-custodian]')).toHaveLength(0);
   });
 
-  // At 358 px the plot's name takes 274 of the 348 px line: no label fits beside it, so none is
-  // written; the three dashed lines stay, and the versions are the timeline's ticks.
+  // Re-pinned with the plot-name fit (lane A5, Chrome at 360): at 358 px the plot is 300 px wide
+  // after its 48 px gutter and its fixed name takes 8 + 25 × 7 = 183 of them, so a version label
+  // can fit beside it; whatever is written never touches the name, and the three lines stay.
   it('writes no version label over the plot name on a phone (358 px); the lines stay', async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -330,7 +407,15 @@ describe('JoyID script page · visual pass', () => {
     render(<ScriptDetailPage name="JoyID" />);
     await screen.findByRole('heading', { name: 'JoyID', level: 1 });
     const history = await screen.findByTestId('script-history');
-    expect(history.querySelectorAll('[data-upgrade-label]')).toHaveLength(0);
+    const plot = 358 - 10 - 48;
+    const nameEnd = 8 + 'CKB held · occupied, free'.length * 7;
+    for (const label of history.querySelectorAll<HTMLElement>('[data-upgrade-label]')) {
+      const w = 4 + label.textContent!.length * 7;
+      const start = label.style.left
+        ? (Number.parseFloat(label.style.left) / 100) * plot
+        : plot - (Number.parseFloat(label.style.right) / 100) * plot - w;
+      expect(start, label.textContent!).toBeGreaterThanOrEqual(nameEnd + 8);
+    }
     expect(history.querySelectorAll('[data-upgrade-line]')).toHaveLength(3);
     expect(screen.getAllByTestId('holder-timeline')[0]).toHaveTextContent('v5 2025-11-21');
   });
@@ -387,7 +472,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(tier1()).toContainElement(nav);
     expect(follows(nav, hero())).toBe(true);
     const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
-    expect(h1).toHaveClass('text-entity', 'text-text-bright');
+    // PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px).
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index', 'text-text-bright');
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
@@ -405,6 +491,32 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(within(lede).getByRole('link', { name: 'joy.id ↗' })).toHaveAttribute(
       'href',
       'https://joy.id'
+    );
+  });
+
+  // PA-18 (UI review 2026-11-14): on a phone "30D 90D 1Y ALL" sat between the kind line and the
+  // description, about 250 px above the chart it controls. Below md the one range group stands in
+  // the chart's caption row, right over the picture, after the figure; from md it keeps its place
+  // at the end of the title row (R13), as the test above pins.
+  it('puts the range buttons in the chart’s caption row below md, not in the title row (PA-18)', async () => {
+    stubViewportFromMd(false);
+    await renderJoyid();
+    const groups = within(hero()).getAllByRole('group', { name: 'Range' });
+    expect(groups).toHaveLength(1);
+    const [range] = groups;
+    const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
+    expect(h1.parentElement!.parentElement!).not.toContainElement(range);
+    const history = within(hero()).getByTestId('script-history');
+    const caption = range.parentElement!;
+    expect(caption.nextElementSibling).toBe(history);
+    expect(caption).toHaveClass('flex', 'justify-end');
+    expect(caption.children).toHaveLength(1);
+    expect(follows(hero().querySelector('[data-role="figure"]')!, caption)).toBe(true);
+    // still the page's range: it draws the picture again
+    fireEvent.click(within(range).getByRole('button', { name: '90D' }));
+    expect(within(range).getByRole('button', { name: '90D' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
     );
   });
 
@@ -432,16 +544,19 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(follows(hero().querySelector('[data-role="figure"]')!, history)).toBe(true);
     const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
     expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    // Re-pinned with the plot-name fit: the fixed name of every CKB-held history plot.
     expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-      'CKB in JoyID cells · occupied and free'
+      'CKB held · occupied, free'
     );
     expect(Number(occupied.getAttribute('height'))).toBeLessThan(
       Number(main.getAttribute('height'))
     );
-    // Values inside the plot from its left edge, no axis column (R13).
-    const ticks = [...main.querySelectorAll('[data-role="y-tick"]')];
+    // Re-pinned with U-19 (UI review 2026-11-14): the values sit in a dim gutter left of the plot,
+    // anchored at their end, no longer inside it from its left edge.
+    expect(main.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+    const ticks = yTickLabels(main);
     expect(ticks.length).toBeGreaterThan(0);
-    for (const t of ticks) expect(t.getAttribute('text-anchor')).not.toBe('end');
+    for (const t of ticks) expect(t.getAttribute('text-anchor')).toBe('end');
   });
 
   // Table-rows L1-3 ruling: no code track between the picture and its reading any more.
@@ -467,7 +582,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     ]);
     for (const t of terms) {
       expect(t).toHaveClass('text-meta', 'text-text-dim');
-      expect(t.nextElementSibling).toHaveClass('text-section', 'text-text-bright');
+      // PA-25 (re-pinned): the value is the first item of the metric's separated list
+      expect(t.nextElementSibling!.querySelector('.text-section')).toHaveClass('text-text-bright');
       expect(t.parentElement!.children).toHaveLength(2);
     }
     expect(metrics).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
@@ -533,7 +649,7 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(h2.parentElement!.children).toHaveLength(2);
     expect(h2.nextElementSibling).toHaveTextContent(/^newest first$/);
     expect(
-      within(tier2()).getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)
+      within(tier2()).getByText(fullText(/one type id, 0xd00c84f0…318323, 5 binaries/))
     ).toBeInTheDocument();
     // Table-rows L1-5: the recipe is "The script" facts.
     expect(within(tier2()).getByRole('heading', { name: 'The script' })).toBeInTheDocument();
@@ -640,7 +756,8 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
       ['hash', 'quiet'],
       ['detail', 'quiet'],
     ]);
-    expect(first[0].left).toMatch(/^v1 2023-10-07 · 0x[0-9a-f]{8}…[0-9a-f]{6}:\d$/);
+    // U-09 (re-pinned): the phone row's out point at the tight size
+    expect(first[0].left).toMatch(/^v1 2023-10-07 · 0x[0-9a-f]{4}…[0-9a-f]{4}:\d$/);
     expect(first[0].right).toBe('consumed by v2');
     // The version hash keeps a line of its own, whole: it is what a developer copies.
     expect(first[1].left).toMatch(/^0x[0-9a-f]{64}$/);

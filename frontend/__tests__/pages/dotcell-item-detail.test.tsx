@@ -4,6 +4,7 @@ import { api, ApiRequestError, type ItemProtocol, type ItemCellVersions } from '
 import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
@@ -15,7 +16,7 @@ it('routes only an actual name 404 to exact endpoint evidence', async () => {
   expect(
     await screen.findByText('/assets/identities/dotcell/items/alice.cell')
   ).toBeInTheDocument();
-  expect(screen.getByText('no identity at this address.')).toBeInTheDocument();
+  expect(screen.getByText('no identity with this id.')).toBeInTheDocument();
 });
 // Visual finish V8: the page loads as the shared detail skeleton, not the asset shell with a
 // "Loading .cell name…" line.
@@ -267,7 +268,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   expect(
     await screen.findByRole('heading', {
       level: 1,
-      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+      name: "no identity with this id. the local index was asked; it holds none. honey badger don't care.",
     })
   ).toBeInTheDocument();
   expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();
@@ -279,7 +280,7 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
   expect(
     await screen.findByRole('heading', { name: 'Term held until 2030-03-18' })
   ).toBeInTheDocument();
-  expect(screen.getByText(/then 30 days of grace/)).toBeInTheDocument();
+  expect(screen.getByText(fullText(/then 30 days of grace/))).toBeInTheDocument();
   expect(document.querySelector('[data-grace]')).not.toBeNull();
   expect(screen.getByRole('region', { name: 'What alice.cell points to' })).toBeInTheDocument();
   const facts = screen.getByRole('region', { name: 'Metrics' });

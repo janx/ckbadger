@@ -100,8 +100,10 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
       'ckb',
       'occupied',
     ]);
-    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda...3x8k26');
-    expect(within(row).getByText('Default Lock')).toHaveClass('whitespace-nowrap');
+    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda0c…3x8k26');
+    // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping row, so it moves to
+    // the next line whole; its words are not made one unit
+    expect(within(row).getByText('Default Lock')).not.toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).not.toHaveClass('basis-full');
@@ -140,8 +142,10 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     expect(kind).toHaveTextContent('JoyID');
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
     expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
-    expect(kind).toHaveClass('whitespace-nowrap', 'small-caps', 'text-text-dim');
-    expect(kind).not.toHaveClass('rounded-sm', 'border');
+    // re-pinned (A4 Chrome sweep): no nowrap; an item of the wrapping line moves whole
+    expect(kind).toHaveClass('small-caps', 'text-text-dim');
+    expect(kind).not.toHaveClass('whitespace-nowrap');
+    expect(kind).not.toHaveClass('border');
     // Not repeated in the party cell.
     expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
   });
@@ -162,7 +166,9 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     const line = container.querySelector('[data-role="participant"]') as HTMLElement;
     expect(line).toHaveClass('flex-wrap');
     expect(line.querySelector('[data-party]')).toHaveClass('max-w-full');
-    expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
+    // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping line, so it moves to
+    // the next line whole; a registered name is words, never made nowrap
+    expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('whitespace-nowrap');
   });
 });
 
@@ -199,8 +205,9 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
   it('says a repeated action line once with its count', () => {
     const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
     const lines = [...container.querySelectorAll('[data-role="detail"]')].map((l) => l.textContent);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
     expect(lines.filter((t) => t?.includes('confirm proposal'))).toEqual([
-      '.bit · confirm proposal ×18',
+      ' · .bit · confirm proposal ×18',
     ]);
   });
 
@@ -208,10 +215,11 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
     // T7: names only on the row. The 29 ".bit Lock" calls of report B#26 differ only in args, so
     // the row names the lock once with its count; each call stays whole in the hover.
     const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
     const lockLine = [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
-      l.textContent?.startsWith('lock')
+      l.textContent?.startsWith(' · lock')
     ) as HTMLElement;
-    expect(lockLine).toHaveTextContent(/^lock \.bit Lock ×29$/);
+    expect(lockLine).toHaveTextContent(/^· lock \.bit Lock ×29$/);
     const link = within(lockLine).getByRole('link', { name: '.bit Lock' });
     const calls = link.getAttribute('title')!.split('\n');
     expect(calls).toHaveLength(29);
@@ -232,7 +240,7 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
     const { container } = render(<ActivityRow activity={distinct} />);
     const lockLine = () =>
       [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
-        l.textContent?.startsWith('lock')
+        l.textContent?.startsWith(' · lock')
       ) as HTMLElement;
     expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
     const more = within(lockLine()).getByRole('button', { name: '+24 more locks' });

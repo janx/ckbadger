@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import { render } from '../utils/test-utils';
 import { stubChartWidth } from '../utils/chart-width';
 import { expectTier1Budget } from '../utils/hierarchy';
@@ -15,8 +16,6 @@ vi.mock('@/lib/api', () => ({
     getHardforks: getHardforksMock,
     getBlock: getBlockMock,
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -186,7 +185,7 @@ describe('HardforksPage', () => {
       'href',
       '/mainnet/scripts/Known%20Lock'
     );
-    expect(screen.getByRole('link', { name: 'Code cell 0x55555555…:0' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Code cell 0x55555555…555555:0' })).toHaveAttribute(
       'href',
       '/mainnet/cell/0x5555555555555555555555555555555555555555555555555555555555555555-0'
     );
@@ -312,8 +311,9 @@ describe('HardforksPage', () => {
     expect(marks.className).not.toMatch(/overflow-y-auto|max-h-/);
     const buttons = within(marks).getAllByRole('button');
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
-      expect.stringMatching(/^Known Lock v2 · Known Lock · version 0x[0-9a-f]{8}…/),
-      expect.stringMatching(/^Known Lock v3 · Known Lock · version 0x[0-9a-f]{8}…/),
+      // U-09 (re-pinned): a mark's name on the chart takes the tight size
+      expect.stringMatching(/^Known Lock v2 · Known Lock · version 0x[0-9a-f]{4}…[0-9a-f]{4},/),
+      expect.stringMatching(/^Known Lock v3 · Known Lock · version 0x[0-9a-f]{4}…[0-9a-f]{4},/),
     ]);
   });
 
@@ -357,6 +357,134 @@ describe('HardforksPage', () => {
     await waitFor(() =>
       expect(meepo).toHaveTextContent('No script CKBadger knows uses data2 yet, 486 days on.')
     );
+  });
+
+  // A4 review 1: a store still syncing has a tip before an edition's activation (an ordinary state
+  // here). An edition the index has not reached has no "days on" and no "days later": its card
+  // says so, and no count of days is ever zero or negative.
+  describe('while the index is before an edition (A4 review 1)', () => {
+    const DAY = 86_400_000;
+    const at = (day: string) => Date.parse(`${day}T00:00:00+08:00`);
+    const [meepoEvent, miranaEvent] = mockTimeline.events;
+    const upcoming = (event: (typeof mockTimeline.events)[number]) => ({
+      ...event,
+      status: 'upcoming' as const,
+      activationBlock: null,
+    });
+    // the card's story, the paragraph after its date line
+    const story = (card: HTMLElement) => within(card).getByText(/^Added CKB-VM/).textContent;
+    const noDayClaim = (card: HTMLElement) => {
+      expect(story(card)).not.toMatch(/days? (on|later)/);
+      // a minus sign before a number (a date's hyphens follow a digit)
+      expect(story(card)).not.toMatch(/(^|\D)-\d/);
+    };
+    const alwaysSuccess = (timestampMs: number) => ({
+      ...producerDeployments.scriptDeployments[0],
+      versionName: 'AlwaysSuccess',
+      versionHash: `0x${'a'.repeat(64)}`,
+      timestampMs,
+      hashTypes: ['data1'],
+    });
+
+    for (const [label, tipMs] of [
+      ['one day', at('2025-07-01') - DAY],
+      ['one year', at('2024-07-01')],
+    ] as const)
+      it(`tells Meepo without a days count when the tip is ${label} before it`, async () => {
+        const { default: HardforksPage } = await import('@/app/hardforks/page');
+        getHardforksMock.mockResolvedValue({
+          ...mockTimeline,
+          tipTimestampMs: tipMs,
+          tipEpoch: 12000,
+          events: [upcoming(meepoEvent), miranaEvent],
+        });
+        render(<HardforksPage />);
+        const meepo = await screen.findByRole('article', { name: 'CKB Edition Meepo upcoming' });
+        expect(story(meepo)).toBe(
+          'Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. No script CKBadger knows uses data2 yet. The index has not reached this edition yet.'
+        );
+        noDayClaim(meepo);
+        expect(
+          screen.getByText(
+            'The index has not reached the latest edition yet; the timeline draws once it has.'
+          )
+        ).toBeInTheDocument();
+      });
+
+    it('tells Mirana, a data1 script deployed before it, while the index is before both', async () => {
+      const { default: HardforksPage } = await import('@/app/hardforks/page');
+      getHardforksMock.mockResolvedValue({
+        ...mockTimeline,
+        tipTimestampMs: at('2022-05-10') - DAY,
+        tipEpoch: 5400,
+        scriptDeployments: [alwaysSuccess(Date.parse('2020-01-01T12:00:00+08:00'))],
+        events: [upcoming(meepoEvent), upcoming(miranaEvent)],
+      });
+      render(<HardforksPage />);
+      const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana upcoming' });
+      expect(story(mirana)).toBe(
+        'Added CKB-VM version 1 and the hash type data1 to pin it. The first known script pinned with data1, AlwaysSuccess, was deployed before it, on 2020-01-01. The index has not reached this edition yet.'
+      );
+      noDayClaim(mirana);
+      noDayClaim(screen.getByRole('article', { name: 'CKB Edition Meepo upcoming' }));
+    });
+
+    it('dates a data1 script deployed before Mirana once the index is past it', async () => {
+      const { default: HardforksPage } = await import('@/app/hardforks/page');
+      getHardforksMock.mockResolvedValue({
+        ...mockTimeline,
+        scriptDeployments: [alwaysSuccess(Date.parse('2020-01-01T12:00:00+08:00'))],
+      });
+      render(<HardforksPage />);
+      const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana activated' });
+      expect(story(mirana)).toBe(
+        'Added CKB-VM version 1 and the hash type data1 to pin it. The first known script pinned with data1, AlwaysSuccess, was deployed before it, on 2020-01-01.'
+      );
+      noDayClaim(mirana);
+    });
+
+    it('writes no zero-day count on the activation day itself', async () => {
+      const { default: HardforksPage } = await import('@/app/hardforks/page');
+      getHardforksMock.mockResolvedValue({
+        ...mockTimeline,
+        tipTimestampMs: Date.parse('2025-07-01T20:00:00+08:00'),
+        scriptDeployments: [alwaysSuccess(Date.parse('2022-05-10T18:00:00+08:00'))],
+      });
+      render(<HardforksPage />);
+      const meepo = await screen.findByRole('article', { name: 'CKB Edition Meepo activated' });
+      expect(story(meepo)).toBe(
+        'Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. No script CKBadger knows uses data2 yet.'
+      );
+      noDayClaim(meepo);
+      const mirana = screen.getByRole('article', { name: 'CKB Edition Mirana activated' });
+      expect(story(mirana)).toBe(
+        'Added CKB-VM version 1 and the hash type data1 to pin it. The first known script pinned with data1 came the same day: AlwaysSuccess.'
+      );
+      noDayClaim(mirana);
+    });
+  });
+
+  // A1 review fix round 2 (isAwaited, the one test of an awaited read): offline, the timeline's
+  // read is paused, not fetching, so isLoading is false and the page showed nothing under its
+  // title. It keeps its loading line while the read is paused and says nothing false; back online
+  // the page renders.
+  it('keeps its loading line while the read is paused offline, then renders once back online', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    onlineManager.setOnline(false);
+    try {
+      render(<HardforksPage />);
+      expect(await screen.findByText('Loading hardfork timeline…')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText(/has not reached|holds no block header/)).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(
+        await screen.findByRole('article', { name: 'CKB Edition Mirana activated' })
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading hardfork timeline…')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('refuses deployments without their registered hash types', async () => {

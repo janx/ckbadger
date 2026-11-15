@@ -3,23 +3,64 @@
 //! Single canonical encoder shared by the API (response rendering) and the
 //! verify suite (cross-checking rendered addresses against node data).
 
-use bech32::{Bech32m, Hrp};
+use bech32::{Bech32m, EncodeError, Hrp};
+
+/// Why a script has no RFC-0021 full address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptAddressError {
+    /// The script is well formed, but its address would be longer than
+    /// bech32m allows (`code_length`, 1023 characters): lock args are
+    /// unbounded on chain, and 599 bytes of them fill an address exactly. A
+    /// fact about the script — it has no address form — not corrupt data.
+    TooLong {
+        encoded_length: usize,
+        code_length: usize,
+    },
+    /// The code hash is not 32 bytes: not a CKB script.
+    InvalidCodeHashLength(usize),
+    /// The hash_type is not one the workspace table knows: not a CKB script.
+    UnknownHashType(i16),
+    /// Any other failure of the bech32 encoder.
+    Encode(String),
+}
+
+impl std::fmt::Display for ScriptAddressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLong {
+                encoded_length,
+                code_length,
+            } => write!(
+                f,
+                "no address form: the address would be {encoded_length} characters, \
+                 over bech32m's {code_length}"
+            ),
+            Self::InvalidCodeHashLength(length) => {
+                write!(f, "Invalid code_hash length: expected 32, got {length}")
+            }
+            Self::UnknownHashType(hash_type) => write!(f, "Unknown hash_type: {hash_type}"),
+            Self::Encode(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScriptAddressError {}
 
 /// Encode a lock script as an RFC-0021 full CKB address
 /// (`0x00 | code_hash | hash_type | args`, bech32m).
 ///
 /// `network` selects the HRP: `mainnet` → `ckb`, anything else → `ckt`.
+/// [`ScriptAddressError::TooLong`] comes only from the encoder's own typed
+/// length error, so a script with no address form is told apart from one that
+/// is not a CKB script.
 pub fn script_to_address(
     code_hash: &[u8],
     hash_type: i16,
     args: &[u8],
     network: &str,
-) -> Result<String, String> {
+) -> Result<String, ScriptAddressError> {
     if code_hash.len() != 32 {
-        return Err(format!(
-            "Invalid code_hash length: expected 32, got {}",
-            code_hash.len()
-        ));
+        return Err(ScriptAddressError::InvalidCodeHashLength(code_hash.len()));
     }
 
     let hrp = match network {
@@ -33,7 +74,7 @@ pub fn script_to_address(
     let hash_type_byte = u8::try_from(hash_type)
         .ok()
         .filter(|byte| crate::hash_type_label(*byte).is_some())
-        .ok_or_else(|| format!("Unknown hash_type: {}", hash_type))?;
+        .ok_or(ScriptAddressError::UnknownHashType(hash_type))?;
 
     // RFC-0021 full payload: 0x00 | code_hash (32) | hash_type (1) | args
     let mut payload = Vec::with_capacity(1 + 32 + 1 + args.len());
@@ -42,7 +83,13 @@ pub fn script_to_address(
     payload.push(hash_type_byte);
     payload.extend_from_slice(args);
 
-    bech32::encode::<Bech32m>(hrp, &payload).map_err(|e| e.to_string())
+    bech32::encode::<Bech32m>(hrp, &payload).map_err(|error| match error {
+        EncodeError::TooLong(length) => ScriptAddressError::TooLong {
+            encoded_length: length.encoded_length,
+            code_length: length.code_length,
+        },
+        other => ScriptAddressError::Encode(other.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -69,6 +116,33 @@ mod tests {
         let code_hash = [0u8; 32];
         let address = script_to_address(&code_hash, 1, &[], "testnet").unwrap();
         assert!(address.starts_with("ckt1"));
+    }
+
+    /// Lock args are unbounded on chain; an address is not. 599 bytes of args
+    /// fill bech32m's 1023 characters exactly (`ckb1`, then 1013 data and 6
+    /// checksum characters); one byte more has no address form, which the
+    /// encoder's typed length error says — and a script that is not a CKB
+    /// script still says why, whatever its args.
+    #[test]
+    fn test_address_form_ends_at_bech32m_code_length() {
+        let code_hash = [0x9b; 32];
+        let longest = script_to_address(&code_hash, 1, &[0x77; 599], "mainnet").unwrap();
+        assert_eq!(longest.len(), 1023);
+        assert_eq!(
+            script_to_address(&code_hash, 1, &[0x77; 600], "testnet"),
+            Err(ScriptAddressError::TooLong {
+                encoded_length: 1025,
+                code_length: 1023
+            })
+        );
+        assert_eq!(
+            script_to_address(&code_hash, 3, &[0x77; 600], "mainnet"),
+            Err(ScriptAddressError::UnknownHashType(3))
+        );
+        assert_eq!(
+            script_to_address(&[0x9b; 31], 1, &[0x77; 600], "mainnet"),
+            Err(ScriptAddressError::InvalidCodeHashLength(31))
+        );
     }
 
     #[test]

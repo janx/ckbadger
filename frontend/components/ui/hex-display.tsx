@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useMemo, memo } from 'react';
+import type { IdShortening } from '@/components/ui/hex-code';
+import { useCopy } from '@/hooks/useCopy';
+import { ELLIPSIS, shortenHash } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
 interface HexCharProps {
@@ -68,45 +71,37 @@ const HexChar = memo(function HexChar({
   );
 });
 
-interface HexDisplayProps {
+type HexDisplayProps = IdShortening & {
   value: string;
-  truncate?: boolean;
-  startChars?: number;
-  endChars?: number;
   groupSize?: number;
   showGroupHighlight?: boolean;
   copyable?: boolean;
   color?: 'aqua' | 'lavender' | 'gold' | 'rouge';
-  size?: 'sm' | 'md' | 'lg';
+  /** The type step: `sm` is the small step, `md` and `lg` the body step. */
+  textSize?: 'sm' | 'md' | 'lg';
   className?: string;
   mono?: boolean;
-}
+};
 
 export function HexDisplay({
   value,
-  truncate = true,
-  startChars = 10,
-  endChars = 8,
   groupSize = 4,
   showGroupHighlight = true,
   copyable = true,
   color = 'aqua',
-  size = 'md',
+  textSize = 'md',
   className,
   mono = true,
+  ...shortening
 }: HexDisplayProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy(value);
+  const truncate = shortening.truncate !== false;
 
-  const cleanValue = value.startsWith('0x') ? value.slice(2) : value;
-  const prefix = value.startsWith('0x') ? '0x' : '';
-
-  const displayValue = useMemo(() => {
-    if (!truncate || cleanValue.length <= startChars + endChars) {
-      return cleanValue;
-    }
-    return `${cleanValue.slice(0, startChars)}...${cleanValue.slice(-endChars)}`;
-  }, [cleanValue, truncate, startChars, endChars]);
+  // The value at its size (U-09), the `0x` drawn apart in the prefix ink.
+  const written = shortening.truncate === false ? value : shortenHash(value, shortening.size);
+  const prefix = written.startsWith('0x') ? '0x' : '';
+  const displayValue = written.slice(prefix.length);
 
   const chars = useMemo(() => {
     const result: { char: string; groupIndex: number; originalIndex: number }[] = [];
@@ -116,7 +111,7 @@ export function HexDisplay({
     for (let i = 0; i < displayValue.length; i++) {
       const char = displayValue[i];
 
-      if (char === '.') {
+      if (char === ELLIPSIS) {
         result.push({ char, groupIndex: -1, originalIndex: i });
         continue;
       }
@@ -132,17 +127,6 @@ export function HexDisplay({
 
     return result;
   }, [displayValue, groupSize]);
-
-  const handleCopy = async () => {
-    if (!copyable) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  };
 
   const sizeClasses = {
     sm: 'text-small',
@@ -166,7 +150,7 @@ export function HexDisplay({
           'inline-flex items-center gap-1',
           allowWrap && 'max-w-full flex-wrap break-all',
           mono && 'font-mono',
-          sizeClasses[size],
+          sizeClasses[textSize],
           className
         )}
       >
@@ -181,17 +165,18 @@ export function HexDisplay({
         'inline-flex items-center',
         allowWrap && 'max-w-full flex-wrap break-all',
         mono && 'font-mono',
-        sizeClasses[size],
+        sizeClasses[textSize],
         copyable && 'cursor-pointer hover:opacity-90',
         className
       )}
-      onClick={handleCopy}
+      // the one copy path (hooks/useCopy): a copy that cannot work shows nothing
+      onClick={copyable ? copy : undefined}
       title={copyable ? `Click to copy: ${value}` : value}
     >
       {prefix && <span className={cn('mr-0.5', prefixColorClasses[color])}>{prefix}</span>}
 
       {chars.map(({ char, groupIndex, originalIndex }) => {
-        if (char === '.') {
+        if (char === ELLIPSIS) {
           return (
             <span key={`ellipsis-${originalIndex}`} className="text-text-dim mx-0.5">
               {char}
@@ -212,55 +197,6 @@ export function HexDisplay({
           />
         );
       })}
-    </span>
-  );
-}
-
-interface ByteGroupDisplayProps {
-  value: string;
-  bytesPerGroup?: number;
-  separator?: string;
-  color?: 'aqua' | 'lavender' | 'gold' | 'rouge';
-  className?: string;
-}
-
-export function ByteGroupDisplay({
-  value,
-  bytesPerGroup = 4,
-  separator = ' ',
-  color = 'aqua',
-  className,
-}: ByteGroupDisplayProps) {
-  const cleanValue = value.startsWith('0x') ? value.slice(2) : value;
-  const prefix = value.startsWith('0x') ? '0x' : '';
-
-  const groups = useMemo(() => {
-    const charsPerGroup = bytesPerGroup * 2;
-    const result: string[] = [];
-
-    for (let i = 0; i < cleanValue.length; i += charsPerGroup) {
-      result.push(cleanValue.slice(i, i + charsPerGroup));
-    }
-
-    return result;
-  }, [cleanValue, bytesPerGroup]);
-
-  const colorClasses = {
-    aqua: ['text-aqua', 'text-aqua-dim'],
-    lavender: ['text-lavender', 'text-lavender-dim'],
-    gold: ['text-gold', 'text-gold-dim'],
-    rouge: ['text-rouge', 'text-rouge-dim'],
-  };
-
-  return (
-    <span className={cn('font-mono tabular-nums', className)}>
-      {prefix && <span className="text-text-dim">{prefix}</span>}
-      {groups.map((group, index) => (
-        <span key={index}>
-          <span className={colorClasses[color][index % 2]}>{group}</span>
-          {index < groups.length - 1 && <span className="text-text-dim">{separator}</span>}
-        </span>
-      ))}
     </span>
   );
 }

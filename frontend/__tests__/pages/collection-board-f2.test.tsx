@@ -124,7 +124,7 @@ it('makes Objects the gel of the genes that vary beside the 20 newest (OB-C1, C9
     'Objects 90 live · three genes vary'
   );
   expect(
-    within(objects).getByRole('img', { name: /allele gel of 90 objects/ })
+    within(objects).getByRole('img', { name: /allele gel of 90\sobjects/ })
   ).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: 'Collection allele frequencies' })).toBeNull();
   expect(
@@ -388,7 +388,7 @@ it('draws holder bars in the objects colour (OB-C7)', async () => {
 it('still shows an empty Newest list honestly', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
   render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
-  expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
+  expect(await screen.findByText('No objects.')).toBeInTheDocument();
 });
 
 // Visual pass on the live services (2026-10-30).

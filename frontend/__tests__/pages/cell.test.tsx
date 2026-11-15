@@ -5,6 +5,7 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -19,7 +20,9 @@ vi.mock('@/components/cell/cell-transactions', () => ({
     </div>
   ),
 }));
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // the error class itself: the page's failed-read line reads a gateway status off it
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: { getCell: vi.fn(), lookupScripts: vi.fn(async () => ({})) },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
@@ -94,16 +97,17 @@ describe('CellDetailPage', () => {
     vi.clearAllMocks();
     outpoint = `${hash}-0`;
   });
+  // U-06: an out point the page cannot read is not an id: the voice page with its own line
   it('rejects an outpoint without an index before fetching', () => {
     outpoint = hash;
     view();
-    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(screen.getByText('that is not a cell out point.')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
   });
   it('rejects output indices outside the store range before fetching', () => {
     outpoint = `${hash}-65536`;
     view();
-    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(screen.getByText('that is not a cell out point.')).toBeInTheDocument();
     expect(getCell).not.toHaveBeenCalled();
   });
   // The seals by kind (C3): the cell's own page seal (112 px, 88 below md, −4°) — its
@@ -137,6 +141,39 @@ describe('CellDetailPage', () => {
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
     // the cell's stone, not its transaction's old hash seal
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
+  });
+  // U-09, the lead's ruling of the B3 follow-up (RESPONSIVE_LAYOUT principle 4): the h1 is the
+  // out point at the head size where its measured line holds it, the row size otherwise; the row
+  // size until measured. Below md the h1 is 26 px with −0.02 em tracking, 15.08 px a character:
+  // the head out point "0xababababab…abababab:0" (23 characters) is 346.84 px, inside the 358 px line
+  // at 390 and over the 328 at 360. The page picked the row size at every width before.
+  it.each([
+    [358, '0xababababab…abababab:0'],
+    [328, '0xabababab…ababab:0'],
+  ] as const)('names the cell on a %i px h1 line by %s', async (line, name) => {
+    stubChartWidth(line);
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!(el as Element).closest('h1')) return style;
+      return new Proxy(style, {
+        get: (target, prop) =>
+          prop === 'fontSize'
+            ? '26px'
+            : prop === 'letterSpacing'
+              ? '-0.52px'
+              : (target as unknown as Record<string | symbol, unknown>)[prop],
+      });
+    });
+    try {
+      getCell.mockResolvedValue(base);
+      view();
+      const title = await screen.findByRole('heading', { level: 1 });
+      await waitFor(() => expect(title).toHaveTextContent(new RegExp(`^${name}$`)));
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
   it('presses a spent cell’s seal in the dead ink', async () => {
     getCell.mockResolvedValue({
@@ -224,14 +261,16 @@ describe('CellDetailPage', () => {
   it('presses no seal when the out point cannot be read', () => {
     outpoint = hash;
     const { container } = view();
-    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(screen.getByText('that is not a cell out point.')).toBeInTheDocument();
     expect(container.querySelector('[data-seal]')).toBeNull();
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
   it('presses no seal when the cell cannot be read', async () => {
     getCell.mockRejectedValue(new Error('node unavailable'));
     const { container } = view();
-    expect(await screen.findByText('Cell data unavailable')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this cell: node unavailable'
+    );
     expect(container.querySelector('[data-seal]')).toBeNull();
     expect(container.querySelector('[data-hash-seal]')).toBeNull();
   });
@@ -258,7 +297,7 @@ describe('CellDetailPage', () => {
       expect(document.title).toMatch(/^Cell 0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · CKBadger$/)
     );
     expect(screen.getByText('Unspent for').parentElement).toHaveTextContent(
-      /^Unspent for1 mas of #125$/
+      /^Unspent for1mas of #125$/
     );
     expect(screen.queryByText(/ms/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
@@ -280,7 +319,7 @@ describe('CellDetailPage', () => {
     view();
     expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
     expect(screen.getByText(/input #2/)).toBeInTheDocument();
-    expect(screen.getByText(/30 s on chain/)).toBeInTheDocument();
+    expect(screen.getByText(/30s on chain/)).toBeInTheDocument();
     // Created / Spent times read as the site UTC+8 clock, never raw ISO (#16, SC-C1 row).
     expect(screen.getByText('2024-01-01 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();
@@ -288,7 +327,7 @@ describe('CellDetailPage', () => {
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
     // Lane U (U3): a spent cell's origin line names the block that spent it.
     expect(screen.getByTestId('cell-origin')).toHaveTextContent(
-      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
+      /^output 0 of transaction 0xababababab…abababab · spent at #125$/
     );
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);
@@ -376,14 +415,16 @@ describe('CellDetailPage', () => {
   it('distinguishes missing cells from transport failures', async () => {
     getCell.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const rendered = view();
-    expect(await screen.findByText(`${hash}-0`)).toBeInTheDocument();
-    expect(screen.getByText('no cell at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no cell at this out point.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the hash shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/cells/${hash.slice(0, 10)}…${hash.slice(-6)}/0`
+    );
     rendered.unmount();
     getCell.mockRejectedValue(new Error('node unavailable'));
     view();
-    expect(await screen.findByText('Cell data unavailable')).toBeInTheDocument();
-    expect(
-      screen.getAllByRole('alert').some((item) => item.textContent?.includes('node unavailable'))
-    ).toBe(true);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not read this cell: node unavailable'
+    );
   });
 });

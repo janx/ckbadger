@@ -1,9 +1,13 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 // Lane P: one dated form outside the activity rows — the UTC+8 date, the age its hover.
 describe('Utc8Date', () => {
+  afterEach(() => vi.useRealTimers());
   it('writes the UTC+8 date and keeps the age in its title', () => {
+    // the clock stands still: the timestamp and the title's age read one time
+    vi.useFakeTimers({ toFake: ['Date'] });
     const ts = Date.now() - 3 * 86_400_000;
     render(<Utc8Date timestamp={String(ts)} className="text-text-dim" />);
     const el = screen.getByText(/^\d{4}-\d\d-\d\d$/);

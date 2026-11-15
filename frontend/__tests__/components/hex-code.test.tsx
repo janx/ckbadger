@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, screen, fireEvent, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { HexCode } from '@/components/ui/hex-code';
 
 const HASH = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+const FULL_VALUE = 'inline-block max-w-full overflow-x-auto whitespace-nowrap align-top';
 
 describe('HexCode', () => {
   beforeEach(() => {
@@ -25,11 +26,38 @@ describe('HexCode', () => {
   it('takes the ink and the size of the line it stands in under `inherit`, still copying', async () => {
     render(<HexCode value={HASH} truncate={false} variant="inherit" />);
     const hash = screen.getByText(HASH);
-    expect(hash.className).toBe('font-mono hover-lit cursor-pointer transition-colors');
+    // U-16 (re-pinned): a full value is one line in its own box, as wide as its column at most
+    expect(hash.className).toBe(
+      `font-mono hover-lit cursor-pointer transition-colors ${FULL_VALUE}`
+    );
     expect(hash).toHaveAttribute('title', 'Click to copy');
     fireEvent.click(hash);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(HASH);
     await waitFor(() => expect(screen.getByText('✓')).toBeInTheDocument());
+  });
+
+  // A4 review 3: HexCode copies through the one copy path (hooks/useCopy): its tick's timer goes
+  // with it, and a copy without a clipboard shows no tick.
+  it('leaves no timer when it goes while its tick shows, and shows none without a clipboard', async () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = render(<HexCode value={HASH} truncate={false} />);
+      await act(async () => {
+        fireEvent.click(screen.getByText(HASH));
+      });
+      expect(screen.getByText('✓')).toBeInTheDocument();
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      Object.assign(navigator, { clipboard: undefined });
+      render(<HexCode value={HASH} truncate={false} />);
+      await act(async () => {
+        fireEvent.click(screen.getByText(HASH));
+      });
+      expect(screen.queryByText('✓')).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the full value as its title under `inherit` when it does not copy', () => {
@@ -43,7 +71,7 @@ describe('HexCode', () => {
       />
     );
     const hash = screen.getByText(HASH);
-    expect(hash.className).toBe('font-mono min-w-0');
+    expect(hash.className).toBe(`font-mono ${FULL_VALUE} min-w-0`);
     expect(hash).toHaveAttribute('title', HASH);
   });
 });

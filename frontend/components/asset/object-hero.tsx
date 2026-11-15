@@ -9,13 +9,16 @@ import { isReadableTrait, traitDisplay, type DnaTrait } from '@/lib/dob-genes';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
+import { useClockText } from '@/components/ui/utc8-date';
 
 /** One status pill for an item page: jade while live, grey once gone (OB-15). */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
   return (
     <span
       className={cn(
-        'text-meta rounded border px-1.5',
+        'text-meta border px-1.5',
         live ? 'text-jade border-jade/40' : 'text-text-dim border-base-border'
       )}
     >
@@ -89,14 +92,14 @@ export function ObjectTraits({
               onFocus={() => onActive(t.name)}
               onBlur={() => onActive(null)}
               className={cn(
-                'border-base-elevated flex min-w-0 justify-between gap-3 border-b py-2 transition-colors',
+                'border-row-rule flex min-w-0 justify-between gap-3 border-b py-2 transition-colors',
                 lit && 'bg-base-surface'
               )}
             >
               <dt className="text-text-dim flex items-center">
                 <span
                   aria-hidden
-                  className="mr-2 inline-block h-2 w-2 shrink-0 rounded-sm"
+                  className="mr-2 inline-block h-2 w-2 shrink-0"
                   style={{ background: color }}
                 />
                 {t.name}
@@ -115,8 +118,9 @@ export function ObjectTraits({
         })}
       </dl>
       <p className="text-text-dim text-meta">
-        Each trait is read from the object’s DNA, below ·{' '}
-        <TapOrHoverHint what="one to find its gene" />
+        Each trait is read from the object’s DNA, below
+        {/* PB-23: the dot goes with the hint; when the page's one hint is elsewhere, no dot */}
+        <TapOrHoverHint what="one to find its gene" dotted />
       </p>
     </div>
   );
@@ -136,7 +140,7 @@ export function spelledDuration(ms: number): string {
   for (const [size, unit] of units)
     if (ms >= size) {
       const n = Math.floor(ms / size);
-      return `${n} ${unit}${n === 1 ? '' : 's'}`;
+      return formatCount(n, unit);
     }
   return 'under a second';
 }
@@ -160,7 +164,6 @@ function timeOf(v: ItemCellVersion): number {
  */
 export function itemLifeSentence(
   versions: readonly ItemCellVersion[],
-  now: number,
   verb: 'Minted' | 'Issued' = 'Minted',
   by?: string
 ): string {
@@ -173,12 +176,15 @@ export function itemLifeSentence(
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
-    return `${born}${moves ? `, moved ${moves} time${moves === 1 ? '' : 's'}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
+    return `${born}${moves ? `, moved ${moves} ${countNoun(moves, 'time')}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
   }
   if (moves === 0) return `${born}, where it sits now.`;
-  const later = spelledDuration(timeOf(last) - timeOf(first));
+  // Two header times need not run forward (a block's timestamp only has to pass the median of the
+  // 37 before it), so a move whose header time is earlier than the mint's is told without a span.
+  const span = timeOf(last) - timeOf(first);
+  const later = span >= 0 ? ` ${spelledDuration(span)} later` : '';
   return moves === 1
-    ? `${born}, then moved ${later} later to ${lockPhrase(last.lockName)}, where it sits now.`
+    ? `${born}, then moved${later} to ${lockPhrase(last.lockName)}, where it sits now.`
     : `${born}, then moved ${moves} times; the last move put it under ${lockPhrase(last.lockName)}, where it sits now.`;
 }
 
@@ -194,10 +200,33 @@ export function itemLifeAges(
   const first = versions[0];
   const last = versions.at(-1);
   if (!first || !last) throw new Error('item life ages need at least one cell version');
-  const born = `${verb.toLowerCase()} ${spelledDuration(now - timeOf(first))} ago`;
-  return versions.length > 1
-    ? `${born} · last moved ${spelledDuration(now - timeOf(last))} ago`
-    : born;
+  // The one age rule (format-age): a header time this device's clock has not reached by more than
+  // consensus allows has no age.
+  const ago = (label: string, version: ItemCellVersion) => {
+    const age = ageSeconds(timeOf(version), now);
+    return age.kind === 'clock-behind'
+      ? `${label}: ${CLOCK_BEHIND}`
+      : `${label} ${spelledDuration(age.seconds * 1000)} ago`;
+  };
+  const born = ago(verb.toLowerCase(), first);
+  return versions.length > 1 ? `${born} · ${ago('last moved', last)}` : born;
+}
+
+/**
+ * The life sentence with its ages as its hover (lane P), read from the page's one clock, so they
+ * move with no data change (lane E4); the sentence itself names no time.
+ */
+export function ItemLife({
+  versions,
+  verb = 'Minted',
+  by,
+}: {
+  versions: readonly ItemCellVersion[];
+  verb?: 'Minted' | 'Issued';
+  by?: string;
+}) {
+  const ages = useClockText((now) => itemLifeAges(versions, now, verb));
+  return <span title={ages}>{itemLifeSentence(versions, verb, by)}</span>;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──
@@ -232,7 +261,9 @@ export function cellLifeSentence(
   const changes = (['lock', 'type', 'data'] as const).flatMap((part) => {
     const key = `${part}Bytes` as const;
     const d = last.anatomy[key] - first.anatomy[key];
-    return d === 0 ? [] : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${Math.abs(d)} bytes`];
+    return d === 0
+      ? []
+      : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${formatCount(Math.abs(d), 'byte')}`];
   });
   const dCap = cap - was,
     dOcc = occupied - BigInt(first.occupiedCapacity);

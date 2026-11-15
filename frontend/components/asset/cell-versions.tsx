@@ -114,7 +114,7 @@ export function CellVersions({
               onFocus={() => setActive(key)}
               onBlur={() => setActive(null)}
               className={cn(
-                'border-base-border-subtle text-small grid min-w-0 gap-3 border-b py-3 sm:grid-cols-[130px_minmax(0,1fr)_160px]',
+                'border-row-rule text-small grid min-w-0 gap-3 border-b py-3 sm:grid-cols-[130px_minmax(0,1fr)_160px]',
                 active && active !== key && 'opacity-35'
               )}
             >
@@ -161,9 +161,9 @@ export function CellVersions({
                     <AppLink href={`/address/${v.ownerAddress}`}>
                       <Hash
                         hash={v.ownerAddress}
+                        kind="address"
+                        size="row"
                         copyable={false}
-                        startChars={10}
-                        endChars={6}
                         className="text-meta"
                       />
                     </AppLink>
@@ -172,8 +172,7 @@ export function CellVersions({
                     {v.lockName ?? 'Lock'}{' '}
                     <Hash
                       hash={v.lock.codeHash}
-                      startChars={6}
-                      endChars={4}
+                      size="row"
                       className="text-meta"
                       copyable={false}
                     />

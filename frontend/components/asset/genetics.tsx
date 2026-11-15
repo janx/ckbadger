@@ -21,9 +21,9 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
 import { COMPOSITION_BADGES, GENE_COLORS } from '@/lib/design-tokens';
+import type { PaletteKey } from '@/lib/palette';
 import {
   alleleLanes,
-  droppedGenesCaption,
   geneLabel,
   geneOrder,
   genotypePoints,
@@ -46,6 +46,11 @@ import {
 } from '@/lib/dob-pattern';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
+import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
+import { TraitText } from '@/components/asset/trait-text';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import { unitText } from '@/components/ui/units';
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
@@ -72,6 +77,15 @@ function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefine
   };
 }
 /**
+ * The colour a gel is drawn on inside its plate: the copper plate's inner fill, else the instrument
+ * frame's glass, which is the surface in both themes. A band's label is inked for it.
+ */
+function plateGround(tier: CompositionTier | undefined): PaletteKey {
+  if (tier === 'btc_ckb') return 'badge-inner-btc';
+  if (tier === 'pure_ckb') return 'badge-inner-pure';
+  return 'base-surface';
+}
+/**
  * The plate a gel sits on. A BTC+CKB or pure-CKB object keeps its copper plate (the object pages'
  * copper is not touched); any other gel sits in the one instrument frame (Midnight, continued,
  * move 3). `className` lays out the gel inside either.
@@ -88,8 +102,8 @@ function GelPlate({
   const copper = plateStyle(tier);
   if (copper)
     return (
-      <div data-gel-plate="copper" className="rounded-lg p-[5px]" style={copper}>
-        <div className={cn('rounded', className)}>{children}</div>
+      <div data-gel-plate="copper" className="p-[5px]" style={copper}>
+        <div className={className}>{children}</div>
       </div>
     );
   return (
@@ -136,8 +150,8 @@ export function DnaParagraph({
   // Set in the object page's "in words" Prose: the paragraph carries no classes of its own.
   return (
     <p>
-      The object’s traits are not stored as text. It carries {bytes} bytes of DNA, and the
-      collection’s decoder reads each gene to express a trait.
+      The object’s traits are not stored as text. It carries {unitText(formatCount(bytes, 'byte'))}{' '}
+      of DNA, and the collection’s decoder reads each gene to express a trait.
       {pointer
         ? ` Its ${pointer} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
         : ''}
@@ -196,7 +210,7 @@ export function ObjectGeneticsView({
         <PromptHeading
           id="h-dna"
           command="DNA"
-          args={`${layout.bytes.length} bytes · ${geneNames.length} gene${geneNames.length === 1 ? '' : 's'}${evidence.number !== null ? ` · number ${evidence.number}` : ''}`}
+          args={`${formatCount(layout.bytes.length, 'byte')} · ${formatCount(geneNames.length, 'gene')}${evidence.number !== null ? ` · number ${evidence.number}` : ''}`}
         />
         {cached.status === 'pending' && (
           <p role="status" className="text-text-dim">
@@ -228,7 +242,7 @@ export function ObjectGeneticsView({
         </GelPlate>
         {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
         <p data-role="caption" className="text-text text-body max-w-[640px]">
-          Its traits are read from {words.bytes} bytes of DNA
+          Its traits are read from {unitText(formatCount(words.bytes, 'byte'))} of DNA
           {words.pointer
             ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
             : ''}
@@ -257,6 +271,7 @@ export function ObjectGeneticsView({
                   total={collection.genetics.eligibleItems}
                   subject={collectionName ?? subject}
                   ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
+                  ground={plateGround(tier)}
                   bandHeight={170}
                   overlays={[
                     { key: 'me', label: 'this one', points: own3.points, persistent: true },
@@ -284,10 +299,12 @@ export function ObjectGeneticsView({
                 Collection variant frequencies await complete decoding.
               </p>
             )}
-            {ruled && ruled.dropped.length > 0 && (
-              <p data-role="caption" className="text-text-dim text-small max-w-[640px]">
-                {droppedGenesCaption(ruled.dropped, collection.genetics.eligibleItems)}
-              </p>
+            {ruled && (
+              <DroppedGenesCaption
+                dropped={ruled.dropped}
+                objects={collection.genetics.eligibleItems}
+                className="max-w-[640px]"
+              />
             )}
           </GelPlate>
         </section>
@@ -324,8 +341,10 @@ export function ObjectGeneticsEvidence({
       </h2>
       <p className="text-text-dim text-meta">
         The byte map describes the current decoder. Trait values are cached VM results
-        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
-        the original decoder binary hash was not recorded. These are separate pieces of evidence.
+        {cached.decodedAt !== null
+          ? unitText(`, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}`)
+          : ''}
+        ; the original decoder binary hash was not recorded. These are separate pieces of evidence.
       </p>
       {layout && (
         <ObjectDnaReading
@@ -336,7 +355,8 @@ export function ObjectGeneticsEvidence({
       {dnaHex !== null && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
-            All {layout ? count(layout.bytes.length) : ''} bytes of DNA as hex
+            All {layout ? unitText(formatCount(layout.bytes.length, 'byte')) : 'bytes'} of DNA as
+            hex
           </summary>
           <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
             {dnaHex}
@@ -346,13 +366,16 @@ export function ObjectGeneticsEvidence({
       {decoded && decoded.media.length > 0 && (
         <ul aria-label="Decoder output" className="text-meta space-y-1">
           {decoded.media.map((m) => (
-            <li key={`${m.hash}:${m.step ?? 'x'}`} className="break-all">
+            // words break between them; a media type anyone can mint breaks anywhere if it must
+            <li key={`${m.hash}:${m.step ?? 'x'}`} className="[overflow-wrap:anywhere]">
               <span className="text-text">
-                {m.mediaType} · {m.size.toLocaleString('en-US')} bytes
+                {m.mediaType} · {unitText(formatCount(m.size, 'byte'))}
                 {m.step !== null ? ` · step ${m.step + 1}` : ''}
                 {m.role ? ` · ${m.role}` : ''}
               </span>{' '}
-              <span className="text-text-dim">sha256 {m.hash.slice(0, 12)}…</span>{' '}
+              <span className="text-text-dim">
+                sha256 <ShortId value={m.hash} kind="hash" size="row" />
+              </span>{' '}
               <a
                 href={`${apiBaseFor(resolveActiveNetwork())}${m.url}`}
                 target="_blank"
@@ -370,7 +393,8 @@ export function ObjectGeneticsEvidence({
           {cached.traits.map((t, i) => (
             <div key={`${t.name}:${i}`} className="min-w-0">
               <dt className="text-text-dim">{t.name}</dt>
-              <dd className="break-all">{t.value === '' ? '(empty)' : t.value}</dd>
+              {/* a raw trait value anyone can mint: words stay whole, a long run breaks anywhere */}
+              <dd className="[overflow-wrap:anywhere]">{t.value === '' ? '(empty)' : t.value}</dd>
             </div>
           ))}
         </dl>
@@ -419,7 +443,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
                 short: count(n),
                 color: 'var(--c-ink-quiet)',
                 quiet: true,
-                title: `${span(part.start, n)} · no gene reads ${n === 1 ? 'it' : 'them'}`,
+                title: `${span(part.start, n)} · no gene reads ${countNoun(n, 'it', 'them')}`,
               };
             const g = byKey.get(part.key)!;
             return {
@@ -490,7 +514,11 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 150,
               header: <span className="text-meta">this object</span>,
               render: (g) => (
-                <span className="text-text block truncate leading-[18px]">
+                // a cut value carries the whole of it in its title (the lead's finding)
+                <span
+                  className="text-text block truncate leading-[18px]"
+                  title={g.value ?? `0x${g.raw}`}
+                >
                   {g.value ?? `0x${g.raw}`}
                 </span>
               ),
@@ -571,7 +599,6 @@ const FORMAT_WORDS: Record<string, string> = {
   jsonDob0: 'JSON DOB/0',
   nervapeJsonDob0: 'Nervape JSON DOB/0',
 };
-const shortHash = (hash: string) => `${hash.slice(0, 6)}…${hash.slice(-4)}`;
 const count = (n: number) => n.toLocaleString('en-US');
 
 /**
@@ -696,15 +723,22 @@ function PatternReading({
         <PhoneRow
           lines={[
             { key: 'gene', tone: 'head', left: row.label, right: row.span },
-            { key: 'rule', tone: 'body', left: row.rule },
+            { key: 'rule', tone: 'body', left: <TraitText text={row.rule} /> },
             // what the objects show can be long: it wraps on its own line, never a right part
-            { key: 'found', tone: 'quiet', left: found(row) ?? '—' },
+            { key: 'found', tone: 'quiet', left: <TraitText text={found(row) ?? '—'} /> },
           ]}
         />
       )}
     />
   );
   const folded = rows.length < genes.length;
+  // the folded table's rows, one a gene
+  const everyGene: GeneRow[] = genes.map((g) => ({
+    label: g.gene.name,
+    genes: [g],
+    span: geneSpan(g.gene),
+    rule: ruleWords(g.gene),
+  }));
   const sampleTraits = sample?.traits ?? [];
   const valueOf = (row: GeneRow) => {
     const values = row.genes.map((g) =>
@@ -745,13 +779,17 @@ function PatternReading({
         {[
           {
             title: 'Each object',
-            body: dna
-              ? `${count(dna.length)} bytes of DNA in its cell data.`
-              : 'its DNA, in its cell data.',
+            body: unitText(
+              dna
+                ? `${formatCount(dna.length, 'byte')} of DNA in its cell data.`
+                : 'its DNA, in its cell data.'
+            ),
           },
           {
             title: 'The pattern',
-            body: `stored in this cluster’s description: ${count(genes.length)} gene${genes.length === 1 ? '' : 's'}, each a byte range and a rule.`,
+            body: unitText(
+              `stored in this cluster’s description: ${formatCount(genes.length, 'gene')}, each a byte range and a rule.`
+            ),
           },
           { title: steps.length > 1 ? 'The decoders' : 'The decoder', body: null },
         ].map((tile, i) => (
@@ -765,7 +803,7 @@ function PatternReading({
                 <span className="hidden sm:inline">→</span>
               </span>
             )}
-            <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5 [overflow-wrap:anywhere]">
+            <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5 [overflow-wrap:anywhere]">
               <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
               {tile.body ??
                 steps.map((step) => (
@@ -773,7 +811,8 @@ function PatternReading({
                     {steps.length > 1 && <span className="text-text">{step.step + 1}. </span>}
                     by {step.decoderReference.type}{' '}
                     <span title={step.decoderReference.hash}>
-                      {shortHash(step.decoderReference.hash)}
+                      {/* a tile of the mechanism chain, under 200 px: tight (U-09) */}
+                      <ShortId value={step.decoderReference.hash} kind="hash" size="tight" />
                     </span>
                     {step.decoderBinaryHash ? (
                       step.decoderBinaryHash === step.decoderReference.hash ? (
@@ -793,7 +832,7 @@ function PatternReading({
                             href={`/script/${step.decoderBinaryHash}`}
                             title={step.decoderBinaryHash}
                           >
-                            {shortHash(step.decoderBinaryHash)}
+                            <ShortId value={step.decoderBinaryHash} kind="hash" size="tight" />
                           </AppLink>
                         </>
                       )
@@ -840,7 +879,7 @@ function PatternReading({
                   short: count(n),
                   color: 'var(--c-ink-quiet)',
                   quiet: true,
-                  title: `${span} · no gene reads ${n === 1 ? 'it' : 'them'}`,
+                  title: `${span} · no gene reads ${countNoun(n, 'it', 'them')}`,
                 };
               const gene = byKey.get(part.key)!.gene;
               return {
@@ -863,11 +902,11 @@ function PatternReading({
           <ReadoutRow
             label="DNA ruler readout"
             pinned={readout.showingPin}
-            idle={`${count(extent)} bytes of DNA · ${count(genes.length)} gene${genes.length === 1 ? '' : 's'}`}
+            idle={`${formatCount(extent, 'byte')} of DNA · ${formatCount(genes.length, 'gene')}`}
           >
-            {readout.active === null
-              ? null
-              : (() => {
+            {readout.active === null ? null : (
+              <TraitText
+                text={(() => {
                   const g = byKey.get(readout.active)!;
                   const row = rows.find((r) => r.genes.includes(g))!;
                   return (
@@ -881,6 +920,8 @@ function PatternReading({
                       .join(' · ') + (row.genes.length > 1 ? ` (in ${row.label})` : '')
                   );
                 })()}
+              />
+            )}
           </ReadoutRow>
         </div>
       ) : (
@@ -900,35 +941,25 @@ function PatternReading({
       {folded && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
-            All {count(genes.length)} genes, one row each
+            All {unitText(formatCount(genes.length, 'gene'))}, one row each
           </summary>
-          <div className="mt-2">
-            {geneTable(
-              genes.map((g) => ({
-                label: g.gene.name,
-                genes: [g],
-                span: geneSpan(g.gene),
-                rule: ruleWords(g.gene),
-              })),
-              'DOB blueprint, every gene'
-            )}
-          </div>
+          <div className="mt-2">{geneTable(everyGene, 'DOB blueprint, every gene')}</div>
         </details>
       )}
       {sample && (
         <div
           role="group"
           aria-label="One object, read this way"
-          className="border-base-border-subtle min-w-0 rounded border px-3.5 py-3"
+          className="border-base-border-subtle min-w-0 border px-3.5 py-3"
         >
           <div className="text-meta text-text-dim flex flex-wrap items-baseline justify-between gap-x-3">
             <span>
               one object, read this way ·{' '}
               <AppLink href={sample.href} title={sample.id}>
-                {`${sample.id.slice(0, 10)}…${sample.id.slice(-4)}`}
+                <ShortId value={sample.id} kind="hash" size="row" />
               </AppLink>
             </span>
-            {dna && <span>{count(dna.length)} bytes</span>}
+            {dna && <span>{unitText(formatCount(dna.length, 'byte'))}</span>}
           </div>
           {sample.decodeStatus !== 'decoded' ? (
             <p className="text-text-dim text-small mt-2">
@@ -945,7 +976,9 @@ function PatternReading({
                   >
                     {row.label}
                   </dt>
-                  <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">{valueOf(row)}</dd>
+                  <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
+                    <TraitText text={valueOf(row)} />
+                  </dd>
                 </Fragment>
               ))}
             </dl>
@@ -953,7 +986,9 @@ function PatternReading({
           {outside.length > 0 && (
             <p className="text-text-dim text-meta mt-2 [overflow-wrap:anywhere]">
               Also from the decoder, outside the pattern:{' '}
-              {outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}
+              <TraitText
+                text={outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}
+              />
             </p>
           )}
         </div>

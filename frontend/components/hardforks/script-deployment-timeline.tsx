@@ -6,6 +6,11 @@ import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { unitNode } from '@/components/ui/units';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -30,6 +35,11 @@ interface Props {
 /** Columns a mark can take on the strip; marks in the same column stack downward. */
 const COLUMNS = 200;
 const ROW_PX = 8;
+/**
+ * PB-02: a version dot is read from a hit area at least this tall over its row of dots (the dot
+ * nearest the pointer answers), not from its own 6–7 px circle; on the lanes and on this strip.
+ */
+export const DOT_HIT_PX = 24;
 
 function headerMs(timestampMs: number): number {
   if (
@@ -42,9 +52,12 @@ function headerMs(timestampMs: number): number {
   return timestampMs;
 }
 
-/** A version's name is not unique (two "PW Lock" versions): the version hash tells them apart. */
-export function markName(mark: HardforkScriptDeployment): string {
-  return `${mark.versionName} · ${mark.familyName} · version ${mark.versionHash.slice(0, 10)}…`;
+/**
+ * A version's name is not unique (two "PW Lock" versions): the version hash tells them apart, at
+ * the size of where the name stands (U-09): a mark's name on the chart, tight; the reading, row.
+ */
+export function markName(mark: HardforkScriptDeployment, size: ShortSize): string {
+  return `${mark.versionName} · ${mark.familyName} · version ${shortenHash(mark.versionHash, size)}`;
 }
 
 /**
@@ -104,6 +117,16 @@ export function ScriptDeploymentTimeline({
     return { mark, left: (column + 0.5) / COLUMNS, row };
   });
   const rows = Math.max(...placed.map((entry) => entry.row)) + 1;
+  const stripHeight = Math.max(DOT_HIT_PX, rows * ROW_PX + 6);
+  /** The mark nearest a pointer over the strip's hit area (`el`): its column's x, its row's y. */
+  const nearest = (clientX: number, clientY: number, el: Element) => {
+    const box = el.getBoundingClientRect();
+    const px = clientX - box.left;
+    const py = clientY - box.top;
+    const at = ({ left: x, row }: (typeof placed)[number]) =>
+      Math.hypot(x * box.width - px, row * ROW_PX + 3.5 - py);
+    return placed.reduce((best, entry) => (at(entry) < at(best) ? entry : best)).mark.versionHash;
+  };
   const left = inset?.left ?? 0;
   const right = inset?.right ?? 0;
   const caption = label ?? `known script versions · ${marks.length.toLocaleString()}`;
@@ -117,7 +140,7 @@ export function ScriptDeploymentTimeline({
           {caption}
         </span>
       )}
-      <div className="relative" style={{ height: rows * ROW_PX + 6 }}>
+      <div className="relative" style={{ height: stripHeight }}>
         {!labelAbove && (
           <span
             className="text-text-dim text-meta absolute left-0 top-0 leading-tight"
@@ -132,6 +155,23 @@ export function ScriptDeploymentTimeline({
           className="absolute inset-y-0"
           style={{ left, right }}
         >
+          {/* PB-02: the pointer reads the nearest dot from this band; the buttons keep the
+              keyboard (focus, Enter, Space) and the assistive names. */}
+          <div
+            aria-hidden="true"
+            data-dot-hit="strip"
+            className="absolute inset-x-0 top-0 z-10 cursor-pointer"
+            style={{ height: stripHeight }}
+            onPointerMove={(event) =>
+              readout.hover(nearest(event.clientX, event.clientY, event.currentTarget))
+            }
+            onPointerLeave={() => {
+              if (readout.pinned !== null) readout.hover(null);
+            }}
+            onClick={(event) =>
+              readout.toggle(nearest(event.clientX, event.clientY, event.currentTarget))
+            }
+          />
           {placed.map(({ mark, left: x, row }) => {
             const active = mark.versionHash === selected?.versionHash;
             return (
@@ -144,7 +184,7 @@ export function ScriptDeploymentTimeline({
                 <button
                   type="button"
                   title={`${mark.versionName} · deployed ${formatUtc8Date(mark.timestampMs)}`}
-                  aria-label={`${markName(mark)}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
+                  aria-label={`${markName(mark, 'tight')}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
                   {...readout.bind(mark.versionHash)}
                   className={`focus-visible:outline-jade block h-[7px] w-[7px] -translate-x-1/2 rounded-full border focus-visible:outline ${active ? 'bg-jade border-jade' : 'border-text-bright bg-base-bg hover:bg-jade'}`}
                 />
@@ -183,9 +223,11 @@ export function DeploymentEvidence({
         pinned={pinned}
         idle="a dot reads its script version, its first code cell and its block (keyboard: focus it)"
       >
-        {selected
-          ? `${markName(selected)} · deployed ${formatUtc8Date(selected.timestampMs)}`
-          : null}
+        {unitNode(
+          selected
+            ? `${markName(selected, 'row')} · deployed ${formatUtc8Date(selected.timestampMs)}`
+            : null
+        )}
       </ReadoutRow>
       {selected && (
         <>
@@ -195,7 +237,9 @@ export function DeploymentEvidence({
           </p>
           <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-y-2">
             <dt className="text-text-dim">Header time</dt>
-            <dd className="break-words">{formatUtc8DateTime(selected.timestampMs)}</dd>
+            <dd className="break-words">
+              <Utc8DateTime timestamp={selected.timestampMs} />
+            </dd>
             <dt className="text-text-dim">Epoch</dt>
             <dd>{selected.epochNumber.toLocaleString()}</dd>
             <dt className="text-text-dim">Version</dt>
@@ -213,7 +257,8 @@ export function DeploymentEvidence({
                 href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
                 className="text-text hover:text-text-bright hover:underline"
               >
-                Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
+                Code cell <ShortId value={selected.codeCellTxHash} kind="hash" size="row" />
+                <OutpointIndex index={selected.codeCellOutputIndex} />
               </Link>
               <Link
                 href={`/blocks/${selected.blockNumber}`}

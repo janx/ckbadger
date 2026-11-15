@@ -3,9 +3,9 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { exactUnsignedInteger, formatDecimal, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatDecimal } from '@/lib/exact-integer';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatTick } from '@/lib/chart-ticks';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -21,9 +21,10 @@ import {
 } from '@/lib/detail-routes';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { formatCompositionTier } from '@/lib/asset-utils';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
+import { percentOf } from '@/lib/format-unit';
 
 export interface AssetAmountProps {
   amount: string;
@@ -43,8 +44,13 @@ export function AssetAmount({ amount, decimals }: AssetAmountProps) {
       )}
       {fraction && (
         <>
-          .<span className="opacity-80">{significant}</span>
-          <span className="text-text-ghost">{fraction.slice(significant.length)}</span>
+          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+            {significant ? `.${significant}` : ''}
+          </span>
+          <span data-ghost className="text-text-ghost">
+            {significant ? '' : '.'}
+            {fraction.slice(significant.length)}
+          </span>
         </>
       )}
       {decimals === null && ' (raw)'}
@@ -90,31 +96,26 @@ function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
     border: '1px solid transparent',
   };
 }
-/** CKB held and occupied on a phone row: "2,885,438.81 CKB held · 2,842,315 occupied (98.5%)". */
-function HeldAndOccupied({ asset: a }: { asset: Asset }) {
-  if (a.ownedCapacity === null) return <span>CKB held unavailable</span>;
-  const held = exactUnsignedInteger(a.ownedCapacity, `${a.id} capacity`);
-  const occupied =
-    a.ownedKnowledge === null ? null : exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`);
-  if (occupied !== null && occupied > held)
-    throw new Error(`${a.id}: occupied capacity exceeds held capacity`);
-  return (
-    <Dotted
-      parts={[
-        <span key="held" className="whitespace-nowrap">
-          <ExactCkb shannons={held} signed={false} tone="plain" /> held
-        </span>,
-        occupied === null ? (
-          'occupied unavailable'
-        ) : (
-          <span key="occupied" className="whitespace-nowrap">
-            <OccupiedCkb shannons={occupied} /> occupied
-            {held > BigInt(0) && ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)`}
-          </span>
-        ),
-      ]}
-    />
-  );
+/**
+ * CKB held and occupied on a phone row: "2,885,438.81 CKB held · 2,842,315 occupied (98.5%)", as
+ * parts of the row's one separated list (a list is never nested in another).
+ */
+function heldAndOccupiedParts(a: Asset): ReactNode[] {
+  const { held, occupied } = heldAndOccupied(a);
+  if (held === null) return ['CKB held unavailable'];
+  return [
+    <span key="held" className="whitespace-nowrap">
+      <ExactCkb shannons={held} signed={false} tone="plain" /> held
+    </span>,
+    occupied === null ? (
+      'occupied unavailable'
+    ) : (
+      <span key="occupied" className="whitespace-nowrap">
+        <OccupiedCkb shannons={occupied} /> occupied
+        {held > BigInt(0) && ` (${percentOf(occupied, held)})`}
+      </span>
+    ),
+  ];
 }
 
 /** An exact count and its noun, singular for one ("1 holder", "93 objects"). */
@@ -147,7 +148,9 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
     const name = (
       <AppLink href={href} className="text-text-bright">
         <span className="font-medium">
-          {a.symbol ?? a.name ?? <Hash hash={a.id} copyable={false} className="text-small" />}
+          {a.symbol ?? a.name ?? (
+            <Hash hash={a.id} size="tight" copyable={false} className="text-small" />
+          )}
         </span>
         {a.symbol && a.name && <span className="text-text"> {a.name}</span>}
       </AppLink>
@@ -189,7 +192,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
             ? {
                 key: 'figures',
                 tone: 'quiet',
-                left: <Dotted parts={[supply, <HeldAndOccupied key="h" asset={a} />]} />,
+                left: <Dotted parts={[supply, ...heldAndOccupiedParts(a)]} />,
                 right: <Dotted parts={[...activity, hm]} />,
               }
             : {
@@ -201,7 +204,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
           !wide && {
             key: 'figures',
             tone: 'quiet',
-            left: <Dotted parts={[supply, <HeldAndOccupied key="h" asset={a} />]} />,
+            left: <Dotted parts={[supply, ...heldAndOccupiedParts(a)]} />,
           },
         ]}
       />
@@ -209,7 +212,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
   }
   const title = (
     <AppLink href={href} className="text-text-bright font-medium">
-      {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+      {a.name || <Hash hash={a.id} size="tight" copyable={false} className="text-small" />}
     </AppLink>
   );
   if (a.assetType === 'object') {
@@ -229,16 +232,9 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
       <span key="m" className="whitespace-nowrap">
         of <AssetCount value={a.totalSupply} /> minted
       </span>,
-      <HeldAndOccupied key="c" asset={a} />,
+      ...heldAndOccupiedParts(a),
       a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`,
-      <Hash
-        key="id"
-        hash={a.id}
-        startChars={6}
-        endChars={4}
-        copyable={false}
-        className="text-meta"
-      />,
+      <Hash key="id" hash={a.id} size="tight" copyable={false} className="text-meta" />,
     ];
     return (
       <PhoneRow
@@ -302,10 +298,14 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
           ? {
               key: 'figures',
               tone: 'quiet',
-              left: <Dotted parts={[...counts, <HeldAndOccupied key="c" asset={a} />]} />,
+              left: <Dotted parts={[...counts, ...heldAndOccupiedParts(a)]} />,
             }
           : { key: 'activity', tone: 'body', left: <Dotted parts={[sub, ...counts]} /> },
-        !wide && { key: 'figures', tone: 'quiet', left: <HeldAndOccupied asset={a} /> },
+        !wide && {
+          key: 'figures',
+          tone: 'quiet',
+          left: <Dotted parts={heldAndOccupiedParts(a)} />,
+        },
       ]}
     />
   );
@@ -355,7 +355,7 @@ export function CkbTwoPlaces({ shannons }: { shannons: bigint }) {
   );
 }
 
-/** A token amount to 2 dp, its decimals in ghost ink; unknown decimals print the raw integer. */
+/** A token amount to 2 dp, its decimals in the dim ink; unknown decimals print the raw integer. */
 export function TokenTwoPlaces({ amount, decimals }: { amount: string; decimals: number | null }) {
   const value = exactUnsignedInteger(amount, 'token amount');
   const exact = formatTokenBalanceWithRawMarker(amount, decimals);
@@ -369,7 +369,7 @@ export function TokenTwoPlaces({ amount, decimals }: { amount: string; decimals:
   return (
     <span className="tabular-nums" title={exact}>
       {whole}
-      {fraction && <span className="text-text-ghost text-meta">.{fraction}</span>}
+      {fraction && <span className="text-text-dim text-meta">.{fraction}</span>}
     </span>
   );
 }
@@ -406,7 +406,7 @@ function heldTitle(a: Asset): string {
   if (occupied === null) parts.push('occupied unavailable');
   else
     parts.push(
-      `${exactCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)` : ''}`
+      `${exactCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${percentOf(occupied, held)})` : ''}`
     );
   return parts.join(' · ');
 }
@@ -474,11 +474,13 @@ function TokenName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright min-w-0 truncate leading-[18px]"
       >
-        {a.name ?? a.symbol ?? <Hash hash={a.id} copyable={false} className="text-small" />}
+        {a.name ?? a.symbol ?? (
+          <Hash hash={a.id} size="row" copyable={false} className="text-small" />
+        )}
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
       {a.standard !== 'xudt' && a.standard !== 'xudt_compatible' && (
-        <RowTag className="text-text-ghost">{formatStandard(a.standard)}</RowTag>
+        <RowTag className="text-text-dim">{formatStandard(a.standard)}</RowTag>
       )}
     </span>
   );
@@ -591,7 +593,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
       <span
         data-thumb-frame={frame ? (a.compositionTier ?? undefined) : undefined}
         className={cn(
-          '-my-[3px] flex h-6 w-6 shrink-0 items-center justify-center rounded-sm',
+          '-my-[3px] flex h-6 w-6 shrink-0 items-center justify-center',
           !frame && 'border-base-border border'
         )}
         style={frame}
@@ -602,7 +604,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright min-w-0 truncate leading-[18px]"
       >
-        {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
       {a.compositionTier ? (
@@ -616,7 +618,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
   );
 }
 
-/** Live items, and a ghost "/ N" only when minted differs from live (board objects). */
+/** Live items, and a dim "/ N" only when minted differs from live (board objects). */
 function LiveOfMinted({ asset: a }: { asset: Asset }) {
   const differs =
     a.liveCount !== null && a.totalSupply !== null && String(a.liveCount) !== a.totalSupply;
@@ -624,7 +626,7 @@ function LiveOfMinted({ asset: a }: { asset: Asset }) {
     <span>
       <AssetCount value={a.liveCount} />
       {differs && (
-        <span className="text-text-ghost text-meta">
+        <span className="text-text-dim text-meta">
           {' / '}
           <AssetCount value={a.totalSupply} />
         </span>
@@ -697,7 +699,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright min-w-0 truncate leading-[18px]"
       >
-        {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
       {a.name !== standard && <RowTag>{standard}</RowTag>}
     </span>
@@ -755,7 +757,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         columns={wordHeads(tokenColumns(rows))}
         rows={rows}
         rowKey={(a) => a.id}
-        empty="No tokens found"
+        empty="No tokens."
         density="row"
         rowTitle={tokenTitle}
         mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
@@ -768,7 +770,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         columns={wordHeads(objectColumns(rows))}
         rows={rows}
         rowKey={(a) => a.id}
-        empty="No objects found"
+        empty="No objects."
         density="row"
         rowTitle={objectTitle}
         mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
@@ -780,7 +782,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
       columns={wordHeads(identityColumns(rows))}
       rows={rows}
       rowKey={(a) => a.id}
-      empty="No identities found"
+      empty="No identities."
       density="row"
       rowTitle={identityTitle}
       mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}

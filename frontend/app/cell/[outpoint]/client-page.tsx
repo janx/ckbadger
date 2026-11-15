@@ -1,6 +1,8 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useCopy } from '@/hooks/useCopy';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
@@ -12,9 +14,12 @@ import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ExactCkb } from '@/components/activity-event-row';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
-import { formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { formatDurationMs } from '@/lib/utils';
+import { shortenOutpoint } from '@/lib/shorten';
 import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -22,6 +27,13 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
+import { ShortId } from '@/components/ui/short-id';
+import { TitleId } from '@/components/ui/title-id';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
+
+/** What `outpointParts` accepts, as the not-an-id page states it. */
+const OUTPOINT_RULE =
+  'an out point is a transaction hash and an output index: 0x and 64 hex digits, a dash, 0 to 65535.';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -91,10 +103,6 @@ function useScriptNames(cell: Cell | undefined) {
   return { lock: name(cell?.lock?.codeHash), type: name(cell?.type?.codeHash), lookup };
 }
 
-function short(hash: string, head = 8, tail = 6): string {
-  return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
-}
-
 function Fact({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -129,7 +137,8 @@ function ScriptFact({
     script.codeHash === TYPE_ID_CODE_HASH
       ? undefined
       : `/script/${script.codeHash}?hashType=${script.hashType}`;
-  const text = name ?? short(script.codeHash);
+  // a fact tile's ids at the row size (U-09)
+  const text = name ?? <ShortId value={script.codeHash} kind="hash" size="row" />;
   return (
     <Fact
       label={label}
@@ -137,7 +146,9 @@ function ScriptFact({
         script.args !== '0x' || owner ? (
           <>
             {script.args !== '0x' && (
-              <span title={script.args}>args {short(script.args, 4, 4)}</span>
+              <span title={script.args}>
+                args <ShortId value={script.args} kind="hash" size="row" />
+              </span>
             )}
             {owner && (
               <Link
@@ -145,7 +156,7 @@ function ScriptFact({
                 title={owner}
                 className="hover:text-jade block [overflow-wrap:anywhere]"
               >
-                {truncateHash(owner, 10, 6)}
+                <ShortId value={owner} kind="address" size="row" />
               </Link>
             )}
           </>
@@ -231,9 +242,7 @@ function CellFacts({
         sub={
           <>
             {cell.createdTimestamp && (
-              <time dateTime={cell.createdTimestamp}>
-                {formatUtc8DateTime(cell.createdTimestamp)}
-              </time>
+              <Utc8DateTime timestamp={cell.createdTimestamp} dateTime={cell.createdTimestamp} />
             )}
             {cell.createdEpoch ? (
               <span className="block">
@@ -257,9 +266,7 @@ function CellFacts({
           sub={
             <>
               {cell.spentTimestamp && (
-                <time dateTime={cell.spentTimestamp}>
-                  {formatUtc8DateTime(cell.spentTimestamp)}
-                </time>
+                <Utc8DateTime timestamp={cell.spentTimestamp} dateTime={cell.spentTimestamp} />
               )}
               {cell.consumingInputIndex != null && <> · input #{cell.consumingInputIndex}</>}
               {cell.lifetimeMs != null && <> · {formatDurationMs(cell.lifetimeMs)} on chain</>}
@@ -295,16 +302,15 @@ function CellFacts({
 }
 
 function CopyOutpoint({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
+  // the one copy path (hooks/useCopy): "copied" for a moment after a copy that worked, nothing
+  // after one that cannot (no clipboard over plain HTTP on a LAN address)
+  const { copied, copy } = useCopy(value);
   return (
     <button
       type="button"
       aria-label="Copy out point"
-      onClick={async () => {
-        await navigator.clipboard.writeText(value);
-        setCopied(true);
-      }}
-      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] rounded border px-2"
+      onClick={copy}
+      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] border px-2"
     >
       {copied ? 'copied' : 'copy'}
     </button>
@@ -338,15 +344,16 @@ function CodeCellOf({ cell }: { cell: Cell }) {
 
 /**
  * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to the
- * transaction page and the block to its page.
+ * "output 0 of transaction 0x0361eb40ab…12b6518a · live since #14,965,803", the hash linking to
+ * the transaction page and the block to its page; the line under the plate is the page's lede
+ * (U-09: head).
  */
 function CellOrigin({ cell }: { cell: Cell }) {
   return (
     <p data-testid="cell-origin">
       output {cell.outputIndex} of transaction{' '}
       <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        {short(cell.txHash)}
+        <ShortId value={cell.txHash} kind="hash" size="head" />
       </Link>{' '}
       ·{' '}
       {cell.status === 'dead' ? (
@@ -390,11 +397,15 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // Consistency round C13 + lane U (U3): the page presents a cell, named by its short out
         // point; the kind line before it says "Cell" (seals by kind, C10), the full out point and
         // its copy are the id line, and the transaction it is an output of is said under the plate
-        // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, its one break
-        // opportunity after the "…": under the stone below md it has the full width, and at 26 px
-        // the short out point (19 characters, 20 or 21 for an index up to 999) is 286.5 to 316.7
-        // px, inside the 328 px line at 360, so it stands on one line.
-        title={`${short(cell.txHash)}:${cell.outputIndex}`}
+        // (no "Transaction … / output N" breadcrumb). The h1 is the out point alone, one unit,
+        // at the head size where its measured line holds it and at the row size otherwise (U-09,
+        // RESPONSIVE_LAYOUT principle 4; TitleId). Below md it has the full width under the stone at
+        // 26 px, 15.08 px a character with the h1's tracking: the head out point (23 to 25
+        // characters for an index up to 999) is 346.8 to 377.0 px, so an index under 10 takes the
+        // head form in the 358 px line at 390 and every out point takes the row form (19 to 21
+        // characters, 286.5 to 316.7 px) in the 328 px line at 360; from md, beside the stone, the
+        // head form (400.2 to 435 px at 30 px) fits the plate.
+        title={<TitleId form={(size) => shortenOutpoint(cell.txHash, cell.outputIndex, size)} />}
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
@@ -527,20 +538,13 @@ export default function CellDetailPage() {
       />
     );
   }
-  const body = !parts ? (
-    <DetailLayout title="Invalid cell outpoint">
-      <p role="alert" className="text-rouge text-small break-all">
-        {String(outpoint)}
-      </p>
-    </DetailLayout>
-  ) : query.isPending ? (
+  if (!parts) return <NotFoundPage notAnId={{ kind: 'cell', reason: OUTPOINT_RULE }} />;
+  if (!query.data && isBadRequestApiError(query.error))
+    return <NotFoundPage notAnId={{ kind: 'cell', reason: query.error.apiMessage }} />;
+  const body = isAwaited(query) ? (
     <DetailSkeleton />
   ) : query.error && !query.data ? (
-    <DetailLayout title="Cell data unavailable">
-      <p role="alert" className="text-rouge text-small break-all">
-        {query.error.message}
-      </p>
-    </DetailLayout>
+    <ReadFailure what="cell" error={query.error} />
   ) : !query.data ? (
     <DetailLayout title="Cell data unavailable">
       <p role="alert" className="text-rouge text-small">

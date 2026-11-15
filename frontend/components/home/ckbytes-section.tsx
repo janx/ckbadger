@@ -31,7 +31,6 @@ import { api, type ChartResponse, type CkbytesAllocation, type DaoStatistics } f
 import { formatCompactSigned, MINUS } from '@/lib/chart-ticks';
 import {
   formatDecimalBytes,
-  formatPercent,
   formatSignedCkbExact,
   formatSignedCkbInteger,
   formatSignedCount,
@@ -46,6 +45,7 @@ import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
+import { percentFigure } from '@/lib/format-unit';
 
 /** Both change charts show the last 30 complete days. */
 const CHANGE_DAYS = 30;
@@ -68,7 +68,7 @@ export function CkbytesSection() {
   });
   const d = useMemo(
     () =>
-      derive({ data: allocation.data, error: allocation.error }, allocationOf, 'No allocation yet'),
+      derive({ data: allocation.data, error: allocation.error }, allocationOf, 'No allocation.'),
     [allocation.data, allocation.error]
   );
   // No note while the allocation loads or fails: the heading never names a block it has not read.
@@ -209,7 +209,7 @@ export function supplyFormula(view: AllocationView): string {
 }
 
 /**
- * The supply's note (the Main board's aside): the comment, then the formula line in the ghost ink,
+ * The supply's note (the Main board's aside): the comment, then the formula line in the dim ink,
  * set in under the comment's words. Rendered only for a ready allocation.
  */
 function SupplyNote({ view }: { view: AllocationView }) {
@@ -222,7 +222,7 @@ function SupplyNote({ view }: { view: AllocationView }) {
       <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-ghost text-meta m-0 mt-3 pl-[18px] font-mono"
+        className="text-text-dim text-meta m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>
@@ -238,8 +238,8 @@ function Allocation({ d }: { d: Derived<AllocationView> }) {
   if (d.state === 'loading') {
     return (
       <div aria-hidden="true" className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
-        <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
-        <div className="bg-base-surface h-2.5 animate-pulse rounded-full" />
+        <div className="bg-base-surface h-9 w-2/3 animate-pulse" />
+        <div className="bg-base-surface h-2.5 animate-pulse" />
       </div>
     );
   }
@@ -250,7 +250,7 @@ function Allocation({ d }: { d: Derived<AllocationView> }) {
         data-testid="ckbytes-allocation-error"
         className={cn(
           ALLOCATION_CLASS,
-          'border-negative/40 text-negative text-small rounded border px-3 py-2'
+          'border-negative/40 text-negative text-small border px-3 py-2'
         )}
       >
         {d.message}
@@ -301,7 +301,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
   const { active, handlers, focusHandlers } = useHighlight();
   // The page's lit figure flares when the served total changes (material pass v2, move 4).
   const flare = usePhosphor(circulating);
-  const pct = (part: bigint) => formatPercent(part, circulating, 2);
+  const pct = (part: bigint) => percentFigure(part, circulating);
   // Geometry follows the unrounded served amounts; Number is used only for CSS layout.
   const width = (part: bigint) => `${(Number(part) / Number(circulating)) * 100}%`;
   const total = formatCkbAmount(circulating);
@@ -320,22 +320,33 @@ function AllocationReady({ view }: { view: AllocationView }) {
     <div className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
       <div
         data-testid="ckbytes-circulating"
-        // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's
+        // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's. A
+        // wrapping row of two items, the figure and its label (A4 Chrome F1): the label goes under
+        // the figure, starting its line with no indent, when the line cannot hold both — the
+        // figure ≈ 570 px from 640 (14 + 9 characters at 40 px and " CKB" at 20, −0.03 em) and
+        // 314.5 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
+        // 682.8 px (1280's 828.8 px column), two at 1024 (649.6), 640 (608), 390 (358), 360 (328).
         className={cn(
-          'text-text-bright text-index sm:text-display tabular-nums tracking-[-0.01em] [overflow-wrap:anywhere]',
+          'text-text-bright text-index sm:text-display flex flex-wrap items-center gap-x-3 tabular-nums tracking-[-0.01em]',
           flare
         )}
       >
-        {total.integer}
-        <span className="text-text-dim">.{total.decimal}</span>
-        <span className="text-text-dim text-[0.5em]"> CKB</span>
+        {/* The figure and its unit, one unbreakable unit (PA-19; the scripts pages' rule): below
+            640 the decimals are body, so the integer (14 characters at 26 px, 214.8 px with the
+            tracking), the decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 328 at
+            360; at the integer's size they took 355.2 px and the unit went to the next line. */}
+        <span className="whitespace-nowrap">
+          {total.integer}
+          <span className="text-text-dim max-sm:text-body">.{total.decimal}</span>
+          <span className="text-text-dim text-[0.5em]"> CKB</span>
+        </span>
         {/* what the figure is, now the heading says `supply` (the board's label); the block it
-            is read at is the heading's note, said once. One unit, so it moves under the figure
-            whole rather than break ('in' / 'circulation' at 1024), at its own tracking, not the
-            display figure's −0.03 em */}
+            is read at is the heading's note, said once. An item of the row, so it moves under
+            the figure whole rather than break ('in' / 'circulation' at 1024), at its own
+            tracking, not the display figure's −0.03 em */}
         <span
           data-testid="ckbytes-label"
-          className="text-text-dim text-small ml-3 whitespace-nowrap align-middle font-normal tracking-normal"
+          className="text-text-dim text-small font-normal tracking-normal"
         >
           in circulation
         </span>
@@ -343,7 +354,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       <div
         role="img"
         aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
-        className="bg-base-surface flex h-2.5 overflow-hidden rounded-full"
+        className="bg-base-surface flex h-2.5 overflow-hidden"
       >
         {knowledge > BigInt(0) && (
           <span
@@ -430,12 +441,12 @@ function LegendItem({
       type="button"
       data-legend={name}
       data-active={active || undefined}
-      className="focus-visible:ring-base-border -mx-1 flex items-baseline gap-2 rounded bg-transparent px-1 py-1 text-left outline-none focus-visible:ring-1"
+      className="focus-visible:ring-base-border -mx-1 flex items-baseline gap-2 bg-transparent px-1 py-1 text-left outline-none focus-visible:ring-1"
       {...events}
     >
       <span
         aria-hidden="true"
-        className={cn('h-2 w-2 self-center rounded-sm', swatch)}
+        className={cn('h-2 w-2 self-center', swatch)}
         style={swatchColor === undefined ? undefined : { backgroundColor: swatchColor }}
       />
       <span className={active ? 'text-text-bright' : 'text-text'}>{name}</span>
@@ -515,10 +526,7 @@ function ChangeFigure({
     staleTime: 300_000,
     refetchInterval: 300_000,
   });
-  const d = useMemo(
-    () => derive({ data, error }, changeView, 'No daily history yet'),
-    [data, error]
-  );
+  const d = useMemo(() => derive({ data, error }, changeView, 'No daily history.'), [data, error]);
   const v = viewOf(d);
   return (
     <ChartFigure
@@ -579,7 +587,7 @@ function DaoBlock() {
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
-  const d = useMemo(() => derive({ data, error }, daoView, 'No DAO data yet'), [data, error]);
+  const d = useMemo(() => derive({ data, error }, daoView, 'No DAO data.'), [data, error]);
   return (
     <div data-testid="home-dao" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-col gap-0.5">
@@ -587,7 +595,7 @@ function DaoBlock() {
         <span className="text-text-dim text-small">deposited</span>
       </div>
       {d.state === 'loading' && (
-        <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse rounded" />
+        <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse" />
       )}
       {d.state === 'error' && (
         <div role="alert" className="text-rouge text-small">

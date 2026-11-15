@@ -31,13 +31,11 @@ import {
   type HexRowBytes,
 } from '@/lib/cell-byte-layout';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
-
-export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
+import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /** Excerpt ranges align to 24 bytes, which every dump row length (24, 16, 8) divides or fits. */
 const ROW = 24;
-/** Offsets and sizes in the quiet slate, a text ink read by `text-[color:var(--ink)]`. */
-const QUIET = inkStyle(BOARD_INKS.quiet);
 /** The capacity map's gap between parts (`gap-[2px]`). */
 const MAP_GAP = 2;
 /** Data longer than this shows excerpts with "⋯ N bytes … show" rows instead of every byte. */
@@ -158,7 +156,7 @@ const HexRows = memo(function HexRows({
     for (let b = r; b < r + perRow; b++) {
       if (b < from || b >= to || b >= bytes.length) {
         hex.push(
-          <span key={b} aria-hidden="true" data-pad="" className="invisible rounded-sm px-px">
+          <span key={b} aria-hidden="true" data-pad="" className="invisible px-px">
             00
           </span>
         );
@@ -179,7 +177,7 @@ const HexRows = memo(function HexRows({
           data-part-id={part.id}
           data-byte={`${block}:${b}`}
           title={`${part.label} · byte ${b.toLocaleString('en-US')}`}
-          className="rounded-sm px-px"
+          className="px-px"
           style={{
             color: part.tone,
             backgroundColor: part.occupied ? rgba(part.tone, 0.15) : 'transparent',
@@ -192,7 +190,7 @@ const HexRows = memo(function HexRows({
         <span
           key={b}
           data-part-id={part.id}
-          style={{ color: part.occupied ? part.tone : 'var(--c-text-ghost)' }}
+          style={{ color: part.occupied ? part.tone : 'var(--c-text-dim)' }}
         >
           {ch}
         </span>
@@ -202,10 +200,9 @@ const HexRows = memo(function HexRows({
       <div key={`${block}:${r}`} className="flex h-[21px] items-center">
         <span
           className={cn(
-            'shrink-0 select-none text-[color:var(--ink)]',
+            'text-text-dim shrink-0 select-none',
             width === 5 ? 'w-[74px]' : 'w-[62px]'
           )}
-          style={QUIET}
         >
           0x{r.toString(16).padStart(width, '0')}
         </span>
@@ -287,9 +284,10 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   if (!breakdown || (molecule && outOccupied + dataBytes.length !== breakdown.totalBytes))
     return (
       <p role="alert" className="text-rouge text-small">
-        Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied} occupied CellOutput +{' '}
-        {dataBytes.length} data) disagree with its occupied size{' '}
-        {breakdown ? `${breakdown.totalBytes} B` : '(missing)'}.
+        Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied.toLocaleString('en-US')}{' '}
+        occupied CellOutput + {dataBytes.length.toLocaleString('en-US')} data) disagree with its
+        occupied size{' '}
+        {breakdown ? `${breakdown.totalBytes.toLocaleString('en-US')} B` : '(missing)'}.
       </p>
     );
   const parts = [...outParts, ...dataParts];
@@ -376,12 +374,12 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         key={`gap:${from}`}
         data-gap={`${from}-${to}`}
         className={cn(
-          'text-text-dim text-meta border-base-border-subtle my-1 flex h-[30px] items-center gap-3 border-y border-dashed',
+          'text-text-dim text-meta border-row-rule my-1 flex h-[30px] items-center gap-3 border-y border-dashed',
           digits === 5 ? 'pl-[74px]' : 'pl-[62px]'
         )}
       >
         <span>
-          ⋯ {fmt(to - from)} bytes [{fmt(from)}..{fmt(to)}): {listed}
+          ⋯ {unitNode(formatCount(to - from, 'byte'))} [{fmt(from)}..{fmt(to)}): {listed}
         </span>
         <button
           type="button"
@@ -455,7 +453,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             [
               'raw',
               rawHex(part.block === 'output' ? outBytes : dataBytes, part),
-              part.occupied ? part.tone : 'var(--c-ink-quiet)',
+              part.occupied ? part.tone : 'var(--c-text-dim)',
             ],
             ...(part.value !== null ? [['value', part.value] as [string, ReactNode]] : []),
             [
@@ -597,9 +595,9 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     ? byId.get(active.id)?.group === g
                     : g === 'data'
             }
-            title={`${g} · ${fmt(groupBytes[g])} bytes`}
+            title={`${g} · ${formatCount(groupBytes[g], 'byte')}`}
             {...handlers({ kind: 'group', group: g })}
-            className="text-meta flex items-center justify-center whitespace-nowrap rounded-sm"
+            className="text-meta flex items-center justify-center whitespace-nowrap"
             style={{
               flex: `${bytes} 0 0`,
               minWidth: mapSegmentMinWidth(label, big ? 28 : 8),
@@ -626,7 +624,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="text-meta text-base-bg flex items-center justify-center overflow-hidden rounded-sm"
+                className="text-meta text-base-bg flex items-center justify-center overflow-hidden"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
@@ -647,13 +645,11 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 <span key={region.id} className="inline-flex items-center gap-1.5">
                   <span
                     aria-hidden="true"
-                    className="inline-block h-2 w-2 rounded-sm"
+                    className="inline-block h-2 w-2"
                     style={{ backgroundColor: region.tone }}
                   />
                   {region.label}{' '}
-                  <span className="text-[color:var(--ink)]" style={QUIET}>
-                    {fmt(region.end - region.start)}
-                  </span>
+                  <span className="text-text-dim">{fmt(region.end - region.start)}</span>
                 </span>
               ))}
           </div>
@@ -688,7 +684,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     data-pill={part.id}
                     {...handlers({ kind: 'part', id: part.id })}
                     className={cn(
-                      'text-meta inline-flex h-6 items-center gap-1.5 rounded border px-2',
+                      'text-meta inline-flex h-6 items-center gap-1.5 border px-2',
                       active?.kind === 'part' && active.id === part.id
                         ? 'border-text'
                         : 'border-base-border-subtle',
@@ -701,7 +697,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                       style={{ backgroundColor: part.occupied ? part.tone : 'var(--c-text-ghost)' }}
                     />
                     {part.block === 'output' ? part.label.split(' · ').at(-1) : part.label}
-                    <span className="text-meta text-[color:var(--ink)]" style={QUIET}>
+                    <span className="text-meta text-text-dim">
                       [{fmt(part.start)}..{fmt(part.end)})
                     </span>
                   </button>
@@ -750,9 +746,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 )}
                 <div
                   aria-label="CellData byte map"
-                  className={cn(
-                    molecule && 'border-base-border-subtle mt-2.5 border-t border-dashed pt-3.5'
-                  )}
+                  className={cn(molecule && 'border-row-rule mt-2.5 border-t border-dashed pt-3.5')}
                 >
                   <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
                     <span>
@@ -789,7 +783,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           aria-label="Field detail"
           aria-live="polite"
           className={cn(
-            'text-small border-base-border-subtle min-h-[260px] rounded border px-3.5 py-3',
+            'text-small border-base-border-subtle min-h-[260px] border px-3.5 py-3',
             STICKY_RAIL
           )}
         >

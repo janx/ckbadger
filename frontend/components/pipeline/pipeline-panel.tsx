@@ -57,7 +57,6 @@ import {
   blockTip,
   commitNote,
   fmtBytes,
-  shortHash,
   chipTip,
   nextTip,
   predictedTip,
@@ -72,6 +71,8 @@ import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/win
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
+import { formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
 
 const SVG_LABEL = {
   row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase',
@@ -274,7 +275,6 @@ function Ring({
       y={q.Y - pad}
       width={q.s + 2 * pad}
       height={q.s + 2 * pad}
-      rx={2}
       fill="none"
       strokeWidth={1.5}
       strokeDasharray={dashed ? '3 2' : undefined}
@@ -490,7 +490,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       setHover({ block, tx: hit.id, window: info.kind === 'committed' ? info.block.number : null });
       nextArc = info.kind === 'cellbase' ? info.block.number : null;
       nextCursor = 'pointer';
-      show(txTip(info, snapshot, Date.now()));
+      show(txTip(info, snapshot));
     } else if (hit?.kind === 'ghost') {
       // A predicted tx: linked to its pool square by hash when the listed pool has it.
       const g = ghostOfTx.get(hit.id);
@@ -706,7 +706,6 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
                 y={hovered.Y - 4}
                 width={hovered.s + 8}
                 height={hovered.s + 8}
-                rx={3}
                 fill="none"
                 strokeWidth={3}
                 strokeOpacity={0.45}
@@ -773,7 +772,7 @@ function selectionText(
     if (tx) {
       return {
         tag: 'committed',
-        text: `committed in ${formatBlockNumber(b.number)} · its proposal is in ${formatBlockNumber(tx.proposedIn.block)}, ${b.number - tx.proposedIn.block} blocks earlier`,
+        text: `committed in ${formatBlockNumber(b.number)} · its proposal is in ${formatBlockNumber(tx.proposedIn.block)}, ${formatCount(b.number - tx.proposedIn.block, 'block')} earlier`,
       };
     }
   }
@@ -793,12 +792,12 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
       className={`${FOOTER_ROW} text-text text-meta gap-x-3`}
     >
       <span className="eyebrow text-text-dim text-meta">Selected</span>
-      <span className="text-text-bright">{shortHash(pinned)}</span>
+      <span className="text-text-bright">
+        <ShortId value={pinned} kind="hash" size="row" />
+      </span>
       {sel ? (
         <>
-          <span
-            className={`text-meta rounded border px-1.5 py-[3px] leading-none ${TAG_TONE[sel.tag]}`}
-          >
+          <span className={`text-meta border px-1.5 py-[3px] leading-none ${TAG_TONE[sel.tag]}`}>
             {sel.tag}
           </span>
           <span>{sel.text}</span>
@@ -813,7 +812,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
         type="button"
         aria-label="Clear selection"
         onClick={clearPin}
-        className="border-base-border text-text hover:text-text-bright text-meta rounded border px-[7px] py-[3px]"
+        className="border-base-border text-text hover:text-text-bright text-meta border px-[7px] py-[3px]"
       >
         ×
       </button>
@@ -842,7 +841,7 @@ export function PipelinePanel() {
           pipeline
           <span
             title={PIPELINE_HELP}
-            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 rounded-full border text-center font-mono normal-case leading-3 tracking-normal"
+            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 border text-center font-mono normal-case leading-3 tracking-normal"
           >
             ?
           </span>

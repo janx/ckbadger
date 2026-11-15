@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { truncateRecordHex } from '@/components/asset/identity-document';
+import { shortenHash } from '@/lib/shorten';
 
 describe('identity record labels', () => {
-  it('truncates binary record hex instead of dumping whole WebP blobs (ID-DC2)', () => {
+  // ID-DC2, U-09 (re-pinned): a record's binary value is a hex id in the evidence's records
+  // column, written at the row size through the one rule (it was 18…8 by its own helper)
+  it('shortens binary record hex instead of dumping whole WebP blobs (ID-DC2)', () => {
     const hex = `0x${'ab'.repeat(40)}`;
-    expect(truncateRecordHex(hex)).toBe(`0x${'ab'.repeat(9)}…${'ab'.repeat(4)}`);
-    expect(truncateRecordHex('0xabcdef')).toBe('0xabcdef');
+    expect(shortenHash(hex, 'row')).toBe(`0x${'ab'.repeat(4)}…${'ab'.repeat(3)}`);
+    expect(shortenHash('0xabcdef', 'row')).toBe('0xabcdef');
   });
 });

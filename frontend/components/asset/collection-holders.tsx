@@ -20,6 +20,8 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
+import { countNoun } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
 
 export interface CollectionHoldersProps {
   load: (params: {
@@ -28,8 +30,8 @@ export interface CollectionHoldersProps {
   }) => Promise<CursorPaginatedResponse<CollectionHolder>>;
   queryKey: string;
   distribution?: readonly { range: string; holders: number; items: number }[];
-  /** F2 objects (OB-C7): draw the counts as bars in this class colour (Collection board). */
-  assetClass?: BarClass;
+  /** F2 objects (OB-C7), PB-12: the counts are bars in the collection's class colour. */
+  assetClass: BarClass;
 }
 
 /** The asset classes a row bar can be drawn in (`AlignedBar` tones). */
@@ -41,28 +43,16 @@ const COUNT_WIDTH = 44;
 
 /**
  * F2 objects (OB-C7) on the row rules: a count as an 8 px bar in the class colour on the column's
- * round scale, its exact number beside it; a page that gives no class colour prints the count.
+ * round scale, its exact number beside it.
  */
 function countColumn<T>(
   key: string,
   label: string,
   rows: readonly T[],
   value: (row: T) => number,
-  assetClass: BarClass | undefined
+  assetClass: BarClass
 ): ListColumn<T> {
   const scale = resourceScale(rows.map(value));
-  if (!assetClass)
-    return {
-      key,
-      label,
-      minWidth: 100,
-      numeric: true,
-      render: (row) => (
-        <span>
-          <AssetCount value={value(row)} />
-        </span>
-      ),
-    };
   return {
     key,
     label,
@@ -149,14 +139,15 @@ function ScopedCollectionHolders({
     !!distribution && !!holders.data && BigInt(holders.data.data.length) > totalHolders;
   const rank = (holder: CollectionHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1;
-  const party = (holder: CollectionHolder) => (
+  // the holder at the form's size (U-09): row in the table, tight in the phone row
+  const party = (holder: CollectionHolder, size: ShortSize) => (
     <DotCellParty
       party={{
         hashPrefix: holder.ownerHashPrefix ?? null,
         lockHash: holder.lockScriptHash,
         address: holder.address,
       }}
-      truncate
+      size={size}
       // Table-rows L2-4: the holder is the row's bright key, on one 18 px line.
       className="[&>span]:text-small [&_a]:text-text-bright max-w-full flex-nowrap whitespace-nowrap [&>span]:py-0 [&>span]:leading-[18px] [&_a]:leading-[18px]"
     />
@@ -168,7 +159,7 @@ function ScopedCollectionHolders({
         holder.lockScriptHash ??
         `${holder.ownerHashPrefix ?? holderKey(holder)} (unresolved)`,
       holder.lockCodeHash === null ? 'lock not indexed' : (holder.lockKind ?? holder.lockCodeHash),
-      `${holder.itemCount.toLocaleString('en-US')} ${holder.itemCount === 1 ? 'item' : 'items'}`,
+      `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];
   const columns: ListColumn<CollectionHolder>[] = [
@@ -183,7 +174,7 @@ function ScopedCollectionHolders({
       key: 'owner',
       label: 'Holder',
       minWidth: 196,
-      render: party,
+      render: (holder) => party(holder, 'row'),
     },
     {
       key: 'lock',
@@ -194,6 +185,7 @@ function ScopedCollectionHolders({
           <LockKind
             lockKind={holder.lockKind}
             lockCodeHash={holder.lockCodeHash}
+            size="row"
             className={rowTagClass('default', 'min-w-0 truncate')}
           />
         </span>
@@ -257,26 +249,33 @@ function ScopedCollectionHolders({
                 density="row"
                 rowTitle={holderTitle}
                 mobileRow={(holder, wide) => {
-                  const max = Math.max(...holders.data!.data.map((h) => h.itemCount));
+                  // R7: the table's scale for its Items bars — the page's rounded maximum.
+                  const scale = resourceScale(listed.map((h) => h.itemCount));
                   return (
                     <HolderPhoneRow
                       rank={rank(holder)}
-                      party={party(holder)}
+                      party={party(holder, 'tight')}
                       lock={
-                        <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
+                        <LockKind
+                          lockKind={holder.lockKind}
+                          lockCodeHash={holder.lockCodeHash}
+                          size="tight"
+                        />
                       }
                       amount={
                         <span className="whitespace-nowrap">
                           <AssetCount value={holder.itemCount} />{' '}
                           <span className="text-text-dim text-small">
-                            {holder.itemCount === 1 ? 'item' : 'items'}
+                            {countNoun(holder.itemCount, 'item', 'items')}
                           </span>
                         </span>
                       }
-                      // The bar is the holder's count against the largest on the page, as the
-                      // table's Items column draws it.
-                      barWidth={`${max ? (holder.itemCount / max) * 100 : 0}%`}
-                      barColor={assetClass ? CLASS_COLORS[assetClass] : undefined}
+                      bar={{
+                        value: holder.itemCount,
+                        scale,
+                        color: CLASS_COLORS[assetClass],
+                      }}
+                      axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
                       wide={wide}
                     />
                   );
@@ -298,11 +297,7 @@ function ScopedCollectionHolders({
               )}
             </>
           ) : (
-            <AssetReadState
-              error={holders.error}
-              loading={holders.isLoading}
-              label="collection holders"
-            />
+            <AssetReadState error={holders.error} read={holders} label="collection holders" />
           )}
         </div>
         {distribution && (
@@ -338,7 +333,7 @@ function ScopedCollectionHolders({
                           <span className="text-text-dim">
                             {' · '}
                             <AssetCount value={bucket.items} />{' '}
-                            {bucket.items === 1 ? 'item' : 'items'}
+                            {countNoun(bucket.items, 'item', 'items')}
                           </span>
                         </>
                       ),
@@ -346,7 +341,7 @@ function ScopedCollectionHolders({
                         <span className="inline-flex items-center gap-1.5">
                           {bucketColumns[1].render(bucket)}
                           <span className="text-text-dim">
-                            {bucket.holders === 1 ? 'holder' : 'holders'}
+                            {countNoun(bucket.holders, 'holder', 'holders')}
                           </span>
                         </span>
                       ),

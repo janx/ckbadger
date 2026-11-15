@@ -2,7 +2,6 @@ import {
   encodeCellsByScriptCursor,
   getScriptRefBadgeLabel,
   getScriptRefQueryHashType,
-  getScriptRefVerboseLabel,
   normalizeScriptRefHashType,
 } from '@/lib/script-ref';
 
@@ -26,14 +25,6 @@ describe('script-ref utils', () => {
     expect(getScriptRefBadgeLabel('data1')).toBe('bytecode(data1)');
     expect(getScriptRefBadgeLabel('data2')).toBe('bytecode(data2)');
     expect(getScriptRefBadgeLabel('unknown')).toBe('bytecode(data)');
-  });
-
-  it('formats verbose labels consistently', () => {
-    expect(getScriptRefVerboseLabel('type')).toBe('type ref');
-    expect(getScriptRefVerboseLabel('data')).toBe('bytecode hash ref (data)');
-    expect(getScriptRefVerboseLabel('data1')).toBe('bytecode hash ref (data1)');
-    expect(getScriptRefVerboseLabel('data2')).toBe('bytecode hash ref (data2)');
-    expect(getScriptRefVerboseLabel('unknown')).toBe('bytecode hash ref (data)');
   });
 
   it('resolves query hash type with fallback', () => {

@@ -3,7 +3,9 @@ import { useState } from 'react';
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api, isNotFoundApiError, type DotCellItem } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { AppLink } from '@/components/ui/app-link';
 import { ExactCkb } from '@/components/activity-event-row';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
@@ -76,7 +78,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
           type="button"
           disabled={more.isFetching}
           onClick={() => (wantsMore ? void more.fetchNextPage() : setWantsMore(true))}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 rounded border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Show more sub-names
         </button>
@@ -111,8 +113,10 @@ function ScopedName({ itemRef }: { itemRef: string }) {
       />
     );
   }
-  if (!item && detail.isLoading) return <DetailSkeletonPage />;
-  if (!item)
+  if (!item && isBadRequestApiError(detail.error))
+    return <NotFoundPage notAnId={{ kind: 'identity', reason: detail.error.apiMessage }} />;
+  if (!item) {
+    if (!detail.error) return <DetailSkeletonPage />;
     return (
       <AssetDetailShell
         title=".cell name"
@@ -123,9 +127,10 @@ function ScopedName({ itemRef }: { itemRef: string }) {
           { label: '.cell', href: '/identities/dotcell' },
         ]}
       >
-        <AssetReadState label=".cell name" error={detail.error} loading={detail.isLoading} />
+        <ReadFailure what=".cell name" error={detail.error} />
       </AssetDetailShell>
     );
+  }
   return (
     <CanonicalIdentityDetail
       kind="dotcell"
@@ -156,7 +161,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
               </AppLink>
             </>
           ) : (
-            <AssetReadState label="name ring" error={ring.error} loading={ring.isLoading} />
+            <AssetReadState label="name ring" error={ring.error} read={ring} />
           )}
         </section>
       }

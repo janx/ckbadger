@@ -1,17 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import ForksPage from '@/app/forks/page';
 import { api } from '@/lib/api';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
 import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overview.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
@@ -47,8 +50,12 @@ describe('ForksPage', () => {
     const rate = await within(hero).findByText('250.00');
     expect(rate).toHaveClass('sm:text-display', 'text-text-bright');
     expect(within(rate).getByText('%')).toHaveClass('text-hero');
-    expect(within(hero).getByText('uncle rate · 3 days through 2026-10-22')).toBeInTheDocument();
-    expect(within(hero).getByText('5 uncles in 2 blocks · target 2.50%')).toHaveClass('text-body');
+    expect(
+      within(hero).getByText(fullText('uncle rate · 3 days through 2026-10-22'))
+    ).toBeInTheDocument();
+    expect(within(hero).getByText(fullText('5 uncles in 2 blocks · target 2.50%'))).toHaveClass(
+      'text-body'
+    );
     // the days are the picture, inside the hero section
     expect(hero.querySelectorAll('[data-uncles]')).toHaveLength(3);
     // the node's own record (R2b-b): one quiet row under the reading, outside the hero
@@ -65,6 +72,7 @@ describe('ForksPage', () => {
         .getAllByRole('definition')
         .map((dd) => dd.textContent)
     ).toEqual([
+      // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
       '1 time · since 2025-08-01',
       '1 uncle · 1 one block later',
       '1 of 1 · committed in a later block',
@@ -164,7 +172,9 @@ describe('ForksPage', () => {
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(
       within(tier2).getByText(
-        /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\. It only notices a fork when the losing block reached it first and it had to switch\. The uncles are the complete record, and they are on chain for anyone to recount\./
+        fullText(
+          /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\. It only notices a fork when the losing block reached it first and it had to switch\. The uncles are the complete record, and they are on chain for anyone to recount\./
+        )
       )
     ).toBeInTheDocument();
     expect(
@@ -234,6 +244,18 @@ describe('ForksPage', () => {
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
   });
 
+  it('draws the rows’ fork glyphs and the shape key’s block swatch square (U-02, R1)', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const key = screen.getByRole('list', { name: 'Shape key' });
+    expect(rects(key)).toHaveLength(1);
+    expect(roundedRects(key)).toEqual([]);
+    expect(rects(table()).length).toBeGreaterThanOrEqual(5);
+    expect(roundedRects(table())).toEqual([]);
+  });
+
   it('shows the first 5 branch switches, then every one in place under “Show all 18 branch switches ↓” (R15)', async () => {
     const event = list().data[0];
     const rows = Array.from({ length: 18 }, (_, i) => ({ ...event, id: i + 1 }));
@@ -258,7 +280,7 @@ describe('ForksPage', () => {
     const more = screen.getByRole('button', { name: 'Show all 18 branch switches ↓' });
     expect(more).toHaveClass('text-small');
     expect(more).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText(/18 switches/)).toBeNull();
+    expect(screen.queryByText(fullText(/18 switches/))).toBeNull();
     // expanding is the link: every row, every column, in place, then the pager
     fireEvent.click(more);
     expect(bodyRows()).toHaveLength(18);
@@ -302,7 +324,8 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(within(table()).getByText('same miner')).toBeInTheDocument();
-    const miners = within(table()).getAllByRole('link', { name: '…93hhsj' });
+    // U-09 (re-pinned): the table's unnamed miners at the row size (it was the tail alone)
+    const miners = within(table()).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' });
     expect(miners).toHaveLength(2);
     expect(miners[0]).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
@@ -334,9 +357,9 @@ describe('ForksPage', () => {
       'href',
       `/mainnet/address/${address}`
     );
-    expect(within(table()).getByRole('link', { name: '…2cdyx8' })).toBeInTheDocument();
+    expect(within(table()).getByRole('link', { name: 'ckb1qzda0c…2cdyx8' })).toBeInTheDocument();
     // T5: the fork point is the row's one bright thing; both miners read in body ink.
-    for (const name of ['Example Pool', '…2cdyx8'])
+    for (const name of ['Example Pool', 'ckb1qzda0c…2cdyx8'])
       expect(within(table()).getByRole('link', { name })).not.toHaveClass('text-text-bright');
   });
 
@@ -414,5 +437,89 @@ describe('ForksPage', () => {
       /^seen 2025-08-01 06:13:20 UTC\+8, .+ ago · fork point #10, depth 1$/
     );
     expect(within(row).getByText('50 ms')).toHaveClass('text-small', 'tabular-nums');
+  });
+});
+
+// Lane E4: a switch's age, in the table row's title and on the phone row's own line, reads the
+// page's one clock, so it moves with no data change; both were written once at render. The clock
+// stops with the page.
+describe('ForksPage: a switch’s age reads the one clock (E4)', () => {
+  const seenAt = (detectedAt: string): List => {
+    const served = list();
+    return { ...served, data: [{ ...served.data[0], detectedAt }, ...served.data.slice(1)] };
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ now: T0 });
+    vi.mocked(api.getForks).mockResolvedValue(seenAt(new Date(T0 - 20_000).toISOString()));
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    // the phone width's ResizeObserver stub and its getBoundingClientRect spy
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('moves the age in a table row’s title', async () => {
+    const { unmount } = render(<ForksPage />);
+    const title = () =>
+      within(screen.getByRole('table', { name: 'Branch switches on this node' }))
+        .getAllByRole('row')[1]
+        .getAttribute('title');
+    await loadUnderStillClock(
+      () => screen.queryByRole('table', { name: 'Branch switches on this node' }) !== null
+    );
+    expect(title()).toMatch(/ UTC\+8, 20s ago · /);
+    tick(1000);
+    expect(title()).toMatch(/ UTC\+8, 21s ago · /);
+    tick(38_000);
+    expect(title()).toMatch(/ UTC\+8, 59s ago · /);
+    tick(1000);
+    expect(title()).toMatch(/ UTC\+8, 1m ago · /);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('moves the age on a phone row’s own line', async () => {
+    atContainerWidth(358);
+    const { unmount } = render(<ForksPage />);
+    const age = () =>
+      within(
+        within(
+          screen.getByRole('list', { name: 'Branch switches on this node, compact' })
+        ).getAllByRole('listitem')[0]
+      ).getByText(/^\d+[smh] ago$/).textContent;
+    await loadUnderStillClock(
+      () => screen.queryByRole('list', { name: 'Branch switches on this node, compact' }) !== null
+    );
+    expect(age()).toBe('20s ago');
+    tick(1000);
+    expect(age()).toBe('21s ago');
+    tick(38_000);
+    expect(age()).toBe('59s ago');
+    tick(1000);
+    expect(age()).toBe('1m ago');
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('ForksPage while its reads are paused', () => {
+  it('says both are loading, not "No completed fork days", then draws them once back online', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    const { resume } = renderPaused(<ForksPage />);
+    expect(await screen.findByText('Loading fork history…')).toHaveAttribute('role', 'status');
+    expect(screen.getByText('Loading branch switches…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('No completed fork days are indexed.')).toBeNull();
+    resume();
+    expect(await screen.findByText('250.00')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('table', { name: 'Branch switches on this node' })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Loading/)).toBeNull();
   });
 });

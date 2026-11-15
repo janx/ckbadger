@@ -7,6 +7,8 @@ import { BITCOIN_COLORS, GENE_COLORS } from '@/lib/design-tokens';
 import type { AlleleLane } from '@/lib/dob-genes';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fullText } from '@/__tests__/utils/full-text';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 const layout = sequencingGenes(nervape3xGenetics, 'Nervape 3x');
 const lanes = alleleLanes(
@@ -16,7 +18,10 @@ const lanes = alleleLanes(
 );
 
 describe('SequencingGel (Object board, OB-7)', () => {
-  // drawn 1:1 for its measured box; 896 px is the DNA plate at 1280, where the gene columns fit
+  // drawn 1:1 for its measured box; 896 px is the DNA plate at 1280, where the gene columns fit.
+  // The review's item B (the lead's ruling): 8da9b2b5 moved this to 937 px, a width no viewport
+  // gives, when the inscription reading grew to 33 characters; the reading is now
+  // "inscription a94617…79e0i0" (25) and the plate is 896 again
   beforeEach(() => stubChartWidth(896));
   afterEach(() => {
     vi.restoreAllMocks();
@@ -55,12 +60,30 @@ describe('SequencingGel (Object board, OB-7)', () => {
     );
     const bg = container.querySelector('[data-gene="prev.bg"]')!;
     expect(bg.textContent).toContain('bytes 0–31 · btcfs');
-    expect(bg.textContent).toContain('a9461795…e0');
-    expect(bg.textContent).toContain('Bitcoin inscription …79e0i0');
+    expect(bg.textContent).toContain('a94617…79e0');
+    expect(bg.textContent).toContain('inscription a94617…79e0i0');
     const relief = container.querySelector('[data-gene="relief"]')!;
     expect(relief.textContent).toContain('byte 0 · 1 option');
     expect(relief.querySelector('[stroke-dasharray]')).not.toBeNull();
     expect(container.querySelector('[data-gene="Note"]')!.textContent).toContain('empty');
+  });
+
+  // Lane E2 (ruling R4): the raw bytes beside a gene are words in the gene's own ink at full
+  // strength; at fill-opacity .85 the copper read 3.92:1, the indigo 4.24:1 and the dim 3.77:1 on
+  // the day page (4.12:1 the dim by night), each ≥ 4.57:1 at full strength.
+  it('draws each gene’s raw bytes in the gene ink at full strength, no word thinned at rest', () => {
+    const { container } = render(
+      <SequencingGel layout={layout} subject="Nervape 3x" active={null} onActive={() => {}} />
+    );
+    const texts = [...container.querySelectorAll('[data-gene="prev.bg"] text')];
+    // U-09 (re-pinned): the raw bytes take the tight size of the one rule, 6…4
+    const raw = texts.find((t) => t.textContent === 'a94617…79e0')!;
+    expect(raw).toHaveAttribute('fill', BITCOIN_COLORS.copper);
+    expect(raw).not.toHaveAttribute('fill-opacity');
+    const thinned = [...container.querySelectorAll('text, tspan')].filter(
+      (t) => t.hasAttribute('fill-opacity') || t.hasAttribute('opacity')
+    );
+    expect(thinned.map((t) => t.textContent)).toEqual([]);
   });
 
   it('dims everything but the hovered gene and reports the gene up (three-way hover)', () => {
@@ -112,7 +135,10 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
     expect(
       container.querySelector('[data-lane="Color"] [data-allele="Water Veins"] title')!.textContent
     ).toBe('Color = Water Veins: 20 of 90 (22.22%)');
-    expect(screen.getByText(/band thickness = share of all 90 objects/)).toBeInTheDocument();
+    // the count is one unit (B3 round 4, task 3): the caption is read across its span
+    expect(
+      screen.getByText(fullText(/band thickness = share of all 90 objects/))
+    ).toBeInTheDocument();
   });
 
   it('draws a persistent genotype overlay for "this one" across every lane', () => {
@@ -129,6 +155,21 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
     expect(overlay).toHaveAttribute('opacity', '1');
     expect(overlay.querySelectorAll('[data-tick]')).toHaveLength(6);
     expect(overlay.textContent).toContain('this one');
+  });
+
+  it('draws its wells, bands and the "this one" outline square-cornered (U-02, R1)', () => {
+    const own = genotypePoints(lanes, nervape3xGenetics.cachedVmTraits.traits);
+    const { container } = render(
+      <AlleleGel
+        lanes={lanes}
+        total={90}
+        subject="Nervape 3x"
+        overlays={[{ key: 'me', label: 'this one', points: own.points, persistent: true }]}
+      />
+    );
+    expect(container.querySelectorAll('rect[data-allele]').length).toBeGreaterThan(6);
+    expect(container.querySelectorAll('rect[data-tick]')).toHaveLength(6);
+    expect(roundedRects(container)).toEqual([]);
   });
 
   it('shows a row overlay only while that row is active, and links lanes to genes', () => {
@@ -199,6 +240,34 @@ describe('SequencingGel at the measured width (V3)', () => {
     vi.unstubAllGlobals();
   });
 
+  // The review's item B: the wide gel holds at the 896 px plate (1280) for this DNA with a value
+  // at the full budget. Its columns before the value end at 684.28 px: the gene columns from 304
+  // (38 + 16 × 15 + 10 + 16), the longest name ("prev.type", 9 × 7.64 + 10), the longest bytes ·
+  // rule ("bytes 51–52 · nervapeNote", 25 × 7.32 + 12), the raw at the tight size (11 × 7.32 + 8),
+  // the arrow's 16 and the 2 px end. 896 − 684.28 = 211.72 px holds 27 characters of 7.64 (206.28)
+  // and not 28 (213.92): the budget is 27. A value of 40 characters is cut to it and still fits.
+  it('draws the wide gel at the 896 px plate with a value cut to the full budget', () => {
+    stubChartWidth(896);
+    const long = 'N'.repeat(40);
+    const full = {
+      ...layout,
+      genes: layout.genes.map((g) => (g.name === 'Serial' ? { ...g, value: long } : g)),
+    };
+    const { container } = render(
+      <SequencingGel layout={full} subject="Nervape 3x" active={null} onActive={() => {}} />
+    );
+    expect(screen.queryByRole('list', { name: 'Genes' })).toBeNull();
+    // the drawn words (the group's <title> keeps the whole value for a reader)
+    const words = Array.from(container.querySelectorAll('[data-gene="Serial"] text')).map(
+      (t) => t.textContent
+    );
+    expect(words).toContain(`${'N'.repeat(26)}…`);
+    expect(words.some((w) => w!.includes('N'.repeat(27)))).toBe(false);
+    expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
+      'inscription a94617…79e0i0'
+    );
+  });
+
   it('draws lanes and gene columns side by side, 1:1, where the columns fit', () => {
     stubChartWidth(896);
     const { container } = render(<ControlledGel />);
@@ -209,7 +278,7 @@ describe('SequencingGel at the measured width (V3)', () => {
     expect(container.querySelector('.overflow-x-auto')).toBeNull();
     // the gene readings are SVG columns beside the bands, the value not cut
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
-      'Bitcoin inscription …79e0i0'
+      'inscription a94617…79e0i0'
     );
     // each column starts after the longest text of the one before: "bytes 51–52 · nervapeNote"
     // (25 characters of 11.5 px) ends before the raw column, which no longer collides with it
@@ -245,7 +314,7 @@ describe('SequencingGel at the measured width (V3)', () => {
       )
     ).toEqual(['Color', 'Serial', 'Note']);
     const genes = screen.getByRole('list', { name: 'Genes' });
-    // the longest reading (a9461795…e0 → Bitcoin inscription …79e0i0) does not fit a third
+    // the longest reading (a94617…79e0 → inscription a94617…79e0i0) does not fit a third
     // column at 358 px: each reading takes its own line under the name and bytes
     expect(genes).toHaveAttribute('data-rows', 'two-line');
     const rows = within(genes).getAllByRole('listitem');
@@ -263,14 +332,17 @@ describe('SequencingGel at the measured width (V3)', () => {
       'prev.bg',
       'bytes 0–31',
       'btcfs',
-      'a9461795…e0',
+      'a94617…79e0',
       '→',
-      'Bitcoin inscription …79e0i0',
+      'inscription a94617…79e0i0',
     ])
       expect(bg).toHaveTextContent(part);
-    expect(within(bg).getByText('Bitcoin inscription …79e0i0')).toHaveClass(
-      '[overflow-wrap:anywhere]'
-    );
+    // the value wraps anywhere as third-party text does, its shortened id one unit inside it (B3
+    // round 2, re-pinned on purpose: the id is a NoBreak of its own, so the value is two nodes)
+    const id = within(bg).getByText('a94617…79e0i0', { selector: '[data-nobreak]' });
+    const value = id.parentElement as HTMLElement;
+    expect(value).toHaveTextContent(/^inscription a94617…79e0i0$/);
+    expect(value).toHaveClass('[overflow-wrap:anywhere]');
     expect(rows[3]).toHaveTextContent('Color');
     expect(rows[3]).toHaveTextContent('byte 32');
     expect(rows[3]).toHaveTextContent('03');
@@ -307,6 +379,19 @@ describe('SequencingGel at the measured width (V3)', () => {
     render(<ControlledGel />);
     expect(screen.getByRole('list', { name: 'Genes' })).toHaveAttribute('data-rows', 'one-line');
   });
+
+  it.each([896, 358])(
+    'draws its wells, bands, gene spans and field square at %i px, a lit gene too (U-02, R1)',
+    (width) => {
+      stubChartWidth(width);
+      const { container } = render(
+        <SequencingGel layout={layout} subject="Nervape 3x" active="Color" onActive={() => {}} />
+      );
+      expect(container.querySelectorAll('rect[data-nibble]')).toHaveLength(106);
+      expect(rects(container).length).toBeGreaterThan(106);
+      expect(roundedRects(container)).toEqual([]);
+    }
+  );
 
   it('refuses a box too narrow for 16 lanes of 14 px', () => {
     stubChartWidth(200);
@@ -371,7 +456,10 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     // the genotype is marked on every lane and labelled on each row
     const overlay = container.querySelector('[data-overlay="me"]')!;
     expect(overlay.querySelectorAll('[data-tick]')).toHaveLength(6);
-    expect(overlay.querySelectorAll('polyline')).toHaveLength(2);
+    // Re-pinned with PB-04 (UI review 2026-11-14): the genotype is joined side to side between
+    // neighbouring lanes (two links in each row of three), not by a polyline through the bands.
+    expect(overlay.querySelectorAll('[data-link]')).toHaveLength(4);
+    expect(overlay.querySelectorAll('polyline')).toHaveLength(0);
     expect(Array.from(overlay.querySelectorAll('text')).map((t) => t.textContent)).toEqual([
       'this one',
       'this one',
@@ -443,7 +531,7 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     expect(within(rows[0]).getAllByRole('cell')[0]).toHaveTextContent(/^gene5$/);
     expect(rows[0]).toHaveTextContent('2 of 6');
     const more = screen.getByRole('button', {
-      name: /^62 more genes: 61 with 2 variants and 1 with 1 variant/,
+      name: /^62\smore\sgenes: 61 with 2\svariants and 1 with 1\svariant/,
     });
     fireEvent.click(more);
     expect(within(table).getAllByRole('row').slice(1)).toHaveLength(72);
@@ -469,7 +557,7 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
         selected={{ gene0: 'b' }}
       />
     );
-    fireEvent.click(screen.getByRole('button', { name: /^gene0, 2 variants/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^gene0, 2\svariants/ }));
     const variants = screen.getByRole('list', { name: 'gene0 variants' });
     expect(
       within(variants)
@@ -504,11 +592,13 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     expect(row).toHaveTextContent('▸ this one: b · 2 of 6');
   });
 
+  // Re-pinned with PB-04: with no tag always shown there is no left margin, so the narrowest box
+  // that still holds a 12 px lane is 34 px (the 22 px right edge and one lane), not 96.
   it('throws on a box too narrow for one 12 px lane instead of drawing an empty gel', () => {
-    stubChartWidth(80);
+    stubChartWidth(30);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => render(<AlleleGel lanes={lanes} total={90} subject="Nervape 3x" />)).toThrow(
-      /Nervape 3x: a 80 px allele gel cannot hold a 12 px lane/
+      /Nervape 3x: a 30 px allele gel cannot hold a 12 px lane/
     );
   });
 });

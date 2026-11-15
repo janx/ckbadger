@@ -70,7 +70,8 @@ describe('code cell page against the CellCode board', () => {
     expect(nameBox).not.toContainElement(codeCellOf);
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     await within(facts).findByRole('link', { name: 'Multisig' });
-    expect(facts).toHaveTextContent('args 0x6598…d696');
+    // U-09 (re-pinned): a fact tile's args at the row size
+    expect(facts).toHaveTextContent('args 0x65983f1d…eed696');
     expect(facts).toHaveTextContent('TypeType ID');
     expect(facts).toHaveTextContent('Data100,312 BRISC-V ELF');
     expect(facts.textContent).not.toContain(

@@ -10,8 +10,6 @@ vi.mock('@/lib/api', () => ({
     getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
     getHardforks: vi.fn().mockResolvedValue({ events: [] }),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/ui/chart', () => ({ Chart: (props: never) => chartMock(props) }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
@@ -64,7 +62,20 @@ describe('HodlWavePage', () => {
     const [ages, holders] = chartMock.mock.calls.map(([props]) => props);
     expect(ages).toMatchObject({
       kind: 'stacked',
-      series: response.series.map(({ key, label }) => ({ key, label })),
+      // Every band the API returns, named as a range (re-pinned for CH-21: the API's labels).
+      series: response.series.map(({ key }) => ({
+        key,
+        label: {
+          '24h': '< 1 d',
+          '1d1w': '1 d – 1 w',
+          '1w1m': '1 w – 1 m',
+          '1m3m': '1 m – 3 m',
+          '3m6m': '3 m – 6 m',
+          '6m1y': '6 m – 1 y',
+          '1y3y': '1 y – 3 y',
+          gt3y: '> 3 y',
+        }[key],
+      })),
       data: [{ label: '2024-01-01', values: expect.objectContaining({ gt3y: '15.00' }) }],
     });
     // Responsive review C#10: the summary pairs stay one column until md ("Largest age / band").

@@ -13,6 +13,7 @@ import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { ShortId } from '@/components/ui/short-id';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
   /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
@@ -46,10 +47,12 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
           ))}
         </select>
       </label>
-      <div className="text-meta break-all">
+      <div className="text-meta [overflow-wrap:anywhere]">
         Outpoint{' '}
+        {/* the hash at its line's 11 px (A4 Chrome F4): 66 × 6.6 = 435.6 px and ":N", within a
+            1024 column's 460 px; at 13 px it took 514.8 and scrolled */}
         <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
-          <Hash hash={cell.txHash} truncate={false} copyable={false} />
+          <Hash hash={cell.txHash} truncate={false} copyable={false} className="text-meta" />
           <OutpointIndex index={cell.outputIndex} />
         </AppLink>
       </div>
@@ -122,7 +125,8 @@ export function ItemTransactionContext({
       data-acted-on={context.actedOn}
       className={cn(
         'text-meta space-y-1 whitespace-normal',
-        headline.neighbour && 'opacity-[0.45]'
+        // a neighbour's row is set back (R4): every word dim, nothing faded
+        headline.neighbour && 'quiet'
       )}
     >
       {part !== 'cell' && (
@@ -137,7 +141,7 @@ export function ItemTransactionContext({
             <span className="text-text-dim block">
               to{' '}
               <AppLink href={`/address/${context.createdCell.ownerAddress}`}>
-                {`${context.createdCell.ownerAddress.slice(0, 10)}…${context.createdCell.ownerAddress.slice(-6)}`}
+                <ShortId value={context.createdCell.ownerAddress} kind="address" size="row" />
               </AppLink>{' '}
               (output {context.createdCell.outputIndex})
             </span>

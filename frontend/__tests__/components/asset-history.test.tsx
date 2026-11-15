@@ -1,7 +1,8 @@
-import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, within, cleanup } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { yTickLabels, plotLeftOf } from '@/__tests__/utils/y-ticks';
 const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
   { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
@@ -13,6 +14,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="tokens"
           weeklyNoun="transfers"
           daily={daily.map((day, i) => ({ ...day, supply: String(i + 1) }))}
           weekly={[]}
@@ -21,8 +23,13 @@ describe('Asset history', () => {
         />
       );
       const plot = screen.getByRole('img', { name: 'Supply, T' });
-      // Lane P: the values are written inside the plot (the baseline is not), still scientific.
-      expect(plot).toHaveTextContent(/\de-255 T/);
+      // Re-pinned with the lane A5 follow-up (U-19): the values are bare in the gutter, still
+      // scientific, and the plot's name says the unit once.
+      expect(plot).toHaveTextContent(/\de-255/);
+      expect(plot).not.toHaveTextContent(/e-255 T/);
+      // Re-pinned with the plot-name fit: the fixed 'supply in tokens' (a symbol has no length
+      // bound and SVG text does not wrap).
+      expect(plot.querySelector('[data-role="chart-name"]')).toHaveTextContent('supply in tokens');
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       const readout = screen.getByLabelText('History readout');
       expect(readout).toHaveTextContent(`0.${'0'.repeat(254)}2`);
@@ -41,6 +48,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="tokens"
           weeklyNoun="transactions"
           daily={daily}
           weekly={[{ weekStart: '2024-01-01', count: 8000 }]}
@@ -50,17 +58,22 @@ describe('Asset history', () => {
       );
       const plots = screen.getAllByRole('img');
       expect(plots).toHaveLength(3);
-      // Lane P (R13, Main.dc.html): the ticks are ghost values written inside each plot from its
-      // left edge, so no gutter can cut them; the longest one still starts inside its chart.
-      const ticks = [...plots[2].querySelectorAll('[data-role="y-tick"]')];
-      expect(ticks.map((t) => t.textContent)).toContain('5k transactions');
+      // Re-pinned with U-19 (UI review 2026-11-14) and its lane A5 follow-up: the ticks are bare
+      // values in one gutter sized from the longest of the three plots' labels (the unit is said
+      // once, in each plot's name), never under the 48 px least.
+      const ticks = yTickLabels(plots[2]);
+      expect(ticks.map((t) => t.textContent)).toContain('5k');
+      const left = plotLeftOf(plots[2]);
+      const longest = Math.max(
+        ...plots.flatMap((plot) => yTickLabels(plot).map((t) => t.textContent!.length))
+      );
+      expect(left).toBe(Math.max(48, longest * 6 + 8));
       for (const tick of ticks) {
-        expect(tick.getAttribute('text-anchor')).toBeNull();
-        expect(Number(tick.getAttribute('x'))).toBe(8);
+        expect(tick.getAttribute('text-anchor')).toBe('end');
+        expect(Number(tick.getAttribute('x'))).toBe(left - 8);
       }
       // The three plots still share one left edge, so their days line up.
-      const lefts = plots.map((plot) => plot.querySelector('line')!.getAttribute('x1'));
-      expect(new Set(lefts).size).toBe(1);
+      expect(new Set(plots.map(plotLeftOf)).size).toBe(1);
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
@@ -72,6 +85,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[]}
@@ -79,11 +93,15 @@ describe('Asset history', () => {
         />
       );
       // Lane P: the plot names its inks inside it (Main.dc.html); the readout keys them.
+      // Re-pinned with U-19: a shorter name, so it fits beside the value gutter at 360 px.
       expect(screen.getByRole('img', { name: 'CKB held in its cells, CKB' })).toHaveTextContent(
-        'CKB held in its cells · occupied, free above it'
+        'CKB held · occupied, free'
       );
       const swatches = [
-        ...screen.getByLabelText('History readout').querySelectorAll<HTMLElement>('[aria-hidden]'),
+        // PB-23: the readout is one separated list; its dots are not swatches
+        ...screen
+          .getByLabelText('History readout')
+          .querySelectorAll<HTMLElement>('[aria-hidden]:not([data-dotted-separator])'),
       ];
       expect(swatches.map((s) => s.style.backgroundColor)).toEqual([
         'var(--c-jade)',
@@ -103,6 +121,7 @@ describe('Asset history', () => {
     try {
       const { container } = render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[{ weekStart: '2024-01-01', count: 3 }]}
@@ -116,7 +135,7 @@ describe('Asset history', () => {
       ).toBeTruthy();
       expect(readout).toHaveClass('border-t');
       expect(readout).toHaveTextContent(
-        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50 % · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
+        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50% · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
       );
       expect(within(readout).getByText('occupied')).toHaveAttribute(
         'title',
@@ -135,12 +154,16 @@ describe('Asset history', () => {
 
   // Lane P (R13, Main.dc.html, measured ~150 px by lane A): the main history plot is the page's
   // picture, at least 280 px tall, its name and round values written inside it in ghost ink.
-  it('draws the main plot 280 px tall with its name and ghost values inside it', () => {
+  // Re-pinned with U-19 (UI review 2026-11-14): the values leave the plot for a dim gutter (they
+  // were ghost values written inside it, under the line and behind the bars); the name stays
+  // inside the plot, after the gutter, short enough to fit a 360 px phone.
+  it('draws the main plot 280 px tall with its name inside it and its values in the gutter', () => {
     stubChartWidth(1248);
     try {
       for (const token of [undefined, { symbol: 'T', decimals: 0 }]) {
         const { unmount } = render(
           <AssetHistory
+            assetClass={token ? 'tokens' : 'objects'}
             weeklyNoun="transfers"
             daily={daily}
             weekly={[{ weekStart: '2024-01-01', count: 400 }]}
@@ -150,24 +173,16 @@ describe('Asset history', () => {
         );
         const main = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
         expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
-        expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-          'CKB held in its cells · occupied, free above it'
-        );
-        // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
-        expect(
-          8 + main.querySelector('[data-role="chart-name"]')!.textContent!.length * 6.6
-        ).toBeLessThanOrEqual(326);
+        const name = main.querySelector('[data-role="chart-name"]')!;
+        expect(name).toHaveTextContent('CKB held · occupied, free');
+        const left = plotLeftOf(main);
+        expect(Number(name.getAttribute('x'))).toBe(left + 8);
         for (const plot of screen.getAllByRole('img')) {
-          const ticks = [...plot.querySelectorAll('[data-role="y-tick"]')];
+          expect(plot.querySelectorAll('[data-role="y-tick"]')).toHaveLength(0);
+          const ticks = yTickLabels(plot);
           expect(ticks.length).toBeGreaterThan(0);
-          for (const tick of ticks) expect(tick).toHaveAttribute('fill', 'var(--c-text-ghost)');
-          // no axis column: no value is written right-aligned left of the plot
-          expect(
-            [...plot.querySelectorAll('text[text-anchor="end"]')].filter(
-              (t) => Number(t.getAttribute('x')) < 200
-            )
-          ).toEqual([]);
-          expect(plot.querySelector('line')).toHaveAttribute('x1', '0');
+          for (const tick of ticks) expect(tick).toHaveAttribute('fill', 'var(--c-text-dim)');
+          expect(plotLeftOf(plot)).toBe(left);
         }
         unmount();
       }
@@ -179,6 +194,7 @@ describe('Asset history', () => {
   it('keeps exact tier-one readouts, complete-day scope and the actual peak date', () => {
     render(
       <AssetHistory
+        assetClass="tokens"
         weeklyNoun="transfers"
         daily={daily}
         weekly={[{ weekStart: '2024-01-01', count: 3 }]}
@@ -198,16 +214,19 @@ describe('Asset history', () => {
     expect(screen.queryByText(/CKB held peaked/)).toBeNull();
     // Lane P (Main.dc.html): the scope is the hover of the reading's day, not a line of its own.
     expect(screen.queryByText(/Complete UTC\+8 days through/)).toBeNull();
-    expect(within(readout).getByText('2024-01-08')).toHaveAttribute(
-      'title',
-      'complete UTC+8 days through 2024-01-08 · indexed chain time'
-    );
+    // re-pinned (A4 round 2): the date is a unit (a span of its own) inside the titled reading of
+    // the day, and the week's line names the same date as a unit too, so the reading is found by
+    // its title (it was found by its text, then its title read)
+    expect(
+      within(readout).getByTitle('complete UTC+8 days through 2024-01-08 · indexed chain time')
+    ).toHaveTextContent(/^2024-01-08$/);
     fireEvent.click(screen.getByRole('button', { name: '1W' }));
     expect(readout).toHaveTextContent('2024-01-08');
   });
   it('labels supply events in UTC+8 and distinguishes raw block dates from indexed chart days', () => {
     render(
       <AssetHistory
+        assetClass="tokens"
         weeklyNoun="transfers"
         daily={daily}
         weekly={[]}
@@ -227,6 +246,7 @@ describe('Asset history', () => {
               supplyAfter: '13',
               lockHash: '0xbb',
               address: null,
+              lockCodeHash: null,
               lockKind: null,
             },
           ],
@@ -242,6 +262,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          assetClass="tokens"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[]}
@@ -261,6 +282,7 @@ describe('Asset history', () => {
                 supplyAfter: '1200000000',
                 lockHash: `0x${'bb'.repeat(32)}`,
                 address: null,
+                lockCodeHash: `0x${'9b'.repeat(32)}`,
                 lockKind: 'JoyID',
               },
             ],
@@ -273,8 +295,159 @@ describe('Asset history', () => {
       expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
         ['change', 'Burn −1.00000000', '2024-01-02'],
         ['after', 'supply after 12.00000000', null],
-        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbbbb...bbbb JoyID'],
+        // U-09 (re-pinned): the phone row's lock hash at the tight size
+        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbb…bbbb JoyID'],
       ]);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+  // U-15 / lane A4b (UI review 2026-11-14): a mint's or burn's party whose lock the scripts registry
+  // does not name read "Lock kind unavailable"; the event now carries the lock's code hash, and the
+  // party is named by it, "lock 0x43434343…434343", linked to that code hash's script page. A
+  // registered lock reads as before; a lock not indexed shows no kind. U-09 (re-pinned): the code
+  // hash takes the size of the form it is drawn in, row in the table and tight in the phone row.
+  describe('names a supply-event party’s unregistered lock by its code hash (U-15)', () => {
+    const unregistered = `0x${'43'.repeat(32)}`;
+    const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
+    const event = (
+      i: number,
+      kind: 'mint' | 'burn',
+      lockCodeHash: string | null,
+      lockKind: string | null
+    ) => ({
+      txHash: `0x${String(i).repeat(64)}`,
+      blockNumber: 10 + i,
+      txIndex: 0,
+      transferSequence: 0,
+      timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+      kind,
+      amount: '1',
+      supplyAfter: '13',
+      lockHash: `0x${String(i).repeat(64)}`,
+      address:
+        lockCodeHash === null
+          ? null
+          : `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${String(i).repeat(8)}`,
+      lockCodeHash,
+      lockKind,
+    });
+    const rows = [
+      event(1, 'mint', unregistered, null),
+      event(2, 'burn', `0x${'9b'.repeat(32)}`, 'JoyID'),
+      event(3, 'mint', null, null),
+    ];
+    const mount = () => {
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 0 }}
+          supplyEvents={{ total: 3, rows }}
+        />
+      );
+      fireEvent.click(screen.getByText('Every change to the supply (3)'));
+    };
+
+    it('in the table', () => {
+      mount();
+      const table = screen.getByRole('table', { name: 'Mints and burns' });
+      const [, unnamed, named, notIndexed] = within(table).getAllByRole('row');
+      expect(unnamed.querySelector('[data-lock-kind]')).toHaveTextContent(
+        /^lock 0x43434343…434343$/
+      );
+      expect(within(unnamed).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
+        'href',
+        scriptPage
+      );
+      expect(within(named).getByText('JoyID')).toHaveClass('text-text-dim', 'text-meta', 'block');
+      expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+      expect(table).not.toHaveTextContent(/lock kind unavailable/i);
+    });
+
+    it('in the phone row at 358 px', () => {
+      atContainerWidth(358);
+      try {
+        mount();
+        const [unnamed, named, notIndexed] = screen.getAllByTestId('supply-event-row-mobile');
+        expect(phoneLines(unnamed)[2].right).toMatch(/^to ckb1…111111 lock 0x4343…4343$/);
+        expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
+          'href',
+          scriptPage
+        );
+        expect(phoneLines(named)[2].right).toMatch(/^from ckb1…222222 JoyID$/);
+        // A4 Chrome sweep (c): the party is not one nowrap run around its lock name (words); its
+        // address is the unit, the name may break
+        const party = within(named).getByText('JoyID').closest('span:not([data-lock-kind])');
+        expect(party).not.toHaveClass('whitespace-nowrap');
+        expect(within(named).getByText('JoyID').closest('.whitespace-nowrap')).toBeNull();
+        expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+        for (const row of [unnamed, named, notIndexed])
+          expect(row).not.toHaveTextContent(/lock kind unavailable/i);
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+  // A4b review: a party whose lock has no address form (args longer than an address can carry)
+  // comes with a null address and its lock's code hash and kind: it is named by its lock hash,
+  // linked to the address page that takes a lock hash, and by its lock kind.
+  it('names a supply-event party whose lock has no address form by its lock hash and kind (A4b review)', () => {
+    const lockHash = `0x${'88'.repeat(32)}`;
+    const addressPage = expect.stringMatching(new RegExp(`/address/${lockHash}$`));
+    const mount = () => {
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 0 }}
+          supplyEvents={{
+            total: 1,
+            rows: [
+              {
+                txHash: `0x${'aa'.repeat(32)}`,
+                blockNumber: 10,
+                txIndex: 0,
+                transferSequence: 0,
+                timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+                kind: 'mint',
+                amount: '1',
+                supplyAfter: '13',
+                lockHash,
+                address: null,
+                lockCodeHash: `0x${'9b'.repeat(32)}`,
+                lockKind: 'SECP256K1/blake160',
+              },
+            ],
+          }}
+        />
+      );
+      fireEvent.click(screen.getByText('Every change to the supply (1)'));
+    };
+    mount();
+    const [, row] = within(screen.getByRole('table', { name: 'Mints and burns' })).getAllByRole(
+      'row'
+    );
+    expect(within(row).getByRole('link', { name: /^0x8888/ })).toHaveAttribute('href', addressPage);
+    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
+    cleanup();
+    atContainerWidth(358);
+    try {
+      mount();
+      const [phone] = screen.getAllByTestId('supply-event-row-mobile');
+      expect(within(phone).getByRole('link', { name: /^0x8888/ })).toHaveAttribute(
+        'href',
+        addressPage
+      );
+      expect(phoneLines(phone)[2].right).toMatch(/^to 0x8888.* SECP256K1\/blake160$/);
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
@@ -284,6 +457,7 @@ describe('Asset history', () => {
     stubChartWidth(358);
     render(
       <AssetHistory
+        assetClass="tokens"
         weeklyNoun="transactions"
         daily={daily}
         weekly={[{ weekStart: '2024-01-01', count: 3 }]}
@@ -303,6 +477,7 @@ describe('Asset history', () => {
               supplyAfter: '13',
               lockHash: '0xbb',
               address: null,
+              lockCodeHash: null,
               lockKind: null,
             },
           ],
@@ -321,12 +496,19 @@ describe('Asset history', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
       render(
-        <AssetHistory weeklyNoun="transfers" daily={[]} weekly={[]} completeThrough="2024-02-31" />
+        <AssetHistory
+          assetClass="objects"
+          weeklyNoun="transfers"
+          daily={[]}
+          weekly={[]}
+          completeThrough="2024-02-31"
+        />
       )
     ).toThrow('Invalid indexed history date');
     expect(() =>
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[{ weekStart: '2024-01-08', count: 0 }]}
@@ -341,6 +523,7 @@ describe('Asset history', () => {
     expect(() =>
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={daily}
           weekly={[]}
@@ -351,6 +534,7 @@ describe('Asset history', () => {
     expect(() =>
       render(
         <AssetHistory
+          assetClass="objects"
           weeklyNoun="transfers"
           daily={[{ ...daily[0], occupiedCapacity: '10000000002' }]}
           weekly={[]}

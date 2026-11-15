@@ -1,5 +1,6 @@
 import { CELL_COLORS, FREE_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { formatCount } from '@/lib/format-count';
 
 export interface CellAnatomy {
   lock: string;
@@ -38,7 +39,7 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
           <span
             key={p.key}
             data-part={p.key}
-            title={`${p.key}: ${p.value} bytes`}
+            title={`${p.key}: ${formatCount(p.value, 'byte')}`}
             style={{
               width: `${(Number(p.value) / Number(total)) * 100}%`,
               backgroundColor: CELL_COLORS[p.key],
@@ -46,11 +47,28 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
           />
         ))}
       </div>
+      {/* A legend's label is text, in the text ink; the part's colour is on its swatch (U-08). */}
       {!hideLegend && (
-        <div className="text-text-dim text-meta mt-2 flex flex-wrap gap-x-4 gap-y-1">
+        <div
+          data-role="cell-bar-legend"
+          className="text-text-dim text-meta mt-2 flex flex-wrap gap-x-4 gap-y-1"
+        >
           {parts.map((p) => (
-            <span key={p.key} title={`${p.key}: ${p.value} bytes`}>
-              <span style={{ color: CELL_COLORS[p.key] }}>{p.key}</span> {p.value.toString()} B
+            <span
+              key={p.key}
+              data-part-legend={p.key}
+              title={`${p.key}: ${formatCount(p.value, 'byte')}`}
+              className="inline-flex items-center gap-1.5"
+            >
+              <span
+                aria-hidden="true"
+                data-swatch
+                className="inline-block h-2 w-2"
+                style={{ backgroundColor: CELL_COLORS[p.key] }}
+              />
+              <span>
+                <span className="text-text">{p.key}</span> {p.value.toString()} B
+              </span>
             </span>
           ))}
         </div>
@@ -77,8 +95,8 @@ function freeBar(
     <span
       role="img"
       data-free-shannons={free.toString()}
-      aria-label={`${subject}: ${total} occupied bytes of ${shannons} shannons; capacity ${parts[0].value}, lock ${parts[1].value}, type ${parts[2].value}, data ${parts[3].value} bytes`}
-      className={`flex h-2 w-full overflow-hidden rounded-sm ${className ?? ''}`}
+      aria-label={`${subject}: ${total} occupied bytes of ${shannons} shannons; capacity ${parts[0].value}, lock ${parts[1].value}, type ${parts[2].value}, data ${formatCount(parts[3].value, 'byte')}`}
+      className={`flex h-2 w-full overflow-hidden ${className ?? ''}`}
       style={{ backgroundColor: FREE_CAPACITY_COLOR }}
     >
       <span className="flex h-full" style={{ width: `${share}%`, minWidth: 2 }}>

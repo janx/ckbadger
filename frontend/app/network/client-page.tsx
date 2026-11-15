@@ -2,6 +2,7 @@
 
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -18,6 +19,7 @@ import {
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { ClockText } from '@/components/ui/utc8-date';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const PAGE_TITLE = 'Where the nodes are';
@@ -33,10 +35,10 @@ function PageShell({ children }: { children: ReactNode }) {
 function LoadingSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />
+      <div className="bg-base-elevated h-40 w-full animate-pulse" />
       <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 md:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="bg-base-elevated h-24 animate-pulse rounded" />
+          <div key={i} className="bg-base-elevated h-24 animate-pulse" />
         ))}
       </div>
     </div>
@@ -45,9 +47,7 @@ function LoadingSkeleton() {
 
 function ReachabilityCaveat({ className }: { className?: string }) {
   return (
-    <div
-      className={`border-base-border bg-base-surface rounded border px-4 py-3 ${className ?? ''}`}
-    >
+    <div className={`border-base-border bg-base-surface border px-4 py-3 ${className ?? ''}`}>
       <p className="text-text-dim text-body font-mono">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
@@ -67,7 +67,7 @@ function PeersOnboarding({
   return (
     <div className="space-y-4">
       {enabled && (
-        <div className="border-info/30 bg-info/10 rounded border px-4 py-3">
+        <div className="border-info/30 bg-info/10 border px-4 py-3">
           <p className="text-info text-body font-mono">
             {activeRound?.blockedReason
               ? `Crawler round #${activeRound.roundId} blocked — ${activeRound.blockedReason}`
@@ -78,7 +78,7 @@ function PeersOnboarding({
         </div>
       )}
 
-      <div className="border-base-border bg-base-surface rounded border p-6">
+      <div className="border-base-border bg-base-surface border p-6">
         {/* Phase 5 (B9): the crawler as a command, its config state the args. */}
         <PromptHeading
           command="peer crawler"
@@ -99,7 +99,7 @@ function PeersOnboarding({
           Set the crawler to enabled in{' '}
           <code className="text-aqua">this network&apos;s config.toml</code> and restart:
         </p>
-        <pre className="border-base-border bg-base-bg text-text text-small overflow-x-auto rounded border p-3 font-mono">
+        <pre className="border-base-border bg-base-bg text-text text-small overflow-x-auto border p-3 font-mono">
           {`[crawler]
 enabled = true
 # optional geo / ASN enrichment (MaxMind GeoLite2):
@@ -198,8 +198,8 @@ function NetworkLede() {
   return (
     <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
       Nodes find each other by word of mouth; unreachable is not gone.{' '}
-      <a href="#evidence" className="hover:text-text-bright whitespace-nowrap hover:underline">
-        How it works ↓
+      <a href="#evidence" className="hover:text-text-bright hover:underline">
+        How it works<span className="whitespace-nowrap"> ↓</span>
       </a>
     </p>
   );
@@ -226,7 +226,7 @@ function Hero({
       `crawler round #${lastRound.roundId}: ${lastRound.reachablePeers} reachable exceed the ${lastRound.verifiedRetainedPeers} verified`
     );
   const map = useNetworkMap(lastRound.peerOutcomes.exhausted.withoutRetainedVerification);
-  const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
+  const updatedAgo = <ClockText text={(now) => formatTimeAgo(lastRound.finishedAt * 1000, now)} />;
   return (
     <div className="min-w-0">
       <section aria-label={PAGE_TITLE} className="min-w-0">
@@ -247,7 +247,7 @@ function Hero({
           </p>
         )}
         {activeRound?.blockedReason && (
-          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 rounded border px-3 py-2 font-mono">
+          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 border px-3 py-2 font-mono">
             Active crawler round blocked: {activeRound.blockedReason}
           </p>
         )}
@@ -375,15 +375,12 @@ export function NetworkClientPage() {
   // C1: the dashboard has its own hero, not a shared header; every state of the page is this one
   // topic, so the page names the tab (it renders no NotFoundPage).
   useDocumentTitle(NETWORK_TITLE);
-  const {
-    data: summary,
-    isLoading,
-    error,
-  } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'summary'],
     queryFn: api.getNetworkSummary,
     refetchInterval: 30000,
   });
+  const { data: summary, error } = read;
 
   let content: ReactNode;
   if (error) {
@@ -394,7 +391,7 @@ export function NetworkClientPage() {
         </p>
       </DetailLayout>
     );
-  } else if (isLoading || !summary) {
+  } else if (isAwaited(read) || !summary) {
     content = <LoadingSkeleton />;
   } else if (!summary.hasData || !summary.lastRound) {
     content = (

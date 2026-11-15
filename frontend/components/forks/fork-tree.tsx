@@ -13,6 +13,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { minerName } from '@/components/forks/miner-link';
+import { clipLabel, shortenHash } from '@/lib/shorten';
 
 const MARK = ['', '①', '②', '③'] as const;
 /** A later mark on a block that already carries one is drawn this far beside it. */
@@ -65,7 +66,8 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
   const tile = (t: ForkTreeTile, y: number, dropped: boolean) => {
     const tx = x(t.number);
     const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
-    const miner = t.minerAddress ? minerName(t.minerAddress, t.minerPool) : null;
+    // a label on the tree: the tight size, then cut to the tile's width (U-09)
+    const miner = t.minerAddress ? minerName(t.minerAddress, t.minerPool, 'tight') : null;
     return (
       <g key={t.hash} data-tile={t.number} data-dropped={dropped || undefined}>
         <title>
@@ -84,7 +86,6 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
           y={y}
           width={TW}
           height={TH}
-          rx={compact ? 3 : 4}
           fill={FORK_COLORS.tileFill}
           stroke={
             dropped ? FORK_COLORS.dropped : lit ? FORK_COLORS.tileStrokeLit : FORK_COLORS.tileStroke
@@ -126,9 +127,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             fontSize="10"
             fill={FORK_COLORS.tick}
           >
-            {labelsUnder && miner.length > minerChars
-              ? `${miner.slice(0, minerChars - 1)}…`
-              : miner}
+            {labelsUnder ? clipLabel(miner, minerChars) : miner}
           </text>
         )}
       </g>
@@ -215,7 +214,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         <g data-collapsed>
           <title>
             {`${collapsed.count} earlier heights, ${formatBlockNumber(collapsed.first)} to ${formatBlockNumber(collapsed.last)}: ${folded
-              .map((t) => `${formatBlockNumber(t.number)} ${t.hash.slice(0, 10)}`)
+              .map((t) => `${formatBlockNumber(t.number)} ${shortenHash(t.hash, 'tight')}`)
               .join(', ')}`}
           </title>
           <rect
@@ -223,7 +222,6 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             y={yMain}
             width={TW}
             height={TH}
-            rx="3"
             fill={FORK_COLORS.tileFill}
             stroke={FORK_COLORS.tileStroke}
           />

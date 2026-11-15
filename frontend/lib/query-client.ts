@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import type { ApiRequestError } from '@/lib/api';
 import {
+  isBadRequestApiError,
   isDerivePendingError,
   isNetworkInitializingError,
   isNotFoundApiError,
@@ -18,7 +19,7 @@ export const WARMUP_PENDING_RETRY_DELAY_MS = 2000;
  */
 export const NETWORK_INITIALIZING_MAX_RETRY_DELAY_MS = 30_000;
 const DEFAULT_WARMUP_RETRY_LIMIT = 120;
-export const WARMUP_PENDING_BANNER_TEXT = 'Data is being prepared. Retrying automatically...';
+export const WARMUP_PENDING_BANNER_TEXT = 'Data is being prepared. Retrying automatically…';
 export const NETWORK_INITIALIZING_BANNER_TEXT =
   'This network has not started syncing yet — it will begin after the other networks finish their initial sync.';
 
@@ -65,8 +66,9 @@ export function createAppQueryClient(options: CreateAppQueryClientOptions = {}):
           if (isWarmupPendingError(error)) {
             return failureCount < warmupRetryLimit;
           }
-          // A 404 is the API's definite answer; asking again only delays the not-found page.
-          if (isNotFoundApiError(error)) return false;
+          // A 404 or a 400 is the API's definite answer (no such thing; not an id): asking again
+          // gets the same answer and only delays the page that says so.
+          if (isNotFoundApiError(error) || isBadRequestApiError(error)) return false;
           return shouldRetryNonWarmup(failureCount, options.nonWarmupRetry);
         },
         retryDelay: (attemptIndex, error) => {

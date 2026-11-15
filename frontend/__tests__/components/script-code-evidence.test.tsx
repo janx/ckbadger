@@ -14,8 +14,8 @@ import {
   ScriptCodeClassSummary,
   ScriptCapacityEvidenceChart,
   ScriptCustodyEvidence,
-  ScriptCodeHistory,
 } from '@/components/scripts/script-code-evidence';
+import { fullText } from '@/__tests__/utils/full-text';
 
 describe('script code evidence', () => {
   afterEach(() => {
@@ -48,8 +48,8 @@ describe('script code evidence', () => {
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
     expect(sentence).toContain('18,014,398,509.48198600');
-    expect(sentence).toContain('50.0% runs code no one can change');
-    expect(sentence).toContain('50.0% sits under code marked "holder lock not recognised"');
+    expect(sentence).toContain('50.00% runs code no one can change');
+    expect(sentence).toContain('50.00% sits under code marked "holder lock not recognised"');
     expect(screen.getByText('Holder lock not recognised')).toBeInTheDocument();
     expect(
       screen.getByRole('img', { name: 'CKB under lock scripts by who can change their code' })
@@ -72,8 +72,8 @@ describe('script code evidence', () => {
       />
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('55.6% runs code no one can change');
-    expect(sentence).toContain('44.4% runs code a single key can replace');
+    expect(sentence).toContain('55.56% runs code no one can change');
+    expect(sentence).toContain('44.44% runs code a single key can replace');
     expect(detailFixture.history.every((marker) => marker.indexedDay === '2024-01-02')).toBe(true);
   });
 
@@ -95,7 +95,7 @@ describe('script code evidence', () => {
         }}
       />
     );
-    expect(screen.getByText(/3 of 5 keys/)).toBeInTheDocument();
+    expect(screen.getByText(fullText(/3 of 5 keys/))).toBeInTheDocument();
     expect(screen.getByText(/This holder signed to spend/)).toBeInTheDocument();
   });
 
@@ -138,55 +138,7 @@ describe('script code evidence', () => {
       'href',
       `/mainnet/cell/${txB}-2`
     );
-    expect(screen.getByText(/2 code cells:/)).toBeInTheDocument();
-  });
-
-  it('shows no observed events without inventing a deployment', () => {
-    render(<ScriptCodeHistory markers={[]} />);
-    expect(
-      screen.getByText('No observed code cell events for registered references.')
-    ).toBeInTheDocument();
-  });
-
-  it('positions an event on the indexed calendar day rather than a rolled-back raw timestamp', () => {
-    render(
-      <ScriptCodeHistory
-        markers={[
-          {
-            referenceHash: `0x${'12'.repeat(32)}`,
-            hashType: 'type',
-            versionHash: `0x${'34'.repeat(32)}`,
-            event: 'deployed',
-            blockNumber: 42,
-            txIndex: 1,
-            timestamp: Date.parse('2024-01-01T23:59:59Z'),
-            chainTimeMs: Date.parse('2024-01-02T00:00:01Z'),
-            indexedDay: '2024-01-02',
-            codeCellTxHash: `0x${'56'.repeat(32)}`,
-            codeCellOutputIndex: 0,
-            eventTxHash: `0x${'56'.repeat(32)}`,
-            custody: {
-              class: 'one_key',
-              lockCodeHash: null,
-              lockHashType: null,
-              lockArgs: null,
-              threshold: null,
-              keyCount: null,
-              requireFirstN: null,
-              keyHashes: [],
-              verifiedByTx: null,
-              witnessState: 'unavailable',
-              owners: [],
-            },
-          },
-        ]}
-      />
-    );
-    expect(screen.getByText(/Chart day 2024-01-02/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Event transaction/ })).toHaveAttribute(
-      'href',
-      `/mainnet/tx/0x${'56'.repeat(32)}`
-    );
+    expect(screen.getByText(fullText(/2 code cells:/))).toBeInTheDocument();
   });
 
   it('aligns API-produced upgrade markers with the indexed chart day and keeps never-signed distinct', () => {
@@ -235,7 +187,8 @@ describe('script code evidence', () => {
     expect(screen.getAllByRole('button', { name: /2024-11-01 · deployed/ })).toHaveLength(1);
     // Each chip names its code cell by out point (not the reference hash), opening the cell page.
     const codeCell = seed.codeCellTxHash;
-    const short = `${codeCell.slice(0, 8)}...${codeCell.slice(-6)}`;
+    // U-09 (re-pinned): the marker rows' out points at the row size
+    const short = `${codeCell.slice(0, 10)}…${codeCell.slice(-6)}`;
     expect(screen.getByRole('link', { name: `${short}:0` })).toHaveAttribute(
       'href',
       `/mainnet/cell/${codeCell}-0`

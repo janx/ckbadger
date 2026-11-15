@@ -9,7 +9,6 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
-  DotJoined,
   ExactCkb,
   activityClassMark,
   activityHeadline,
@@ -19,9 +18,10 @@ import {
 } from '@/components/activity-event-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { Utc8Date } from '@/components/ui/utc8-date';
+import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import type { ShortSize } from '@/lib/shorten';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 
@@ -39,12 +39,6 @@ const CYCLES_TRACK = 80;
  * reader reads.
  */
 const SIZE_TRACK = 56;
-
-/**
- * The hash of a committed transaction, in the table and the phone row alike: "0x" and 8 digits,
- * the ellipsis, 6 digits (19 characters; at 13 px 148.2 px).
- */
-const HASH_CHARS = { start: 10, end: 6 } as const;
 
 /** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
 function consumedCells(tx: Transaction): number {
@@ -81,32 +75,34 @@ function paysNote(tx: Transaction): ReactNode {
   );
 }
 
-/** The quiet note beside a row's kind: its protocol facts, its type scripts, or its parties. */
-function whatNote(activity: GlobalActivity): ReactNode {
+/**
+ * The quiet note beside a row's kind, as parts of the row's one separated list (PA-25): its
+ * protocol facts, its type scripts, or its parties; their ids at the form's size (U-09).
+ */
+function whatNote(activity: GlobalActivity, size: ShortSize): ReactNode[] {
   if (activity.protocolActions.length > 0) {
     try {
-      const parts = activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa));
-      return parts.length ? <DotJoined parts={parts} /> : null;
+      return activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa, size));
     } catch (error) {
-      return <ActivityReadError txHash={activity.txHash} error={error} />;
+      return [<ActivityReadError key="error" txHash={activity.txHash} error={error} />];
     }
   }
   const names = [
     ...new Set(
       activity.typeCalls.map((sc) =>
-        formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })
+        formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, size)
       )
     ),
   ];
-  if (names.length > 0) return names.join(' · ');
-  return formatCount(activity.participants.length, 'participant');
+  if (names.length > 0) return names;
+  return [formatCount(activity.participants.length, 'participant')];
 }
 
 /** A count of resources on the quiet line: "3 → 3 cells · 903 B · 1,744,520 cycles". */
 function quietFigures(tx: Transaction): ReactNode[] {
   return [
     <span key="cells" className="whitespace-nowrap">
-      {consumedCells(tx)} → {tx.outputsCount} cells
+      {consumedCells(tx)} → {formatCount(tx.outputsCount, 'cell')}
     </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize!.toLocaleString('en-US')} B
@@ -128,23 +124,32 @@ function quietFigures(tx: Transaction): ReactNode[] {
  */
 function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   const mark = tx.activity ? activityClassMark(tx.activity) : null;
-  const note = tx.isCellbase ? null : whatNote(tx.activity!);
-  const what = tx.isCellbase ? (
-    <>
-      <span className="text-text-bright">Cellbase</span> {paysNote(tx)} · reward{' '}
-      <ExactCkb
-        shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
-        signed={false}
-        tone="plain"
-      />
-    </>
-  ) : (
-    <>
-      {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
-      <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
-      {note !== null && <span className="text-text-dim"> · {note}</span>}
-    </>
-  );
+  // What it did, as parts of the line's one separated list (PA-25: no "·" ends or opens a line).
+  const what: ReactNode[] = tx.isCellbase
+    ? [
+        <>
+          <span className="text-text-bright">Cellbase</span> {paysNote(tx)}
+        </>,
+        <>
+          reward{' '}
+          <ExactCkb
+            shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
+            signed={false}
+            tone="plain"
+          />
+        </>,
+      ]
+    : [
+        <>
+          {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
+          <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
+        </>,
+        ...whatNote(tx.activity!, 'tight').map((part, i) => (
+          <span key={i} className="text-text-dim">
+            {part}
+          </span>
+        )),
+      ];
   const fee = (
     <span className="whitespace-nowrap">
       fee{' '}
@@ -180,13 +185,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} className="hover:underline">
-              <Hash
-                hash={tx.hash}
-                startChars={HASH_CHARS.start}
-                endChars={HASH_CHARS.end}
-                copyable={false}
-                className="text-body"
-              />
+              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
           right: (
@@ -196,7 +195,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
               </Link>
               <span className="text-text">
                 {' · '}
-                <Utc8Date timestamp={tx.timestamp} />
+                <Utc8Age timestamp={tx.timestamp} />
               </span>
             </span>
           ),
@@ -205,14 +204,14 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           ? {
               key: 'what',
               tone: 'body',
-              left: <Dotted parts={tx.isCellbase ? [what] : [what, value, fee]} />,
+              left: <Dotted parts={tx.isCellbase ? what : [...what, value, fee]} />,
               right: (
                 <span className="text-text-dim text-meta">
                   <Dotted parts={quiet} />
                 </span>
               ),
             }
-          : { key: 'what', tone: 'body', left: what },
+          : { key: 'what', tone: 'body', left: <Dotted parts={what} /> },
         !wide && {
           key: 'figures',
           tone: 'quiet',
@@ -233,7 +232,8 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
 /**
  * The committed list of the Transactions board (TX-25 / TX-26): general columns first (tx,
  * block · age, what it did, value, fee), then the quieter cells / size / cycles on one shared
- * scale per column. A cellbase row is set back and shows the reward it pays, grey (D5): Value
+ * scale per column. A cellbase row is set back (the quiet variant: every word dim, its stone
+ * pressed; R4) and shows the reward it pays, grey (D5): Value
  * itself excludes cellbase issuance, so the reward is never added to a total.
  */
 export function TransactionListTable({
@@ -261,8 +261,9 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 19 characters at
-      // 13 px (148.2 px) and the 16 px gap: 220.7 of its 221 px. The 29 px it gained over 192 came
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
+      // characters at 13 px (132.6 px; it was 19 with three dots, 148.2 px), and the 16 px gap:
+      // 205.1 of its 221 px. The 29 px it gained over 192 came
       // from the Size bar's track (24, SIZE_TRACK) and What it did's note (5), so the table keeps
       // its 1,230 px and changes form where it did (old issue C: the stone had taken them from
       // the hash, 10 + 6 → 8 + 4).
@@ -275,8 +276,7 @@ export function TransactionListTable({
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
             <Hash
               hash={tx.hash}
-              startChars={HASH_CHARS.start}
-              endChars={HASH_CHARS.end}
+              size="row"
               copyable={false}
               className="text-body text-text-bright leading-[18px]"
             />
@@ -295,7 +295,7 @@ export function TransactionListTable({
           </Link>
           <span className="text-text-dim">
             {' · '}
-            <Utc8Date timestamp={tx.timestamp} />
+            <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
       ),
@@ -316,7 +316,11 @@ export function TransactionListTable({
               {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
             </span>
             <span className="text-text-dim text-small min-w-0 truncate">
-              {tx.isCellbase ? paysNote(tx) : whatNote(tx.activity!)}
+              {tx.isCellbase ? (
+                paysNote(tx)
+              ) : (
+                <Dotted oneLine parts={whatNote(tx.activity!, 'row')} />
+              )}
             </span>
           </span>
         );
@@ -379,7 +383,7 @@ export function TransactionListTable({
       className: 'whitespace-nowrap',
       render: (tx) => (
         <span className="text-text-dim text-small">
-          {consumedCells(tx)} → {tx.outputsCount}
+          {consumedCells(tx).toLocaleString('en-US')} → {tx.outputsCount.toLocaleString('en-US')}
         </span>
       ),
     },
@@ -438,7 +442,7 @@ export function TransactionListTable({
       rows={transactions}
       columns={columns}
       rowKey={(tx) => tx.hash}
-      rowClassName={(tx) => (tx.isCellbase ? 'opacity-[.55]' : '')}
+      rowClassName={(tx) => (tx.isCellbase ? 'quiet' : '')}
       empty="No transactions."
       mobileRow={(tx, wide) => <TransactionPhoneRow tx={tx} wide={wide} />}
     />

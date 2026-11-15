@@ -11,9 +11,18 @@
 // band reads in the line under it, and a tap pins it until a second tap or Escape (R6, board V2).
 import { useId, useState, type ReactNode } from 'react';
 import type { AlleleLane } from '@/lib/dob-genes';
-import { GEL_COLORS, GEL_INK } from '@/lib/design-tokens';
-import { formatPercent } from '@/lib/ckb-decimal';
-import { formatCount } from '@/lib/format-count';
+import { GEL_COLORS, GEL_INK, GEL_INK_KEYS } from '@/lib/design-tokens';
+import {
+  color,
+  hexToRgb,
+  inkOnColours,
+  overGround,
+  type PaletteKey,
+  type ThemeName,
+} from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { unitText } from '@/components/ui/units';
 import {
   ALLELE_GEL,
   alleleGelLayout,
@@ -23,16 +32,61 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { TraitText } from '@/components/asset/trait-text';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
+import { clipLabel } from '@/lib/shorten';
+import { percentOf } from '@/lib/format-unit';
 
 const GAP = 0.6;
+/** How far outside its band the "this one" outline is drawn (PB-04). */
+const OUTLINE_GAP = 1.5;
 const ROW_GAP = 18;
 const MIN_ROW_BAND = 120;
 /** The ranked list shows this many genes before its "more genes" control. */
 const LIST_FIRST = 10;
 
 const r = (v: number) => Math.round(v * 100) / 100;
+/** Where the plate-wide band gradient sets its stops, as fractions of the gel's width. */
+const INK_STOPS = [0, 0.45, 1] as const;
+
+/** `b` at `t` of the way from `a` (two hexes, sRGB, as an SVG gradient interpolates). */
+function lerpHex(a: string, b: string, t: number): string {
+  const [x, y] = [hexToRgb(a), hexToRgb(b)];
+  const c = (p: number, q: number) =>
+    Math.round(p + (q - p) * t)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${c(x.r, y.r)}${c(x.g, y.g)}${c(x.b, y.b)}`;
+}
+
+/**
+ * The ink of a label on a band (words on a fill, `inkOnFill`'s rule): the band is the plate-wide
+ * gradient of `stops` at `alpha` over `ground`, so the label, from `x0` to `x1` on a gel `width`
+ * wide, is read on each colour under it (its two ends and any stop between) and takes the fill ink
+ * that reads strongest on all of them.
+ */
+function bandLabelInk(
+  theme: ThemeName,
+  stops: readonly PaletteKey[],
+  alpha: number,
+  ground: PaletteKey,
+  [x0, x1]: readonly [number, number],
+  width: number
+): string {
+  const at = (x: number) => {
+    const t = Math.min(1, Math.max(0, x / width));
+    const i = t <= INK_STOPS[1] ? 0 : 1;
+    const u = (t - INK_STOPS[i]) / (INK_STOPS[i + 1] - INK_STOPS[i]);
+    return lerpHex(
+      overGround(theme, stops[i], alpha, ground),
+      overGround(theme, stops[i + 1], alpha, ground),
+      u
+    );
+  };
+  const xs = [x0, x1, ...INK_STOPS.map((s) => s * width).filter((x) => x > x0 && x < x1)];
+  return color(inkOnColours(theme, xs.map(at)).ink);
+}
 
 export interface GenotypeOverlay {
   key: string;
@@ -48,6 +102,11 @@ export interface AlleleGelProps {
   total: number;
   subject: string;
   ink?: keyof typeof GEL_INK;
+  /**
+   * The colour the gel is drawn on (its plate's fill, else the page ground): a band's label takes
+   * the ink the band's fill calls for over it.
+   */
+  ground?: PaletteKey;
   /** Height of the band area in one row; wrapped rows share it, down to 120 px each. */
   bandHeight?: number;
   overlays?: readonly GenotypeOverlay[];
@@ -95,7 +154,9 @@ export function AlleleGel(props: AlleleGelProps) {
           genes: lanes.map((lane) => (props.labelOf ? props.labelOf(lane.gene) : lane.gene)),
           width,
           subject,
-          overlayLabels: overlays.map((o) => o.label),
+          // PB-04: only a genotype always shown ("this one") is tagged in the margin; a hovered one
+          // (a cluster page's row) is named by its own lit row, so the lanes keep the width.
+          overlayLabels: overlays.filter((o) => o.persistent).map((o) => o.label),
         });
   return (
     <div ref={box} className="min-w-0">
@@ -110,6 +171,7 @@ function Gel({
   total,
   subject,
   ink = 'other',
+  ground = 'base-bg',
   bandHeight = 250,
   overlays = [],
   activeOverlay = null,
@@ -124,6 +186,7 @@ function Gel({
   layout,
 }: AlleleGelProps & { width: number; layout: Extract<AlleleGelLayout, { form: 'gel' }> }) {
   const inkId = `gel-ink-${useId().replace(/:/g, '')}`;
+  const { resolved: theme } = useTheme();
   const readout = usePinnedReadout<Variant>(variantKey);
   const read = readout.active;
   const readLane = read === null ? undefined : lanes.find((l) => l.gene === read.gene);
@@ -159,9 +222,10 @@ function Gel({
       return p;
     });
   });
-  const centre = (lane: number, band: number) => {
+  /** A band's box, as its rect is drawn. */
+  const bandBox = (lane: number, band: number) => {
     const p = placed[lane][band];
-    return { x: laneX(lane) + lw / 2, y: p.y + p.h / 2 };
+    return { x: laneX(lane) + inset, y: p.y, w: lw - 2 * inset, h: Math.max(p.h, 0.35) };
   };
   const rowActive = activeOverlay !== null && overlays.some((o) => o.key === activeOverlay);
   const laneOpacity = (gene: string) =>
@@ -171,7 +235,7 @@ function Gel({
     <>
       <svg
         role="img"
-        aria-label={`${subject}: allele gel of ${total.toLocaleString('en-US')} objects, one lane per gene (${lanes.map((l) => `${l.gene} ${l.variants} variant${l.variants === 1 ? '' : 's'}`).join(', ')}); each band is one variant, as thick as its share, common at the top.`}
+        aria-label={`${subject}: allele gel of ${formatCount(total, 'object')}, one lane per gene (${lanes.map((l) => `${l.gene} ${l.variants} ${countNoun(l.variants, 'variant')}`).join(', ')}); each band is one variant, as thick as its share, common at the top.`}
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
@@ -226,7 +290,6 @@ function Gel({
                     y={rowTop(ri) + head + 2}
                     width={span(lw - 2 * (inset - 1), 'well')}
                     height="5"
-                    rx="1.2"
                     fill="none"
                     stroke={GEL_COLORS.well}
                     strokeOpacity=".35"
@@ -249,7 +312,6 @@ function Gel({
                           y={r(p.y)}
                           width={span(lw - 2 * inset, 'band')}
                           height={r(bh)}
-                          rx={r(Math.min(1.2, bh / 2))}
                           fill={b.colour ?? `url(#${inkId})`}
                           fillOpacity={r(opacity)}
                           stroke={chosen ? GEL_COLORS.overlay : undefined}
@@ -262,22 +324,36 @@ function Gel({
                           }}
                           className="cursor-pointer"
                         >
-                          <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${formatPercent(BigInt(b.count), BigInt(total))}%)`}</title>
+                          <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${percentOf(BigInt(b.count), BigInt(total))})`}</title>
                         </rect>
-                        {p.h >= 13 && lw >= ALLELE_GEL.labelledLane && !b.isColour && (
-                          <text
-                            x={r(cx)}
-                            y={r(p.y + p.h / 2 + 3.5)}
-                            textAnchor="middle"
-                            fontSize="10"
-                            pointerEvents="none"
-                            fill={lane.conserved ? GEL_COLORS.well : GEL_COLORS.bandText}
-                          >
-                            {b.label.length > labelChars
-                              ? `${b.label.slice(0, labelChars - 1)}…`
-                              : b.label}
-                          </text>
-                        )}
+                        {p.h >= 13 &&
+                          lw >= ALLELE_GEL.labelledLane &&
+                          !b.isColour &&
+                          (() => {
+                            const label = clipLabel(b.label, labelChars);
+                            // words on a fill: the ink the band calls for under the label's run
+                            const half = (label.length * ALLELE_GEL.charWidth) / 2;
+                            const fill = bandLabelInk(
+                              theme,
+                              GEL_INK_KEYS[ink],
+                              r(opacity),
+                              ground,
+                              [r(cx) - half, r(cx) + half],
+                              width
+                            );
+                            return (
+                              <text
+                                x={r(cx)}
+                                y={r(p.y + p.h / 2 + 3.5)}
+                                textAnchor="middle"
+                                fontSize="10"
+                                pointerEvents="none"
+                                fill={fill}
+                              >
+                                {label}
+                              </text>
+                            );
+                          })()}
                       </g>
                     );
                   })}
@@ -312,40 +388,55 @@ function Gel({
               {rows.map((row, ri) => {
                 const pts = o.points
                   .filter((p) => slot.get(p.lane)!.row === ri)
-                  .map((p) => centre(p.lane, p.band));
+                  .sort((a, b) => slot.get(a.lane)!.k - slot.get(b.lane)!.k);
                 if (pts.length === 0) return null;
+                const boxes = pts.map((p) => bandBox(p.lane, p.band));
                 return (
                   <g key={ri}>
-                    <polyline
-                      points={pts.map((p) => `${r(p.x)},${r(p.y)}`).join(' ')}
-                      fill="none"
-                      stroke={GEL_COLORS.overlay}
-                      strokeOpacity=".7"
-                      strokeWidth=".8"
-                    />
-                    {pts.map((p, k) => (
+                    {/* PB-04: the genotype joins its bands from side to side, between the lanes
+                        (never across a band, nor across a lane where it has no counted band). */}
+                    {pts.slice(1).map((p, k) => {
+                      if (slot.get(p.lane)!.k !== slot.get(pts[k].lane)!.k + 1) return null;
+                      const [a, b] = [boxes[k], boxes[k + 1]];
+                      return (
+                        <line
+                          key={`link:${k}`}
+                          data-link
+                          x1={r(a.x + a.w + OUTLINE_GAP)}
+                          y1={r(a.y + a.h / 2)}
+                          x2={r(b.x - OUTLINE_GAP)}
+                          y2={r(b.y + b.h / 2)}
+                          stroke={GEL_COLORS.overlay}
+                          strokeOpacity=".7"
+                          strokeWidth=".8"
+                        />
+                      );
+                    })}
+                    {/* PB-04: its own band is outlined just outside its edges, clear of its name. */}
+                    {boxes.map((box, k) => (
                       <rect
                         key={k}
                         data-tick
-                        x={r(p.x - lw / 2 + inset)}
-                        y={r(p.y - 1.6)}
-                        width={span(lw - 2 * inset, 'genotype tick')}
-                        height="3.2"
-                        rx="1.2"
+                        x={r(box.x - OUTLINE_GAP)}
+                        y={r(box.y - OUTLINE_GAP)}
+                        width={span(box.w + 2 * OUTLINE_GAP, 'genotype outline')}
+                        height={r(box.h + 2 * OUTLINE_GAP)}
                         fill="none"
                         stroke={GEL_COLORS.overlay}
                         strokeWidth="1"
                       />
                     ))}
-                    <text
-                      x={LX + 2}
-                      y={r(pts[0].y + 3.5)}
-                      textAnchor="end"
-                      fontSize="10"
-                      fill={GEL_COLORS.overlay}
-                    >
-                      {o.label}
-                    </text>
+                    {o.persistent && (
+                      <text
+                        x={LX - 4}
+                        y={r(boxes[0].y + boxes[0].h / 2 + 3.5)}
+                        textAnchor="end"
+                        fontSize="10"
+                        fill={GEL_COLORS.overlay}
+                      >
+                        {o.label}
+                      </text>
+                    )}
                   </g>
                 );
               })}
@@ -359,15 +450,17 @@ function Gel({
           pinned={readout.showingPin}
           idle={idle ?? tapOrHover('a band.', { capital: true })}
         >
-          {readLane && readBand
-            ? `${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects`
-            : null}
+          {readLane && readBand ? (
+            <TraitText
+              text={`${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}`}
+            />
+          ) : null}
         </ReadoutRow>
       </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
       <p className="text-text-dim text-meta mt-1">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
-        {total.toLocaleString('en-US')} objects, common at the top, rare below
+        {unitText(formatCount(total, 'object'))}, common at the top, rare below
       </p>
     </>
   );
@@ -420,7 +513,7 @@ function GeneList({
       >
         <div
           role="row"
-          className={cn(LIST_GRID, 'border-base-border text-text-dim text-meta border-b pb-1.5')}
+          className={cn(LIST_GRID, 'border-row-rule text-text-dim text-meta border-b pb-1.5')}
         >
           <span role="columnheader">gene</span>
           <span role="columnheader" className="text-right">
@@ -447,7 +540,7 @@ function GeneList({
               onMouseLeave={() => onGeneHover?.(null)}
               className={cn(
                 LIST_GRID,
-                'border-base-elevated border-b py-1.5',
+                'border-row-rule border-b py-1.5',
                 lane.gene === activeGene && 'bg-base-surface'
               )}
             >
@@ -480,10 +573,10 @@ function GeneList({
                               selected[lane.gene] === b.value ? 'text-text-bright' : 'text-aqua'
                             )}
                           >
-                            {b.label} · {of(b.count)}
+                            <TraitText text={b.label} /> · {of(b.count)}
                           </button>
                         ) : (
-                          `${b.label} · ${of(b.count)}`
+                          <TraitText text={`${b.label} · ${of(b.count)}`} />
                         )}
                       </li>
                     ))}
@@ -494,11 +587,8 @@ function GeneList({
                 {lane.variants.toLocaleString('en-US')}
               </span>
               <span role="cell" className="flex items-center justify-end gap-2">
-                <span aria-hidden="true" className="bg-base-elevated flex h-1 w-14 rounded-sm">
-                  <span
-                    className="bg-jade rounded-sm"
-                    style={{ width: `${(top.count / total) * 100}%` }}
-                  />
+                <span aria-hidden="true" className="bg-bar-track flex h-1 w-14">
+                  <span className="bg-jade" style={{ width: `${(top.count / total) * 100}%` }} />
                 </span>
                 <span className="text-text whitespace-nowrap tabular-nums">{of(top.count)}</span>
               </span>
@@ -517,7 +607,7 @@ function GeneList({
       )}
       <p className="text-text-dim text-meta mt-1">
         genes ranked by how many variants they have · most common = how many of all{' '}
-        {total.toLocaleString('en-US')} objects carry the commonest variant · open a gene for every
+        {unitText(formatCount(total, 'object'))} carry the commonest variant · open a gene for every
         variant
       </p>
     </div>

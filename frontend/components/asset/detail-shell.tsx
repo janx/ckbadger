@@ -3,14 +3,17 @@ import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
 import { DetailTier2 } from '@/components/ui/detail-layout';
+import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import type { AssetClass } from '@/lib/design-tokens';
 import { readErrorText } from '@/lib/read-error';
+import { isAwaited, type ReadState } from '@/lib/query-state';
 import { cn } from '@/lib/utils';
 import {
   documentTitleParts,
   useDocumentTitle,
   type DocumentTitleProps,
 } from '@/lib/use-document-title';
+import { unitNode } from '@/components/ui/units';
 
 interface AssetDetailShellBaseProps {
   kind: AssetClass;
@@ -86,16 +89,23 @@ export function AssetDetailShell({
   if (hero && !lede) throw new Error('AssetDetailShell: a hero figure needs the lede it follows');
   useDocumentTitle(documentTitleParts(title, documentTitle));
   const titleId = useId();
+  // PB-06 / PA-32: the name is an entity h1, one step smaller below md (30 → 26 px). The class mark
+  // leads a row that never wraps, its foot on the name's first baseline (an SVG's baseline is its
+  // bottom edge); the name and its state wrap beside it. When the three shared one wrapping line,
+  // a name longer than the line took a line of its own, leaving the mark alone above it and the
+  // state alone below it.
   const titleRow = (
-    <div className="flex min-w-0 flex-wrap items-center gap-3">
+    <div className="flex min-w-0 items-baseline gap-3">
       <ClassMark kind={kind} size={24} />
-      <h1
-        id={lede ? titleId : undefined}
-        className="text-text-bright text-entity min-w-0 break-words font-medium"
-      >
-        {title}
-      </h1>
-      {status}
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <h1
+          id={lede ? titleId : undefined}
+          className="text-text-bright text-entity max-md:text-index min-w-0 break-words font-medium"
+        >
+          {title}
+        </h1>
+        {status}
+      </div>
     </div>
   );
   const named = (
@@ -218,8 +228,8 @@ export function AssetDetailShell({
 export interface AssetMetric {
   label: string;
   value: ReactNode;
-  /** The inline dim note after the value: "· 748 hold one". */
-  note?: ReactNode;
+  /** The inline dim note after the value: "· 748 hold one"; its parts, when it has several. */
+  note?: ReactNode | readonly ReactNode[];
   /** `body` for a value that is a name or an address (the board's 13 px); default `section`. */
   size?: 'section' | 'body';
   /** What the row leaves out of sight (a full date, an exact amount), on hover. */
@@ -243,13 +253,22 @@ export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
                 m.size === 'body' ? 'text-body' : 'text-section'
               )}
             >
-              {m.value}
-              {m.note && (
-                <span data-role="metric-note" className="text-text-dim text-small">
-                  {' · '}
-                  <span>{m.note}</span>
-                </span>
-              )}
+              {/* PA-25: the value and its note's parts are one separated list, so a note's dot
+                  goes with it to a new line ("· 3.82% occupied" opened one, "USDC ·" ended one).
+                  The list speaks in the note's size; the value keeps its own inside its item. */}
+              <Dotted
+                className="text-small"
+                parts={[
+                  <span key="value" className={m.size === 'body' ? 'text-body' : 'text-section'}>
+                    {unitNode(m.value)}
+                  </span>,
+                  m.note !== undefined &&
+                    dottedGroup(Array.isArray(m.note) ? m.note : [m.note], {
+                      role: 'metric-note',
+                      className: 'text-text-dim text-small',
+                    }),
+                ]}
+              />
             </dd>
           </div>
         ))}
@@ -257,18 +276,30 @@ export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
     </section>
   );
 }
+/**
+ * A section's read as the section states it: its failure once it has failed, "Loading …" while
+ * the read is awaited (`isAwaited`: fetching, or paused offline or between retries), and
+ * "… unavailable." only once it has answered with nothing; a read nothing will answer (disabled)
+ * says nothing. A `retained` read is drawn from earlier data, so only a failed refresh is said.
+ */
 export function AssetReadState({
   error,
-  loading,
   label,
-  retained = false,
-}: {
-  error: Error | null;
-  loading?: boolean;
-  label: string;
-  retained?: boolean;
-}) {
-  if (retained && !error) return null;
+  ...props
+}: { error: Error | null; label: string } & (
+  | { retained: true; read?: never }
+  | { retained?: boolean; read: ReadState }
+)) {
+  const retained = props.retained ?? false;
+  if (!error && (retained || !props.read)) return null;
+  const sentence = error
+    ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${readErrorText(error)}.${retained ? ' Showing previously loaded data.' : ''}`
+    : props.read && isAwaited(props.read)
+      ? `Loading ${label}…`
+      : props.read?.status === 'success'
+        ? `${label} unavailable.`
+        : null;
+  if (sentence === null) return null;
   return (
     // F2 identities (round 2, ID-COL-1): a gateway failure is stated by its status, never the
     // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
@@ -276,11 +307,7 @@ export function AssetReadState({
       role={error ? 'alert' : 'status'}
       className="text-text-dim text-small py-3 [overflow-wrap:anywhere]"
     >
-      {error
-        ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${readErrorText(error)}.${retained ? ' Showing previously loaded data.' : ''}`
-        : loading
-          ? `Loading ${label}…`
-          : `${label} unavailable.`}
+      {sentence}
     </p>
   );
 }

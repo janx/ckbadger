@@ -9,6 +9,7 @@ import type { FiberChannelDetail, FiberChannelEvidence } from '@/lib/api';
 import producerDetail from '../fixtures/fiber-open-detail.json';
 import producerEvidence from '../fixtures/fiber-evidence-open.json';
 import c07e from '../fixtures/fiber-channel-c07e.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/components/fiber/fiber-channel-step', () => ({
   FiberChannelStep: (props: {
@@ -116,7 +117,7 @@ describe('FiberChannelBoard', () => {
     expect(within(hero).getByText('capacity')).toHaveClass('w-fit');
     // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
     const lede = within(hero).getByText(
-      'Force-closed 8 d 3 h after it opened; settled after 6 epochs.'
+      'Force-closed 8d 3h after it opened; settled after 6 epochs.'
     );
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
@@ -146,14 +147,14 @@ describe('FiberChannelBoard', () => {
     expect(container.querySelector('#evidence')!.contains(tier2)).toBe(true);
     const summary = within(tier2).getByTestId('channel-summary');
     // Material pass v2 leftovers: the story is set in the shared tier-2 Prose piece (.prose-tier2:
-    // 14 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph.
+    // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph.
     expect(summary.closest('[data-prose]')).toHaveClass('prose-tier2');
     expect(summary).not.toHaveClass('text-body', 'text-text-dim');
     expect(summary).toHaveTextContent(
       'ckb1qzda0c…ppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1qzda0c…5eyy6y 62.00000351 CKB.'
     );
     expect(summary).toHaveTextContent(
-      '8 d 3 h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
+      '8d 3h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
     );
     expect(tier2).toHaveTextContent(
       'The chain never sees a Fiber payment, only the split when the channel opens and the split when it closes. Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'
@@ -174,7 +175,7 @@ describe('FiberChannelBoard', () => {
     const { container } = render(<FiberChannelBoard channel={channel} />);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByTestId('channel-summary')).toHaveTextContent(
-      /^8 d 3 h later the channel was closed without a joint signature/
+      /^8d 3h later the channel was closed without a joint signature/
     );
   });
 
@@ -186,7 +187,8 @@ describe('FiberChannelBoard', () => {
     const bar = container.querySelector('[data-split="left"]') as HTMLElement;
     expect(parseFloat(bar.style.width)).toBeGreaterThan(94);
     expect(
-      screen.getByText(/^at open, 2025-03-06 · net input to the opening transaction/)
+      // re-pinned (A4 round 2): the date is a unit of its own in the note
+      screen.getByText(fullText(/^at open, 2025-03-06 · net input to the opening transaction/))
     ).toBeInTheDocument();
   });
 
@@ -241,10 +243,10 @@ describe('FiberChannelBoard', () => {
       'three steps'
     );
     expect(
-      screen.getByRole('img', { name: /^Opened, force-closed 8 d 3 h later/ })
+      screen.getByRole('img', { name: /^Opened, force-closed 8d 3h later/ })
     ).toBeInTheDocument();
     expect(screen.getByTestId('step-1')).toHaveTextContent(
-      `1 · Open ${channel.fundingTxHash} | → step 2, 8 d 3 h later`
+      `1 · Open ${channel.fundingTxHash} | → step 2, 8d 3h later`
     );
     expect(screen.getByTestId('step-1')).toHaveAttribute('data-carries', '0');
     expect(screen.getByTestId('step-2')).toHaveTextContent(
@@ -274,7 +276,7 @@ describe('FiberChannelBoard', () => {
       expect(tier2).toContainElement(heading);
       expect(heading).toHaveClass('text-body', 'text-text');
     }
-    expect(screen.getByText('Fiber Funding Lock · args, 20 bytes')).toBeInTheDocument();
+    expect(screen.getByText(fullText('Fiber Funding Lock · args, 20 bytes'))).toBeInTheDocument();
     expect(
       screen.getByText('blake160 of the two parties’ aggregated public key')
     ).toBeInTheDocument();
@@ -336,7 +338,9 @@ describe('FiberChannelBoard', () => {
       },
     };
     render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={v1} />);
-    expect(screen.getByText(/Fiber Commitment Lock · args, 58 bytes/)).toHaveTextContent('full58');
+    expect(screen.getByText(fullText(/Fiber Commitment Lock · args, 58 bytes/))).toHaveTextContent(
+      'full58'
+    );
     expect(screen.getByText('Settlement hash / flag').nextElementSibling).toHaveTextContent(
       `0x${'66'.repeat(20)} · 1`
     );

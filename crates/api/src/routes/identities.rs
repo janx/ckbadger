@@ -1067,16 +1067,14 @@ impl DotCellPartyResolver<'_> {
                 None,
             ));
         };
-        let address = Some(
-            encode_lock_address(
-                &lock_hash,
-                &entry.code_hash,
-                entry.hash_type,
-                &entry.args,
-                self.network,
-            )
-            .map_err(|e| ApiError::internal(format!("{e:#}")))?,
-        );
+        let address = encode_lock_address(
+            &lock_hash,
+            &entry.code_hash,
+            entry.hash_type,
+            &entry.args,
+            self.network,
+        )
+        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
         let script_name = self
             .store
             .get_script_info(&entry.code_hash)
@@ -1102,7 +1100,7 @@ impl DotCellPartyResolver<'_> {
             .map_err(|e| ApiError::internal(format!("{e:#}")))?;
         let (address, script_name) = match resolved {
             Some(resolved) => (
-                Some(resolved.address),
+                resolved.address,
                 self.store
                     .get_script_info(&resolved.entry.code_hash)
                     .map_err(|e| ApiError::internal(e.to_string()))?

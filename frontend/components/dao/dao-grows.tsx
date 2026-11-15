@@ -10,8 +10,10 @@ import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal'
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
+import { AMOUNT_INK } from '@/components/activity-event-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatUtc8Date } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 /** The board's example deposit: 10,000 CKB, in shannons. */
 const EXAMPLE_DEPOSIT = '1000000000000';
@@ -88,8 +90,8 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
           kind="line"
           height={200}
           pin={pin}
-          plotName="AR, the accumulated rate · 1.0 at genesis"
-          insideYTicks
+          // U-19: the values in the dim gutter; the name fits beside it on a 360 px phone.
+          plotName="accumulated rate (AR) · 1.0 at genesis"
           endLabel={(value) => arAtFourPlaces(formatExactDecimal(value, 'DAO accumulated rate'))}
           formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
         />
@@ -97,7 +99,7 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
       <div className="mt-2.5">
         <ReadoutRow label="Deposit reading" pinned={pin.showingPin}>
           <span className="text-text-dim">
-            {EXAMPLE_DEPOSIT_CKB} deposited {day.date} →{' '}
+            {EXAMPLE_DEPOSIT_CKB} deposited {unitNode(day.date)} →{' '}
             {current?.isError ? (
               <span role="alert" className="text-negative">
                 (the calculator failed: {String(current.error)})
@@ -189,7 +191,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
                   <span className="text-text-bright text-small tabular-nums">{y.percent}%</span>
                   <span
                     aria-hidden="true"
-                    className="bg-gold w-full rounded-sm"
+                    className="bg-gold w-full"
                     style={{ height: `${Math.round(48 * share)}px`, opacity: 0.35 + 0.45 * share }}
                   />
                 </div>
@@ -199,7 +201,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
           <div className="text-text-dim text-meta mt-1 flex justify-between gap-4">
             <span>
               compensation in each year since launch ·{' '}
-              {formatUtc8Date(years[0].from.chainTimeMs).slice(0, 7)} →
+              {unitNode(formatUtc8Date(years[0].from.chainTimeMs).slice(0, 7))} →
             </span>
             <span className="whitespace-nowrap">
               → {formatUtc8Date(years[years.length - 1].from.chainTimeMs).slice(0, 7)}
@@ -226,8 +228,10 @@ function OwedAmount({ shannons }: { shannons: bigint }) {
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       +{parts.integer}
-      <span className="opacity-70">{parts.fraction}</span>
-      {parts.ghost}
+      <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+        {parts.fraction}
+      </span>
+      <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
 }

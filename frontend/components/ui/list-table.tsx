@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 export interface ListColumn<T> {
   key: string;
@@ -51,6 +52,13 @@ export interface ListTableProps<T> {
    * fields that left a one-line row are kept (with the detail page). Never empty.
    */
   rowTitle?: (row: T) => string;
+  /**
+   * Told the form this list chose, and again whenever its measured width changes it, before the
+   * browser paints. For a part of the page that belongs to one form only — a legend of the wide
+   * table's glyphs, a switch of its bar (PA-02, PA-03) — so it is drawn exactly with that form,
+   * from the same measurement, never from a breakpoint of its own.
+   */
+  onForm?: (form: ListTableForm) => void;
 }
 
 export type ListTableDensity = 'default' | 'row';
@@ -138,6 +146,7 @@ export function ListTable<T>({
   className,
   density = 'default',
   rowTitle,
+  onForm,
 }: ListTableProps<T>) {
   const [minimum, narrowMinimum] = minimumWidths(label, columns, narrowColumns);
   const titleOf = (row: T): string | undefined => {
@@ -153,6 +162,7 @@ export function ListTable<T>({
   const form: ListTableForm =
     width === null ? 'table' : listTableForm(label, width, columns, narrowColumns);
   const shown = form === 'narrow-table' ? narrowColumns! : columns;
+  useLayoutEffect(() => onForm?.(form), [form, onForm]);
   return (
     <div
       ref={ref}
@@ -169,7 +179,7 @@ export function ListTable<T>({
               role="listitem"
               key={rowKey(row)}
               title={titleOf(row)}
-              className={cn('border-base-border-subtle border-b py-2.5', rowClassName?.(row))}
+              className={cn('border-row-rule border-b py-2.5', rowClassName?.(row))}
             >
               {mobileRow(row, width! >= WIDE_ROW_MIN_WIDTH)}
             </div>
@@ -197,7 +207,7 @@ export function ListTable<T>({
                   scope="col"
                   // Table-rows T5: column heads at meta (11 px), dim, in every table.
                   className={cn(
-                    'border-base-border-subtle text-text-dim text-meta border-b py-3 pr-4 font-normal last:pr-0',
+                    'border-row-rule text-text-dim text-meta border-b py-3 pr-4 font-normal last:pr-0',
                     c.numeric ? 'text-right' : 'text-left'
                   )}
                 >
@@ -215,7 +225,7 @@ export function ListTable<T>({
                 onMouseLeave={() => onRowHover?.(null)}
                 // Midnight, continued (move 4): a hovered row gets the row-scan sweep; its rule
                 // is the row-rule ink, #1a1f30 (material pass v2, move 6).
-                className={cn('row-scan border-base-border-subtle border-b', rowClassName?.(row))}
+                className={cn('row-scan border-row-rule border-b', rowClassName?.(row))}
               >
                 {shown.map((c) => (
                   <td
@@ -226,7 +236,7 @@ export function ListTable<T>({
                       c.className
                     )}
                   >
-                    {c.render(row)}
+                    {unitNode(c.render(row))}
                   </td>
                 ))}
               </tr>

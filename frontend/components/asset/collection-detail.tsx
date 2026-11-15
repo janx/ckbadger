@@ -7,7 +7,9 @@ import {
   type ObjectCollection,
   type IdentityCollection,
 } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import {
   AssetDetailShell,
   AssetMetrics,
@@ -27,14 +29,14 @@ import {
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { CapacityHistory } from '@/components/asset/capacity-history';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
-import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Address } from '@/components/ui/address';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
@@ -44,12 +46,16 @@ import {
   type CompositionCounts,
 } from '@/components/ui/composition-set';
 import { RowTag } from '@/components/ui/row-tag';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { collectionFeedHeadline } from '@/lib/feed-headlines';
 import { readErrorText } from '@/lib/read-error';
 import { IdentityPositioning, type IdentityStandard } from '@/components/identity/identity-header';
 import { retryTransientOnly } from '@/lib/query-client';
+import { Dotted } from '@/components/ui/phone-row';
+import { NoBreak } from '@/components/ui/no-break';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -83,33 +89,42 @@ function CollectionLede({
   const onchain = counts ? counts.btc_ckb + counts.pure_ckb : 0;
   return (
     <p className="text-text-dim text-body max-w-[640px]">
-      {/* Responsive B#21: the kind is one unit, so its separator never dangles at a line end. */}
-      <span data-role="collection-kind" className="whitespace-nowrap">
-        {kind === 'spore' ? 'Spore cluster' : 'm-NFT class'}
-        {kind === 'spore' && dobVersion !== null && (
-          <>
-            {' · '}
-            <RowTag>DOB/{dobVersion}</RowTag>
-          </>
-        )}
-      </span>
-      {counts &&
-        live > 0 &&
-        (only ? (
-          <>
-            {' · every object is '}
-            <CompositionBadge tier={only} size="sm" />
-            {only === 'btc_ckb'
-              ? ': its record in a CKB cell, its picture in a Bitcoin inscription.'
-              : only === 'pure_ckb'
-                ? ': its record and its content in CKB cells.'
-                : '.'}
-          </>
-        ) : onchain > 0 ? (
-          ' · some of its objects are fully on-chain, the rest are not.'
-        ) : (
-          ' · none of its objects is fully on-chain.'
-        ))}
+      {/* PB-23: the kind and the sentence are one separated list, so the dot goes with the
+          sentence to a new line; the kind is one unit (responsive B#21). */}
+      <Dotted
+        parts={[
+          <span key="kind" data-role="collection-kind" className="whitespace-nowrap">
+            {kind === 'spore' ? 'Spore cluster' : 'm-NFT class'}
+            {kind === 'spore' && dobVersion !== null && (
+              <>
+                {' · '}
+                <RowTag>DOB/{dobVersion}</RowTag>
+              </>
+            )}
+          </span>,
+          counts &&
+            live > 0 &&
+            (only ? (
+              <>
+                every object is{' '}
+                {/* the badge and the stop after it are one unit: a lone "." never opens a line */}
+                <NoBreak>
+                  <CompositionBadge tier={only} size="sm" />
+                  {only === 'btc_ckb' || only === 'pure_ckb' ? ':' : '.'}
+                </NoBreak>
+                {only === 'btc_ckb'
+                  ? ' its record in a CKB cell, its picture in a Bitcoin inscription.'
+                  : only === 'pure_ckb'
+                    ? ' its record and its content in CKB cells.'
+                    : ''}
+              </>
+            ) : onchain > 0 ? (
+              'some of its objects are fully on-chain, the rest are not.'
+            ) : (
+              'none of its objects is fully on-chain.'
+            )),
+        ]}
+      />
     </p>
   );
 }
@@ -174,6 +189,8 @@ export function CollectionDetail(props: CollectionDetailProps) {
   return <ScopedCollectionDetail key={`${props.kind}:${props.id}`} {...props} />;
 }
 function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
+  // PB-12: the collection's class colour draws its history bars and its holders' bars.
+  const collectionClass = kind === 'identity' ? 'identities' : 'objects';
   const detail = useQuery<ObjectCollection | IdentityCollection>({
     queryKey: [kind === 'identity' ? 'identity-collection' : 'object-collection', id],
     queryFn: () =>
@@ -251,6 +268,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       />
     );
   }
+  if (!data && isBadRequestApiError(detail.error))
+    return <NotFoundPage notAnId={{ kind: 'collection', reason: detail.error.apiMessage }} />;
   if (!data)
     return (
       <AssetDetailShell
@@ -264,7 +283,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           },
         ]}
       >
-        <AssetReadState label="collection" error={detail.error} loading={detail.isLoading} />
+        {detail.error ? (
+          <ReadFailure what="collection" error={detail.error} />
+        ) : (
+          // the read state asks isAwaited: a read paused offline or between retries is awaited
+          <AssetReadState label="collection" error={null} read={detail} />
+        )}
       </AssetDetailShell>
     );
   // ── Consistency round C7 (Main.dc.html): the rail's facts as the metrics row. For a cluster or
@@ -332,7 +356,11 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             size: 'body' as const,
             value: protocol.data ? (
               protocol.data.current ? (
-                <Address address={protocol.data.current.cell.ownerAddress} className="text-body" />
+                <Address
+                  address={protocol.data.current.cell.ownerAddress}
+                  size="row"
+                  className="text-body"
+                />
               ) : (
                 'No current cluster cell'
               )
@@ -367,7 +395,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ),
       note:
         held !== null && occupied !== null && held > BigInt(0)
-          ? `${formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied`
+          ? `${percentOf(occupied, held)} occupied`
           : undefined,
     },
   ];
@@ -384,6 +412,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           <CapacityHistory
             history={chart.data}
             subject={title}
+            assetClass={collectionClass}
             weekly={
               insights.data
                 ? insights.data.weeklyActivity
@@ -396,19 +425,21 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           />
         </>
       ) : (
-        <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
+        <AssetReadState label="capacity history" error={chart.error} read={chart} />
       )}
       {kind !== 'identity' && mints !== undefined && transfers !== undefined && (
-        <p className="text-text-dim text-small">
-          Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
-          {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
-          {held !== null && occupied !== null && occupied > BigInt(0) && (
-            <>
-              {' · '}
-              <HMultiplierReading held={held} occupied={occupied} />
-            </>
-          )}
-        </p>
+        <div className="text-text-dim text-small">
+          {/* PA-25: one separated list, each count with its noun */}
+          <Dotted
+            parts={[
+              `Minted in ${formatCount(mints, 'transaction')}`,
+              `${formatCount(transfers, 'transfer')} since`,
+              held !== null && occupied !== null && occupied > BigInt(0) && (
+                <HMultiplierReading held={held} occupied={occupied} />
+              ),
+            ]}
+          />
+        </div>
       )}
     </div>
   );
@@ -418,7 +449,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       <CollectionHolders
         queryKey={`${kind}:${id}`}
         distribution={insights.data?.holderDistribution}
-        assetClass={kind === 'identity' ? undefined : ('objects' as const)}
+        assetClass={collectionClass}
         load={(p) =>
           kind === 'spore'
             ? api.getSporeClusterHolders(id, p)
@@ -447,9 +478,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
       // has no description to record; it opens with what the standard is instead. A cluster or
       // class is named by its id under the title; its kind leads the lede.
-      identity={
-        kind === 'identity' ? undefined : <Hash hash={id} truncate={false} className="text-meta" />
-      }
+      identity={kind === 'identity' ? undefined : <HeadId value={id} kind="hash" copyable />}
       lede={
         kind === 'identity' ? undefined : (
           <div className="space-y-2.5">
@@ -567,7 +596,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     label="cluster cell"
                     error={protocol.error}
                     retained={!!protocol.data}
-                    loading={protocol.isLoading}
+                    read={protocol}
                   />
                   {protocol.data?.current ? (
                     <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
@@ -612,7 +641,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           label="cluster metadata"
           error={cluster.error}
           retained={!!cluster.data}
-          loading={cluster.isLoading}
+          read={cluster}
         />
       )}
       {kind === 'identity' &&
@@ -640,11 +669,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             />
           </>
         ) : (
-          <AssetReadState
-            label="collection insights"
-            error={insights.error}
-            loading={insights.isLoading}
-          />
+          <AssetReadState label="collection insights" error={insights.error} read={insights} />
         ))}
       {kind === 'object' && <CollectionItems id={id} kind={kind} />}
       {kind === 'identity' && history}
@@ -653,7 +678,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           label="collection insights"
           error={insights.error}
           retained={!!insights.data}
-          loading={insights.isLoading}
+          read={insights}
         />
       )}
       {kind === 'identity' && <CollectionItems id={id} kind={kind} />}
@@ -664,8 +689,10 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
               <p className="text-text-dim text-meta">
-                {pds.data.totalLiveIdentities} live identities · {pds.data.withoutPds} without a
-                PDS. An identity can name more than one endpoint.
+                {unitNode(
+                  formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')
+                )}{' '}
+                · {pds.data.withoutPds} without a PDS. An identity can name more than one endpoint.
               </p>
               <dl className="space-y-3">
                 {pds.data.groups.map((g) => (
@@ -673,14 +700,15 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     <dt className="min-w-0 break-all">{g.endpoint}</dt>
                     {/* F2 identities (round 2): one identity, many identities. */}
                     <dd>
-                      {g.count.toLocaleString('en-US')} {g.count === 1 ? 'identity' : 'identities'}
+                      {g.count.toLocaleString('en-US')}{' '}
+                      {countNoun(g.count, 'identity', 'identities')}
                     </dd>
                   </div>
                 ))}
               </dl>
             </>
           ) : (
-            <AssetReadState label="PDS distribution" error={pds.error} loading={pds.isLoading} />
+            <AssetReadState label="PDS distribution" error={pds.error} read={pds} />
           )}
         </section>
       )}

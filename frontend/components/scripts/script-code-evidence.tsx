@@ -9,16 +9,19 @@ import type {
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { formatCkbAmount, truncateHash } from '@/lib/utils';
+import { formatCkbAmount } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
-import { formatPercent } from '@/lib/ckb-decimal';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -71,20 +74,6 @@ export function immutableHow(classes: readonly ScriptCodeClassTotalApi['class'][
     .map((c) => (c === 'fixed' ? 'pinned by data hash' : 'code cell unspendable'));
 }
 
-/**
- * `part / total` as the Scripts board writes a share: one decimal from 10 %, two from 0.1 %,
- * two significant digits below that, rounded half-up and never a false `0.00%`.
- */
-export function scriptShare(part: bigint, total: bigint): string {
-  if (part === BigInt(0)) return '0%';
-  const hundredTimes = part * BigInt(100);
-  if (hundredTimes >= total * BigInt(10)) return `${formatPercent(part, total, 1)}%`;
-  if (hundredTimes * BigInt(10) >= total) return `${formatPercent(part, total, 2)}%`;
-  let decimals = 2;
-  while (hundredTimes * BigInt(10) ** BigInt(decimals) < total * BigInt(10)) decimals++;
-  return `${formatPercent(part, total, decimals).replace(/0+$/, '').replace(/\.$/, '')}%`;
-}
-
 export function CodeClassSwatch({
   value,
   className,
@@ -96,7 +85,7 @@ export function CodeClassSwatch({
   return (
     <span
       aria-hidden="true"
-      className={className ?? 'inline-block h-2 w-3.5 shrink-0 rounded-sm'}
+      className={className ?? 'inline-block h-2 w-3.5 shrink-0'}
       style={{ backgroundColor: swatch.fill, boxShadow: `inset 0 0 0 1px ${swatch.edge}` }}
     />
   );
@@ -166,7 +155,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
     'Who can change the code'
   );
   const words = (row: ScriptCodeClassTotalApi) =>
-    `${scriptClassLabel(row.class)} ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`;
+    `${scriptClassLabel(row.class)} ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`;
   const fits = (text: string, i: number) =>
     width !== null &&
     (width * spans[i].width) / 100 >=
@@ -176,7 +165,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
       ref={ref}
       role="img"
       aria-label="CKB under lock scripts by who can change their code"
-      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden rounded tabular-nums"
+      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden tabular-nums"
     >
       {held.map((row, i) => {
         const inside = fits(words(row), i) ? words(row) : '';
@@ -184,9 +173,9 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
           <span
             key={row.class}
             data-code-class-segment={row.class}
-            title={`${scriptClassLabel(row.class)}: ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`}
+            title={`${scriptClassLabel(row.class)}: ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`}
             className={cn(
-              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded',
+              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap',
               inside && 'px-2.5',
               SEGMENT_INK[row.class] ?? 'text-text-bright'
             )}
@@ -225,7 +214,7 @@ export function ScriptCodeClassLegend({
           <CodeClassSwatch value={row.class} />
           <span>{scriptClassLabel(row.class)}</span>{' '}
           <span className="text-text tabular-nums">
-            {scriptShare(BigInt(row.lockOwnedCapacitySum), total)}
+            {percentOf(BigInt(row.lockOwnedCapacitySum), total)}
           </span>
         </li>
       ))}
@@ -276,7 +265,7 @@ export function ScriptCodeClassSummary({
             {joinClauses(
               groups.map(
                 (group) =>
-                  `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
+                  `${percentOf(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
               )
             )}
             .
@@ -295,7 +284,7 @@ export function ScriptCodeClassSummary({
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
-            />· {formatCount(row.familyCount!, 'script')}
+            />· {unitNode(formatCount(row.familyCount!, 'script'))}
           </li>
         ))}
       </ul>
@@ -325,6 +314,13 @@ function CodeCellLink({ outpoint }: { outpoint: string }) {
   );
 }
 
+/** A verified multisig's key count: the API states it for every one it verified. */
+function verifiedKeyCount(custody: ScriptCustodyApi): number {
+  if (custody.keyCount === null)
+    throw new Error(`verified multisig ${custody.lockArgs} carries no key count`);
+  return custody.keyCount;
+}
+
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
   return (
@@ -332,8 +328,8 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
       {custody.class === 'multisig' && custody.witnessState === 'verified' && (
         <div className="text-text-dim mt-1">
-          {custody.threshold} of {custody.keyCount} keys · witness configuration matches the code
-          cell lock arguments
+          {custody.threshold} of {unitNode(formatCount(verifiedKeyCount(custody), 'key'))} · witness
+          configuration matches the code cell lock arguments
         </div>
       )}
       {custody.witnessState === 'unavailable' && custody.class === 'multisig' && (
@@ -345,7 +341,10 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </div>
       )}
       {custody.lockArgs && (
-        <div className="text-text-dim text-meta mt-1 break-all font-mono" title={custody.lockArgs}>
+        <div
+          className="text-text-dim text-meta mt-1 font-mono [overflow-wrap:anywhere]"
+          title={custody.lockArgs}
+        >
           Lock args {custody.lockArgs}
         </div>
       )}
@@ -362,10 +361,10 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </details>
       )}
       {signer && (
-        <div className="text-text-dim mt-1 break-all">
+        <div className="text-text-dim mt-1 [overflow-wrap:anywhere]">
           This holder signed to spend the code cell in{' '}
           <AppLink href={`/tx/${signer}`} className="text-emphasis hover:underline">
-            {truncateHash(signer, 12, 8)}
+            <ShortId value={signer} kind="hash" size="row" />
           </AppLink>
         </div>
       )}
@@ -374,11 +373,10 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
           {custody.owners.map((owner) => (
             <li
               key={`${owner.lockCodeHash}:${owner.lockHashType}:${owner.lockArgs}`}
-              className="break-all"
+              className="[overflow-wrap:anywhere]"
             >
               {scriptClassLabel(owner.class)} · {owner.lockHashType} {owner.lockCodeHash} · args{' '}
-              {owner.lockArgs} · {owner.codeCells.length} code cell
-              {owner.codeCells.length === 1 ? '' : 's'}:{' '}
+              {owner.lockArgs} · {unitNode(formatCount(owner.codeCells.length, 'code cell'))}:{' '}
               {owner.codeCells.map((outpoint, i) => (
                 <Fragment key={outpoint}>
                   {i > 0 && ', '}
@@ -390,51 +388,6 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </ul>
       )}
     </div>
-  );
-}
-
-export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi[] }) {
-  return (
-    <DetailSection title="Code history">
-      {markers.length === 0 ? (
-        <p className="text-text-dim text-small">
-          No observed code cell events for registered references.
-        </p>
-      ) : (
-        <ol className="border-base-border space-y-0 border-l pl-4">
-          {markers.map((marker) => (
-            <li
-              key={`${marker.referenceHash}:${marker.hashType}:${marker.codeCellTxHash}:${marker.codeCellOutputIndex}:${marker.event}`}
-              className="border-base-border border-b py-3 last:border-b-0"
-            >
-              <div className="text-small flex flex-wrap items-baseline justify-between gap-2">
-                <span className="text-text-bright capitalize">{marker.event}</span>
-                <AppLink
-                  href={`/blocks/${marker.blockNumber}`}
-                  className="text-emphasis hover:underline"
-                >
-                  Block {formatBlockNumber(marker.blockNumber)}
-                </AppLink>
-              </div>
-              <div className="text-text-dim text-meta mt-1 break-all font-mono">
-                {marker.hashType} reference {truncateHash(marker.referenceHash, 16, 8)} · version{' '}
-                {marker.versionHash ? truncateHash(marker.versionHash, 16, 8) : 'unresolved'}
-              </div>
-              <div className="text-text-dim text-meta mt-1">
-                Chart day {marker.indexedDay} · code cell holder:{' '}
-                {scriptClassLabel(marker.custody.class)}
-              </div>
-              <AppLink
-                href={`/tx/${marker.eventTxHash}`}
-                className="text-emphasis text-meta hover:underline"
-              >
-                Event transaction {truncateHash(marker.eventTxHash, 12, 8)}
-              </AppLink>
-            </li>
-          ))}
-        </ol>
-      )}
-    </DetailSection>
   );
 }
 
@@ -515,7 +468,7 @@ export function ScriptCapacityEvidenceChart({
   }
   const chartMarkers = [...chartMarkerGroups].map(([index, dayMarkers]) => ({
     index,
-    label: `code · ${dayMarkers.length} event${dayMarkers.length === 1 ? '' : 's'}`,
+    label: `code · ${dayMarkers.length} ${countNoun(dayMarkers.length, 'event')}`,
     plotLabel: '◆',
     href: `/blocks/${dayMarkers[0].blockNumber}`,
   }));
@@ -553,11 +506,11 @@ export function ScriptCapacityEvidenceChart({
             {custodyBands.map(({ deployed, start, width, retired }) => (
               <div
                 key={key(deployed)}
-                className="border-base-border relative h-5 border-b border-dashed"
+                className="border-row-rule relative h-5 border-b border-dashed"
                 title={`${deployed.hashType} ${deployed.referenceHash} · ${scriptClassLabel(deployed.custody.class)} · ${deployed.indexedDay}${retired ? ' to retirement' : ' to latest chart day'}`}
               >
                 <div
-                  className="bg-emphasis/40 absolute top-1 h-3 min-w-[3px] rounded-sm"
+                  className="bg-emphasis/40 absolute top-1 h-3 min-w-[3px]"
                   style={{ left: `${start}%`, width: `${width}%` }}
                 />
               </div>
@@ -575,7 +528,7 @@ export function ScriptCapacityEvidenceChart({
             {markers.map((marker) => (
               <span
                 key={key(marker)}
-                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 rounded border px-2 py-1"
+                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
               >
                 <button
                   type="button"
@@ -590,7 +543,8 @@ export function ScriptCapacityEvidenceChart({
                   href={`/cell/${marker.codeCellTxHash}-${marker.codeCellOutputIndex}`}
                   className="hover:text-text-bright hover:underline"
                 >
-                  {truncateHash(marker.codeCellTxHash, 8, 6)}:{marker.codeCellOutputIndex}
+                  <ShortId value={marker.codeCellTxHash} kind="hash" size="row" />
+                  <OutpointIndex index={marker.codeCellOutputIndex} />
                 </AppLink>
               </span>
             ))}

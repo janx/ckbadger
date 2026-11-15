@@ -1,29 +1,29 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ClassMark } from '@/components/ui/class-mark';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
+import { chartAxisFormat, unitAfter, withUnit } from '@/lib/format-unit';
 import {
   axisStyle,
   axisTicks,
+  bucketUnit,
   categoricalAxis,
   chartModel,
   formatChartExact,
   formatChartReadout,
-  shortBucketLabel,
   type ChartHeadline,
   type ChartModel,
 } from '@/components/charts/chart-model';
 
-function shareWidth(share: string, title: string): number {
-  if (share === '—') return 0;
-  if (!share.endsWith('%')) throw new Error(`${title}: share missing %: ${share}`);
-  const width = Number(share.slice(0, -1));
-  if (!Number.isFinite(width) || width < 0 || width > 100)
-    throw new Error(`${title}: invalid share ${share}`);
-  return width;
+/** A preview bar's width: the model's, from the exact parts (never the printed share). */
+function shareWidth(row: { width: number; label: string }, title: string): number {
+  if (!Number.isFinite(row.width) || row.width < 0 || row.width > 100)
+    throw new Error(`${title}: invalid share width ${row.width} for ${row.label}`);
+  return row.width;
 }
 
 /** Top five ranks plus the exact remainder as "Others", both computed by the chart model. */
@@ -51,11 +51,8 @@ function RankedPreview({ model }: { model: ChartModel }) {
             </span>
             <span className="shrink-0 tabular-nums">{row.share}</span>
           </div>
-          <div className="bg-base-elevated mt-1 h-1 rounded">
-            <div
-              className="bg-jade h-1 rounded"
-              style={{ width: `${shareWidth(row.share, model.title)}%` }}
-            />
+          <div className="bg-bar-track mt-1 h-1">
+            <div className="bg-jade h-1" style={{ width: `${shareWidth(row, model.title)}%` }} />
           </div>
         </li>
       ))}
@@ -72,10 +69,11 @@ function cardHeadline(model: ChartModel): ChartHeadline | null {
 }
 
 export function ChartSmallMultiple({ definition }: { definition: ChartDefinition }) {
-  const { data, isLoading, error, refetch } = useQuery({
+  const read = useQuery({
     queryKey: [definition.queryKey],
     queryFn: definition.fetch,
   });
+  const { data, error, refetch } = read;
   const style = axisStyle(definition);
   let model: ChartModel | null = null;
   let ticks: { index: number; label: string }[] = [];
@@ -83,8 +81,12 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   if (data) {
     try {
       model = chartModel(definition, data);
-      ticks = axisTicks(model.card?.points ?? model.points, style, style === 'bucket' ? 6 : 3).map(
-        (tick) => (style === 'bucket' ? { ...tick, label: shortBucketLabel(tick.label) } : tick)
+      // The bucket unit once, on the axis' last label (CH-12).
+      ticks = axisTicks(
+        model.card?.points ?? model.points,
+        style,
+        style === 'bucket' ? 6 : 3,
+        bucketUnit(definition)
       );
     } catch (cause) {
       model = null;
@@ -110,7 +112,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         {model?.latest && headline && (
           <div
             className="ml-auto min-w-0 text-right"
-            title={`${model.latest.label}: ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`}
+            title={`${model.latest.label}: ${withUnit(formatChartExact(model.latest.raw, model.unit), model.unit)}`}
           >
             <div className="text-text-dim text-meta whitespace-nowrap">{headline.pre}</div>
             <div
@@ -118,22 +120,22 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
               aria-label={`${definition.title} current readout`}
               className="min-w-0 overflow-x-auto"
             >
-              <div className="flex w-max min-w-full items-baseline justify-end gap-1">
+              <div className="flex w-max min-w-full items-baseline justify-end">
                 <span className="text-text-bright text-hero whitespace-nowrap font-medium tabular-nums">
                   {headline.display}
                 </span>
-                {/* The unit is in the subtitle, as on the board; only a percentage keeps its sign. */}
-                {headline.unit === '%' && (
-                  <span className="text-text-dim text-meta whitespace-nowrap">%</span>
-                )}
+                {/* Every card figure carries its unit, in the one form (CH-14): 2.55%, 10.43 s. */}
+                <span className="text-text-dim text-meta whitespace-pre">
+                  {unitAfter(headline.unit, '\u00a0')}
+                </span>
               </div>
             </div>
           </div>
         )}
       </div>
-      {isLoading && (
+      {isAwaited(read) && (
         <div
-          className="bg-base-surface h-[120px] animate-pulse rounded"
+          className="bg-base-surface h-[120px] animate-pulse"
           aria-label={`${definition.title} loading`}
         />
       )}
@@ -175,6 +177,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             yDomain={model.yDomain}
             referenceLines={model.referenceLines}
             formatValue={(value) => formatChartReadout(value, model.unit)}
+            formatAxis={chartAxisFormat(model.unit)}
           />
         ))}
       {model?.card && model.card.legend.length > 0 && (
@@ -186,7 +189,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             <li key={entry.key} className="flex items-center gap-1.5">
               <span
                 aria-hidden="true"
-                className="h-[7px] w-[7px] rounded-sm"
+                className="h-[7px] w-[7px]"
                 style={{ backgroundColor: entry.color }}
               />
               <span>{entry.label}</span>

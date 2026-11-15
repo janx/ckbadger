@@ -49,7 +49,7 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
         epoch="11639+836/1434"
         consumes={{ txHash: channel.fundingTxHash, index: 0, role: 'Fiber funding' }}
         carries={{ index: evidence.currentCommitment.outputIndex, role: 'Fiber commitment' }}
-        box={{ head: '→ step 3, after 6 epochs', lines: ['the commitment lock waits'] }}
+        box={{ head: '→ step 3, after 6\u00a0epochs', lines: ['the commitment lock waits'] }}
       />
     );
     expect(await screen.findByText('Fiber Funding Lock')).toBeInTheDocument();

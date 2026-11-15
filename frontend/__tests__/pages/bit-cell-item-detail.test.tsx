@@ -162,12 +162,13 @@ it('reports missing identity and unavailable raw evidence without inventing a do
   expect(
     await screen.findByRole('heading', {
       level: 1,
-      name: "no identity at this address. the local index was asked; it holds none. honey badger don't care.",
+      name: "no identity with this id. the local index was asked; it holds none. honey badger don't care.",
     })
   ).toBeInTheDocument();
-  expect(
-    screen.getByText(`/assets/identities/bit-cell/items/${evidence.itemId}`)
-  ).toBeInTheDocument();
+  // U-18: the facts name the checked endpoint with the id shortened, once
+  expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+    `/assets/identities/bit-cell/items/${evidence.itemId.slice(0, 10)}…${evidence.itemId.slice(-6)}`
+  );
   unmount();
   vi.mocked(api.getBitCellItemDetail).mockResolvedValue(identityItem('bit-cell'));
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));

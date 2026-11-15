@@ -1,7 +1,8 @@
 import { AlignedBar } from '@/components/ui/aligned-bar';
 import { niceTicks } from '@/lib/chart-ticks';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
-import { formatPercent } from '@/lib/ckb-decimal';
+import { formatCount } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
 
 const PROPOSAL_COLOR = CLASS_COLORS.dao;
 const GLYPH_WIDTH = 112;
@@ -38,7 +39,7 @@ export function BlockContents({
   const dotsFrom = 14 + shown.length * 13;
   const dotRoom = Math.floor((GLYPH_WIDTH - dotsFrom - 2 * DOT_R) / DOT_STEP) + 1;
   const dots = Math.min(proposalsCount, Math.max(dotRoom, 0));
-  const label = `Cellbase, ${userSizes.length} user transactions, ${proposalsCount} proposals, ${unclesCount} uncles`;
+  const label = `Cellbase, ${formatCount(userSizes.length, 'user transaction')}, ${formatCount(proposalsCount, 'proposal')}, ${formatCount(unclesCount, 'uncle')}`;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5" title={label}>
       <span data-contents-line className="inline-flex items-center gap-2 whitespace-nowrap">
@@ -151,7 +152,7 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
       <span
         role="img"
         aria-label={`${label}: ${value.toLocaleString('en-US')}${overhead === undefined ? '' : `, ${overhead.toLocaleString('en-US')} overhead, ${(value - overhead).toLocaleString('en-US')} user transactions`}`}
-        className="bg-base-elevated flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
+        className="bg-bar-track flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
       >
         {overhead !== undefined && (
           <span
@@ -183,7 +184,8 @@ export function resourceScale(values: readonly number[]): number {
   if (values.some((n) => !Number.isSafeInteger(n) || n < 0))
     throw new Error('Resource scale requires nonnegative exact integers');
   const max = values.length ? Math.max(...values) : 0;
-  const ticks = niceTicks(0, max);
+  // A count's scale is a whole number (an AlignedBar refuses any other: 7 drew 7.5).
+  const ticks = niceTicks(0, max, 4, 0, { integer: true });
   return ticks.values[ticks.values.length - 1];
 }
 
@@ -224,13 +226,13 @@ export function BlocksLimitsFootnote({ blocks }: { blocks: readonly LimitRow[] }
     <p className="text-text-dim text-small">
       Size and cycles · Fullest of these {blocks.length.toLocaleString('en-US')}:{' '}
       <span className="text-text-bright">{fullest.size.toLocaleString('en-US')}</span> bytes,{' '}
-      {formatPercent(BigInt(fullest.size), bytesLimit)}% of the{' '}
-      {maxBlockBytes.toLocaleString('en-US')}-byte limit ·{' '}
+      {percentOf(BigInt(fullest.size), bytesLimit)} of the {maxBlockBytes.toLocaleString('en-US')}
+      -byte limit ·{' '}
       {most ? (
         <>
           most work:{' '}
           <span className="text-text-bright">{BigInt(most.cycles!).toLocaleString('en-US')}</span>{' '}
-          cycles, {formatPercent(BigInt(most.cycles!), cyclesLimit)}% of the{' '}
+          cycles, {percentOf(BigInt(most.cycles!), cyclesLimit)} of the{' '}
           {cyclesLimit.toLocaleString('en-US')}-cycle limit
         </>
       ) : (

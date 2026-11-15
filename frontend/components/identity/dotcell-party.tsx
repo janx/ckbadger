@@ -4,7 +4,9 @@ import Link from '@/components/ui/link';
 import { Address } from '@/components/ui/address';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Badge } from '@/components/ui/page-header';
-import { cn, truncateHash } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { ShortId } from '@/components/ui/short-id';
+import type { ShortSize } from '@/lib/shorten';
 
 /**
  * A party of a `.cell` name as the chain names it.
@@ -23,28 +25,35 @@ export interface PartyDisplay {
 
 interface DotCellPartyProps {
   party: PartyDisplay;
-  /** Shorten long values — list rows want this, detail fields do not. */
-  truncate?: boolean;
+  /**
+   * The size a list row shortens its values to (U-09); none in a detail field, which writes them
+   * whole.
+   */
+  size?: ShortSize;
   testId?: string;
   className?: string;
 }
 
-export function DotCellParty({ party, truncate = false, testId, className }: DotCellPartyProps) {
+export function DotCellParty({ party, size, testId, className }: DotCellPartyProps) {
   return (
     <span
       data-testid={testId}
       className={cn('inline-flex min-w-0 flex-wrap items-center gap-2', className)}
     >
-      <PartyIdentity party={party} truncate={truncate} />
+      <PartyIdentity party={party} size={size} />
       {party.scriptName && <Badge variant="gray">{party.scriptName}</Badge>}
     </span>
   );
 }
 
-function PartyIdentity({ party, truncate }: { party: PartyDisplay; truncate: boolean }) {
+function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize | undefined }) {
   // An address is the most specific thing the lock resolves to.
   if (party.address) {
-    return <Address address={party.address} truncate={truncate} />;
+    return size ? (
+      <Address address={party.address} size={size} />
+    ) : (
+      <Address address={party.address} truncate={false} />
+    );
   }
 
   // Resolved to a lock hash the address page accepts, but the script encodes
@@ -52,7 +61,11 @@ function PartyIdentity({ party, truncate }: { party: PartyDisplay; truncate: boo
   if (party.lockHash) {
     return (
       <Link href={`/address/${party.lockHash}`} className="hover:underline">
-        <HexDisplay value={party.lockHash} truncate={truncate} size="sm" />
+        {size ? (
+          <HexDisplay value={party.lockHash} size={size} textSize="sm" />
+        ) : (
+          <HexDisplay value={party.lockHash} truncate={false} textSize="sm" />
+        )}
       </Link>
     );
   }
@@ -63,7 +76,7 @@ function PartyIdentity({ party, truncate }: { party: PartyDisplay; truncate: boo
     return (
       <>
         <span className="text-text-bright text-body font-mono" title={party.hashPrefix}>
-          {truncate ? truncateHash(party.hashPrefix, 12, 10) : party.hashPrefix}
+          {size ? <ShortId value={party.hashPrefix} kind="hash" size={size} /> : party.hashPrefix}
         </span>
         <Badge variant="gray">unresolved</Badge>
       </>

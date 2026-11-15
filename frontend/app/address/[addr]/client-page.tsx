@@ -6,7 +6,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
-import { HexCode } from '@/components/ui/hex-code';
+import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -27,16 +27,21 @@ import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool
 import { ExactCkb } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
+import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
 import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
+import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 const activityFilters = [
   ['all', 'All'],
@@ -50,10 +55,6 @@ const activityFilters = [
   ['protocol:rgbpp', 'RGB++'],
 ] as const;
 type ActivityFilter = (typeof activityFilters)[number][0];
-/** C13: the page's h1 — the address (or lock hash) cut to its first 12 and last 8 characters. */
-function shortName(value: string): string {
-  return value.length > 21 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
-}
 /**
  * C14: what a filter chip's one-row page says of its count. The API counts only the unfiltered
  * feed, so a filtered page tells 0 or 1 committed activities exactly, and otherwise only that
@@ -89,21 +90,17 @@ export default function AddressDetailPage() {
   return <AddressDetailPageContent key={addr} addr={addr} />;
 }
 /**
- * The address's id line: the full address and its copy button. It sets no size or ink of its own
- * (`inherit`): the name plate's id line gives it the plate's quiet voice (seals by kind, C10 round
- * 2); the address wraps anywhere, as the line does.
+ * The address's id line: the full address and its copy button, in the plate's quiet voice (seals
+ * by kind, C10 round 2). The address is the head's full id (A4 Chrome F3): one line where the
+ * measured line holds it (97 characters, 698.4 px at 12 px), else in equal unbroken lines — at 390
+ * the line beside the button is 328 px, three lines of 33, 33 and 31; at 640, 578 px, two of 49 and
+ * 48 — never the own-box scroller it was. Without an address the page is its lock hash, a hash.
  */
-function AddressIdentity({ value }: { value: string }) {
+function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
   const [copyState, setCopyState] = useState('Copy address');
   return (
     <span className="flex min-w-0 items-start gap-2">
-      <HexCode
-        value={value}
-        truncate={false}
-        copyable={false}
-        variant="inherit"
-        className="min-w-0"
-      />
+      <HeadId value={value} kind={kind} />
       <button
         aria-label={copyState}
         title={copyState}
@@ -149,7 +146,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const address = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
-    refetchInterval: POOL_POLL_INTERVAL_MS,
+    // R11: an id that is not one never becomes one; its 400 is not polled
+    refetchInterval: (query) =>
+      isBadRequestApiError(query.state.error) ? false : POOL_POLL_INTERVAL_MS,
   });
   const lockHash = address.data?.lockScriptHash;
   const holdings = useQuery({
@@ -236,22 +235,34 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       />
     );
   }
+  if (!a && isBadRequestApiError(address.error)) {
+    return <NotFoundPage notAnId={{ kind: 'address', reason: address.error.apiMessage }} />;
+  }
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
-        {!a && address.isLoading ? (
-          <DetailSkeleton />
+        {!a && address.error ? (
+          <ReadFailure what="address" error={address.error} />
         ) : !a ? (
-          <AddressLoadState label="address" error={address.error} loading={false} />
+          <DetailSkeleton />
         ) : (
           <DetailLayout
-            // C13: the page is named by its short address; the full one and its copy are beneath.
-            title={shortName(a.address ?? a.lockScriptHash)}
+            // C13: the page is named by its short address (U-09: an h1 is the head size); the full
+            // one and its copy are beneath.
+            title={
+              a.address ? shortenAddress(a.address, 'head') : shortenHash(a.lockScriptHash, 'head')
+            }
             documentTitle={[
               a.address ? titleAddress(a.address) : titleHash(a.lockScriptHash),
               'address',
             ]}
-            identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
+            identity={
+              a.address ? (
+                <AddressIdentity value={a.address} kind="address" />
+              ) : (
+                <AddressIdentity value={a.lockScriptHash} kind="hash" />
+              )
+            }
             // An address is its lock script: the page presses the script's stone (the tall rounded
             // one) of the lock script's hash, which the address read already carries; nothing else
             // is fetched for the seal. Its name plate (seals by kind, C10) opens on "Address".
@@ -274,6 +285,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       {a.lockScriptInfo?.name ?? (
                         <Hash
                           hash={a.lockScript.codeHash}
+                          size="row"
                           className="text-small"
                           copyable={false}
                         />
@@ -283,10 +295,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 )}
                 {a.lockScriptInfo?.deprecated && <span className="text-negative">Deprecated</span>}
                 <span>
-                  {holdings.data
-                    ? `${holdings.data.liveCellsCount.toLocaleString('en-US')} live cells · `
-                    : ''}
-                  {a.transactionsCount.toLocaleString('en-US')} transactions
+                  {unitNode(
+                    holdings.data
+                      ? `${formatCount(holdings.data.liveCellsCount, 'live cell')} · `
+                      : ''
+                  )}
+                  {unitNode(formatCount(a.transactionsCount, 'transaction'))}
                 </span>
               </span>
             }
@@ -344,7 +358,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <AddressLoadState
                 label="holdings and balance partition"
                 error={holdings.error}
-                loading={holdings.isLoading}
+                read={holdings}
               />
             )}
             {a.pendingSummary !== null && a.pendingSummary.txCount > 0 && (
@@ -353,7 +367,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 className="text-text-dim text-small flex flex-wrap items-baseline gap-3"
               >
                 <span>Unconfirmed</span>
-                <span>{a.pendingSummary.txCount} tx</span>
+                <span>{a.pendingSummary.txCount.toLocaleString('en-US')} tx</span>
                 {BigInt(a.pendingSummary.capacityDelta) !== BigInt(0) && (
                   <span>
                     <ExactCkb shannons={BigInt(a.pendingSummary.capacityDelta)} wrap /> pending
@@ -363,7 +377,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             )}
             {holdings.data && <AddressHoldingsSection holdings={holdings.data} />}
             {names.error ? (
-              <AddressLoadState label=".cell named rights" error={names.error} loading={false} />
+              <AddressLoadState label=".cell named rights" error={names.error} read={names} />
             ) : (
               names.data &&
               names.data.data.length > 0 && (
@@ -376,7 +390,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     {names.data.data.map((n) => (
                       <div
                         key={n.identityId}
-                        className="border-base-elevated text-small flex flex-wrap justify-between gap-2 border-b py-2"
+                        className="border-row-rule text-small flex flex-wrap justify-between gap-2 border-b py-2"
                       >
                         <Link
                           href={getIdentityItemDetailHref('dotcell', n.identityId)}
@@ -385,9 +399,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           {n.name}
                         </Link>
                         <span className="text-text-dim">
-                          {n.expiredAt === null
-                            ? 'Expiry unavailable'
-                            : `expires ${formatUtc8Date(n.expiredAt * 1000)}`}
+                          {unitNode(
+                            n.expiredAt === null
+                              ? 'Expiry unavailable'
+                              : `expires ${formatUtc8Date(n.expiredAt * 1000)}`
+                          )}
                         </span>
                       </div>
                     ))}
@@ -405,7 +421,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               )
             )}
             {fiber.error ? (
-              <AddressLoadState label="Fiber channels" error={fiber.error} loading={false} />
+              <AddressLoadState label="Fiber channels" error={fiber.error} read={fiber} />
             ) : (
               fiber.data &&
               fiber.data.length > 0 && (
@@ -419,16 +435,21 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   {fiber.data.map((c) => (
                     <div
                       key={c.channelId}
-                      className="border-base-elevated text-small flex flex-wrap justify-between gap-3 border-b py-3"
+                      className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
                       <Link href={`/fiber/channels/${c.channelId}`}>
-                        <Hash hash={c.channelId} className="text-small" copyable={false} />
+                        <Hash
+                          hash={c.channelId}
+                          size="row"
+                          className="text-small"
+                          copyable={false}
+                        />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
                           <Link href={`/address/${p}`} key={p}>
-                            <Hash hash={p} copyable={false} className="text-small" />
+                            <Hash hash={p} size="row" copyable={false} className="text-small" />
                           </Link>
                         ))}
                       </span>
@@ -449,11 +470,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <AddressStaleNotice error={cells.error} label="live cells" />
               )}
               {/* The Address board: views on the left, activity filters on the right of one row. */}
-              <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+              <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
                 <div
                   role="group"
                   aria-label="History views"
-                  className="flex flex-wrap gap-x-6 gap-y-1"
+                  className="flex flex-wrap gap-x-6 gap-y-1 max-md:gap-x-4"
                 >
                   {(
                     [
@@ -468,7 +489,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       aria-pressed={tab === id}
                       onClick={() => setTab(id)}
                       className={cn(
-                        'text-section flex h-11 items-center gap-2 border-b-2 font-medium',
+                        'text-section max-md:text-body flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5',
                         tab === id
                           ? 'border-jade text-text-bright'
                           : 'text-text-dim border-transparent'
@@ -476,17 +497,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     >
                       {label}
                       {id === 'activities' && activitiesCount.data !== undefined && (
-                        <span className="text-text-dim text-small font-normal">
+                        <span className="text-text-dim text-small max-md:text-meta font-normal">
                           {activitiesCount.data.toLocaleString('en-US')}
                         </span>
                       )}
                       {id === 'transactions' && (
-                        <span className="text-text-dim text-small font-normal">
+                        <span className="text-text-dim text-small max-md:text-meta font-normal">
                           {a.transactionsCount.toLocaleString('en-US')}
                         </span>
                       )}
                       {id === 'cells' && holdings.data && (
-                        <span className="text-text-dim text-small font-normal">
+                        <span className="text-text-dim text-small max-md:text-meta font-normal">
                           {holdings.data.liveCellsCount.toLocaleString('en-US')}
                         </span>
                       )}
@@ -504,7 +525,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       // Exact or none: "All" is the address's total, a filter 0 or 1, else no number.
                       const count: number | 'many' | undefined =
                         value === 'all' ? activitiesCount.data : page && chipCount(page);
-                      const empty = count === 0;
+                      // An empty filter says so with its "0", in the dim ink of every other chip:
+                      // a count of nothing is a datum, never the ghost (R4).
                       return (
                         <button
                           key={value}
@@ -515,12 +537,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             activityPage.reset();
                           }}
                           className={cn(
-                            'text-small rounded border px-2.5 py-1.5',
+                            'text-small border px-2.5 py-1.5',
                             filter === value
                               ? 'border-base-border bg-base-elevated text-text-bright'
-                              : empty
-                                ? 'border-base-border-subtle text-text-ghost'
-                                : 'border-base-border-subtle text-text-dim'
+                              : 'border-base-border-subtle text-text-dim'
                           )}
                         >
                           {label}
@@ -554,7 +574,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           cellPage.reset();
                         }}
                         className={cn(
-                          'text-small flex items-center gap-1.5 rounded border px-2.5 py-1.5',
+                          'text-small flex items-center gap-1.5 border px-2.5 py-1.5',
                           cellClass === c.key
                             ? 'border-base-border bg-base-elevated text-text-bright'
                             : 'border-base-border-subtle text-text-dim'
@@ -599,11 +619,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     />
                   </>
                 ) : (
-                  <AddressLoadState
-                    label="activities"
-                    error={activities.error}
-                    loading={activities.isLoading}
-                  />
+                  <AddressLoadState label="activities" error={activities.error} read={activities} />
                 ))}
               {tab === 'transactions' &&
                 (transactions.data ? (
@@ -625,7 +641,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <AddressLoadState
                     label="transactions"
                     error={transactions.error}
-                    loading={transactions.isLoading}
+                    read={transactions}
                   />
                 ))}
               {tab === 'cells' &&
@@ -647,11 +663,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     />
                   </>
                 ) : (
-                  <AddressLoadState
-                    label="live cells"
-                    error={cells.error}
-                    loading={cells.isLoading}
-                  />
+                  <AddressLoadState label="live cells" error={cells.error} read={cells} />
                 ))}
             </section>
           </DetailLayout>

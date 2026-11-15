@@ -7,9 +7,11 @@ export interface CapacityHistoryProps {
   subject: string;
   /** The collection's weekly activity, or why there is none to draw here. */
   weekly: CollectionInsights['weeklyActivity'] | { unavailable: string };
+  /** PB-12: the collection's class (object or identity), whose colour its bars are drawn in. */
+  assetClass: 'objects' | 'identities';
 }
 /** Adapt the canonical capacity series to the same range, axis and cursor as token history. */
-export function CapacityHistory({ history, subject, weekly }: CapacityHistoryProps) {
+export function CapacityHistory({ history, subject, weekly, assetClass }: CapacityHistoryProps) {
   if (history.source !== 'indexedChainTimeUtc8')
     throw new Error(`${subject}: unsupported capacity calendar ${history.source}`);
   const daily = history.data.map((point) => {
@@ -35,6 +37,7 @@ export function CapacityHistory({ history, subject, weekly }: CapacityHistoryPro
         }
         weeklyNoun="transfers"
         completeThrough={history.completeThrough}
+        assetClass={assetClass}
       />
     </section>
   );

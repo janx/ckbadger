@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { usePinWord } from '@/hooks/usePinWord';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 export interface ReadoutRowProps {
   /** The accessible name of the readout (it is a polite live region). */
@@ -43,7 +44,7 @@ export function ReadoutRow({ label, pinned, idle, hint = true, children }: Reado
       role="status"
       aria-live="polite"
       aria-label={label}
-      className="border-base-border-subtle text-small flex items-baseline justify-between gap-3 border-t pt-2"
+      className="border-row-rule text-small flex items-baseline justify-between gap-3 border-t pt-2"
     >
       {/* Hover never moves layout: an idle sentence stays reserved under the reading as an
           invisible ghost in the same grid cell (generated content, so it is neither the reading's
@@ -60,11 +61,11 @@ export function ReadoutRow({ label, pinned, idle, hint = true, children }: Reado
       >
         <span className="[grid-area:1/1]">
           {empty ? (
-            <span className="text-text-dim">{idleWords}</span>
+            <span className="text-text-dim">{unitNode(idleWords)}</span>
           ) : (
             <>
               {pinned && <span className="text-text-dim">{pinWord} </span>}
-              {children}
+              {unitNode(children)}
             </>
           )}
         </span>

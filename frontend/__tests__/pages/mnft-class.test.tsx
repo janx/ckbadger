@@ -1,7 +1,9 @@
-import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { act, render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { onlineManager } from '@tanstack/react-query';
 import Page from '@/app/classes/[classId]/client-page';
 import { api } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 // An m-NFT class id is its issuer id (20 bytes) and a 4-byte class index (lane E draws it).
 const mockClassId = '0x1111111111111111111111111111111111111111' + '00000003';
@@ -64,11 +66,26 @@ it('keeps a loading state until the collection is read', () => {
   render(<Page classId={mockClassId} />);
   expect(screen.getByRole('status')).toHaveTextContent('Loading collection');
 });
+// Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+// without fetching, so isLoading is false: the page said "collection unavailable." while it
+// waited.
+it('keeps its loading state while the read is paused offline, then shows the class once back online', async () => {
+  onlineManager.setOnline(false);
+  try {
+    render(<Page classId={mockClassId} />);
+    expect(await screen.findByText('Loading collection…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText(/collection unavailable/)).toBeNull();
+    act(() => onlineManager.setOnline(true));
+    expect(await screen.findByRole('heading', { name: 'Test mNFT Class' })).toBeInTheDocument();
+  } finally {
+    onlineManager.setOnline(true);
+  }
+});
 it('reports read errors without generating a placeholder collection', async () => {
   vi.mocked(api.getObjectCollection).mockRejectedValue(new Error('Not found'));
   render(<Page classId={mockClassId} />);
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Could not load collection: Not found'
+    'Could not read this collection: Not found'
   );
 });
 it('renders exact class counts and configured permissions, not legacy bit meanings', async () => {
@@ -89,7 +106,10 @@ it('retains class and issuer raw evidence and separate full transaction history'
   expect(
     [...evidence.querySelectorAll('[data-segment]')].map((s) => s.getAttribute('data-target'))
   ).toEqual(['field-0', 'field-1']);
-  expect(within(evidence).getByText('Test Issuer · 5 classes · 2 sets')).toBeInTheDocument();
+  // each count is one unit (B3 round 4, task 3): the line is read across their spans
+  expect(
+    within(evidence).getByText(fullText('Test Issuer · 5 classes · 2 sets'))
+  ).toBeInTheDocument();
   expect(within(evidence).getByText('100 · planned 100')).toBeInTheDocument();
   expect(within(evidence).getByText('not recorded')).toBeInTheDocument();
   // Main.dc.html: "Recent activity" opens the full feed at its transactions.

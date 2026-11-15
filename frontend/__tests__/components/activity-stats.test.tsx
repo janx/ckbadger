@@ -102,7 +102,8 @@ describe('ActivityStats', () => {
       r.getAttribute('data-rank-row')
     );
     expect(labels).toEqual(['script', 'transfer', 'identity', 'dao']);
-    expect(types).toHaveTextContent('Script call81.4%');
+    // CH-14 (re-pinned): the one percentage of a count in the total, two decimals (was 81.4%)
+    expect(types).toHaveTextContent('Script call81.45%');
     expect(types).not.toHaveTextContent('Token');
     expect(within(types).getByRole('link', { name: /Script call/ })).toHaveAttribute(
       'href',
@@ -116,15 +117,15 @@ describe('ActivityStats', () => {
     expect(scripts).toHaveTextContent('By script, share of 11,300 calls');
     const rows = [...scripts.querySelectorAll('[data-rank-row]')];
     expect(rows).toHaveLength(6);
-    expect(rows[0]).toHaveTextContent('.bit Time Index State48.5%');
-    expect(rows[5]).toHaveTextContent('3 others0.1%');
+    expect(rows[0]).toHaveTextContent('.bit Time Index State48.50%');
+    expect(rows[5]).toHaveTextContent('3 others0.10%');
     expect(rows[5].querySelector('a')).toBeNull();
     expect(within(scripts).getByRole('link', { name: /Bitcoin SPV Type Lock/ })).toHaveAttribute(
       'href',
       '/mainnet/scripts/Bitcoin%20SPV%20Type%20Lock'
     );
     expect(
-      within(scripts).getByRole('link', { name: 'By script, share of 11,300 calls' })
+      within(scripts).getByRole('link', { name: 'By script, share of 11,300\u00a0calls' })
     ).toHaveAttribute('href', '/mainnet/charts/most-utilized-scripts');
     // No donuts and no placeholder.
     expect(screen.queryByText(/Hover for details/)).not.toBeInTheDocument();

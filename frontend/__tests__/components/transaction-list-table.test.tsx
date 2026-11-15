@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
@@ -82,6 +84,55 @@ const cellbase: Transaction = {
   activity: null,
   pays: { number: 20829764, hash: '0x' + '64'.repeat(32) },
 };
+
+/** Every class of an element and its descendants that fades it (`opacity-30`, `opacity-[.55]`). */
+function fading(element: Element): string[] {
+  return [element, ...element.querySelectorAll('*')].flatMap((e) =>
+    [...e.classList].filter((c) => /(^|:)opacity-(?!0$|100$)/.test(c))
+  );
+}
+
+// UI review 2026-11-14 (DY-02, U-08, ruling R4): "set back" is the dim ink on every word, never
+// element opacity (55 % put the hash at 3.6:1 and "reward 559.51…" at 2.1:1 by day, and turned
+// the stone pink, an ink the seals do not have); the stone keeps its own state's ink at full
+// strength — a cellbase is in force, so it stays the pressed cinnabar.
+describe('a cellbase row set back (R4, DY-02)', () => {
+  const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is the quiet variant: every word dim, nothing faded, the stone pressed at full strength', () => {
+    render(<TransactionListTable transactions={[scriptCall, cellbase]} />);
+    const [, call, base] = within(screen.getByRole('table')).getAllByRole('row');
+    expect(base).toHaveClass('quiet');
+    expect(call).not.toHaveClass('quiet');
+    expect(fading(base)).toEqual([]);
+    const stone = base.querySelector('[data-seal-state]') as HTMLElement;
+    expect(stone).toHaveAttribute('data-seal-state', 'pressed');
+    expect(fading(stone)).toEqual([]);
+  });
+
+  it('sets the phone row back the same way', () => {
+    atContainerWidth(358);
+    render(<TransactionListTable transactions={[cellbase]} />);
+    const item = screen.getByTestId('transaction-row-mobile').closest('[role="listitem"]')!;
+    expect(item).toHaveClass('quiet');
+    expect(fading(item)).toEqual([]);
+    expect(item.querySelector('[data-seal-state]')).toHaveAttribute('data-seal-state', 'pressed');
+  });
+
+  it('draws the quiet variant in globals.css: the dim ink on every word, the ghost and SVG kept', () => {
+    const rule = css.match(/\.quiet,\s*\.quiet :where\(([^)]*\))\)\s*\{([^}]*)\}/);
+    expect(rule, '.quiet rule').not.toBeNull();
+    // the exclusions: a seal (its SVG paints by attribute) and the padding zeros
+    expect(rule![1]).toContain('svg');
+    expect(rule![1]).toContain('.text-text-ghost');
+    expect(rule![2]).toContain('color: var(--c-text-dim)');
+    expect(rule![2]).not.toMatch(/opacity|filter/);
+  });
+});
 
 describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => {
   it('uses the board columns, with the bar scales in the header', () => {
@@ -172,7 +223,8 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   it('sets cellbase rows back and shows the reward they pay, grey, outside every total (D5)', () => {
     render(<TransactionListTable transactions={[cellbase]} />);
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
-    expect(row).toHaveClass('opacity-[.55]');
+    // R4 (re-pinned on purpose): set back is the quiet variant, not 55 % opacity
+    expect(row).toHaveClass('quiet');
     expect(row).toHaveTextContent('Cellbase');
     const value = row.querySelector('[data-reward]')!;
     expect(value).toHaveTextContent(/^reward 559\.61739927$/);
@@ -244,6 +296,21 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
   });
 
+  // CH-14 (the thousands hunt): a count of four digits or more is grouped, as every count is
+  // ('1234 → 5678' read beside '2,555' elsewhere)
+  it('groups a cells count of four digits or more', () => {
+    render(
+      <TransactionListTable
+        transactions={[{ ...transfer, inputsCount: 1234, outputsCount: 5678 }]}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const heads = within(table).getAllByRole('columnheader');
+    const at = heads.findIndex((th) => th.textContent === 'Cells');
+    const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[at];
+    expect(cell).toHaveTextContent(/^1,234 → 5,678$/);
+  });
+
   // Table-rows T5: one bright thing per row, the key cell at body. The 18 px line keeps the row
   // at its one-line height (a 13 px line is 20.8 px and would make it 45.8).
   it('leads each row with its hash at 13 px bright on an 18 px line; a cellbase keeps its dim row (T5)', () => {
@@ -258,8 +325,8 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
       expect(hash).not.toHaveClass('text-small');
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/${tx.hash}`);
     }
-    expect(base).toHaveClass('opacity-[.55]');
-    expect(call).not.toHaveClass('opacity-[.55]');
+    expect(base).toHaveClass('quiet');
+    expect(call).not.toHaveClass('quiet');
   });
 });
 
@@ -290,8 +357,13 @@ describe('TransactionListTable row stones', () => {
       expect(seal).toHaveClass('-my-[3px]');
       expectBefore(seal, within(tr).getByTitle(txs[i].hash).closest('a')!);
     });
-    // a cellbase row is set back, its stone with it (still pressed: it is in a block)
-    expect(rows[2]).toHaveClass('opacity-[.55]');
+    // a cellbase row is set back in the dim ink; its stone keeps its own state, pressed at full
+    // strength: it is in a block (R4, re-pinned on purpose: the row was faded to 55 %)
+    expect(rows[2]).toHaveClass('quiet');
+    expect(rows[2].querySelector('[data-seal-state]')).toHaveAttribute(
+      'data-seal-state',
+      'pressed'
+    );
   });
 
   it('leads every phone row with its stone in its own column, not overhanging', () => {
@@ -330,7 +402,7 @@ describe('TransactionListTable row stones', () => {
         { form: 'row', height: ROW_SEAL.tx.height, state: 'pressed', ...SEAL_INKS }
       );
       expect(seal.innerHTML).not.toBe(parsed(counted.svg));
-      expect(row).toHaveTextContent(width === null ? '0 → 1' : '0 → 1 cells');
+      expect(row).toHaveTextContent(width === null ? '0 → 1' : '0 → 1 cell');
       unmount();
     }
   });
@@ -349,17 +421,18 @@ describe('TransactionListTable row stones', () => {
     expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
-    // "0x" and 8 digits, the ellipsis, 6 digits: 19 characters of JetBrains Mono at 13 px (7.8)
+    // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
+    // characters of JetBrains Mono at 13 px (7.8; it was 19 with three dots)
     const [, row] = within(table).getAllByRole('row');
     const shown = within(row).getByTitle(scriptCall.hash);
-    expect(shown).toHaveTextContent(/^0x00de304b\.\.\.25cbbc$/);
+    expect(shown).toHaveTextContent(/^0x00de304b…25cbbc$/);
     const chars = shown.textContent!.length;
-    expect(chars).toBe(19);
-    // the stone, the hash and the 16 px gap fit the 221 px; one more character would not
+    expect(chars).toBe(17);
+    // the stone, the hash and the 16 px gap fit the 221 px with 15.9 px to spare; the column
+    // keeps its 221 so the table keeps its 1,230 px and changes form where it did
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(220.7, 6);
-    expect(used).toBeLessThanOrEqual(221);
-    expect(used + 7.8).toBeGreaterThan(221);
+    expect(used).toBeCloseTo(205.1, 6);
+    expect(221 - used).toBeCloseTo(15.9, 6);
     // What it did keeps the longest DAO headline whole beside its 16 px mark and two 8 px gaps
     expect(16 + 8 + 'DAO Withdraw Complete'.length * 7.2 + 8 + 16).toBeLessThanOrEqual(widths[2]);
     // Size: its 56 px track, the bar's 10 px gap, a 5-digit scale's figure (5 ch at 12 px) and the
@@ -367,12 +440,15 @@ describe('TransactionListTable row stones', () => {
     expect(widths[6] - (56 + 10 + 5 * 7.2 + 16)).toBeCloseTo(3, 6);
   });
 
-  // Old issue C: the table and the phone row show the same 19 characters of the hash.
-  it('shows the hash 10 + 6 in the table and in the phone row alike', () => {
+  // U-09 (re-pinned; old issue C had the table and the phone row alike at 10 + 6): the size is
+  // the form's, the row size in the table and the tight size in the phone row.
+  it('shows the hash at the row size in the table and the tight size in the phone row', () => {
     for (const width of [1232, 608, 358]) {
       atContainerWidth(width);
       const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
-      expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(/^0x00de304b\.\.\.25cbbc$/);
+      expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(
+        width === 1232 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
+      );
       expect(screen.queryByRole('table') === null).toBe(width < 1230);
       unmount();
       vi.unstubAllGlobals();
@@ -406,7 +482,7 @@ describe('TransactionListTable row stones', () => {
     const started = performance.now();
     render(<TransactionListTable transactions={many} />);
     const elapsed = performance.now() - started;
-    console.info(`50 transaction rows with their stones: ${elapsed.toFixed(1)} ms`);
+    console.info(`50\u00a0transaction rows with their stones: ${elapsed.toFixed(1)} ms`);
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(50);
     rows.forEach((tr, i) =>
@@ -437,9 +513,10 @@ describe('TransactionListTable phone row (board L2)', () => {
       {
         key: 'identity',
         tone: 'head',
-        left: '0x00de304b...25cbbc',
+        left: '0x00de…cbbc',
         // Lane P: the block's UTC+8 date; its age is the date's hover.
-        right: expect.stringMatching(/^#20,829,775 · \d{4}-\d\d-\d\d$/),
+        // PA-22 (re-pinned): the live list's row says its age (it was the date)
+        right: expect.stringMatching(/^#20,829,775 · \d+[smhdy] ago$/),
       },
       {
         key: 'what',
@@ -453,17 +530,17 @@ describe('TransactionListTable phone row (board L2)', () => {
         tone: 'quiet',
         // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB").
         left: '0 CKB · fee 0.00030000 CKB',
-        right: '3 → 3 cells · 903 B · 1,704,957 cycles',
+        right: '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
       },
     ]);
     expect(call.querySelector('[data-line="what"] .truncate')).toBeNull();
     // A cellbase pays its reward on the what line; its fee is a quiet figure.
     expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0xc89d2d25...9a2cd7', expect.stringMatching(/^#20,829,775 · /)],
+      ['identity', '0xc89d…2cd7', expect.stringMatching(/^#20,829,775 · /)],
       ['what', 'Cellbase pays #20,829,764 · reward 559.61739927 CKB', null],
-      ['figures', '0 → 1 cells · 360 B · fee 0 CKB', '0 cycles'],
+      ['figures', '0 → 1\u00a0cell · 360 B · fee 0 CKB', '0 cycles'],
     ]);
-    expect(base.closest('[role="listitem"]')).toHaveClass('opacity-[.55]');
+    expect(base.closest('[role="listitem"]')).toHaveClass('quiet');
   });
 
   it('is two lines at 608 px: value and fee join what it did, the figures take the right edge', () => {
@@ -471,11 +548,11 @@ describe('TransactionListTable phone row (board L2)', () => {
     render(<TransactionListTable transactions={[scriptCall]} />);
     const [call] = screen.getAllByTestId('transaction-row-mobile');
     expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0x00de304b...25cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      ['identity', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · /)],
       [
         'what',
         'Script call · .bit Time Index State · .bit Time Info · 0 CKB · fee 0.00030000 CKB',
-        '3 → 3 cells · 903 B · 1,704,957 cycles',
+        '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
       ],
     ]);
   });

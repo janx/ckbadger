@@ -3,13 +3,21 @@ import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ownerRun, ownerRuns } from '@/lib/identity-term';
-import { formatUtc8Date, truncateHash } from '@/lib/utils';
+import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
+import { countNoun } from '@/lib/format-count';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 type DotcellProtocol = Extract<ItemProtocol, { kind: 'dotcell' }>;
 
+/**
+ * A named party in a line or an owner's step: its address (else its lock hash) at the row size
+ * (U-09, PB-19: the role cards, the owners and the metrics of a name write it at one length), or
+ * the 20-byte prefix whole when no lock was resolved.
+ */
 function partyShort(party: DotCellPartyRef): string {
-  return party.lockHash ? truncateHash(party.address ?? party.lockHash, 13, 8) : party.hashPrefix;
+  if (!party.lockHash) return party.hashPrefix;
+  return party.address ? shortenAddress(party.address, 'row') : shortenHash(party.lockHash, 'row');
 }
 
 /**
@@ -58,7 +66,7 @@ export function DotcellRoles({
       label: 'Owner · holds the name',
       party: current.decoded.owner,
       since: owner.since.cell.timestamp,
-      note: `this address holds ${ownerNameCount.toLocaleString('en-US')} ${ownerNameCount === 1 ? 'cell' : 'cells'}`,
+      note: `this address holds ${ownerNameCount.toLocaleString('en-US')} ${countNoun(ownerNameCount, 'cell', 'cells')}`,
       accent: true,
     },
     {
@@ -83,16 +91,16 @@ export function DotcellRoles({
             role="group"
             aria-label={c.label}
             className={cn(
-              'flex min-w-0 flex-col gap-1 rounded-lg border px-4 py-3.5 [overflow-wrap:anywhere]',
+              'flex min-w-0 flex-col gap-1 border px-4 py-3.5 [overflow-wrap:anywhere]',
               c.accent ? 'border-identity/50' : 'border-base-border'
             )}
           >
             <span className="text-text-dim text-small">{c.label}</span>
             <span>
-              <PartyLine party={c.party} size={14} />
+              <PartyLine party={c.party} size="row" />
             </span>
             <span className="text-text-dim text-small">
-              since {formatUtc8Date(c.since)} · {c.note}
+              since <Utc8Date timestamp={c.since} /> · {c.note}
             </span>
           </div>
         ))}
@@ -107,12 +115,12 @@ export function DotcellRoles({
               key={`${run.owner}:${run.since.cell.txHash}`}
               data-owner-step={step}
               className={cn(
-                'flex min-w-0 flex-1 flex-col gap-0.5 rounded border px-3 py-2.5',
+                'flex min-w-0 flex-1 flex-col gap-0.5 border px-3 py-2.5',
                 step === 'now' ? 'border-identity/60' : 'border-base-border border-dashed'
               )}
             >
               <span className="text-text-dim text-meta">
-                {formatUtc8Date(run.since.cell.timestamp)}
+                <Utc8Date timestamp={run.since.cell.timestamp} />
                 {step ? ` · ${step}` : ''}
               </span>
               <span

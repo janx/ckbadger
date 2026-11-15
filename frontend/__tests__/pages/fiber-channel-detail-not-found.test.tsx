@@ -19,11 +19,11 @@ describe('Fiber channel entity error routing', () => {
       )
     );
     render(<FiberChannelDetailPage />);
-    // the checked endpoint stands in the facts (the eyebrow shows the route, which here reads the same)
-    expect(
-      (await screen.findAllByText(`/fiber/channels/${id}`)).some((el) => el.closest('.error-facts'))
-    ).toBe(true);
-    expect(screen.getByText('no fiber channel at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('no fiber channel with this id.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the id shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/fiber/channels/${id.slice(0, 10)}…${id.slice(-6)}`
+    );
   });
 
   it('keeps a source invariant failure distinct from a missing channel', async () => {
@@ -37,6 +37,6 @@ describe('Fiber channel entity error routing', () => {
     );
     render(<FiberChannelDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('channel index mismatch');
-    expect(screen.queryByText('no fiber channel at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no fiber channel with this id.')).not.toBeInTheDocument();
   });
 });

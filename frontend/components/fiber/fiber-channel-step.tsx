@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { TxStructure, type TxContinuity } from '@/components/transaction/tx-structure';
 import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
@@ -10,6 +11,8 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
+import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 
 export interface FiberStepBox {
   head: ReactNode;
@@ -31,8 +34,6 @@ interface Props {
   carries?: { index: number; role: string };
   box: FiberStepBox;
 }
-
-const short = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 
 function codeHashesOf(tx: TransactionDetail | undefined): string[] {
   if (!tx) return [];
@@ -84,25 +85,25 @@ export function FiberChannelStep({
           style={inkStyle(BOARD_INKS.link)}
           title={txHash}
         >
-          {short(txHash)}
+          <ShortId value={txHash} kind="hash" size="row" />
         </Link>
         {' · '}
         <Link href={`/blocks/${blockNumber}`} className="hover:text-jade">
           {formatBlockNumber(blockNumber)}
         </Link>
-        {` · ${formatUtc8DateTime(timestamp)}`}
+        {unitNode(` · ${formatUtc8DateTime(timestamp)}`)}
         {epoch !== undefined && ` · epoch ${stageEpoch(epoch, blockNumber)}`}
       </span>
     </h3>
   );
   let body: ReactNode;
-  if (transaction.isPending || (codeHashes.length > 0 && lookup.isPending)) {
+  if (isAwaited(transaction) || isAwaited(lookup)) {
     body = (
       <p className="text-text-dim text-small">Loading the {title.toLowerCase()} transaction…</p>
     );
   } else if (transaction.error || lookup.error) {
     body = (
-      <p role="alert" className="text-rouge text-small break-all">
+      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
         {title} transaction unavailable: {String(transaction.error ?? lookup.error)}
       </p>
     );
@@ -120,14 +121,14 @@ export function FiberChannelStep({
       : -1;
     if (consumes && spentIndex < 0) {
       body = (
-        <p role="alert" className="text-rouge text-small break-all">
+        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
           {title} transaction {txHash} does not spend the {consumes.role} cell {consumes.txHash}:
           {consumes.index}
         </p>
       );
     } else if (carries && carries.index >= tiles.outputs.length) {
       body = (
-        <p role="alert" className="text-rouge text-small break-all">
+        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
           {title} transaction {txHash} has no output {carries.index} to carry the channel
         </p>
       );
@@ -164,7 +165,7 @@ export function FiberChannelStep({
             hideGroups
           />
           <div
-            className="text-small flex flex-col items-start gap-1 rounded border border-dashed px-3 py-2.5"
+            className="text-small flex flex-col items-start gap-1 border border-dashed px-3 py-2.5"
             style={{ borderColor: BOARD_INKS.quiet }}
           >
             <span className="text-text-bright">{box.head}</span>

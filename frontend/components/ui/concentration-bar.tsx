@@ -1,11 +1,12 @@
 'use client';
 
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
-import { fade } from '@/lib/palette';
-import { formatPercent } from '@/lib/ckb-decimal';
+import { CLASS_COLORS, CLASS_KEYS, type AssetClass } from '@/lib/design-tokens';
+import { color, fade, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
+import { percentOf } from '@/lib/format-unit';
 
 export interface ConcentrationGroup {
   label: string;
@@ -25,7 +26,8 @@ export interface ConcentrationBarProps {
   labelsInside?: boolean;
 }
 
-const OPACITY = [1, 0.7, 0.45, 0.22];
+/** The ranked groups' fills: the class colour at these alphas over the page ground. */
+export const CONCENTRATION_STEPS = [1, 0.7, 0.45, 0.22] as const;
 /** The in-segment words: 12 px with 10 px padding each side. */
 const LABEL_PX = 12;
 const LABEL_PAD = 10;
@@ -44,8 +46,11 @@ export function ConcentrationBar({
   labelsInside = false,
 }: ConcentrationBarProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  if (groups.length > OPACITY.length)
-    throw new Error(`${label}: at most ${OPACITY.length} ranked groups, got ${groups.length}`);
+  const { resolved: theme } = useTheme();
+  if (groups.length > CONCENTRATION_STEPS.length)
+    throw new Error(
+      `${label}: at most ${CONCENTRATION_STEPS.length} ranked groups, got ${groups.length}`
+    );
   const spans = partitionSpans(
     groups.map((g) => g.value),
     total,
@@ -53,7 +58,7 @@ export function ConcentrationBar({
     100,
     label
   );
-  const share = (g: ConcentrationGroup) => `${formatPercent(g.value, total)}%`;
+  const share = (g: ConcentrationGroup) => percentOf(g.value, total);
   const words = (g: ConcentrationGroup, i: number) =>
     i === 0 ? `${g.label} ${share(g)}` : `${g.label} · ${share(g)}`;
   const fits = (text: string, i: number) =>
@@ -67,10 +72,10 @@ export function ConcentrationBar({
     <div ref={ref} className="min-w-0 space-y-2">
       <div
         role="img"
-        aria-label={`${label}: ${groups.map((g) => `${g.label} ${formatPercent(g.value, total)}%`).join(', ')}`}
+        aria-label={`${label}: ${groups.map((g) => `${g.label} ${share(g)}`).join(', ')}`}
         className={cn(
           'flex w-full gap-0.5 overflow-hidden',
-          labelsInside ? 'text-small h-[28px] rounded tabular-nums' : 'h-3 rounded-full'
+          labelsInside ? 'text-small h-[28px] tabular-nums' : 'h-3'
         )}
       >
         {groups.map((g, i) =>
@@ -78,13 +83,12 @@ export function ConcentrationBar({
             <span
               key={g.label}
               data-segment={g.label}
-              className={cn(
-                'flex items-center overflow-hidden whitespace-nowrap rounded px-2.5',
-                OPACITY[i] >= 0.7 ? 'text-base-bg' : 'text-text-bright'
-              )}
+              className="flex items-center overflow-hidden whitespace-nowrap px-2.5"
               style={{
                 width: `${spans[i].width}%`,
-                backgroundColor: withAlpha(CLASS_COLORS[assetClass], OPACITY[i]),
+                backgroundColor: withAlpha(CLASS_COLORS[assetClass], CONCENTRATION_STEPS[i]),
+                // DY-03: the words take the ink the fill's own luminance calls for, in this theme.
+                color: color(inkOnFill(theme, CLASS_KEYS[assetClass], CONCENTRATION_STEPS[i]).ink),
               }}
             >
               {inside[i] && <span>{inside[i]}</span>}
@@ -95,7 +99,7 @@ export function ConcentrationBar({
               data-segment={g.label}
               style={{
                 width: `${spans[i].width}%`,
-                opacity: OPACITY[i],
+                opacity: CONCENTRATION_STEPS[i],
                 backgroundColor: CLASS_COLORS[assetClass],
               }}
             />

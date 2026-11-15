@@ -13,6 +13,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { fade } from '@/lib/palette';
 import { cn } from '@/lib/utils';
+import { formatCount, countNoun } from '@/lib/format-count';
 export type HexField = ByteRange & { color?: string };
 
 export interface HexMapProps {
@@ -91,7 +92,7 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
               title={`Byte ${offsetBase + i}: 0x${byte}${owners.length ? ` · ${owners.map((f) => f.label).join(', ')}` : ''}`}
               {...target(own)}
               className={cn(
-                'text-small min-w-[2.5ch] rounded-sm px-0.5 py-1 tabular-nums',
+                'text-small min-w-[2.5ch] px-0.5 py-1 tabular-nums',
                 highlighted ? 'bg-base-elevated text-text-bright' : 'text-text-dim'
               )}
               style={{ color: owners[0]?.color }}
@@ -123,7 +124,7 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
       <ReadoutRow
         label={`${subject} byte readout`}
         pinned={readout.showingPin}
-        idle={`${bytes.length} bytes · inspect a field or byte`}
+        idle={`${formatCount(bytes.length, 'byte')} · inspect a field or byte`}
       >
         {selected ? selected.description : null}
       </ReadoutRow>
@@ -171,7 +172,7 @@ function HexScaleMap({
         short: fmt(n),
         color: 'var(--c-ink-quiet)',
         quiet: true,
-        title: `${span} · no field describes ${n === 1 ? 'this byte' : 'these bytes'}`,
+        title: `${span} · no field describes ${countNoun(n, 'this byte', 'these bytes')}`,
       };
     const owners = piece.ids.map((id) => byId.get(id)!);
     const owner = owners.reduce((a, b) => (b.length < a.length ? b : a));
@@ -322,7 +323,7 @@ export function ByteScaleMap({
             paddingRight: text ? LABEL_PAD_PX : 0,
           };
           const className = cn(
-            'text-meta flex min-w-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-sm',
+            'text-meta flex min-w-0 items-center justify-center overflow-hidden whitespace-nowrap',
             on && 'outline outline-1 outline-text'
           );
           return s.target !== undefined && (onHover || onSelect) ? (
@@ -379,7 +380,7 @@ export function ByteScaleMap({
                   x={t.x}
                   y={15}
                   textAnchor={t.anchor}
-                  fill="var(--c-ink-quiet)"
+                  fill="var(--c-text-dim)"
                   className="text-meta"
                 >
                   {t.label}

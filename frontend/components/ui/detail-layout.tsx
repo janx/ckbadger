@@ -7,6 +7,7 @@ import {
   useDocumentTitle,
   type DocumentTitleProps,
 } from '@/lib/use-document-title';
+import { unitNode } from '@/components/ui/units';
 
 /** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
 const DetailTierContext = createContext<1 | 2>(1);
@@ -101,14 +102,15 @@ export function DetailLayout({
       className={cn(
         'text-text-bright break-words',
         kind === 'entity' ? 'text-entity' : 'text-index',
-        // The name plate's name is one type step smaller below md (seals by kind, C10;
-        // RESPONSIVE_LAYOUT principle 5): under the stone it has the full width, but at 30 px a
-        // short out point (19 characters, 330.6 px) or a short address (21, 365.4 px) is wider than
-        // the 328 px line at 360; at 26 px they are 286.5 and 316.7 px.
-        seal && kind === 'entity' && 'max-md:text-index'
+        // An entity's name is one type step smaller below md (seals by kind, C10; RESPONSIVE_LAYOUT
+        // principle 5): under the stone it has the full width, but at 30 px a short out point (19
+        // characters, 330.6 px) or a short address (21, 365.4 px) is wider than the 328 px line at
+        // 360; at 26 px they are 286.5 and 316.7 px. PB-06 / PA-32: every entity head takes it,
+        // with a seal or without (the uncle page, a script by its code hash).
+        kind === 'entity' && 'max-md:text-index'
       )}
     >
-      {title}
+      {unitNode(title)}
     </h1>
   );
   const head = seal ? (
@@ -156,7 +158,9 @@ export function DetailLayout({
                 className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
               >
                 <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
-                <dd className="text-text-bright min-w-0 break-words tabular-nums">{value}</dd>
+                <dd className="text-text-bright min-w-0 break-words tabular-nums">
+                  {unitNode(value)}
+                </dd>
               </div>
             ))}
           </dl>
@@ -170,7 +174,7 @@ export function DetailLayout({
         <DetailTier2>
           {tier2}
           {rawData && (
-            <details open={rawOpen} className="border-base-border-subtle border-t pt-4">
+            <details open={rawOpen} className="border-row-rule border-t pt-4">
               <summary className="text-text-dim hover:text-text text-small cursor-pointer">
                 Raw data
               </summary>

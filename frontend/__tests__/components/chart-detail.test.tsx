@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { act, createTestQueryClient, render } from '../utils/test-utils';
@@ -17,8 +18,6 @@ vi.mock('@/lib/api', () => ({
     getHardforks: vi.fn(),
     getBlocksByDay: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 vi.mock('@/components/charts/chart-small-multiple', () => ({
@@ -109,8 +108,9 @@ describe('shared chart detail', () => {
     expect(
       await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
     ).toBeInTheDocument();
-    // The head rounds a rate like the board (9.01); the exact value is its hover title.
-    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01PH/s');
+    // The head rounds a rate like the board (9.01); the exact value is its hover title. Re-pinned
+    // for CH-14: the unit bound to its figure by a no-break space.
+    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01 PH/s');
     expect(screen.getByText('/charts/hash-rate')).toBeInTheDocument();
     // R-10 (CH-27): a dated block chart's evidence names the blocks of its latest day, exactly.
     expect(api.getBlocksByDay).toHaveBeenCalledWith(response.data.at(-1)!.date);
@@ -139,7 +139,7 @@ describe('shared chart detail', () => {
     });
     render(<ChartDetail slug="hash-rate" />);
     const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
-    expect(readings).toHaveTextContent('2024-02-101,234.57PH/s');
+    expect(readings).toHaveTextContent('2024-02-101,234.57 PH/s');
     expect(screen.getByTitle('1,234.567890123456789 PH/s')).toBeInTheDocument();
     expect(screen.getByText('+1,233.57 PH/s')).toBeInTheDocument();
   });
@@ -191,6 +191,8 @@ describe('shared chart detail', () => {
   });
 
   // CH-04 (round 2): the fact names the miner in the card's head…tail form; the link keeps it all.
+  // Re-pinned for CH-03 (UI review 2026-11-14): the fact's label is "Leading miner" and the name
+  // its bright value; the ranking's link is the short form too, the full address its title.
   it('names the leading miner in short form in the fact while retaining its address link', async () => {
     const address = `ckb1${'qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj'}`;
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
@@ -210,16 +212,18 @@ describe('shared chart detail', () => {
       toDate: '2026-10-27',
     });
     render(<ChartDetail slug="miner-address-distribution" />);
-    const label = await screen.findByText('Leading miner: ckb1qzda0c…93hhsj (62.7931%)');
+    const label = await screen.findByText('Leading miner');
+    expect(label.nextElementSibling).toHaveTextContent(
+      'ckb1qzda0c…93hhsj · 41,743 blocks · 62.79%'
+    );
     // A ranked chart counts no points: its command has no args (phase 5, D10).
     const heading = screen.getByRole('heading', { name: 'Distribution' });
     expect(heading.children).toHaveLength(1);
     expect(label).toHaveClass('min-w-0', 'break-words');
     expect(label.parentElement).toHaveClass('grid-cols-1');
-    expect(screen.getByRole('link', { name: address })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${address}`
-    );
+    const link = screen.getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
+    expect(link).toHaveAttribute('title', address);
   });
 
   // --- F2 charts group: the ChartDetail board ---
@@ -261,8 +265,9 @@ describe('shared chart detail', () => {
     vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
     render(<ChartDetail slug="hash-rate" />);
     const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
-    expect(readings).toHaveTextContent('2026-10-2991.34PH/s');
-    expect(readings).toHaveTextContent('peak, 2022-06-01465.31PH/s');
+    // Re-pinned for CH-14: each figure's unit after a no-break space.
+    expect(readings).toHaveTextContent('2026-10-2991.34 PH/s');
+    expect(readings).toHaveTextContent('peak, 2022-06-01465.31 PH/s');
     // The exact values stay one hover away.
     expect(screen.getByTitle('465.31129244471372 PH/s')).toBeInTheDocument();
   });
@@ -343,7 +348,7 @@ describe('shared chart detail', () => {
     expect(screen.queryByRole('heading', { name: /^Full history/ })).toBeNull();
     const props = lastChart('Epoch durations');
     expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
-    expect(props.subtitle).toBe('Completed epochs by hours taken · 3 buckets');
+    expect(props.subtitle).toBe('Completed epochs by hours taken · 3\u00a0buckets');
     expect(props.slotBars).toBe(true);
   });
 
@@ -365,7 +370,13 @@ describe('shared chart detail', () => {
     await screen.findByRole('heading', { name: 'Distribution 6 buckets' });
     const props = lastChart('Cell size');
     expect(props.categoricalX).toBe(true);
-    expect(props.xTicks).toEqual(labels.map((label, index) => ({ index, label })));
+    // Every bucket named, in the axis' words with the unit once (re-pinned for CH-12: the API's
+    // labels, 'CKB' on each and '100k-1m').
+    expect(props.xTicks).toEqual(
+      ['< 100', '100 – 1k', '1k – 10k', '10k – 100k', '100k – 1M', '≥ 1M CKB'].map(
+        (label, index) => ({ index, label })
+      )
+    );
   });
 
   it('prints epoch numbers with thousands groups (CH-35)', async () => {
@@ -380,7 +391,8 @@ describe('shared chart detail', () => {
     });
     render(<ChartDetail slug="epoch-time-length" />);
     const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
-    expect(readings).toHaveTextContent('#15,2024.29hours');
+    // Re-pinned for CH-14: the SI symbol h, after a no-break space (was '4.29hours').
+    expect(readings).toHaveTextContent('#15,2024.29 h');
     const props = lastChart('Epoch length') as { formatLabel: (label: string) => string };
     expect(props.formatLabel('15202')).toBe('epoch #15,202');
   });
@@ -404,12 +416,15 @@ describe('shared chart detail', () => {
     expect(readings).toHaveTextContent('peak, #14,004');
     // the count is the command's args (phase 5, D10): 'full history 1,201 epochs'
     expect(screen.getByRole('heading', { name: 'Full history 1,201 epochs' })).toBeInTheDocument();
-    expect(screen.getByText('1,201 epochs')).toBeInTheDocument();
+    // Re-pinned for CH-06: the blocks chart's command line carries its span as well.
+    expect(screen.getByRole('heading', { name: 'Epoch blocks 1,201 epochs' })).toBeInTheDocument();
     const main = lastChart('Epoch length');
     expect(main.hideCaption).toBe(true);
     expect(main.referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
-    // The separate blocks chart says what it counts, not the hours subtitle.
-    expect(lastChart('Epoch blocks').subtitle).toBe('Epoch blocks · 1,201 epochs');
+    // The separate blocks chart says what it counts, not the hours subtitle (re-pinned for CH-06:
+    // its caption is its own quantity, the name no longer repeated in it).
+    expect(lastChart('Epoch blocks').subtitle).toBe('Blocks, per epoch · 1,201\u00a0epochs');
+    expect(lastChart('Epoch blocks').hideCaption).toBe(true);
   });
 
   it('gives every chart a readout line a tap pins (R6), and says so in its help', async () => {
@@ -439,5 +454,18 @@ describe('shared chart detail', () => {
     expect(
       screen.getByText(/select it to keep it there, select it again to let it go/)
     ).toBeInTheDocument();
+  });
+
+  // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+  // awaited: the chart keeps its loading form, never a blank page, and draws once back online.
+  it('keeps its loading form while its read is paused, then draws once back online', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(response);
+    const { resume } = renderPaused(<ChartDetail slug="hash-rate" />);
+    expect(await screen.findByLabelText('Hash rate loading')).toBeInTheDocument();
+    resume();
+    expect(
+      await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hash rate loading')).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import {
   StoredDescription,
 } from '@/components/asset/collection-evidence';
 import { clusterProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
+import { fullText } from '@/__tests__/utils/full-text';
 
 // Consistency lane E (C5): the collection pages' tier 2 — the cluster cell byte by byte with its
 // place, holder and type; the stored description folded; an m-NFT class id byte by byte.
@@ -27,7 +28,8 @@ describe('ClusterCellEvidence', () => {
     );
     const facts = within(section).getByLabelText('The cluster cell');
     expect(facts).toHaveTextContent(
-      'live cell0xa5c534…3261:0 · created in #99 · 2023-11-15held byckb1qpq5zs2p…utsyjq · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args'
+      // U-09 (re-pinned): the evidence's rows at the row size
+      'live cell0xa5c53484…1f3261:0 · created in #99 · 2023-11-15held byckb1qpq5zs…utsyjq · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args'
     );
     expect(within(facts).getAllByRole('link')[0]).toHaveAttribute(
       'href',
@@ -92,7 +94,8 @@ describe('MnftClassEvidence', () => {
       screen.getByRole('button', { name: /^Class index · big-endian = 20 · / })
     ).toBeInTheDocument();
     expect(screen.getByText('1,200 · planned 0')).toBeInTheDocument();
-    expect(screen.getByText('Nervina · 24 classes · 0 sets')).toBeInTheDocument();
+    // each count is one unit (B3 round 4, task 3): the line is read across their spans
+    expect(screen.getByText(fullText('Nervina · 24 classes · 0 sets'))).toBeInTheDocument();
     const info2 = screen.getByText('Issuer info, as stored · pretty JSON').closest('details')!;
     expect(JSON.parse(info2.querySelector('pre')!.textContent!)).toEqual({
       name: 'Nervina',

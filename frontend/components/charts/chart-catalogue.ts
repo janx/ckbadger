@@ -36,12 +36,18 @@ export interface ChartDefinition {
   evidenceLabel: string;
   queryKey: string;
   fetch: () => Promise<ChartPayload>;
-  /** Existing chart route outside the accepted 28-card overview. */
-  supplemental?: boolean;
-  /** A dual-unit API series belongs on a separate axis/chart; never stack it with this one. */
-  secondaryUnit?: string;
-  secondaryLabel?: string;
+  /**
+   * A second physical unit the API returns beside the main series: its own chart under the main
+   * one, never stacked or combined with it (CH-06). `label` names it once, as the section's command
+   * line; `note` says in plain words what it counts; `caption` is its quantity, for its caption.
+   */
+  secondary?: { unit: string; label: string; caption: string; note: string };
   primaryField?: 'value' | 'value2';
+  /**
+   * The names of a chart's two series of one unit (the API's value and its companion), in the
+   * page's words, never the API's axis labels with their "(%)" (CH-21).
+   */
+  seriesNames?: { primary: string; companion: string };
   /** Four related charts, as on the ChartDetail board (CH-28). */
   related: readonly string[];
 }
@@ -208,8 +214,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Nervos DAO',
     queryKey: 'dao-chart-total-deposit',
     fetch: api.getDaoTotalDepositChart,
-    secondaryUnit: 'depositors',
-    secondaryLabel: 'Current depositors',
+    secondary: {
+      unit: 'depositors',
+      label: 'Current depositors',
+      caption: 'Depositors, per day',
+      note: 'Addresses holding a live Nervos DAO deposit at the end of each day.',
+    },
     related: ['daily-deposit', 'circulation-ratio', 'nominal-apc', 'total-supply'],
   },
   {
@@ -228,8 +238,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Nervos DAO',
     queryKey: 'dao-chart-daily-deposit',
     fetch: api.getDaoDailyDepositChart,
-    secondaryUnit: 'deposits',
-    secondaryLabel: 'Deposit count',
+    secondary: {
+      unit: 'deposits',
+      label: 'Deposit count',
+      caption: 'Deposits, per day',
+      note: 'New Nervos DAO deposits made each day.',
+    },
     related: ['total-deposit', 'circulation-ratio', 'nominal-apc', 'activity-type-breakdown'],
   },
   {
@@ -262,6 +276,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Supply and DAO',
     queryKey: 'chart-inflation-rate',
     fetch: api.getInflationRateChart,
+    seriesNames: { primary: 'Nominal inflation', companion: 'Real inflation' },
     related: ['total-supply', 'secondary-issuance', 'nominal-apc', 'total-deposit'],
   },
   {
@@ -295,7 +310,6 @@ export const CHARTS: readonly ChartDefinition[] = [
     queryKey: 'dao-chart-circulation-ratio',
     fetch: api.getDaoCirculationRatioChart,
     related: ['total-deposit', 'daily-deposit', 'total-supply', 'nominal-apc'],
-    supplemental: true,
   },
   {
     slug: 'knowledge-size',
@@ -311,8 +325,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-knowledge-size',
     fetch: api.getKnowledgeSizeChart,
-    secondaryUnit: '%',
-    secondaryLabel: 'Utilization',
+    secondary: {
+      unit: '%',
+      label: 'Utilization',
+      caption: 'Occupied share of circulating CKB',
+      note: 'CKB occupied by live cells as a share of circulating CKB, each day.',
+    },
     related: [
       'common-knowledge-composition',
       'cell-count',
@@ -397,8 +415,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-cell-size-distribution',
     fetch: api.getCellSizeDistributionChart,
-    secondaryUnit: 'CKB',
-    secondaryLabel: 'Common knowledge',
+    secondary: {
+      unit: 'CKB',
+      label: 'Common knowledge',
+      caption: 'CKB occupied, by cell size',
+      note: 'CKB occupied by the live cells in each size bucket.',
+    },
     related: [
       'knowledge-size',
       'cell-count',
@@ -421,6 +443,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     queryKey: 'chart-capacity-turnover-ratio',
     fetch: api.getCapacityTurnoverRatioChart,
     primaryField: 'value2',
+    seriesNames: { primary: 'Weekly turnover', companion: 'Daily turnover' },
     related: ['knowledge-size', 'ckb-volume', 'hodl-wave', 'transaction-count'],
   },
   {
@@ -437,8 +460,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Address activity',
     queryKey: 'chart-address-cohort-retention',
     fetch: api.getAddressCohortRetentionChart,
-    secondaryUnit: 'CKB',
-    secondaryLabel: 'Common knowledge',
+    secondary: {
+      unit: 'CKB',
+      label: 'Common knowledge',
+      caption: 'CKB occupied, by first-seen month',
+      note: 'CKB occupied today by the addresses first seen in each month.',
+    },
     related: ['active-addresses', 'hodl-wave', 'knowledge-size', 'common-knowledge-composition'],
   },
   {
@@ -512,7 +539,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     cardSubtitle: 'daily average, s',
     section: section.blocks,
     visual: 'line',
-    unit: 'seconds',
+    unit: 's',
     scale: 'raw',
     source: 'blocks',
     evidenceHref: '/blocks',
@@ -528,15 +555,19 @@ export const CHARTS: readonly ChartDefinition[] = [
     cardSubtitle: 'hours, against the consensus target',
     section: section.blocks,
     visual: 'line',
-    unit: 'hours',
+    unit: 'h',
     scale: 'raw',
     source: 'blocks',
     evidenceHref: '/blocks',
     evidenceLabel: 'Blocks',
     queryKey: 'chart-epoch-time-length',
     fetch: api.getEpochTimeLengthChart,
-    secondaryUnit: 'blocks',
-    secondaryLabel: 'Epoch blocks',
+    secondary: {
+      unit: 'blocks',
+      label: 'Epoch blocks',
+      caption: 'Blocks, per epoch',
+      note: 'Blocks in each completed epoch.',
+    },
     related: ['epoch-time-distribution', 'average-block-time', 'difficulty', 'hash-rate'],
   },
   {
@@ -582,7 +613,8 @@ export function chartSectionId(title: string): string {
     .replace(/^-|-$/g, '');
 }
 export const CHART_BY_SLUG = new Map(CHARTS.map((chart) => [chart.slug, chart]));
-export const INDEX_CHARTS = CHARTS.filter((chart) => !chart.supplemental);
+/** The index lists every chart page, each in its section (CH-22: none is left out). */
+export const INDEX_CHARTS = CHARTS;
 
 export function chartApiPath(definition: ChartDefinition): string {
   if (

@@ -10,8 +10,6 @@ vi.mock('@/lib/api', () => ({
     getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
     getHardforks: vi.fn().mockResolvedValue({ events: [] }),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/ui/chart', () => ({ Chart: (props: never) => chartMock(props) }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
@@ -50,9 +48,10 @@ describe('TotalSupplyPage', () => {
         { label: 'Nervos DAO', color: 'var(--c-gold)' },
       ],
     });
-    // The head reading (CH-21): CKB stays exact, every digit.
+    // The head reading (CH-21): CKB stays exact, every digit; its unit after a no-break space
+    // (re-pinned for CH-14).
     expect(screen.getByRole('group', { name: 'Supply readings' })).toHaveTextContent(
-      '2026-02-23100.00000003CKB'
+      '2026-02-23100.00000003 CKB'
     );
     expect(screen.getByText('/charts/total-supply')).toBeInTheDocument();
   });

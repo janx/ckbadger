@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 interface PromptHeadingProps {
   /** The command: the section's name, in the moon ink, set lowercase. */
@@ -48,7 +49,7 @@ export function PromptHeading({
       {Tag !== 'h2' && (mark ?? <span aria-hidden="true" className="section-mark mr-2.5" />)}
       <span className="lowercase">{command}</span>
       {args !== undefined && (
-        <span className="text-text-dim ml-2.5 font-normal normal-case">{args}</span>
+        <span className="text-text-dim ml-2.5 font-normal normal-case">{unitNode(args)}</span>
       )}
     </Tag>
   );
@@ -56,8 +57,8 @@ export function PromptHeading({
   return (
     <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
       {heading}
-      <span data-prompt-note="" className="text-text-ghost text-meta ml-auto">
-        {note}
+      <span data-prompt-note="" className="text-text-dim text-meta ml-auto">
+        {unitNode(note)}
       </span>
     </div>
   );

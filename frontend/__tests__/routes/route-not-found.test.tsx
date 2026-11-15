@@ -11,7 +11,7 @@ import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { api } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
 
-// The real router hooks and the real `notFound()` (setup.ts stubs this module for page tests).
+// The real router hooks (setup.ts stubs this module for page tests).
 vi.mock('@/src/navigation', async (importOriginal) => importOriginal());
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 vi.mock('@/components/layout/site-footer', () => ({ SiteFooter: () => null }));
@@ -42,16 +42,19 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     vi.restoreAllMocks();
   });
 
-  it('the stale fork URL with a full orphan hash is a 404, not "the page fell"', async () => {
+  // U-06, R11: the address is refused by its shape, so it is answered as an id that is not one
+  // (the voice page, its own first line), still never as "the page fell".
+  it('the stale fork URL with a full orphan hash is not an id, not "the page fell"', async () => {
     const getForkAt = vi.spyOn(api, 'getForkAt');
     mount(STALE_FORK);
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        name: "that is not a fork height and orphan. the index was not asked; nothing on it is lost. honey badger don't care.",
       })
     ).toBeInTheDocument();
-    expect(screen.getByText('Not found · 404')).toBeInTheDocument();
+    expect(screen.getByText('Not an id · 400')).toBeInTheDocument();
+    expect(screen.queryByText('Error · not a 404')).toBeNull();
     expect(screen.queryByText(/the chain keeps/)).toBeNull();
     expect(screen.queryByText('notFound')).toBeNull();
     // The address is refused by its shape: no API request is made for it.
@@ -60,14 +63,15 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     await waitFor(() => expect(document.title).toBe('Not found · CKBadger'));
   });
 
-  it('an uncle index that is not a number is a 404 too (the same notFound() signal)', async () => {
+  it('an uncle index that is not a number is not an id either', async () => {
     mount('/mainnet/blocks/20894834/uncles/first');
     expect(
       await screen.findByRole('heading', {
         level: 1,
-        name: "no page at this path. the chain was not asked; nothing on it is lost. honey badger don't care.",
+        name: "that is not a block and uncle index. the index was not asked; nothing on it is lost. honey badger don't care.",
       })
     ).toBeInTheDocument();
+    expect(screen.queryByText('Error · not a 404')).toBeNull();
     expect(screen.queryByText(/the chain keeps/)).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ import {
   type TokenHistory,
   type GlobalActivity,
 } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -26,8 +27,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getTokenActivityFeed: vi.fn(),
     getTokenTransactions: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
@@ -125,6 +124,7 @@ const event = (i: number, kind: 'mint' | 'burn') => ({
   supplyAfter: '1000000000000',
   lockHash: other,
   address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+  lockCodeHash: `0x${'9b'.repeat(32)}`,
   lockKind: 'JoyID',
 });
 describe('Token board (F2 objects)', () => {
@@ -324,9 +324,9 @@ describe('Token board (F2 objects)', () => {
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
     });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(/xUDT · 8 decimals/)).toHaveClass('text-body');
+    expect(await screen.findByText(fullText(/xUDT · 8 decimals/))).toHaveClass('text-body');
     expect(await screen.findByText(/Another token also calls itself TEST/)).toHaveTextContent(
-      'Tell them apart by type hash; this one is 0x12121212…1212.'
+      'Tell them apart by type hash; this one is 0x1212121212…12121212.'
     );
   });
 
@@ -358,7 +358,12 @@ describe('Token board (F2 objects)', () => {
     const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' + 'x'.repeat(40);
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
-      issuer: { lockHash: other, address, lockKind: 'Default Lock' },
+      issuer: {
+        lockHash: other,
+        address,
+        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockKind: 'Default Lock',
+      },
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/the lock hash of the owner that can mint/);

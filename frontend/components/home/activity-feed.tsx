@@ -3,13 +3,13 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { ActivityRow, ActivityRowHead, activityRowTitle } from '@/components/activity/activity-row';
+import { ActivityRow, ActivityRowHead, RowArticle } from '@/components/activity/activity-row';
 import { ACTIVITY_HEAD_CLASS, SectionHeading } from '@/components/home/section';
-export { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { useFreshKeys } from '@/hooks/useFreshKeys';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { api, type Transaction } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { countNoun } from '@/lib/format-count';
 
 /** The feed always shows this many rows: no inner scroll, no row cut mid-way. */
 export const FEED_ROWS = 8;
@@ -52,14 +52,14 @@ export function ActivityFeed() {
           note={
             <Link
               href={active.viewAll}
-              className="text-interactive hover:text-jade text-small whitespace-nowrap transition-colors"
+              className="text-interactive hover:text-jade text-small transition-colors"
             >
-              view all →
+              view all<span className="whitespace-nowrap"> →</span>
             </Link>
           }
         />
       </div>
-      <div className="border-base-border-subtle flex items-center border-b">
+      <div className="border-row-rule flex items-center border-b">
         <div role="group" aria-label="Feed" className="flex gap-4 sm:gap-6">
           {TABS.map((t) => (
             <button
@@ -86,7 +86,7 @@ export function ActivityFeed() {
           query={activities}
           what="activity"
           keyOf={(a) => a.txHash}
-          row={(a, fresh) => <ActivityRow activity={a} fresh={fresh} />}
+          row={(a, fresh) => <ActivityRow activity={a} fresh={fresh} age />}
           items={activities.data}
         />
       ) : (
@@ -103,7 +103,7 @@ export function ActivityFeed() {
   );
 }
 
-const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 transition-colors';
+const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-row-rule py-3 transition-colors';
 
 function FeedList<T>({
   query,
@@ -133,12 +133,12 @@ function FeedList<T>({
         {Array.from({ length: FEED_ROWS }, (_, i) => (
           <div key={i} className={ROW_CLASS}>
             <div className="flex justify-between">
-              <span className="bg-base-elevated h-4 w-44 animate-pulse rounded" />
-              <span className="bg-base-elevated h-3 w-12 animate-pulse rounded" />
+              <span className="bg-base-elevated h-4 w-44 animate-pulse" />
+              <span className="bg-base-elevated h-3 w-12 animate-pulse" />
             </div>
             <div className="flex justify-between">
-              <span className="bg-base-elevated h-3 w-56 animate-pulse rounded" />
-              <span className="bg-base-elevated h-3 w-32 animate-pulse rounded" />
+              <span className="bg-base-elevated h-3 w-56 animate-pulse" />
+              <span className="bg-base-elevated h-3 w-32 animate-pulse" />
             </div>
           </div>
         ))}
@@ -158,7 +158,7 @@ function FeedList<T>({
   );
 }
 
-const plural = (n: number, noun: string) => `${noun}${n === 1 ? '' : 's'}`;
+const plural = (n: number, noun: string) => countNoun(n, noun);
 
 function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
   // Cross-highlight with the transaction pipeline (hovered or pinned there, or hovered here).
@@ -169,11 +169,13 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
   const highlighted = hoverTx === tx.hash || pinned === tx.hash;
   const count = 'inline-block min-w-[3ch] text-right tabular-nums';
   return (
-    <article
+    <RowArticle
       data-feed-row={tx.hash}
       data-tx-row={tx.hash}
-      // Consistency C3: the activity row's hover, the hash and the age (the row shows the date).
-      title={activityRowTitle(tx.hash, tx.timestamp)}
+      // The activity row's hover, the hash and the age (consistency C3); this feed is live, so
+      // the row shows the age too (PA-22).
+      hash={tx.hash}
+      timestamp={tx.timestamp}
       data-highlighted={highlighted}
       // A committed tx anchors the proposal window on the block that committed it.
       onPointerEnter={() =>
@@ -194,7 +196,8 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
         hash={tx.hash}
         blockNumber={tx.blockNumber}
         timestamp={tx.timestamp}
+        age
       />
-    </article>
+    </RowArticle>
   );
 }

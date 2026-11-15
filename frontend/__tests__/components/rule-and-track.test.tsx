@@ -1,0 +1,385 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import ts from 'typescript';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { ShareBar } from '@/components/ui/share-bar';
+import { AlignedBar } from '@/components/ui/aligned-bar';
+import { BlockPosition } from '@/components/blocks/block-position';
+import { FORK_COLORS, FREE_CAPACITY_COLOR } from '@/lib/design-tokens';
+import { CHART_GRID_COLOR } from '@/lib/chart-colors';
+import { Chart } from '@/components/ui/chart';
+import { BarChart } from '@/components/home/mini-chart';
+import { color } from '@/lib/palette';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
+
+// UI review 2026-11-14, ruling R5 (DY-01, DY-08): by day the page is ruled paper, on which the
+// hair (`base-border-subtle`) and the elevated tint (`base-elevated`) are 1.09:1 and 1.03:1 against
+// a ruled line — a row rule is one more ruled line and a bar's empty track is not there. A row rule
+// is drawn in the row-rule ink and a track in the bar-track ink, the keys that clear the paper and
+// a ruled line by 1.25:1 by day (palette.test). A tile is the surface under its own 1 px border.
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+type Row = { name: string; amount: string };
+const COLUMNS: ListColumn<Row>[] = [
+  { key: 'name', label: 'Name', minWidth: 180, render: (r) => r.name },
+  { key: 'amount', label: 'Amount', minWidth: 240, numeric: true, render: (r) => r.amount },
+];
+
+function table() {
+  return (
+    <ListTable
+      label="Holdings"
+      columns={COLUMNS}
+      rows={[
+        { name: 'Token', amount: '12.5' },
+        { name: 'Coin', amount: '7' },
+      ]}
+      rowKey={(r) => r.name}
+      mobileRow={(r) => r.name}
+    />
+  );
+}
+
+describe('a row rule (R5, DY-01)', () => {
+  it('rules the table’s rows and its head in the row-rule ink', () => {
+    stubChartWidth(608);
+    render(table());
+    const t = screen.getByRole('table', { name: 'Holdings' });
+    for (const tr of t.querySelectorAll('tbody tr'))
+      expect(tr).toHaveClass('border-b', 'border-row-rule');
+    for (const th of t.querySelectorAll('thead th'))
+      expect(th).toHaveClass('border-b', 'border-row-rule');
+    expect(t.innerHTML).not.toContain('border-base-border-subtle');
+  });
+
+  it('rules the phone rows in the row-rule ink', () => {
+    stubChartWidth(358);
+    render(table());
+    for (const item of screen.getAllByRole('listitem'))
+      expect(item).toHaveClass('border-b', 'border-row-rule');
+  });
+});
+
+/**
+ * A horizontal 1 px line drawn in the hair or the elevated tint: a class string that holds one of
+ * them as a border or divide colour and a top, bottom or y border (or a y divide). A frame (`border`
+ * on every side) is not a rule and is not read.
+ */
+const HAIR_COLOUR =
+  /(?<![\w-])(?:[\w-]+:)*(?:border|divide)-base-(?:border-subtle|elevated)(?![\w-])/;
+const HORIZONTAL = /(?<![\w-])(?:[\w-]+:)*(?:border-[tby]|divide-y)(?![\w-])/;
+const LITERAL = /(['"`])((?:(?!\1).)*)\1/g;
+
+function hairRules(code: string): { line: number; what: string }[] {
+  const out: { line: number; what: string }[] = [];
+  code.split('\n').forEach((text, i) => {
+    for (const m of text.matchAll(LITERAL))
+      if (HAIR_COLOUR.test(m[2]) && HORIZONTAL.test(m[2]))
+        out.push({ line: i + 1, what: m[2].match(HAIR_COLOUR)![0] });
+  });
+  return out;
+}
+
+/** The hair rules that are not row rules, per file in order: a header's or a strip's edge. */
+const EDGE =
+  'the edge of the page header or its vitals strip: a frame’s border, not a rule between rows';
+const HAIR_EDGES: Record<string, readonly string[]> = {
+  'components/layout/header.tsx': [EDGE, EDGE],
+  'components/error-page-shell.tsx': [EDGE],
+};
+
+describe('a horizontal rule in the content is a row rule (R5, DY-01)', () => {
+  it('finds a hair or elevated rule, never a frame or a row-rule', () => {
+    const code = [
+      '<div className="border-base-border-subtle flex border-b py-2">',
+      "const r = 'divide-base-elevated divide-y'; const f = 'border-base-border-subtle rounded border';",
+      '<li className="border-row-rule border-t" /><i className="border-base-elevated border-l" />',
+    ].join('\n');
+    expect(hairRules(code)).toEqual([
+      { line: 1, what: 'border-base-border-subtle' },
+      { line: 2, what: 'divide-base-elevated' },
+    ]);
+  });
+
+  it('draws every rule between rows, under a head and above a closing block in the row-rule ink', () => {
+    const root = join(__dirname, '..', '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.tsx?$/.test(name)) files.push(path);
+      }
+    };
+    walk(join(root, 'app'));
+    walk(join(root, 'components'));
+    const short: string[] = [];
+    for (const file of files) {
+      const path = relative(root, file);
+      const found = hairRules(readFileSync(file, 'utf8'));
+      const edges = HAIR_EDGES[path] ?? [];
+      found.slice(edges.length).forEach((r) => short.push(`${path}:${r.line} ${r.what}`));
+      if (found.length < edges.length)
+        short.push(`${path}: ${edges.length} edges listed, ${found.length} found`);
+    }
+    expect(short).toEqual([]);
+  });
+});
+
+// Ruling 4c: a chart's gridline is a rule on the ruled paper — in the hair it is one more ruled
+// line by day (1.09:1). Every chart grid (and the forks chart's base line) is the row-rule key,
+// the hair by night as before.
+/**
+ * A row's rule drawn in the frame border's ink (`border-base-border`, any alpha): an element that
+ * is a row by its structure — a `tr` / `th` / `td`, an element with `role="row"`,
+ * `"columnheader"` or `"rowheader"`, or the element a `.map(` callback returns — and whose class
+ * names that colour with a top, bottom or y border (or a y divide). Its class is read from a string,
+ * a template or the literals inside a `cn(…)` / ternary. A frame reads as a frame by its fill and
+ * its four sides; a row reads as a row by its rule, the row-rule ink every list shares (by day the
+ * frame border sits at 1.27:1 on the tier-2 ground beside the row rule's 1.37).
+ */
+const FRAME_COLOUR = /(?<![\w-])(?:[\w-]+:)*(?:border|divide)-base-border(?:\/\d+)?(?![\w-])/;
+const ROW_ROLES = new Set(['row', 'columnheader', 'rowheader']);
+const ROW_TAGS = new Set(['tr', 'th', 'td']);
+
+function frameRuledRows(file: string, code: string): { line: number; what: string }[] {
+  const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: { line: number; what: string }[] = [];
+  const classText = (attrs: ts.JsxAttributes): string => {
+    const attr = attrs.properties.find(
+      (p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(source) === 'className'
+    );
+    if (!attr?.initializer) return '';
+    const texts: string[] = [];
+    const collect = (node: ts.Node) => {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+        texts.push(node.text);
+      else if (ts.isTemplateExpression(node)) {
+        texts.push(node.head.text, ...node.templateSpans.map((s) => s.literal.text));
+        node.templateSpans.forEach((s) => collect(s.expression));
+      } else ts.forEachChild(node, collect);
+    };
+    collect(attr.initializer);
+    return texts.join(' ');
+  };
+  const attrValue = (attrs: ts.JsxAttributes, name: string) => {
+    const attr = attrs.properties.find(
+      (p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(source) === name
+    );
+    return attr?.initializer && ts.isStringLiteral(attr.initializer) ? attr.initializer.text : null;
+  };
+  /** Whether the element is what a `.map(` callback returns. */
+  const returnedByMap = (element: ts.Node): boolean => {
+    let node: ts.Node = element;
+    while (ts.isParenthesizedExpression(node.parent)) node = node.parent;
+    let fn: ts.Node | undefined;
+    if (ts.isArrowFunction(node.parent) && node.parent.body === node) fn = node.parent;
+    else if (ts.isReturnStatement(node.parent)) {
+      fn = node.parent.parent;
+      while (fn && !ts.isFunctionLike(fn)) fn = fn.parent;
+    }
+    if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return false;
+    const call = fn.parent;
+    return (
+      ts.isCallExpression(call) &&
+      call.arguments[0] === fn &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      call.expression.name.text === 'map'
+    );
+  };
+  const visit = (node: ts.Node) => {
+    const opening = ts.isJsxElement(node)
+      ? node.openingElement
+      : ts.isJsxSelfClosingElement(node)
+        ? node
+        : null;
+    if (opening) {
+      const cls = classText(opening.attributes);
+      const colour = cls.match(FRAME_COLOUR);
+      const row =
+        ROW_TAGS.has(opening.tagName.getText(source)) ||
+        ROW_ROLES.has(attrValue(opening.attributes, 'role') ?? '') ||
+        returnedByMap(node);
+      if (colour && HORIZONTAL.test(cls) && row)
+        out.push({
+          line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+          what: `<${opening.tagName.getText(source)}> ${colour[0]}`,
+        });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+/** Rows a structure reads as rows that are a frame's edge after all, per file in order: none. */
+const FRAME_ROWS: Record<string, readonly string[]> = {};
+
+describe('a row is ruled in the row-rule ink, never the frame border’s (R5, DY-01)', () => {
+  it('finds a row by its tag, its role or as what a .map( returns, never a frame or a child', () => {
+    const code = [
+      'export const A = () => (',
+      '  <table><tbody><tr className="border-base-border border-b" /></tbody></table>',
+      ');',
+      'export const B = () => <div role="row" className="border-base-border/50 border-b" />;',
+      'export const C = ({ xs }: { xs: string[] }) => (',
+      '  <ul>{xs.map((x) => (<li key={x} className={cn("border-base-border border-t", x && "py-2")} />))}</ul>',
+      ');',
+      'export const D = ({ xs }: { xs: string[] }) => xs.map((x) => {',
+      '  const k = x;',
+      '  return <div key={k} className="border-base-border border-b"><span className="border-base-border border-b" /></div>;',
+      '});',
+      'export const E = () => <div className="border-base-border border-b px-3">head</div>;',
+      'export const F = ({ xs }: { xs: string[] }) => xs.map((x) => <div key={x} className="border-row-rule border-b" />);',
+      'export const G = ({ xs }: { xs: string[] }) => xs.map((x) => <div key={x} className="border-base-border border" />);',
+      'export const H = ({ xs }: { xs: string[] }) => xs.filter((x) => <div className="border-base-border border-b" />);',
+    ].join('\n');
+    expect(frameRuledRows('a.tsx', code)).toEqual([
+      { line: 2, what: '<tr> border-base-border' },
+      { line: 4, what: '<div> border-base-border/50' },
+      { line: 6, what: '<li> border-base-border' },
+      { line: 10, what: '<div> border-base-border' },
+    ]);
+  });
+
+  it('rules no row of a list or a table in the frame border’s ink', () => {
+    const root = join(__dirname, '..', '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.tsx$/.test(name)) files.push(path);
+      }
+    };
+    walk(join(root, 'app'));
+    walk(join(root, 'components'));
+    const short: string[] = [];
+    for (const file of files) {
+      const path = relative(root, file);
+      const found = frameRuledRows(file, readFileSync(file, 'utf8'));
+      const listed = FRAME_ROWS[path] ?? [];
+      found.slice(listed.length).forEach((r) => short.push(`${path}:${r.line} ${r.what}`));
+      if (found.length < listed.length)
+        short.push(`${path}: ${listed.length} frame rows listed, ${found.length} found`);
+    }
+    expect(short).toEqual([]);
+  });
+});
+
+describe('chart gridlines are rules (R5, ruling 4c)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('names the row-rule key as the charts’ grid colour', () => {
+    expect(CHART_GRID_COLOR).toBe(color('row-rule'));
+    expect(FORK_COLORS.grid).toBe(color('row-rule'));
+    expect(FORK_COLORS.axis).toBe(color('row-rule'));
+  });
+
+  it('draws the shared chart’s and the home mini charts’ grids in the row-rule ink', () => {
+    stubChartWidth(480);
+    const { container } = render(
+      <>
+        <Chart
+          title="Hash rate"
+          subtitle="daily"
+          data={[
+            { label: '2026-10-28', values: { rate: '1' } },
+            { label: '2026-10-29', values: { rate: '3' } },
+          ]}
+          series={[{ key: 'rate', label: 'Hash rate', color: color('jade') }]}
+          unit="PH/s"
+          formatValue={(v) => v}
+        />
+        <BarChart
+          bars={[{ label: '09:00', value: 610, state: 'highlight' }]}
+          ariaLabel="Bars"
+          formatValue={String}
+        />
+      </>
+    );
+    const strokes = [...container.querySelectorAll('line')]
+      .filter(
+        (l) => l.getAttribute('y1') === l.getAttribute('y2') && !l.getAttribute('stroke-dasharray')
+      )
+      .map((l) => l.getAttribute('stroke'));
+    expect(strokes.length).toBeGreaterThan(2);
+    expect(strokes).not.toContain('var(--c-base-border-subtle)');
+    expect(container.querySelector('[data-role="grid"]')).toHaveAttribute(
+      'stroke',
+      color('row-rule')
+    );
+  });
+});
+
+describe('the tier-2 ground decides its rule (R5, ruling 4b)', () => {
+  it('re-points the row rule and the bar track to their deeper keys inside .tier2-ground', () => {
+    const css = readFileSync(join(__dirname, '..', '..', 'app', 'globals.css'), 'utf8');
+    const rule = css.match(/\.tier2-ground\s*\{([^}]*)\}/)![1];
+    for (const key of ['row-rule', 'bar-track'])
+      for (const kind of ['c', 'rgb'])
+        expect(rule, `--${kind}-${key}`).toContain(`--${kind}-${key}: var(--${kind}-${key}-deep);`);
+  });
+});
+
+describe('a bar’s empty track (R5, DY-01)', () => {
+  it('lays the share bar and the aligned bar on the bar-track ink', () => {
+    const { container } = render(
+      <>
+        <ShareBar value={1} scale={10} color={color('jade')} track={80} />
+        <AlignedBar
+          label="Size"
+          scale={1000}
+          segments={[{ key: 'value', label: 'Size', value: 400, tone: 'data' }]}
+        />
+      </>
+    );
+    expect(container.querySelector('[data-share-track]')).toHaveClass('bg-bar-track');
+    expect(container.querySelector('[data-track]')).toHaveClass('bg-bar-track');
+    expect(container.innerHTML).not.toContain('bg-base-elevated');
+  });
+
+  it('draws a cell’s free capacity, the empty part of its bar, in the bar-track ink', () => {
+    expect(FREE_CAPACITY_COLOR).toBe(color('bar-track'));
+  });
+});
+
+describe('the neighbour tiles of “Position in the chain” (R5, DY-08)', () => {
+  it('draws every block tile as the surface under its own 1 px border', () => {
+    const { container } = render(
+      <BlockPosition
+        block={{
+          ...blockEvidence,
+          number: 932,
+          hash: `0x${'c'.repeat(64)}`,
+          parentHash: `0x${'d'.repeat(64)}`,
+          timestamp: '2026-10-26T08:55:37Z',
+          confirmations: 3,
+          proposalsCount: 0,
+          unclesCount: 0,
+          uncles: [],
+        }}
+        transactions={[]}
+        proposals={[]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    const tiles = [...container.querySelectorAll('a[aria-label^="Block #"] > rect')];
+    expect(tiles.length).toBeGreaterThanOrEqual(3);
+    for (const rect of tiles) {
+      expect(rect).toHaveAttribute('stroke', color('slate-other'));
+      // a 1 px line on the pixel grid: inset half a pixel, the tile's size kept
+      expect(rect.getAttribute('stroke-width') ?? '1').toBe('1');
+      expect(rect).toHaveAttribute('x', '0.5');
+      expect(rect).toHaveAttribute('y', '0.5');
+    }
+  });
+});

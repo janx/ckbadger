@@ -141,7 +141,7 @@ export function HelpPopover({
             role="dialog"
             aria-label={title ?? label}
             className={cn(
-              'border-base-border/80 bg-base-surface/95 text-text-dim fixed z-[10000] w-[22rem] max-w-[min(24rem,calc(100vw-1rem))] rounded-lg border p-3 shadow-2xl backdrop-blur-sm',
+              'border-base-border/80 bg-base-surface/95 text-text-dim fixed z-[10000] w-[22rem] max-w-[min(24rem,calc(100vw-1rem))] border p-3 shadow-2xl backdrop-blur-sm',
               contentClassName
             )}
             style={position ?? undefined}
@@ -206,7 +206,7 @@ export function HelpPopover({
         aria-controls={panelId}
         className={cn(
           'text-text-dim border-base-border/70 hover:border-emphasis/40 hover:text-emphasis',
-          'relative inline-flex h-5 w-5 items-center justify-center rounded-full border',
+          'relative inline-flex h-5 w-5 items-center justify-center border',
           'bg-base-elevated/70 text-meta font-mono transition-colors',
           'before:absolute before:-inset-3 before:content-[""]'
         )}

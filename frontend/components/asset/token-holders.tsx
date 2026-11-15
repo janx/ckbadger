@@ -21,12 +21,17 @@ import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
-import { shareBarWidth } from '@/components/ui/share-bar';
+import { formatShareTick } from '@/components/ui/share-bar';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
-import { RowTag } from '@/components/ui/row-tag';
+import { rowTagClass } from '@/components/ui/row-tag';
+import { LockKind } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatTick } from '@/lib/chart-ticks';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -76,8 +81,7 @@ export function TokenDistributionView({
   }, 0);
   if (bucketBalance !== total || bucketHolders !== d.holdersCount)
     throw new Error('Token distribution buckets do not equal totals');
-  const share = (amount: bigint) =>
-    total === BigInt(0) ? '—' : `${formatScaledInteger(amount * BigInt(100), total, 2)}%`;
+  const share = (amount: bigint) => (total === BigInt(0) ? '—' : percentOf(amount, total));
   const holderScale = resourceScale(d.buckets.map((b) => b.holdersCount));
   const columns: ListColumn<TokenDistribution['buckets'][number]>[] = wordHeads([
     {
@@ -163,7 +167,7 @@ export function TokenDistributionView({
                     <span className="whitespace-nowrap">
                       <AssetCount value={b.holdersCount} />{' '}
                       <span className="text-text-dim">
-                        {b.holdersCount === 1 ? 'holder' : 'holders'}
+                        {countNoun(b.holdersCount, 'holder', 'holders')}
                       </span>
                     </span>
                   ),
@@ -172,7 +176,7 @@ export function TokenDistributionView({
                   key: 'share',
                   tone: 'quiet',
                   left: (
-                    <span aria-hidden="true" className="bg-base-elevated inline-block h-1.5 w-10">
+                    <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
                       <span
                         className="bg-token block h-full"
                         style={{
@@ -222,21 +226,19 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     const total = exactUnsignedInteger(holders.data!.totalSupply, 'holder-page supply'),
       amount = exactUnsignedInteger(h.balance, 'holder balance');
     if (amount > total) throw new Error('Holder balance exceeds same-response supply');
-    if (total === BigInt(0)) return { text: '—', hundredths: 0, amount, total };
+    if (total === BigInt(0)) return { text: '—', hundredths: 0 };
     const hundredths = Number(formatScaledInteger(amount * BigInt(10000), total, 0));
-    return {
-      text: `${formatScaledInteger(amount * BigInt(100), total, 2)}%`,
-      hundredths,
-      amount,
-      total,
-    };
+    return { text: percentOf(amount, total), hundredths };
   };
   // Board L5 on the row rules (table-rows L2-4): rank and address bright, the lock a tag, the
   // amount to 2 dp and the share as an 8 px bar on the page's scale — 552 px of minimums, so the
   // table holds in the token page's 554 px column at 1280; the two-line phone row takes over below
   // it. Every digit of the amount is in the row's title.
+  /** R7: the one scale of the page's share bars, the table's and the phone rows' alike. */
+  const shareScaleOf = (rows: readonly TokenHolder[]) =>
+    resourceScale(rows.map((h) => holderShare(h).hundredths));
   const holderColumns = (rows: readonly TokenHolder[]): ListColumn<TokenHolder>[] => {
-    const shareScale = resourceScale(rows.map((h) => holderShare(h).hundredths));
+    const shareScale = shareScaleOf(rows);
     return [
       {
         key: 'rank',
@@ -256,9 +258,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           >
             <Hash
               hash={h.address ?? h.lockScriptHash}
+              kind={h.address ? 'address' : 'hash'}
+              size="row"
               copyable={false}
-              startChars={10}
-              endChars={6}
               variant="bright"
               className="text-body leading-[18px]"
             />
@@ -270,17 +272,19 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         label: 'Lock',
         minWidth: 116,
         // A flex line holds the chip at its own 18 px, so the row stays 41 px; a long lock kind
-        // ends in an ellipsis, whole in the chip's and the row's hover.
-        render: (h) => {
-          const kind = h.lockKind ?? 'Lock kind unavailable';
-          return (
-            <span className="flex min-w-0">
-              <RowTag title={kind} className="min-w-0 truncate">
-                {kind}
-              </RowTag>
-            </span>
-          );
-        },
+        // ends in an ellipsis, whole in the row's hover (the chip's hover is the code hash).
+        // U-15: a lock the registry does not name reads "lock <code hash>", as on the collection
+        // holders.
+        render: (h) => (
+          <span className="flex min-w-0">
+            <LockKind
+              lockKind={h.lockKind}
+              lockCodeHash={h.lockCodeHash}
+              size="row"
+              className={rowTagClass('default', 'min-w-0 truncate')}
+            />
+          </span>
+        ),
       },
       {
         key: 'balance',
@@ -303,7 +307,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             label="Share"
             scale={shareScale}
             trackWidth={SHARE_TRACK}
-            format={(n) => `${n / 100}%`}
+            format={formatShareTick}
           />
         ),
         render: (h) => {
@@ -327,7 +331,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     [
       `#${rank(h)}`,
       h.address ?? h.lockScriptHash,
-      h.lockKind ?? 'lock kind unavailable',
+      h.lockCodeHash === null ? 'lock not indexed' : (h.lockKind ?? h.lockCodeHash),
       `${formatTokenBalanceWithRawMarker(h.balance, decimals)}${symbol ? ` ${symbol}` : ''}`,
       `${holderShare(h).text} of supply`,
     ].join(' · ');
@@ -348,25 +352,37 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             rowTitle={holderTitle}
             mobileRow={(h, wide) => {
               const share = holderShare(h);
+              const rows = holders.data!.data;
+              const scale = shareScaleOf(rows);
               return (
                 <HolderPhoneRow
                   rank={rank(h)}
                   party={
                     <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
-                      {/* 10…6 lets rank, address, lock and amount share a 358 px line (L5). */}
+                      {/* The phone row's tight size (U-09), 11 characters for an address, 4…6 (it
+                          was 10…6, 17): rank, address, lock and amount share a 358 px line (L5). */}
                       <Hash
                         hash={h.address ?? h.lockScriptHash}
+                        kind={h.address ? 'address' : 'hash'}
+                        size="tight"
                         copyable={false}
-                        startChars={10}
-                        endChars={6}
                         className="text-body"
                       />
                     </AppLink>
                   }
-                  lock={h.lockKind ?? 'Lock kind unavailable'}
+                  lock={
+                    // In the row's own dim small ink, as the kind was written before U-15.
+                    <LockKind
+                      lockKind={h.lockKind}
+                      lockCodeHash={h.lockCodeHash}
+                      size="tight"
+                      className="text-text-dim text-small"
+                    />
+                  }
                   amount={<AssetAmount amount={h.balance} decimals={decimals} />}
                   share={share.text}
-                  barWidth={shareBarWidth(share.amount, share.total)}
+                  bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
+                  axis={rows[0] === h ? formatShareTick(scale) : undefined}
                   wide={wide}
                 />
               );
@@ -387,7 +403,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           )}
         </>
       ) : (
-        <AssetReadState error={holders.error} loading={holders.isLoading} label="holders" />
+        <AssetReadState error={holders.error} read={holders} label="holders" />
       )}
     </div>
   );
@@ -402,9 +418,11 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             pagination.reset();
           }}
         >
-          {all
-            ? 'Top 10 holders'
-            : `All ${distribution.data?.holdersCount.toLocaleString('en-US') ?? ''} holders →`}
+          {unitNode(
+            all
+              ? 'Top 10 holders'
+              : `All ${distribution.data ? formatCount(distribution.data.holdersCount, 'holder') : 'holders'} →`
+          )}
         </button>
       }
     >
@@ -421,7 +439,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         <>
           <AssetReadState
             error={distribution.error}
-            loading={distribution.isLoading}
+            read={distribution}
             label={distributionSource}
           />
           {holderTable}

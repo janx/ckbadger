@@ -12,6 +12,7 @@ import {
 } from '@/lib/design-tokens';
 import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -24,6 +25,8 @@ import {
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { useClockTime } from '@/components/ui/utc8-date';
+import { countNoun } from '@/lib/format-count';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const POLL_INTERVAL_MS = 10_000;
@@ -120,9 +123,11 @@ function toActivityDate(timestamp: string): Date {
   return new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
 }
 
-/** The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone. */
-function getActivityDayLabel(timestamp: string): string {
-  const now = Date.now();
+/**
+ * The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone:
+ * "Today" and "Yesterday" are the reader's, at `now` from the page's one clock (lane E4).
+ */
+function getActivityDayLabel(timestamp: string, now: number): string {
   const day = formatUtc8Date(toActivityDate(timestamp).getTime());
   if (day === formatUtc8Date(now)) return 'Today';
   if (day === previousChainDay(now)) return 'Yesterday';
@@ -210,7 +215,7 @@ function ActivityStreamToolbar({
   return (
     <div
       data-testid="activities-stream-toolbar"
-      className="bg-base-bg border-base-border-subtle border-b py-3"
+      className="bg-base-bg border-row-rule border-b py-3"
     >
       <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
         {FILTER_OPTIONS.map((option) => (
@@ -221,7 +226,7 @@ function ActivityStreamToolbar({
             aria-pressed={selectedFilter === option.value}
             onClick={() => onFilterChange(option.value)}
             className={cn(
-              'text-small flex items-center gap-2 rounded border px-3 py-2 transition-colors',
+              'text-small flex items-center gap-2 border px-3 py-2 transition-colors',
               selectedFilter === option.value
                 ? 'border-base-border text-text-bright bg-base-surface'
                 : 'text-text-dim hover:text-text border-transparent'
@@ -232,7 +237,7 @@ function ActivityStreamToolbar({
               <span
                 aria-hidden="true"
                 data-swatch
-                className="h-[9px] w-[9px] rounded-sm"
+                className="h-[9px] w-[9px]"
                 style={{ backgroundColor: option.swatch }}
               />
             )}
@@ -254,7 +259,7 @@ function ActivityStreamToolbar({
         <div
           role="img"
           aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
-          className="mt-3 flex h-2 overflow-hidden rounded-sm"
+          className="mt-3 flex h-2 overflow-hidden"
         >
           {FILTER_OPTIONS.filter(
             (o) => o.value !== 'all' && counts[o.value] !== undefined && counts[o.value]! > 0
@@ -277,7 +282,7 @@ function ActivityStreamToolbar({
 function ActivityDayDivider({ label }: { label: string }) {
   return (
     <div
-      className="text-text-dim border-base-border-subtle text-meta mt-5 border-b py-2"
+      className="text-text-dim border-row-rule text-meta mt-5 border-b py-2"
       data-testid={getDayDividerTestId(label)}
     >
       {label}
@@ -300,16 +305,16 @@ function SkeletonRows() {
   return Array.from({ length: 8 }).map((_, index) => (
     <div
       key={index}
-      className="border-base-border/50 border-b px-3 py-3 last:border-b-0"
+      className="border-row-rule border-b px-3 py-3 last:border-b-0"
       data-testid="activities-stream-skeleton"
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="bg-base-elevated h-4 w-28 animate-pulse rounded" />
-        <div className="bg-base-elevated h-3 w-24 animate-pulse rounded" />
+        <div className="bg-base-elevated h-4 w-28 animate-pulse" />
+        <div className="bg-base-elevated h-3 w-24 animate-pulse" />
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <div className="bg-base-elevated h-3 w-32 animate-pulse rounded" />
-        <div className="bg-base-elevated h-3 w-20 animate-pulse rounded" />
+        <div className="bg-base-elevated h-3 w-32 animate-pulse" />
+        <div className="bg-base-elevated h-3 w-20 animate-pulse" />
       </div>
     </div>
   ));
@@ -323,6 +328,8 @@ export function ActivitiesStreamExplorer({
   totalCount?: number;
 }) {
   useEffect(() => ensureKeyframes(), []);
+  // "Today" and "Yesterday" move on at UTC+8 midnight: the stream renders again when the date does
+  const now = useClockTime((t) => formatUtc8Date(t));
 
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -361,15 +368,7 @@ export function ActivitiesStreamExplorer({
     }, ROW_HIGHLIGHT_DURATION_MS);
   };
 
-  const {
-    data,
-    error,
-    isLoading,
-    hasNextPage,
-    fetchNextPage,
-    isFetchingNextPage,
-    isFetchNextPageError,
-  } = useInfiniteQuery({
+  const stream = useInfiniteQuery({
     queryKey: ['global-activities-stream', selectedFilter, pageSize],
     queryFn: ({ pageParam }) =>
       api.getGlobalActivities({
@@ -381,6 +380,11 @@ export function ActivitiesStreamExplorer({
     getNextPageParam: (lastPage) =>
       lastPage.hasMore ? (lastPage.nextCursor ?? undefined) : undefined,
   });
+  const { data, error, hasNextPage, fetchNextPage, isFetchingNextPage, isFetchNextPageError } =
+    stream;
+  // awaited, not isLoading: a first page paused offline or between retries has not answered
+  // "nothing of this kind"
+  const awaited = isAwaited(stream);
 
   const baseItems = useMemo(() => data?.pages.flatMap((page) => page.data) ?? [], [data?.pages]);
 
@@ -491,8 +495,8 @@ export function ActivitiesStreamExplorer({
     safeScrollIntoView(topAnchorRef.current, { behavior: 'smooth', block: 'start' });
   };
 
-  const initialError = !isLoading && !!error && visibleItems.length === 0;
-  const emptyState = !isLoading && !error && visibleItems.length === 0;
+  const initialError = !awaited && !!error && visibleItems.length === 0;
+  const emptyState = !awaited && !error && visibleItems.length === 0;
   const hasPending = pendingNewItems.length > 0;
 
   return (
@@ -500,7 +504,7 @@ export function ActivitiesStreamExplorer({
       <div ref={topAnchorRef} />
 
       {headQuery.isError && visibleItems.length > 0 && (
-        <div className="border-base-border bg-base-surface/90 text-text-dim text-small rounded-lg border px-3 py-2 font-mono">
+        <div className="border-base-border bg-base-surface/90 text-text-dim text-small border px-3 py-2 font-mono">
           Could not refresh:{' '}
           {headQuery.error instanceof Error
             ? headQuery.error.message
@@ -525,16 +529,16 @@ export function ActivitiesStreamExplorer({
             <button
               type="button"
               onClick={handleMergePending}
-              aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
-              className="border-jade/10 w-full rounded-none border-y bg-[color:var(--bar)] px-4 py-1.5 text-left transition-colors hover:bg-[color:var(--bar-hover)] sm:py-2"
+              aria-label={`${pendingNewItems.length} new ${countNoun(pendingNewItems.length, 'activity', 'activities')}`}
+              className="border-jade/10 w-full border-y bg-[color:var(--bar)] px-4 py-1.5 text-left transition-colors hover:bg-[color:var(--bar-hover)] sm:py-2"
               style={cssVars({
                 '--bar': STREAM_COLORS.pending,
                 '--bar-hover': STREAM_COLORS.pendingHover,
               })}
             >
               <span className="text-text text-small">
-                {pendingNewItems.length} new activit{pendingNewItems.length === 1 ? 'y' : 'ies'} ·
-                Show at top
+                {pendingNewItems.length} new{' '}
+                {countNoun(pendingNewItems.length, 'activity', 'activities')} · Show at top
               </span>
             </button>
           )}
@@ -546,7 +550,7 @@ export function ActivitiesStreamExplorer({
             onFilterChange={handleFilterChange}
           />
         </div>
-        {isLoading ? (
+        {awaited ? (
           <LoadingRows />
         ) : initialError ? (
           <div role="alert" className="text-small flex flex-col gap-1 py-4">
@@ -562,15 +566,20 @@ export function ActivitiesStreamExplorer({
             {visibleItems.map((activity, index) => {
               const key = itemKey(activity);
               const previousLabel =
-                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp) : null;
-              const currentLabel = getActivityDayLabel(activity.timestamp);
+                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp, now) : null;
+              const currentLabel = getActivityDayLabel(activity.timestamp, now);
               const showDayDivider = currentLabel !== previousLabel;
 
               return (
                 <div key={key}>
                   {showDayDivider && <ActivityDayDivider label={currentLabel} />}
                   {/* The lock kind gets its own column so it never wraps under the address. */}
-                  <ActivityRow activity={activity} fresh={highlightedKeys.has(key)} lockColumn />
+                  <ActivityRow
+                    activity={activity}
+                    fresh={highlightedKeys.has(key)}
+                    lockColumn
+                    age
+                  />
                 </div>
               );
             })}
@@ -581,7 +590,7 @@ export function ActivitiesStreamExplorer({
                 <button
                   type="button"
                   onClick={() => void fetchNextPage()}
-                  className="border-base-border text-text hover:text-text-bright text-small rounded border px-5 py-2"
+                  className="border-base-border text-text hover:text-text-bright text-small border px-5 py-2"
                 >
                   Older
                 </button>
@@ -595,11 +604,11 @@ export function ActivitiesStreamExplorer({
             )}
 
             {isFetchNextPageError && (
-              <div className="border-base-border/50 border-t px-3 py-3 text-center">
+              <div className="border-row-rule border-t px-3 py-3 text-center">
                 <p className="text-text text-small">Could not read older activities</p>
                 <button
                   type="button"
-                  className="text-jade hover:text-jade/80 text-small mt-1 cursor-pointer underline transition-colors"
+                  className="text-jade hover:text-jade-dim text-small mt-1 cursor-pointer underline transition-colors"
                   onClick={() => void fetchNextPage()}
                 >
                   Retry

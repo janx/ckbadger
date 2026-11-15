@@ -6,9 +6,9 @@ import {
   ScriptCodeClassLegend,
   ScriptCodeClassSummary,
   scriptClassLabel,
-  scriptShare,
 } from '@/components/scripts/script-code-evidence';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
+import { percentOf } from '@/lib/format-unit';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 // Scripts board (Version 50): of 49.77B CKB under the lock scripts, 96.5% immutable, 3.47% a
@@ -68,27 +68,31 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
     expect(container.querySelector('[data-code-class-segment]')).toBeNull();
     const sentence = screen.getByTestId('code-class-sentence');
     expect(sentence.textContent).toMatch(
-      /^Of the 49,794,300,000(\.0+)? CKB under these 36 lock scripts, /
+      /^Of the 49,794,300,000(\.0+)? CKB under these 36\slock scripts, /
     );
-    expect(sentence.textContent).toContain('96.5% runs code no one can change');
+    expect(sentence.textContent).toContain('96.46% runs code no one can change');
     expect(sentence.textContent).toContain('3.47% runs code a multisig can replace');
-    expect(sentence.textContent).toContain('0.075% runs code a single key can replace');
+    expect(sentence.textContent).toContain('0.07% runs code a single key can replace');
     const legend = screen.getByRole('list', { name: 'Code classes' });
     expect(within(legend).getAllByRole('listitem')).toHaveLength(3);
     expect(within(legend).getByText(/a multisig can replace/i)).toBeInTheDocument();
     expect(legend.textContent).toContain('1,727,000,000');
+    // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
     expect(legend.textContent).toContain('18 scripts');
   });
 });
 
-describe('scriptShare (SC-L6)', () => {
-  it('rounds half-up and keeps two significant digits below 0.1 %, never a false 0.00%', () => {
+// CH-14 and the review's item I (re-pinned on purpose): the scripts' shares are the one
+// percentage, percentOf, two decimals and never a false 0.00% (scriptShare wrote one decimal from
+// 10 %, two from 0.1 % and two significant digits below that; the page gave no reason in words)
+describe('the scripts’ shares (SC-L6)', () => {
+  it('round half up at two decimals and never print a false 0.00%', () => {
     // JoyID: 19,096,283 of 456,002,179.57 CKB = 4.1878…% (the page truncated it to 4.18%).
-    expect(scriptShare(BigInt('1909628300000000'), BigInt('45600217957000000'))).toBe('4.19%');
-    expect(scriptShare(BigInt(965), BigInt(1000))).toBe('96.5%');
-    expect(scriptShare(BigInt(75), BigInt(100000))).toBe('0.075%');
-    expect(scriptShare(BigInt(1), BigInt(10000000))).toBe('0.00001%');
-    expect(scriptShare(BigInt(0), BigInt(10))).toBe('0%');
+    expect(percentOf(BigInt('1909628300000000'), BigInt('45600217957000000'))).toBe('4.19%');
+    expect(percentOf(BigInt(965), BigInt(1000))).toBe('96.50%');
+    expect(percentOf(BigInt(75), BigInt(100000))).toBe('0.08%');
+    expect(percentOf(BigInt(1), BigInt(10000000))).toBe('<0.01%');
+    expect(percentOf(BigInt(0), BigInt(10))).toBe('0.00%');
   });
 });
 
@@ -101,8 +105,8 @@ describe('ScriptCodeClassSummary · visual pass (R2b-b familyCount, D6, 390 px)'
   it('counts scripts per class from familyCount, in the sentence and the legend (SC-L3)', () => {
     render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
     const sentence = screen.getByTestId('code-class-sentence').textContent!;
-    expect(sentence).toContain('3.47% runs code a multisig can replace (18 scripts)');
-    expect(sentence).toContain('0.075% runs code a single key can replace (7 scripts)');
+    expect(sentence).toContain('3.47% runs code a multisig can replace (18\u00a0scripts)');
+    expect(sentence).toContain('0.07% runs code a single key can replace (7\u00a0scripts)');
     const legend = screen.getByRole('list', { name: 'Code classes' });
     expect(legend).toHaveTextContent('· 18 scripts');
     expect(legend).toHaveTextContent('· 36 scripts');
@@ -168,7 +172,7 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
     expect(bar).toHaveClass('h-[28px]', 'text-small');
     const segments = [...container.querySelectorAll<HTMLElement>('[data-code-class-segment]')];
     expect(segments.map((s) => s.textContent)).toEqual([
-      'Immutable · pinned by data hash 96.5%',
+      'Immutable · pinned by data hash 96.46%',
       '',
       '',
     ]);
@@ -192,8 +196,8 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
     const segments = [...container.querySelectorAll<HTMLElement>('[data-code-class-segment]')];
     expect(segments.map((s) => s.dataset.codeClassSegment)).toEqual(['unspendable', 'multisig']);
     expect(segments.map((s) => s.textContent)).toEqual([
-      'Immutable · code cell unspendable 40.0%',
-      'A multisig can replace 60.0%',
+      'Immutable · code cell unspendable 40.00%',
+      'A multisig can replace 60.00%',
     ]);
     for (const s of segments) expect(s).toHaveClass('text-text-bright');
   });
@@ -203,7 +207,7 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
     const { container: phone, unmount } = render(<ScriptCodeClassBar classes={classes} />);
     expect(
       [...phone.querySelectorAll('[data-code-class-segment]')].map((s) => s.textContent)
-    ).toEqual(['Immutable · pinned by data hash 96.5%', '', '']);
+    ).toEqual(['Immutable · pinned by data hash 96.46%', '', '']);
     unmount();
     vi.restoreAllMocks();
     stubChartWidth(240);
@@ -228,9 +232,9 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
         .getAllByRole('listitem')
         .map((li) => li.textContent)
     ).toEqual([
-      'Immutable · pinned by data hash 96.5%',
+      'Immutable · pinned by data hash 96.46%',
       'A multisig can replace 3.47%',
-      'One key can replace 0.075%',
+      'One key can replace 0.07%',
     ]);
     expect(legend.textContent).not.toMatch(/\d\.\d{8}|scripts/);
   });

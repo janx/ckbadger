@@ -9,8 +9,10 @@ import {
   createTestQueryClient,
 } from '@/__tests__/utils/test-utils';
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import {
   sporeDetailProducer,
   sporeCellVersionsProducer,
@@ -62,12 +64,21 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   );
   expect(api.getItemCellVersions).toHaveBeenCalledWith('spore', id);
 });
+// A4 Chrome F3: the object id under the title was HexCode's own-box scroller (box 358 px for
+// 436 px at 390, the first screen); it is the head's HeadId in the head's 11 px.
+it('prints the object id in its head as the head’s full id, never a scroller', async () => {
+  render(<SporeDetailPage sporeId={id} />);
+  expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
+  expectHeadId(id);
+});
+
 it('renders exact raw protocol bytes and current gene mapping with separate VM provenance', async () => {
   render(<SporeDetailPage sporeId={id} />);
   // F2 objects (OB-8): the number stays with the DNA; VM provenance is tier-2 DNA evidence.
   // Phase 5 (A13): the number is the last of the DNA command's args, which name the section.
+  // U-15 (re-pinned): one byte is "1 byte", the count and its noun one unit.
   expect(
-    await screen.findByRole('region', { name: /^DNA \d+ bytes · \d+ genes? · number \d+$/ })
+    await screen.findByRole('region', { name: /^DNA \d+\sbytes? · \d+\sgenes? · number \d+$/ })
   ).toHaveTextContent('18446744073709551614');
   expect(screen.getByLabelText('DNA evidence')).toHaveTextContent(
     'original decoder binary hash was not recorded'
@@ -120,6 +131,27 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
   );
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
 });
+// Lane E4: how long ago the object was minted, the life sentence's hover, reads the page's one
+// clock, so it moves with no data change; it was written once, from the time the page mounted.
+// The clock stops with the page.
+it('moves the life sentence’s minted age with no data change (E4)', async () => {
+  vi.useFakeTimers({ now: T0 });
+  const history: ItemCellVersions = structuredClone(sporeCellVersionsProducer);
+  history.data = [{ ...history.data[0], timestamp: String(T0 - 20_000), isLive: true }];
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(history);
+  const { unmount } = render(<SporeDetailPage sporeId={id} />);
+  const ages = () => screen.getByText(/^Minted to /).getAttribute('title');
+  await loadUnderStillClock(() => screen.queryByText(/^Minted to /) !== null);
+  expect(ages()).toBe('minted 20\u00a0seconds ago');
+  tick(1000);
+  expect(ages()).toBe('minted 21\u00a0seconds ago');
+  tick(38_000);
+  expect(ages()).toBe('minted 59\u00a0seconds ago');
+  tick(1000);
+  expect(ages()).toBe('minted 1\u00a0minute ago');
+  unmount();
+  expect(vi.getTimerCount()).toBe(0);
+});
 it('fails with item context when capacity violates the occupied invariant', async () => {
   vi.mocked(api.getSporeObject).mockResolvedValue({ ...sporeDetailProducer, ownedCapacity: '1' });
   const error = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -151,7 +183,7 @@ it('presents BTCFS as link-only media even when a decoded image URL exists', asy
   });
   const { container } = render(<SporeDetailPage sporeId={id} />);
   expect(
-    await screen.findByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗' })
+    await screen.findByRole('link', { name: 'Bitcoin tx 0bfb000000…005719 · inscription i0 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${'0bfb'.padEnd(60, '0')}5719`);
   // Lane U follow-up: the one Omiga link is the media frame's "View image ↗" button; the outlined
   // h1-row button (U5) is gone, so the page has exactly one link to Omiga.
@@ -324,8 +356,14 @@ it('renders not found for both absent namespaces or an unrecognized identifier',
     new ApiRequestError(404, 'not_found', 'Collection not found')
   );
   const { rerender } = render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByText(`/assets/objects/${id}`)).toBeInTheDocument();
-  expect(screen.getByText(/Both \/spore\/objects\/.* returned HTTP 404/)).toBeInTheDocument();
+  expect(await screen.findByText('no object with this id.')).toBeInTheDocument();
+  // U-18: one fact line: the lookup that decided (the collection is asked only after the
+  // object's 404), the id shortened, once
+  expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+    `/assets/objects/${id.slice(0, 10)}…${id.slice(-6)}`
+  );
+  // U-06: an identifier no object route owns is not an id: the same voice page, its own line
   rerender(<SporeDetailPage sporeId="not-an-id" />);
-  expect(screen.getByRole('heading', { name: 'Invalid object identifier' })).toBeInTheDocument();
+  expect(screen.getByText('that is not an object id.')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Invalid object identifier' })).toBeNull();
 });

@@ -4,9 +4,11 @@ import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { AssetClass } from '@/lib/design-tokens';
+import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import type { TxHover, TxLinkSets } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 export interface MatrixColumn {
   id: string;
@@ -34,13 +36,20 @@ export interface MatrixGroup {
   name: string;
   href?: string;
   mark?: AssetClass | null;
-  sub: ReactNode;
+  /**
+   * The line under the name (the lock's args), at the size of the form it is drawn in (U-09):
+   * `row` in the matrix's script column, `tight` in the narrow list.
+   */
+  sub: (size: ShortSize) => ReactNode;
   ran: boolean;
   cellIds: readonly string[];
   /** Null when the group reads no witness. */
   witness: MatrixWitness | null;
-  /** The cell dep its code comes from; null when there is none to point at (an attached lock). */
-  code: ReactNode;
+  /**
+   * The cell dep its code comes from, at the form's size; null when there is none to point at (an
+   * attached lock).
+   */
+  code: (size: ShortSize) => ReactNode;
   /** Exact decimal cycles of a group that ran; null when not measured (or not run). */
   cycles: string | null;
   /** Shown instead of the cycles line (a pending transaction: "will run when committed"). */
@@ -139,7 +148,7 @@ export function ScriptGroupMatrix({
       <div role="table" aria-label="Script groups" className="text-small">
         <div
           role="row"
-          className="border-base-border-subtle text-text-dim text-meta grid items-end border-b pb-1.5"
+          className="border-row-rule text-text-dim text-meta grid items-end border-b pb-1.5"
           style={{ gridTemplateColumns: template }}
         >
           <span role="columnheader">Script</span>
@@ -162,7 +171,7 @@ export function ScriptGroupMatrix({
                     dim(lit?.cells.has(c.id) ?? false) && 'opacity-25'
                   )}
                 >
-                  <span title={c.top} className="text-text-ghost text-meta max-w-[68px] truncate">
+                  <span title={c.top} className="text-text-dim text-meta max-w-[68px] truncate">
                     {c.top}
                   </span>
                   {c.href ? (
@@ -203,7 +212,7 @@ export function ScriptGroupMatrix({
               onFocus={() => onHover({ t: 'group', id: g.id })}
               onBlur={() => onHover(null)}
               className={cn(
-                'border-base-elevated grid items-center border-b transition-opacity',
+                'border-row-rule grid items-center border-b transition-opacity',
                 g.ran ? 'text-text min-h-[54px]' : 'text-text-dim min-h-[46px]',
                 on && 'bg-base-surface',
                 dim(on) && 'opacity-25'
@@ -228,7 +237,7 @@ export function ScriptGroupMatrix({
                     <span className="truncate">{g.name}</span>
                   )}
                 </span>
-                <span className="text-text-dim truncate">{g.sub}</span>
+                <span className="text-text-dim truncate">{unitNode(g.sub('row'))}</span>
                 <span className="text-text-dim">
                   {cyclesLine(g, 'runs here · cycles not available')}
                 </span>
@@ -246,7 +255,8 @@ export function ScriptGroupMatrix({
                     {g.witness.detail && (
                       <span className="text-text-dim">
                         {' '}
-                        · {g.witness.detail.kind}, {formatCount(g.witness.detail.size, 'B', 'B')}
+                        · {g.witness.detail.kind},{' '}
+                        {unitNode(formatCount(g.witness.detail.size, 'B', 'B'))}
                       </span>
                     )}
                   </button>
@@ -286,10 +296,10 @@ export function ScriptGroupMatrix({
                             aria-hidden="true"
                             data-dot={g.ran ? 'ran' : 'attached'}
                             className={cn(
-                              'block rounded-full',
+                              'block',
                               g.ran
-                                ? 'bg-jade h-2.5 w-2.5'
-                                : 'border-text-dim h-[9px] w-[9px] border-[1.2px]'
+                                ? 'bg-jade h-2.5 w-2.5 rounded-full'
+                                : 'border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]'
                             )}
                           />
                         )}
@@ -299,7 +309,7 @@ export function ScriptGroupMatrix({
                 </button>
               </span>
               <span role="cell" className="min-w-0 pl-4">
-                {g.code ?? <span className="text-text-dim">—</span>}
+                {g.code('row') ?? <span className="text-text-dim">—</span>}
               </span>
             </div>
           );
@@ -333,7 +343,7 @@ function GroupList({
 }) {
   return (
     <ul aria-label="Script groups" className="text-small">
-      {groups.map((g, i) => {
+      {groups.map((g) => {
         const on = lit?.groups.has(g.id) ?? false;
         return (
           <li
@@ -348,8 +358,7 @@ function GroupList({
             onFocus={() => onHover({ t: 'group', id: g.id })}
             onBlur={() => onHover(null)}
             className={cn(
-              'flex flex-col gap-1 border-t py-2.5 transition-opacity',
-              i === 0 ? 'border-base-border-subtle' : 'border-base-elevated',
+              'border-row-rule flex flex-col gap-1 border-t py-2.5 transition-opacity',
               g.ran ? 'text-text' : 'text-text-dim',
               on && 'bg-base-surface',
               dim(on) && 'opacity-25'
@@ -391,10 +400,10 @@ function GroupList({
                 aria-hidden="true"
                 data-dot={g.ran ? 'ran' : 'attached'}
                 className={cn(
-                  'mr-2 inline-block rounded-full align-[1px]',
+                  'mr-2 inline-block align-[1px]',
                   g.ran
-                    ? 'bg-jade h-[9px] w-[9px]'
-                    : 'border-text-dim h-[9px] w-[9px] border-[1.2px]'
+                    ? 'bg-jade h-[9px] w-[9px] rounded-full'
+                    : 'border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]'
                 )}
               />
               <button
@@ -424,7 +433,8 @@ function GroupList({
                   {g.witness.detail && (
                     <span className="text-text-dim">
                       {' '}
-                      ({g.witness.detail.kind} {formatCount(g.witness.detail.size, 'B', 'B')})
+                      ({g.witness.detail.kind}{' '}
+                      {unitNode(formatCount(g.witness.detail.size, 'B', 'B'))})
                     </span>
                   )}
                 </>
@@ -434,9 +444,9 @@ function GroupList({
               data-line="evidence"
               className="text-text-dim text-meta flex flex-wrap gap-x-3 gap-y-0.5"
             >
-              <span className="min-w-0 [overflow-wrap:anywhere]">{g.sub}</span>
-              {g.code !== null && (
-                <span className="min-w-0 [overflow-wrap:anywhere]">{g.code}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{unitNode(g.sub('tight'))}</span>
+              {g.code('tight') !== null && (
+                <span className="min-w-0 [overflow-wrap:anywhere]">{g.code('tight')}</span>
               )}
             </div>
           </li>

@@ -3,18 +3,17 @@
 import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
 import { BlockContents } from '@/components/blocks/block-visual';
-import {
-  SentenceNodes,
-  heightListParts,
-  sentenceText,
-  type SentencePart,
-} from '@/components/ui/block-link';
+import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { BLOCK_POSITION_COLORS } from '@/lib/design-tokens';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
+import { HexCode } from '@/components/ui/hex-code';
+import { Dotted } from '@/components/ui/phone-row';
+import { shortenHash } from '@/lib/shorten';
+import { unitNode } from '@/components/ui/units';
 
 /** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
 export type BlockNeighbour = Pick<
@@ -42,14 +41,6 @@ export function positionParts(
     ', ',
     `and included ${block.unclesCount ? formatCount(block.unclesCount, 'uncle') : 'no uncle'}`,
   ];
-}
-
-/** The position sentence as text (lane L: computed once, as parts; the page renders the parts). */
-export function positionSentence(
-  block: Pick<Block, 'number' | 'proposalsCount' | 'unclesCount'>,
-  links: readonly { from: number; to: number }[]
-): string {
-  return sentenceText(positionParts(block, links));
 }
 
 interface BlockPositionProps {
@@ -188,7 +179,7 @@ export function BlockPosition({
       )}
       <div aria-label="Chain position relationships" className="min-w-0 space-y-4 md:hidden">
         <div
-          className="text-small space-y-2 rounded p-3"
+          className="text-small space-y-2 p-3"
           style={{ backgroundColor: BLOCK_POSITION_COLORS.currentTile }}
         >
           <Link href={`/blocks/${block.hash}`} className="text-text-bright block">
@@ -215,11 +206,11 @@ export function BlockPosition({
         {links.map((arc) => (
           <div
             key={`${arc.from}:${arc.to}`}
-            className="border-base-border-subtle text-small space-y-2 border-t pt-3"
+            className="border-row-rule text-small space-y-2 border-t pt-3"
           >
             <p className="text-gold">
-              {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +{arc.to - arc.from}{' '}
-              blocks
+              {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +
+              {unitNode(formatCount(arc.to - arc.from, 'block'))}
             </p>
             <p className="flex flex-wrap items-center gap-2">
               <Link href={`/blocks/${arc.from}`}>{formatBlockNumber(arc.from)}</Link>
@@ -230,7 +221,7 @@ export function BlockPosition({
             </p>
             {arc.uncles.size > 0 && (
               <p className="text-text-dim">
-                Includes proposals carried by {arc.uncles.size} uncle(s).
+                Includes proposals carried by {unitNode(formatCount(arc.uncles.size, 'uncle'))}.
               </p>
             )}
           </div>
@@ -238,14 +229,32 @@ export function BlockPosition({
         {block.uncles.map((uncle, index) => (
           <div
             key={uncle.hash}
-            className="border-base-border-subtle text-small min-w-0 space-y-2 border-t border-dashed pt-3"
+            className="border-row-rule text-small min-w-0 space-y-2 border-t border-dashed pt-3"
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
-            <Link href={`/blocks/${uncle.parentHash}`} className="block break-all">
-              Parent {uncle.parentHash}
+            {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
+            <Link href={`/blocks/${uncle.parentHash}`} className="block">
+              Parent{' '}
+              <HexCode
+                value={uncle.parentHash}
+                truncate={false}
+                copyable={false}
+                variant="inherit"
+              />
             </Link>
-            <Link href={getUncleDetailHref(block.number, index)} className="block break-all">
-              Uncle {formatBlockNumber(uncle.number)} · {uncle.hash}
+            <Link href={getUncleDetailHref(block.number, index)} className="block">
+              <Dotted
+                parts={[
+                  `Uncle ${formatBlockNumber(uncle.number)}`,
+                  <HexCode
+                    key="hash"
+                    value={uncle.hash}
+                    truncate={false}
+                    copyable={false}
+                    variant="inherit"
+                  />,
+                ]}
+              />
             </Link>
             <p className="text-text-dim">
               Included by{' '}
@@ -298,8 +307,8 @@ export function BlockPosition({
                 data-proposal-to={arc.to}
               >
                 <title>
-                  {arc.hashes.size} transactions proposed in {formatBlockNumber(arc.from)} and
-                  committed in {formatBlockNumber(arc.to)}
+                  {formatCount(arc.hashes.size, 'transaction')} proposed in{' '}
+                  {formatBlockNumber(arc.from)} and committed in {formatBlockNumber(arc.to)}
                   {arc.uncles.size
                     ? `; includes proposals carried by ${arc.uncles.size} uncle(s)`
                     : ''}
@@ -337,11 +346,15 @@ export function BlockPosition({
                   href={`/blocks/${current ? block.hash : parent ? block.parentHash : number}`}
                   aria-label={`Block ${formatBlockNumber(number)}`}
                 >
+                  {/* A tile is the surface under its own 1 px border (DY-08: on the tier-2 ground
+                      the tile's fill alone is 1.03:1 by day), drawn on the pixel grid. */}
                   <rect
-                    width={tileWidth}
-                    height="88"
-                    rx="6"
+                    x="0.5"
+                    y="0.5"
+                    width={tileWidth - 1}
+                    height="87"
                     fill={current ? BLOCK_POSITION_COLORS.currentTile : 'var(--c-tile)'}
+                    stroke="var(--c-slate-other)"
                   />
                   <text
                     x="10"
@@ -399,7 +412,6 @@ export function BlockPosition({
                       y={top + 0.5}
                       width={tileWidth - 1}
                       height="71"
-                      rx="6"
                       fill="none"
                       stroke="var(--c-ink-quiet)"
                       strokeDasharray="3 3"
@@ -408,7 +420,7 @@ export function BlockPosition({
                       uncle {formatBlockNumber(uncle.number)}
                     </text>
                     <text x={uncleX + 10} y={top + 39} fill="var(--c-text-dim)" fontSize="11">
-                      {uncle.hash.slice(0, 6)}…{uncle.hash.slice(-4)}
+                      {shortenHash(uncle.hash, 'tight')}
                     </text>
                     <text
                       data-uncle-time
@@ -442,19 +454,13 @@ export function BlockPosition({
                   href={`/blocks/${uncle.parentHash}`}
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
-                  <rect
-                    x={parentX}
-                    y={top}
-                    width="178"
-                    height="58"
-                    rx="6"
-                    fill="var(--c-base-surface)"
-                  />
+                  <rect x={parentX} y={top} width="178" height="58" fill="var(--c-base-surface)" />
                   <text x={parentX + 10} y={top + 21} fill="var(--c-text-dim)" fontSize="11">
                     Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
                   <text x={parentX + 10} y={top + 41} fill="var(--c-text)" fontSize="11">
-                    {uncle.parentHash.slice(0, 12)}…{uncle.parentHash.slice(-6)}
+                    {/* SVG labels in 178 px tiles: the tight size (U-09) */}
+                    {shortenHash(uncle.parentHash, 'tight')}
                   </text>
                 </Link>
                 <Link
@@ -466,7 +472,6 @@ export function BlockPosition({
                     y={top}
                     width="178"
                     height="58"
-                    rx="6"
                     fill="none"
                     stroke="var(--c-ink-quiet)"
                     strokeDasharray="3 3"
@@ -475,7 +480,7 @@ export function BlockPosition({
                     Uncle {formatBlockNumber(uncle.number)}
                   </text>
                   <text x={uncleX + 10} y={top + 41} fill="var(--c-text-dim)" fontSize="11">
-                    {uncle.hash.slice(0, 12)}…{uncle.hash.slice(-6)}
+                    {shortenHash(uncle.hash, 'tight')}
                   </text>
                 </Link>
               </g>

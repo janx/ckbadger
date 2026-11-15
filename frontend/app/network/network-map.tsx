@@ -2,6 +2,7 @@
 
 import { Fragment, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
@@ -10,6 +11,9 @@ import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-pa
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+import { shortenHash } from '@/lib/shorten';
+import { ShortId } from '@/components/ui/short-id';
 
 type Point = NetworkMap['points'][number];
 
@@ -145,20 +149,6 @@ export function layoutCountryClusters(
   return { dots, labels, listed };
 }
 
-/** The dots alone, on the default 720 × 353 map (kept for callers that place only dots). */
-export function layoutMapPoints(
-  points: Point[],
-  width = 720,
-  height = Math.round(720 * 0.49)
-): Array<{ point: Point; x: number; y: number }> {
-  return layoutCountryClusters(points, width, height).dots;
-}
-
-/** A peer id is a 34-byte multihash: head…tail is enough to tell peers apart (CH-57). */
-export function shortPeerId(peerId: string): string {
-  return peerId.length > 20 ? `${peerId.slice(0, 10)}…${peerId.slice(-6)}` : peerId;
-}
-
 /** The map's counts, one derivation for the key, the reading row and the notes. */
 export function mapCounts(map: NetworkMap): {
   reachable: number;
@@ -257,8 +247,8 @@ function sessionWords(point: Point): string {
 /** A node's identity in one line, for the readout under the map: who, where, state, client. */
 function peerLine(point: Point): string {
   const who = point.alias
-    ? `${point.alias.address} · peer ${shortPeerId(point.peerId)}`
-    : `peer ${shortPeerId(point.peerId)}`;
+    ? `${point.alias.address} · peer ${shortenHash(point.peerId, 'row')}`
+    : `peer ${shortenHash(point.peerId, 'row')}`;
   const state = point.reachable ? 'reachable now' : 'verified before, not reachable now';
   return `${who} · ${point.country} · ${state} · ${point.clientVersion}`;
 }
@@ -266,7 +256,7 @@ function peerLine(point: Point): string {
 function PeerReadout({ point, roundId }: { point: Point; roundId: number | null }) {
   const rows: [string, string, string?][] = [
     // With an alias the panel is titled by it, so the peer id is a row (R-13).
-    ...(point.alias ? [['peer', shortPeerId(point.peerId)] as [string, string]] : []),
+    ...(point.alias ? [['peer', shortenHash(point.peerId, 'row')] as [string, string]] : []),
     [
       'state',
       point.reachable ? 'reachable now' : 'verified before, not reachable now',
@@ -277,14 +267,20 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
     ['where', `${point.country} · ${point.asn ?? '—'}`],
     [
       'in address books',
-      `of ${point.advertiserCount.toLocaleString()} peers in round #${roundId ?? '—'}`,
+      `of ${formatCount(point.advertiserCount, 'peer')} in round #${roundId ?? '—'}`,
     ],
     ['first seen', formatUtc8Date(point.firstSeen * 1000)],
   ];
   return (
     <>
       <p className="text-text-bright text-body [overflow-wrap:anywhere]">
-        {point.alias ? point.alias.address : `peer ${shortPeerId(point.peerId)}`}
+        {point.alias ? (
+          point.alias.address
+        ) : (
+          <>
+            peer <ShortId value={point.peerId} kind="hash" size="row" />
+          </>
+        )}
       </p>
       <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-2 gap-y-1">
         {rows.map(([label, value, tone]) => (
@@ -305,7 +301,8 @@ export interface NetworkMapState {
   ref: RefObject<HTMLDivElement | null>;
   width: number;
   height: number;
-  isLoading: boolean;
+  /** The read is awaited (`isAwaited`): fetching, or paused (offline, a hidden tab between retries). */
+  awaited: boolean;
   error: unknown;
   ready: NetworkMap | null;
   placed: ReturnType<typeof layoutCountryClusters> | null;
@@ -321,7 +318,7 @@ export function useNetworkMap(neverVerified: number): NetworkMapState {
   // A named node stays named until the pointer leaves the map (sticky), as before R6.
   const readout = usePinnedReadout<string>(String, { sticky: true });
   const [ref, measured] = useElementWidth<HTMLDivElement>();
-  const { data, isLoading, error } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'map'],
     queryFn: api.getNetworkMap,
     refetchInterval: 30000,
@@ -332,13 +329,16 @@ export function useNetworkMap(neverVerified: number): NetworkMapState {
   // The board's map is about twice as wide as it is tall (880 × 430).
   // On a phone the clusters need more room than the board's ratio leaves (390 shot).
   const height = Math.max(MIN_MAP_HEIGHT, Math.round(width * 0.49));
-  const ready = !isLoading && !error && data ? data : null;
+  const { data, error } = read;
+  // awaited, not isLoading: a read paused offline or between retries is still awaited
+  const awaited = isAwaited(read);
+  const ready = !awaited && !error && data ? data : null;
   const placed = ready ? layoutCountryClusters(ready.points, width, height) : null;
   const selectedId = readout.active;
   if (selectedId !== null && ready && !ready.points.some((point) => point.peerId === selectedId))
     readout.clear();
   const selected = ready?.points.find((point) => point.peerId === selectedId) ?? null;
-  return { neverVerified, readout, ref, width, height, isLoading, error, ready, placed, selected };
+  return { neverVerified, readout, ref, width, height, awaited, error, ready, placed, selected };
 }
 
 /**
@@ -348,7 +348,7 @@ export function useNetworkMap(neverVerified: number): NetworkMapState {
  * or focused node; a tap pins it there until a second tap on it or Escape (R6).
  */
 export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
-  const { readout, ref, width, height, isLoading, error, ready, placed, selected } = map;
+  const { readout, ref, width, height, awaited, error, ready, placed, selected } = map;
   const selectedId = readout.active;
   const layout = placed?.dots ?? [];
   const countryLabels = placed?.labels ?? [];
@@ -361,7 +361,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
         <TerminalPanel aria-label="Map of verified peers" className="min-w-0 self-start">
           <TerminalPanelContent padding="sm">
             <div ref={ref} className="flex min-w-0 flex-col gap-3">
-              {isLoading ? (
+              {awaited ? (
                 <p className="text-text-dim text-small">Loading crawler locations…</p>
               ) : !ready ? (
                 <p role="alert" className="text-negative text-small">
@@ -413,7 +413,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
-                      {country} {count}
+                      {country} {count.toLocaleString('en-US')}
                     </text>
                   ))}
                   {layout.map(({ point, x, y: mapY }) => {
@@ -423,7 +423,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                         key={point.peerId}
                         data-peer={point.peerId}
                         {...readout.bind(point.peerId)}
-                        aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
+                        aria-label={`${point.country} peer ${shortenHash(point.peerId, 'row')}, ${
                           point.reachable ? 'reachable now' : 'verified before, not reachable now'
                         }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
                         opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
@@ -473,7 +473,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
           <aside
             aria-label="Selected peer evidence"
             aria-live="polite"
-            className={`border-base-border-subtle text-small min-w-0 self-start rounded border px-3.5 py-3 ${STICKY_RAIL}`}
+            className={`border-base-border-subtle text-small min-w-0 self-start border px-3.5 py-3 ${STICKY_RAIL}`}
           >
             {selected ? (
               <PeerReadout point={selected} roundId={ready.roundId} />
@@ -521,7 +521,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
             <Fragment key={country}>
               {i > 0 && ' · '}
               <span data-country-listed className="whitespace-nowrap">
-                <span className="text-text">{country}</span> {count}
+                <span className="text-text">{country}</span> {count.toLocaleString('en-US')}
               </span>
             </Fragment>
           ))}
@@ -535,7 +535,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
           </span>
           <svg
             role="img"
-            aria-label={`${neverVerified} peers only heard of`}
+            aria-label={`${formatCount(neverVerified, 'peer')} only heard of`}
             width={width}
             height={12 + Math.floor((neverVerified - 1) / perRow) * 9}
             className="block"
@@ -567,12 +567,14 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
  * place, why close dots move, and why no link is drawn. Shares the map's query (one fetch).
  */
 export function NetworkMapNotes() {
-  const { data, isLoading, error } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'map'],
     queryFn: api.getNetworkMap,
     refetchInterval: 30000,
   });
-  if (isLoading) return null;
+  const { data, error } = read;
+  // awaited, not isLoading: a read paused offline or between retries is still awaited
+  if (isAwaited(read)) return null;
   if (error || !data)
     return (
       <p role="alert" className="text-negative text-small">
@@ -593,16 +595,5 @@ export function NetworkMapNotes() {
       connections to others. Those links cannot be seen from outside, so none are drawn: not even
       this node&apos;s, which would make it look like a centre.
     </p>
-  );
-}
-
-/** The map and the lines under it, together (a page without a hero to split them across). */
-export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
-  const map = useNetworkMap(neverVerified);
-  return (
-    <div className="min-w-0">
-      <NetworkMapPicture map={map} />
-      <NetworkMapFootnotes map={map} />
-    </div>
   );
 }

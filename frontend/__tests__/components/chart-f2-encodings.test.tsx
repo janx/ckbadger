@@ -3,6 +3,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { Chart } from '@/components/ui/chart';
+import { roundedRects } from '@/__tests__/utils/square-corners';
 
 // F2 charts group: the chart encodings of the Charts / ChartDetail boards the shared Chart lacked
 // (CH-09, CH-12, CH-15, CH-22, CH-23, CH-24, CH-35, CH-58). Every one is opt-in.
@@ -37,8 +38,9 @@ describe('shared Chart encodings for the charts boards', () => {
         formatValue={(v) => v}
       />
     );
-    expect(text(container)).toContain('100 %');
-    expect(text(container)).not.toContain('150 %');
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    expect(text(container)).toContain('100%');
+    expect(text(container)).not.toContain('150%');
   });
 
   it('draws a dashed reference line at a target value, inside the axis (CH-12)', () => {
@@ -53,11 +55,13 @@ describe('shared Chart encodings for the charts boards', () => {
         formatValue={(v) => v}
       />
     );
+    // Re-pinned for CH-21 (UI review 2026-11-14): the target's dash is 4 3 in the bright ink,
+    // over a knock-out of the same dash; it was a 3 3 dash at 60 % that the data hid.
     const line = container.querySelector('[data-reference-line="target 4 %"] line')!;
-    expect(line.getAttribute('stroke-dasharray')).toBe('3 3');
+    expect(line.getAttribute('stroke-dasharray')).toBe('4 3');
     expect(text(container)).toContain('target 4 %');
-    // The axis grows to hold the target even though no point reaches it.
-    expect(text(container).some((t) => t === '4 %')).toBe(true);
+    // The axis grows to hold the target even though no point reaches it. Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    expect(text(container).some((t) => t === '4%')).toBe(true);
   });
 
   it('keys a target line above the plot, clear of the data and the hardfork names (C#16)', () => {
@@ -76,11 +80,13 @@ describe('shared Chart encodings for the charts boards', () => {
     );
     const key = container.querySelector('[data-reference-key="target 2.50 %"]')!;
     expect(key.querySelector('text')).toHaveTextContent('target 2.50 %');
-    expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('3 3');
+    // The key's sample is the plot's own line (re-pinned for CH-21: was a 3 3 dash).
+    expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('4 3');
     // The plot starts below the key: every grid line and the marker's name are under it.
     const keyY = Number(key.querySelector('text')!.getAttribute('y'));
     const gridYs = [
-      ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
+      // the grid is the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
+      ...container.querySelectorAll('svg line[stroke="var(--c-row-rule)"]'),
     ].map((n) => Number(n.getAttribute('y1')));
     expect(Math.min(...gridYs) - keyY).toBeGreaterThanOrEqual(10);
     const marker = [...container.querySelectorAll('svg text')].find(
@@ -135,6 +141,27 @@ describe('shared Chart encodings for the charts boards', () => {
     const reading = container.querySelector('[data-hover-reading]')!;
     expect(reading.textContent).toContain('day 2025-01-01');
     expect(reading.textContent).toContain('3! PH/s');
+  });
+
+  it('draws the in-plot hover reading in a square-cornered box (U-02, R1)', () => {
+    const { container } = render(
+      <Chart
+        title="Hash rate"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="PH/s"
+        pointDots
+        formatLabel={(label) => `day ${label}`}
+        formatValue={(v) => `${v}!`}
+      />
+    );
+    const svg = container.querySelector('svg[role="img"]')!;
+    expect(container.querySelector('[data-hover-reading]')).toBeNull();
+    fireEvent.keyDown(svg, { key: 'ArrowLeft' });
+    const box = container.querySelector('[data-hover-reading] > rect');
+    expect(box).toHaveAttribute('stroke', 'var(--c-base-border)');
+    expect(roundedRects(svg)).toEqual([]);
   });
 
   it('draws a series dashed or as a bare line when asked (CH-12 real inflation, CH-58)', () => {
@@ -418,6 +445,15 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
     expect(line.startsWith('M0,')).toBe(true);
   });
 
+  // Lane E2 (ruling R4): an in-plot value is a figure, in the dim ink; the ghost (1.64–2.22:1) is
+  // only for padding zeros and decoration.
+  it('writes the in-plot values in the dim ink, never the ghost', () => {
+    const { container } = render(<Chart {...props} plotName="AR" insideYTicks />);
+    const ticks = Array.from(container.querySelectorAll('svg [data-role="y-tick"]'));
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const t of ticks) expect(t).toHaveAttribute('fill', 'var(--c-text-dim)');
+  });
+
   it("writes the latest value at the line's end", () => {
     const { container } = render(
       <Chart {...props} plotName="AR" endLabel={(v) => v.slice(0, 5)} />
@@ -436,7 +472,7 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
   });
 });
 
-// Lane P (additive): `insideYTicks="over"` writes the ghost values over the plotted series, so a
+// Lane P (additive): `insideYTicks="over"` writes the in-plot values over the plotted series, so a
 // stacked area (60 % opaque) cannot bury them; `true` keeps them under it (the DAO page's charts).
 describe('in-plot values over a filled chart', () => {
   beforeEach(() => stubChartWidth(600));
@@ -606,14 +642,13 @@ describe('chart material (visual finish V13)', () => {
           formatValue={(v) => v}
         />
       );
-      const grid = [
-        ...container.querySelectorAll('svg line[stroke="var(--c-base-border-subtle)"]'),
-      ];
+      const grid = [...container.querySelectorAll('svg line[stroke="var(--c-row-rule)"]')];
       expect(grid.length).toBeGreaterThan(1);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
+      // A target keeps its own dash (re-pinned for CH-21: 4 3, was 3 3 like a hardfork's).
       expect(container.querySelector('[data-reference-line="target 4 %"] line')).toHaveAttribute(
         'stroke-dasharray',
-        '3 3'
+        '4 3'
       );
       const marker = [...container.querySelectorAll('svg g')].find(
         (g) => g.querySelector('title')?.textContent === 'Meepo'

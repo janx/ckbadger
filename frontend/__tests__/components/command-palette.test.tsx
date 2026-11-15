@@ -234,4 +234,24 @@ describe('CommandPalette', () => {
       delete window.__CKBADGER_RUNTIME_CONFIG__;
     }
   });
+
+  // A4 review 5: where Intl gives no time zone, the help names none ("local time, undefined").
+  it('names no zone under the shortcuts where Intl gives none', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = { buildVersion: '0.8.2@f8947b8d3915' };
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      ...resolved,
+      timeZone: undefined as unknown as string,
+    });
+    try {
+      render(<CommandPalette />);
+      fireEvent.keyDown(window, { key: '?' });
+      expect(screen.getByTestId('shortcuts-about')).toHaveTextContent(
+        /^ckbadger 0\.8\.2 · the status line's clock is local time$/
+      );
+    } finally {
+      spy.mockRestore();
+      delete window.__CKBADGER_RUNTIME_CONFIG__;
+    }
+  });
 });

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { CLASS_KEYS, type AssetClass } from '@/lib/design-tokens';
 import { partitionSpans } from '@/lib/partition-geometry';
+import { color, inkOnFill, type FillInk, type PaletteKey } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 
 export interface IcicleNode {
   key: string;
@@ -12,10 +14,12 @@ export interface IcicleNode {
   placeholder?: string;
   children?: readonly IcicleNode[];
   // ---- F2 group dao (additive; omitted = the original drawing) ----
-  /** Box fill instead of the tone's class colour (a design token, e.g. the DAO issuance palette). */
-  color?: string;
-  /** Label ink: the tone's class colour (default), the bright text ink, or (hierarchy v3) the page ink on a light fill. */
-  ink?: 'tone' | 'bright' | 'dark';
+  /**
+   * The box's fill as a palette key, instead of the tone's class colour (the DAO issuance
+   * palette). The words inside a box take the ink its fill calls for (`inkOnFill`), never one
+   * picked by hand.
+   */
+  fill?: PaletteKey;
   /** A quiet third line under the value (or after it, inside the box). */
   note?: string;
   /** Under the box from its left edge (default), under it ending at its right edge, or inside it. */
@@ -42,6 +46,25 @@ export interface IciclePartitionProps {
   /** Box heights by depth (px) and the gap between rows and between sibling boxes. */
   rows?: { heights: readonly number[]; gap: number };
 }
+
+/**
+ * A box's paint: its fill (the node's own, else its tone's class colour) as a key and as a colour
+ * reference, and its strength.
+ */
+export function icicleNodePaint(node: IcicleNode): {
+  key: PaletteKey;
+  color: string;
+  opacity: number;
+} {
+  const key = node.fill ?? CLASS_KEYS[node.tone];
+  return { key, color: color(key), opacity: node.opacity ?? 0.9 };
+}
+
+/** The class of each ink a word inside a box can take (`FILL_INKS`), as a literal for Tailwind. */
+const FILL_INK_CLASS: Record<FillInk, string> = {
+  'base-void': 'fill-base-void',
+  'text-bright': 'fill-text-bright',
+};
 
 const W = 900;
 const BOX = 28;
@@ -88,10 +111,12 @@ function fittedLabel(
   pad: number
 ): { name: boolean; note: boolean } | 'share' | null {
   const fits = (text: string) => text.length * advance(px) + 2 * pad <= width;
-  const core = `${label.name} ${label.share}${label.unit ? ` ${label.unit}` : ''}`;
+  const share = `${label.share}${label.unit ? ` ${label.unit}` : ''}`;
+  const core = `${label.name} ${share}`;
   if (label.note && fits(`${core} · ${label.note}`)) return { name: true, note: true };
   if (fits(core)) return { name: true, note: false };
-  if (fits(label.share)) return 'share';
+  // A share alone keeps its unit (an amount is never a bare number).
+  if (fits(share)) return 'share';
   return null;
 }
 
@@ -125,6 +150,7 @@ export function IciclePartition({
   }
   const lastBelow = placed.some((p) => p.depth === depth && p.node.align !== 'inside');
   const height = rowY[depth] + boxH(depth) + (rows || hideLabels || !lastBelow ? 0 : LABELS);
+  const { resolved: theme } = useTheme();
   return (
     <svg
       role="img"
@@ -134,14 +160,10 @@ export function IciclePartition({
       className="block overflow-visible font-mono"
     >
       {placed.map(({ node, depth: d, x, width }) => {
-        const ink =
-          node.ink === 'bright'
-            ? 'fill-text-bright'
-            : node.ink === 'dark'
-              ? 'fill-base-bg'
-              : undefined;
-        const inkFill =
-          node.ink === 'bright' || node.ink === 'dark' ? undefined : CLASS_COLORS[node.tone];
+        const paint = icicleNodePaint(node);
+        // Words inside the box: the one ink its fill calls for in this theme, every word of them
+        // (a box is a fill, so no word on it is dim or thinned; A5's fill-ink rule, DY-03).
+        const boxInk = FILL_INK_CLASS[inkOnFill(theme, paint.key, paint.opacity).ink];
         const h = boxH(d);
         // hierarchy v3: words inside the box at body (a ≥ 40 px row) or meta, where they fit.
         const px = h >= 40 ? 13 : 11;
@@ -159,9 +181,8 @@ export function IciclePartition({
               y={rowY[d]}
               width={width}
               height={h}
-              rx="3"
-              fill={node.color ?? CLASS_COLORS[node.tone]}
-              fillOpacity={node.opacity ?? 0.9}
+              fill={paint.color}
+              fillOpacity={paint.opacity}
             />
             {node.boxLabel && fitted !== null && (
               <text
@@ -169,25 +190,19 @@ export function IciclePartition({
                 x={x + pad}
                 y={rowY[d] + h / 2 + Math.round(px * 0.35)}
                 fontSize={px}
-                className={ink}
+                className={boxInk}
               >
                 {fitted === 'share' ? (
-                  <tspan fontWeight={500}>{node.boxLabel.share}</tspan>
+                  <>
+                    <tspan fontWeight={500}>{node.boxLabel.share}</tspan>
+                    {node.boxLabel.unit && ` ${node.boxLabel.unit}`}
+                  </>
                 ) : (
                   <>
                     {node.boxLabel.name} <tspan fontWeight={500}>{node.boxLabel.share}</tspan>
-                    {node.boxLabel.unit && (
-                      <tspan className={node.ink === 'dark' ? undefined : 'fill-text'}>
-                        {' '}
-                        {node.boxLabel.unit}
-                      </tspan>
-                    )}
+                    {node.boxLabel.unit && <tspan> {node.boxLabel.unit}</tspan>}
                     {fitted.note && (
-                      <tspan
-                        data-part="note"
-                        className={node.ink === 'dark' ? undefined : 'fill-text-dim'}
-                        fillOpacity={node.ink === 'dark' ? 0.7 : undefined}
-                      >
+                      <tspan data-part="note">
                         {' · '}
                         {node.boxLabel.note}
                       </tspan>
@@ -202,12 +217,11 @@ export function IciclePartition({
                 x={x + 8}
                 y={rowY[d] + 19}
                 fontSize="12"
-                fill={inkFill}
-                className={ink}
+                className={boxInk}
               >
-                {node.label} <tspan className="fill-text-bright">{formatValue(node.value)}</tspan>
+                {node.label} <tspan>{formatValue(node.value)}</tspan>
                 {node.note && (
-                  <tspan className="fill-text" fontSize="11">
+                  <tspan fontSize="11">
                     {' · '}
                     {node.note}
                   </tspan>
@@ -222,8 +236,7 @@ export function IciclePartition({
                   y={rowY[d] + BOX + 15}
                   textAnchor={anchor}
                   fontSize="11"
-                  fill={inkFill}
-                  className={ink}
+                  className="fill-text"
                 >
                   {node.label}
                 </text>
@@ -257,7 +270,6 @@ export function IciclePartition({
                   y={rowY[d + 1]}
                   width={Math.max(width - 2, 0)}
                   height={boxH(d + 1)}
-                  rx="3"
                   fill="none"
                   className="stroke-base-border"
                   strokeDasharray="2 3"

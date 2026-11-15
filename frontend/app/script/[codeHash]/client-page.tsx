@@ -5,8 +5,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from '@/src/navigation';
 import { api } from '@/lib/api';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
+import { NotFoundPage } from '@/components/not-found-page';
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
+/** What `/script/` takes besides a script name, as the not-an-id page says it. */
+const CODE_HASH_RULE = 'a code hash is 0x and 64 hex digits.';
 
 function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
@@ -40,6 +43,9 @@ export default function ScriptByCodeHashPage({
   const rawIdentifier = decodeURIComponent(routeCodeHash);
   const scriptIdentifier = rawIdentifier.trim();
   const isCodeHashIdentifier = isHexScriptHash(scriptIdentifier);
+  // `/script/<name>` is an alias of the named page; `0x…` that is not 32 bytes is neither a code
+  // hash nor a name.
+  const isMalformedCodeHash = !isCodeHashIdentifier && /^0x/i.test(scriptIdentifier);
   const normalizedCodeHash = isCodeHashIdentifier
     ? `0x${scriptIdentifier.slice(2).toLowerCase()}`
     : scriptIdentifier;
@@ -47,12 +53,12 @@ export default function ScriptByCodeHashPage({
   const initialKind = normalizeScriptKind(searchParams.get('kind'));
 
   useEffect(() => {
-    if (!scriptIdentifier || isCodeHashIdentifier) {
+    if (!scriptIdentifier || isCodeHashIdentifier || isMalformedCodeHash) {
       return;
     }
 
     router.replace(`/scripts/${encodeURIComponent(scriptIdentifier)}`);
-  }, [isCodeHashIdentifier, router, scriptIdentifier]);
+  }, [isCodeHashIdentifier, isMalformedCodeHash, router, scriptIdentifier]);
 
   const { data: lookupResult } = useQuery({
     queryKey: ['script-lookup-detail', normalizedCodeHash],
@@ -87,11 +93,15 @@ export default function ScriptByCodeHashPage({
     router.replace(`/scripts/${encodeURIComponent(targetName)}${suffix ? `?${suffix}` : ''}`);
   }, [initialHashType, initialKind, isCodeHashIdentifier, knownScript, normalizedCodeHash, router]);
 
+  if (isMalformedCodeHash) {
+    return <NotFoundPage notAnId={{ kind: 'script', reason: CODE_HASH_RULE }} />;
+  }
+
   if (!isCodeHashIdentifier || (knownScript && hasKnownScriptName(knownScript.name))) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
-          <div className="text-text-dim text-body">Resolving script page...</div>
+          <div className="text-text-dim text-body">Resolving script page…</div>
         </main>
       </div>
     );

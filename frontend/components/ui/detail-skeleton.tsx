@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-const BAR = 'bg-base-surface animate-pulse rounded';
+const BAR = 'bg-base-surface animate-pulse';
 
 /**
  * An entity page while its data loads (visual finish V8): the shape of what is coming, not a

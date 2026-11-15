@@ -44,9 +44,11 @@ describe('CkbytesSection', () => {
     // what the figure is, quiet beside it, where "at #N" stood (the board's label)
     const label = within(total).getByTestId('ckbytes-label');
     expect(label).toHaveTextContent(/^in circulation$/);
-    expect(label).toHaveClass('text-text-dim', 'text-small', 'ml-3');
-    // one unit, never broken inside, at its own tracking (not the display figure's)
-    expect(label).toHaveClass('whitespace-nowrap', 'tracking-normal');
+    // at its own tracking (not the display figure's); re-pinned (A4 Chrome F1): no margin of its
+    // own (the row's gap stands between the two), and no nowrap — as an item of a wrapping row it
+    // moves under the figure whole
+    expect(label).toHaveClass('text-text-dim', 'text-small', 'tracking-normal');
+    expect(label.className).not.toMatch(/(^|\s)m[lx]?-/);
     expect(total.lastElementChild).toBe(label);
     expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
     // Lane L: the block the total is exact at is a link.
@@ -57,6 +59,43 @@ describe('CkbytesSection', () => {
       'href',
       '/mainnet/charts/total-supply'
     );
+  });
+
+  // PA-19 (UI review 2026-11-14): at 390 the supply figure filled the line and its "CKB" went to
+  // the caption's line, 3 px off its baseline; at 360 the figure itself, 23 characters at 26 px
+  // (355.2 px with its −0.01 em tracking), could break inside (overflow-wrap: anywhere). The same
+  // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.8 px), the
+  // decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at 360, and the figure
+  // and its unit are one unbreakable unit; "in circulation" moves under it whole.
+  it('keeps the supply figure and its unit one unit, the decimals 13 px below 640 (PA-19)', async () => {
+    render(<CkbytesSection />);
+    const total = await screen.findByTestId('ckbytes-circulating');
+    expect(total).not.toHaveClass('[overflow-wrap:anywhere]');
+    expect(total.children).toHaveLength(2);
+    const figure = total.firstElementChild as HTMLElement;
+    expect(figure).toHaveClass('whitespace-nowrap');
+    expect(figure).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
+    expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-body');
+    expect(total.lastElementChild).toBe(within(total).getByTestId('ckbytes-label'));
+  });
+
+  // A4 Chrome F1: the figure (nowrap) and the label (nowrap) followed each other with no
+  // whitespace between, so the line had no break between two unbreakable units and the label ran
+  // off the page (+52 px at 390, +56 at 640). The two are items of a wrapping row: the label goes
+  // to the next line when the figure's line cannot hold both, starting it with no indent; neither
+  // sits in a nowrap parent that holds both.
+  it('sets the figure and its label as two items of a wrapping row (A4 Chrome F1)', async () => {
+    render(<CkbytesSection />);
+    const total = await screen.findByTestId('ckbytes-circulating');
+    expect(total).toHaveClass('flex', 'flex-wrap', 'gap-x-3');
+    expect(total).not.toHaveClass('whitespace-nowrap');
+    const [figure, label] = [...total.children] as HTMLElement[];
+    expect(figure).toHaveClass('whitespace-nowrap');
+    expect(label).toBe(within(total).getByTestId('ckbytes-label'));
+    expect(figure).not.toContainElement(label);
+    // nothing between the row and the page lays the two out on one unbreakable line
+    for (let el: HTMLElement | null = total; el; el = el.parentElement)
+      expect(el).not.toHaveClass('whitespace-nowrap');
   });
 
   // Rubbing × Song print, phase 5 (H3, the Main board): `■ supply`, the block the allocation was
@@ -148,7 +187,8 @@ describe('CkbytesSection', () => {
     expect(formula.textContent).toBe(
       `C ${MINUS} burnt ${MINUS} S · from the DAO header of #20,820,045`
     );
-    expect(formula).toHaveClass('text-text-ghost', 'text-meta', 'font-mono');
+    // R4 (re-pinned on purpose): the formula is information, in the dim ink
+    expect(formula).toHaveClass('text-text-dim', 'text-meta', 'font-mono');
     expect(within(formula).queryByRole('link')).toBeNull();
   });
 
@@ -204,7 +244,8 @@ describe('CkbytesSection', () => {
       daoFree: '0',
     });
     render(<CkbytesSection />);
-    const bar = await screen.findByRole('img', { name: /Knowledge 0\.00 percent/ });
+    // the review's item I (re-pinned): a share above nothing reads <0.01, never a false 0.00
+    const bar = await screen.findByRole('img', { name: /Knowledge <0\.01 percent/ });
     const knowledge = bar.querySelector('[data-segment="knowledge"]') as HTMLElement;
     const free = bar.querySelector('[data-segment="free"]') as HTMLElement;
     expect(Number.parseFloat(knowledge.style.width)).toBeGreaterThan(0);

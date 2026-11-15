@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { NotFoundPage } from '@/components/not-found-page';
+import { ReadFailure } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetCount } from '@/components/asset/inventory-table';
@@ -20,6 +21,7 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import {
@@ -27,11 +29,12 @@ import {
   LiveBadge,
   cellLifeSentence,
   ckbText,
-  itemLifeSentence,
-  itemLifeAges,
+  ItemLife,
   lockFootnote,
   lockPhrase,
 } from '@/components/asset/object-hero';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -83,7 +86,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           ? 'a Bitcoin inscription'
           : null;
   return (
-    <figure className="border-base-border min-w-0 space-y-3 rounded border p-5 text-center">
+    <figure className="border-base-border min-w-0 space-y-3 border p-5 text-center">
       {renderer ? (
         <>
           <div className="text-text-bright text-body">
@@ -114,7 +117,6 @@ export interface MnftDetailProps {
 }
 
 export function MnftDetail({ objectId }: MnftDetailProps) {
-  const [now] = useState(() => Date.now());
   const detail = useQuery({
     queryKey: ['mnft-item-detail', objectId],
     queryFn: () => api.getMnftItemDetail(objectId),
@@ -140,13 +142,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       />
     );
   }
-  if (!detail.data && detail.isLoading) return <DetailSkeletonPage />;
+  if (!detail.data && isBadRequestApiError(detail.error))
+    return <NotFoundPage notAnId={{ kind: 'object', reason: detail.error.apiMessage }} />;
   if (!detail.data) {
+    if (!detail.error) return <DetailSkeletonPage />;
     return (
       <div className="min-h-screen">
         <main className="container mx-auto min-w-0 py-8">
-          <h1 className="text-text-bright text-entity">m-NFT</h1>
-          <AssetReadState label="m-NFT" error={detail.error} loading={detail.isLoading} />
+          <h1 className="text-text-bright text-entity max-md:text-index">m-NFT</h1>
+          <ReadFailure what="object" error={detail.error} />
         </main>
       </div>
     );
@@ -169,11 +173,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
   // The m-NFT's index in its class (not a block height), as the h1 writes it.
   const tokenNumber = item.tokenIndex.toLocaleString('en-US');
   const evidenceState = (
-    <AssetReadState
-      error={protocol.error}
-      loading={protocol.isLoading}
-      label="item cell evidence"
-    />
+    <AssetReadState error={protocol.error} read={protocol} label="item cell evidence" />
   );
   return (
     <AssetDetailShell
@@ -190,7 +190,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         { label: className, href: classHref },
       ]}
       status={<LiveBadge live={item.isLive} gone="Burned" />}
-      identity={<Hash hash={item.nftId} truncate={false} className="text-meta break-all" />}
+      identity={<HeadId value={item.nftId} kind="hash" copyable />}
       intro={
         <div className="space-y-4 pt-1">
           <AssetReadState error={detail.error} label="m-NFT" retained />
@@ -201,9 +201,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           )}
           {history && history.data.length > 0 ? (
             <p className="text-text text-body leading-relaxed">
-              <span title={itemLifeAges(history.data, now, 'Issued')}>
-                {itemLifeSentence(history.data, now, 'Issued', item.issuer.name ?? 'its issuer')}
-              </span>
+              <ItemLife
+                versions={history.data}
+                verb="Issued"
+                by={item.issuer.name ?? 'its issuer'}
+              />
             </p>
           ) : (
             <p className="text-text text-body">
@@ -225,7 +227,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {/* F2 objects (OB-M6): the board's four properties; configure decoding is tier 2. */}
           {/* One column until md: at 640 the 2×2 grid broke "8 bytes" (responsive B#15). */}
           <dl aria-label="Properties" className="grid gap-x-7 md:grid-cols-2">
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Token</dt>
               <dd className="text-text-bright text-right">
                 #<AssetCount value={item.tokenIndex} />{' '}
@@ -235,14 +237,14 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </dd>
             </div>
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">State</dt>
               <dd className="text-text-bright text-right">
                 0x{item.state.toString(16).padStart(2, '0')} ·{' '}
                 {item.claimed ? 'claimed' : 'unclaimed'} · {item.locked ? 'locked' : 'unlocked'}
               </dd>
             </div>
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Issuer</dt>
               <dd className="text-text-bright text-right">
                 {item.issuer.name ?? 'Unnamed issuer'}{' '}
@@ -251,13 +253,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </dd>
             </div>
-            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Characteristic</dt>
               <dd className="text-text-bright min-w-0 text-right [overflow-wrap:anywhere]">
                 {characteristic.every((b) => b === '00') ? (
                   <>
                     none, all zero ·{' '}
-                    <span className="whitespace-nowrap">{characteristic.length} bytes</span>
+                    <span className="whitespace-nowrap">
+                      {formatCount(characteristic.length, 'byte')}
+                    </span>
                   </>
                 ) : (
                   item.characteristicHex
@@ -278,10 +282,16 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               value: history ? (
                 current ? (
                   <AppLink href={`/address/${current.ownerAddress}`}>
-                    <Hash hash={current.ownerAddress} className="text-body" copyable={false} />
+                    <Hash
+                      hash={current.ownerAddress}
+                      kind="address"
+                      size="row"
+                      className="text-body"
+                      copyable={false}
+                    />
                   </AppLink>
                 ) : (
-                  'No live cell'
+                  'No live owner'
                 )
               ) : (
                 evidenceState
@@ -289,7 +299,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               note: current ? (
                 <>
                   {current.lockName ?? 'Unregistered lock'} · since{' '}
-                  {formatUtc8Date(current.timestamp)}
+                  <Utc8Date timestamp={current.timestamp} />
                 </>
               ) : undefined,
             },
@@ -321,7 +331,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     <span className="text-text-dim">never</span>
                   ) : (
                     <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
-                      {formatUtc8Date(last.timestamp)}
+                      <Utc8Date timestamp={last.timestamp} />
                     </AppLink>
                   )
                 ) : (
@@ -336,7 +346,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                       <AppLink href={`/blocks/${last.blockNumber}`}>
                         {formatBlockNumber(last.blockNumber)}
                       </AppLink>{' '}
-                      · {moves} transfer{moves === 1 ? '' : 's'} since issue
+                      · {moves} {countNoun(moves, 'transfer')} since issue
                     </>
                   )
                 ) : undefined,
@@ -412,7 +422,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             error={protocol.error}
             label="item cell evidence"
             retained={!!evidence}
-            loading={protocol.isLoading}
+            read={protocol}
           />
           {evidence && <ItemEvidence protocol={evidence} />}
         </>
@@ -423,7 +433,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         error={protocol.error}
         label="item cell evidence"
         retained={!!evidence}
-        loading={protocol.isLoading}
+        read={protocol}
       />
       {history && (
         <div role="region" aria-label="CKB held in its cell" className="space-y-3">
@@ -515,11 +525,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             </div>
           </>
         ) : (
-          <AssetReadState
-            error={collection.error}
-            loading={collection.isLoading}
-            label="class totals"
-          />
+          <AssetReadState error={collection.error} read={collection} label="class totals" />
         )}
       </section>
     </AssetDetailShell>

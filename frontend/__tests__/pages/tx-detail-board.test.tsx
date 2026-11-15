@@ -5,7 +5,7 @@
  * the cellbase and DAO-withdrawal variants and the pending wording.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import {
@@ -47,8 +47,6 @@ vi.mock('@/lib/api', async () => {
       lookupScripts: vi.fn(),
       getBlock: vi.fn(),
     },
-    isWarmupPendingError: vi.fn(() => false),
-    isNetworkInitializingError: vi.fn(() => false),
   };
 });
 vi.mock('@/hooks/useCyclesCalculation', () => ({
@@ -377,11 +375,41 @@ describe('Transaction board, tier 1', () => {
     expect(h1.querySelector('[data-class]')).toBeNull();
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
-      'Nervape 3x 0x51c7...96f2 moved from ckb1qzda...cjk9lz to ckb1qzda...shp3hr. The sender paid a 0.00064119 CKB fee.'
+      // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size
+      'Nervape 3x 0x51c75a0000…000096f2 moved from ckb1qzda0cr0…sqcjk9lz to ckb1qzda0cr0…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
+    // A4 review 3: the one copy path; a copy that worked says so in its title for a moment
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveAttribute(
+        'title',
+        'Copied'
+      )
+    );
+  });
+
+  // A4 review 3: over plain HTTP on a LAN address there is no clipboard. The copy button copies
+  // through the one copy path: nothing claims a copy, and nothing rejects unhandled.
+  it('claims no copy and rejects nothing where the clipboard is absent', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      Object.assign(navigator, { clipboard: undefined });
+      render(<TransactionDetailPage />);
+      await screen.findByRole('heading', { level: 1, name: 'Object transfer' });
+      const button = screen.getByRole('button', { name: 'Copy transaction hash' });
+      await act(async () => {
+        fireEvent.click(button);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(button).toHaveAttribute('title', 'Copy transaction hash');
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
   });
 
   // The seals by kind (C2; the Transaction board's one corner): the transaction's long stone,
@@ -413,8 +441,13 @@ describe('Transaction board, tier 1', () => {
     // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
     // the copy button keeps its own classes
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const hash = within(idLine).getByText(TX_HASH);
-    expect(hash.className).toBe('min-w-0');
+    // the lead's ruling a: the hash is the plate's PlateHash, one line or two halves, never a
+    // scroller (re-pinned: it was a bare span, 'min-w-0'); still no size or ink of its own
+    // re-pinned (A4 Chrome F3): the piece is every head's HeadId, still no size or ink of its own
+    const hash = idLine.querySelector('[data-head-id]') as HTMLElement;
+    expect(hash).toHaveAttribute('title', TX_HASH);
+    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
+    expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
     expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
       'text-text-dim',
@@ -478,9 +511,9 @@ describe('Transaction board, tier 1', () => {
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
     ).toEqual([
-      '1 cell became 1.',
+      '1\u00a0cell became 1.',
       '0.00064119 ckb to the miner.',
-      'common knowledge grew by 26 bytes.',
+      'common knowledge grew by 26\u00a0bytes.',
     ]);
     expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
     expect(container.querySelectorAll('.comment')).toHaveLength(1);
@@ -513,7 +546,7 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
     expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent('paid by ckb1qzda...cjk9lz');
+    expect(rail).toHaveTextContent('paid by ckb1qzda0c…cjk9lz');
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
@@ -535,7 +568,7 @@ describe('Transaction board, tier 1', () => {
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
     render(<TransactionDetailPage />);
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
-    await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed'));
+    await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a00…0096f2 departed'));
     expect(table.querySelectorAll('[data-composition="btc_ckb"]')).toHaveLength(2);
     expect(table).toHaveTextContent('−502');
     expect(table).not.toHaveTextContent('502.00000000');
@@ -549,7 +582,8 @@ describe('Transaction board, tier 2', () => {
   it('lights a witness, its groups and their dep, and dims everything unrelated (TX-14)', async () => {
     render(<TransactionDetailPage />);
     const w0 = await screen.findByTestId('tx-witness-item-0');
-    await screen.findAllByText(/supplies code for/);
+    // the cell deps have resolved (PA-12 re-pinned this wait: the rows no longer say "supplies")
+    await waitFor(() => expect(document.querySelector('#tx-dep-0')).not.toBeNull());
     fireEvent.mouseEnter(w0);
     expect(w0).toHaveAttribute('data-lit', 'true');
     expect(screen.getByTestId('tx-witness-item-1')).toHaveClass('opacity-25');
@@ -563,7 +597,8 @@ describe('Transaction board, tier 2', () => {
     );
     expect(document.querySelector('#tx-dep-0')).toHaveAttribute('data-lit', 'true');
     expect(document.querySelector('#tx-dep-1')).toHaveClass('opacity-25');
-    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('quiet');
     fireEvent.mouseLeave(w0);
     expect(screen.getByTestId('tx-witness-item-1')).not.toHaveClass('opacity-25');
   });
@@ -596,16 +631,14 @@ describe('Transaction board, tier 2', () => {
       if (!el) throw new Error('no dep row yet');
       return el as HTMLElement;
     });
-    expect(dep0).toHaveTextContent('dep group');
-    expect(dep0).toHaveTextContent('supplies code for Default Lock');
+    // PA-12 re-pinned the wording: one statement led by the dep kind (was "supplies code for X"
+    // beside "for X").
+    expect(dep0).toHaveTextContent('dep group for Default Lock');
     expect(dep0).toHaveTextContent('↳ 0xmember:0 · Default Lock code, 52,048 B');
     expect(dep0).toHaveTextContent('↳ 0xother:1 · 1,048,576 B no script here names');
-    expect(document.querySelector('#tx-dep-1')).toHaveTextContent(
-      'supplies code for Spore · 76,752 B'
-    );
+    expect(document.querySelector('#tx-dep-1')).toHaveTextContent('code for Spore · 76,752 B');
     const dep2 = document.querySelector('#tx-dep-2') as HTMLElement;
-    expect(dep2).toHaveTextContent('code of Default Lock · 122,552 B');
-    expect(dep2).toHaveTextContent('not run here');
+    expect(dep2).toHaveTextContent('code of Default Lock, not run here · 122,552 B');
     expect(dep2).not.toHaveTextContent('dep_group');
     fireEvent.mouseEnter(dep2);
     expect(
@@ -615,9 +648,9 @@ describe('Transaction board, tier 2', () => {
     const attached = document.querySelector(
       `[data-group-row="lock:attached:${OUTPUT_LOCK}"]`
     ) as HTMLElement;
-    expect(attached).toHaveTextContent('code 0xd00a0222...2c47f7:0 · not run here');
+    expect(attached).toHaveTextContent('code 0xd00a0222…2c47f7:0 · not run here');
     // In the code column the out point opens the code cell; the kind jumps to the dep row.
-    expect(within(attached).getByRole('link', { name: '0xd00a0222...2c47f7:0' })).toHaveAttribute(
+    expect(within(attached).getByRole('link', { name: '0xd00a0222…2c47f7:0' })).toHaveAttribute(
       'href',
       expect.stringMatching(new RegExp(`/cell/0xd00a0222${'00'.repeat(26)}2c47f7-0$`))
     );
@@ -628,18 +661,47 @@ describe('Transaction board, tier 2', () => {
     const spore = document.querySelector(
       `[data-group-row="type:run:${TYPE_SCRIPT}"]`
     ) as HTMLElement;
-    expect(within(spore).getByRole('link', { name: '0x96b198fb...b69824:0' })).toHaveAttribute(
+    expect(within(spore).getByRole('link', { name: '0x96b198fb…b69824:0' })).toHaveAttribute(
       'href',
       expect.stringMatching(new RegExp(`/cell/0x96b198fb${'00'.repeat(26)}b69824-0$`))
     );
     expect(within(spore).getByRole('link', { name: 'code' })).toHaveAttribute('href', '#tx-dep-1');
   });
 
+  // PA-12 (UI review 2026-11-14): a dep row said what it supplies twice, "supplies code for Spore ·
+  // 76,752 B" and, in a second column, "for Spore" (and "no script here runs it" beside "not run
+  // here"), each wrapping in half the width of a phone. The row says it once at every width: the
+  // out point, then one statement led by the kind of dep — what it supplies code for, or whose code
+  // it holds and that it does not run here — and the code's size.
+  it('says once what each cell dep is for, the dep kind leading the statement (PA-12)', async () => {
+    render(<TransactionDetailPage />);
+    const dep = (i: number) =>
+      waitFor(() => {
+        const el = document.querySelector(`#tx-dep-${i}`);
+        if (!el) throw new Error(`no dep row ${i} yet`);
+        return el as HTMLElement;
+      });
+    const count = (el: HTMLElement, word: string) => el.textContent!.split(word).length - 1;
+    const code = await dep(1);
+    expect(code).toHaveTextContent(/^0x96b198fb…b69824:0code for Spore · 76,752 B$/);
+    expect(count(code, 'Spore')).toBe(1);
+    const group = await dep(0);
+    expect(group).toHaveTextContent(/^0x71a7ba8f…72e46c:0dep group for Default Lock↳/);
+    // the group's statement, then its member's own line
+    expect(count(group, 'Default Lock')).toBe(2);
+    expect(count(group, ' for ')).toBe(1);
+    const attached = await dep(2);
+    expect(attached).toHaveTextContent(
+      /^0xd00a0222…2c47f7:0code of Default Lock, not run here · 122,552 B$/
+    );
+    expect(count(attached, 'not run here')).toBe(1);
+  });
+
   it('draws the proposal ruler and the exact capacity equation (TX-17, TX-19)', async () => {
     render(<TransactionDetailPage />);
     expect(
       await screen.findByRole('img', {
-        name: 'Proposed in block 99, committed 2 blocks later in 101; the commit window is 2 to 10 blocks',
+        name: 'Proposed in block 99, committed 2\u00a0blocks later in 101; the commit window is 2 to 10 blocks',
       })
     ).toBeInTheDocument();
     expect(await screen.findByTestId('tx-capacity-equation')).toHaveTextContent(
@@ -807,14 +869,15 @@ describe('Transaction variants (D4)', () => {
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
     ).toEqual([
-      '1 cell from the block reward; none consumed.',
-      'common knowledge grew by 61 bytes.',
+      '1\u00a0cell from the block reward; none consumed.',
+      'common knowledge grew by 61\u00a0bytes.',
     ]);
     expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
-        'miner lock Default Lock(0xabab...abab) · message “0.210.0 (860c9bb 2026-09-21)”'
+        // U-09 (re-pinned): a witness note in its row, the row size
+        'miner lock Default Lock(0xabababab…ababab) · message “0.210.0 (860c9bb 2026-09-21)”'
       )
     );
     expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('a cellbase runs no script');
@@ -886,7 +949,7 @@ describe('Transaction board, R2b-a fields', () => {
     await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'));
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
     expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
-      'pubkey hash 0x111111...1111'
+      'pubkey hash 0x11111111…111111'
     );
   });
 
@@ -936,10 +999,10 @@ describe('Transaction board, R2b-a fields', () => {
     );
     expect(
       document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
-    ).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
+    ).toHaveTextContent('args 0x07 + hash 0x31da0000…005d74');
     const owner = screen.getByTestId('tx-fact-output-lock-0');
     expect(owner).toHaveTextContent('New owner of the object in output 0');
-    expect(owner).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
+    expect(owner).toHaveTextContent('args 0x07 + hash 0x31da0000…005d74');
     expect(owner).not.toHaveTextContent(/CKBFS|held through/);
   });
 
@@ -974,7 +1037,7 @@ describe('Transaction board, R2b-a fields', () => {
     const w1 = await screen.findByTestId('tx-witness-item-1');
     await waitFor(() =>
       expect(w1).toHaveTextContent(
-        'message: 2 actions for Spore: MintProxy, Spore (script info 0x454545...4545)'
+        'message: 2 actions for Spore: MintProxy, Spore (script info 0x45454545…454545)'
       )
     );
   });
@@ -1011,7 +1074,7 @@ describe('Transaction board, R2b-a fields', () => {
     });
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
-      'It ran .bit Time Index State and .bit Time Info. ckb1qzda...cjk9lz paid a 0.00064119 CKB fee.'
+      'It ran .bit Time Index State and .bit Time Info. ckb1qzda0cr0…sqcjk9lz paid a 0.00064119 CKB fee.'
     );
   });
 });
@@ -1026,8 +1089,9 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
       'ckb',
     ]);
     const [object, ckb] = groups;
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda...cjk9lz');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda...shp3hr');
+    // U-09 (re-pinned): the ribbon's parties at the row size
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda0c…cjk9lz');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda0c…shp3hr');
     expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
     expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee
@@ -1056,8 +1120,9 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
     const giver = object.querySelector('[data-flow-side="from"] [data-flow-end="party"]')!;
     fireEvent.mouseEnter(giver);
     expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
-    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('opacity-30');
+    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('quiet');
     fireEvent.mouseLeave(giver);
-    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('opacity-30');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('quiet');
   });
 });

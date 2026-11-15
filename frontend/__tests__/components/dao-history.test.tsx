@@ -14,6 +14,7 @@ import {
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import type { ChartResponse } from '@/lib/api';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { expectTicksInGutter } from '@/__tests__/utils/y-ticks';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -162,7 +163,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // the grid of deposited and the share multiple's half-scale line: solid hairlines
     const share = container.querySelector('svg[data-panel="share"]')!;
     for (const panel of [main, share]) {
-      const grid = [...panel.querySelectorAll('line.stroke-base-border-subtle')];
+      // in the row-rule ink (R5, ruling 4c; re-pinned on purpose: it was the hair)
+      const grid = [...panel.querySelectorAll('line.stroke-row-rule')];
       expect(grid.length).toBeGreaterThan(0);
       for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
     }
@@ -180,6 +182,29 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // Evidence first: the reading follows every panel.
     for (const svg of Array.from(container.querySelectorAll('svg')))
       expect(svg.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // UI review 2026-11-14 (DY-06, ruling R4): the reading's fraction digits are the quieter ink of
+  // the amount's sign (AMOUNT_INK), never the amount's ink at 70 %; its padding zeros the ghost.
+  it('sets the reading’s fraction digits in the sign’s quieter ink, never at an opacity', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const last = deposited.data.length - 1;
+    deposited.data[last] = { ...deposited.data[last], value: '101190.25' };
+    deposited.peak = { date: date(last), value: '101190.25' };
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(reading).toHaveTextContent('deposited 101,190.25000000');
+    expect(reading).toHaveTextContent('+10.25000000');
+    const fractions = [...reading.querySelectorAll('[data-fraction]')];
+    expect(fractions.map((f) => f.textContent)).toEqual(['.25', '.25', '.25']);
+    // deposited and the peak are plain, the week's net is signed and rising
+    expect(fractions.map((f) => f.className)).toEqual([
+      'text-text-dim',
+      'text-jade-dim',
+      'text-text-dim',
+    ]);
+    expect(reading.innerHTML).not.toMatch(/opacity-/);
   });
 
   it('moves the one reading with the pointer across all panels; a tap pins the day, a second tap lets go (R6)', () => {
@@ -200,15 +225,18 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
     // A tap on the main plot pins the day it lands on; leaving keeps it.
     const main = container.querySelector('svg[data-panel="deposited"]')!;
-    fireEvent.pointerMove(main, { clientX: 600 });
-    fireEvent.click(main, { clientX: 600 });
+    // Re-pinned with U-19: the plot starts after its 48 px value gutter, so its middle day (77 of
+    // 154) is under x = 48 + 1,152 / 2 = 624, no longer 600.
+    fireEvent.pointerMove(main, { clientX: 624 });
+    fireEvent.click(main, { clientX: 624 });
     fireEvent.pointerLeave(main);
     expect(reading).toHaveTextContent(new RegExp(`^selected ${date(77)} · deposited`));
     // "selected" opens the same row of items, so it shares their line.
-    const row = within(reading).getByText(date(77)).parentElement!;
+    // re-pinned (A4 round 2): the date is a unit inside its item, the item in the row
+    const row = within(reading).getByText(date(77)).closest('.flex-wrap') as HTMLElement;
     expect(row).toHaveClass('flex', 'flex-wrap');
     expect(row.firstElementChild).toHaveTextContent(/^selected$/);
-    fireEvent.click(main, { clientX: 600 });
+    fireEvent.click(main, { clientX: 624 });
     expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
   });
 
@@ -230,7 +258,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const weekly = container.querySelector('[data-panel="weekly"]')!;
     // The cap is a round number above p95 × 1.25 (10 × 1.25 → 15); the note follows the name.
     expect(weekly.querySelector('[data-role="chart-name"]')!.textContent).toBe(
-      'net change per week\u00a0·\u00a0±15 scale, 1 week cut'
+      // the review's item C (re-pinned): the count through formatCount, a no-break space
+      'net change per week\u00a0·\u00a0±15 scale, 1\u00a0week cut'
     );
     const clipped = container.querySelectorAll('[data-week][data-clipped="true"]');
     expect(clipped).toHaveLength(1);
@@ -255,6 +284,36 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
       'week from 2024-05-28 −12.34567891'
     );
+  });
+
+  // Lane E2 (ruling R4): the SVG twin of the HTML fractions. The end label's digits after the point
+  // are the sign's fraction ink as a fill at full strength (AMOUNT_INK), never the amount's ink at
+  // fill-opacity .7, which put the cinnabar at 2.91–3.16:1 by night and the celadon at 2.79–3.12:1
+  // by day.
+  it('draws the weekly end label’s fraction in its sign’s fraction ink, never at a fill opacity', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const endOf = (value: string) => {
+      const data = deposited.data.map((p, i) => (i === 154 ? { ...p, value } : p));
+      const { container, unmount } = render(
+        <Picture deposited={{ ...deposited, data }} ratio={ratio} />
+      );
+      const end = container.querySelector('[data-panel="weekly"] [data-role="end-label"]')!;
+      const tspans = [...end.querySelectorAll('tspan')].map((t) => ({
+        text: t.textContent,
+        fill: t.getAttribute('fill'),
+        fillOpacity: t.getAttribute('fill-opacity'),
+      }));
+      unmount();
+      return tspans;
+    };
+    // the last week starts at 101,180 CKB: −12.34567891, then +10.25
+    expect(endOf('101167.65432109')).toEqual([
+      { text: '.34', fill: 'var(--c-rouge-dim)', fillOpacity: null },
+    ]);
+    expect(endOf('101190.25')).toEqual([
+      { text: '.25', fill: 'var(--c-jade-dim)', fillOpacity: null },
+    ]);
   });
 
   it('refuses a deposit history with a missing day', () => {
@@ -296,7 +355,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     ).toHaveTextContent(`since ${date(125)}`);
   });
 
-  it('starts the deposited scale at a round top near the peak and writes its values inside the plot', () => {
+  // Re-pinned with U-19 (UI review 2026-11-14): the values sit in a dim gutter left of the plot
+  // (48 px, the charts' least), anchored at their end, no longer ghost values inside it.
+  it('starts the deposited scale at a round top near the peak and writes its values in a gutter', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
@@ -306,9 +367,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // 101,190 CKB at most: round values up to 150k; 0 is the baseline and 150k the name's band.
     expect(ticks.map((t) => t.textContent)).toEqual(['50k', '100k']);
     for (const t of ticks) {
-      expect(t).toHaveAttribute('x', '8');
-      expect(t).not.toHaveAttribute('text-anchor', 'end');
-      expect(t).toHaveClass('fill-text-ghost');
+      expect(t).toHaveAttribute('x', '40');
+      expect(t).toHaveAttribute('text-anchor', 'end');
+      expect(t).toHaveClass('fill-text-dim');
     }
   });
 });
@@ -371,5 +432,27 @@ describe('cutShare', () => {
     expect(cutShare('1,234.5')).toBe('1,234.5');
     expect(cutShare('7')).toBe('7');
     expect(() => cutShare('7%')).toThrow('is not a decimal');
+  });
+});
+
+// U-19 (UI review 2026-11-14): the deposited plot wrote its round values inside itself in the ghost
+// ink, where a spike crossed them; like every history plot they sit in a dim gutter left of it.
+describe('DaoHistory deposited values (U-19)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([358, 1200])('writes them in a dim gutter left of the plot at %i px', (width) => {
+    stubChartWidth(width);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const svg = container.querySelector('[data-panel="deposited"]')!;
+    expect(expectTicksInGutter(svg, 'deposited')).toEqual(expect.arrayContaining(['50k', '100k']));
+    // the name starts inside the plot, after the gutter
+    const name = svg.querySelector('[data-role="chart-name"]')!;
+    expect(Number(name.getAttribute('x'))).toBeGreaterThan(
+      Number(svg.querySelector('[data-role="y-tick"]')!.getAttribute('x'))
+    );
   });
 });

@@ -7,11 +7,10 @@ import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
 import { api, type KnownScript } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: { getScripts: vi.fn() },
-  isWarmupPendingError: () => false,
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 
@@ -132,7 +131,7 @@ describe('Scripts list against the Scripts board', () => {
         'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.'
       )
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('search by name or code hash')).toBeInTheDocument();
   });
 
   it('writes the Code column as immutable or upgradable · N versions, by whom in its title (SC-L2, SC-L4, L1-1)', async () => {
@@ -141,7 +140,7 @@ describe('Scripts list against the Scripts board', () => {
     const row = (name: string) =>
       within(table).getByRole('link', { name }).closest('tr') as HTMLElement;
     const joyCode = within(row('JoyID')).getByTestId('script-code-class');
-    expect(joyCode.textContent).toBe('upgradable · 5 versions');
+    expect(joyCode.textContent).toBe('upgradable · 5\u00a0versions');
     expect(joyCode.getAttribute('title')).toContain('by a multisig');
     expect(within(row('Default Lock')).getByTestId('script-code-class').textContent).toBe(
       'immutable'
@@ -158,7 +157,7 @@ describe('Scripts list against the Scripts board', () => {
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const joyRow = within(table).getByRole('link', { name: 'JoyID' }).closest('tr') as HTMLElement;
     expect(joyRow.textContent).toContain('161,049');
-    expect(joyRow.getAttribute('title')).toContain('161,049 live of 2,707,778 cells ever');
+    expect(joyRow.getAttribute('title')).toContain('161,049 live of 2,707,778\u00a0cells ever');
     expect(joyRow.textContent).toContain('456,002,179.57');
     expect(joyRow.getAttribute('title')).toContain('456,002,179.57000000 CKB');
     expect(joyRow.textContent).not.toContain('456.00M');
@@ -166,7 +165,7 @@ describe('Scripts list against the Scripts board', () => {
     const godRow = within(table)
       .getByRole('link', { name: 'Godwoken Custodian Lock' })
       .closest('tr') as HTMLElement;
-    expect(godRow.textContent).toContain('0.0001%');
+    expect(godRow.textContent).toContain('<0.01%');
     expect(godRow.textContent).not.toContain('0.00%');
   });
 
@@ -242,7 +241,7 @@ describe('Scripts list · visual pass (R2b-b)', () => {
     render(<ScriptsPage />);
     await screen.findByRole('table', { name: 'Scripts' });
     expect(screen.queryByRole('heading', { name: 'Scripts', level: 2 })).toBeNull();
-    expect(screen.getByText('3 scripts')).toBeInTheDocument();
+    expect(screen.getByText(fullText('3 scripts'))).toBeInTheDocument();
   });
 });
 
@@ -374,7 +373,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // 96.5 % of 1,376 px holds its words; 3.47 % and 0.075 % do not, and stay empty (R12: no
     // exact amounts inside the bar).
     expect(segments.map((s) => s.textContent)).toEqual([
-      'Immutable · pinned by data hash 96.5%',
+      'Immutable · pinned by data hash 96.46%',
       '',
       '',
     ]);
@@ -390,9 +389,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
         .getAllByRole('listitem')
         .map((li) => li.textContent)
     ).toEqual([
-      'Immutable · pinned by data hash 96.5%',
+      'Immutable · pinned by data hash 96.46%',
       'A multisig can replace 3.47%',
-      'One key can replace 0.075%',
+      'One key can replace 0.07%',
     ]);
     for (const share of within(legend).getAllByText(/%$/)) expect(share).toHaveClass('text-text');
     expect(legend.textContent).not.toMatch(/\d\.\d{8}/);
@@ -506,7 +505,7 @@ describe('Scripts list phone row (board L6)', () => {
       {
         key: 'code',
         tone: 'body',
-        left: 'lock·Upgradable · 5 versions· by a multisig · since 2023-10-07',
+        left: 'lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
         right: '161,049 live · of 2,707,778 · 4.19% occupied',
       },
       {
@@ -530,6 +529,28 @@ describe('Scripts list phone row (board L6)', () => {
     expect(within(rows[2]).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
   });
 
+  // PA-03 (UI review 2026-11-14): "bar: CKB | occupied" switches what the table's bar column
+  // draws; the rows the list takes below the table's 1,034 px minimum (a phone, 640, and the 976
+  // px of a 1024 window) draw no bar, so the switch goes with the table, chosen by the list's
+  // measured width like the table itself.
+  it('shows the bar switch only with the table that draws the bar (PA-03)', async () => {
+    for (const width of [358, 608, 976]) {
+      atContainerWidth(width);
+      const view = render(<ScriptsPage />);
+      await screen.findAllByTestId('script-row-mobile');
+      expect(screen.queryByRole('group', { name: 'Bar shows' }), `${width} px`).toBeNull();
+      view.unmount();
+      vi.restoreAllMocks();
+      vi.mocked(api.getScripts).mockResolvedValue(response);
+    }
+    atContainerWidth(1232);
+    render(<ScriptsPage />);
+    await screen.findByRole('table', { name: 'Scripts' });
+    expect(await screen.findByRole('group', { name: 'Bar shows' })).toHaveTextContent(
+      'bar:CKBoccupied'
+    );
+  });
+
   it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {
     atContainerWidth(608);
     render(<ScriptsPage />);
@@ -537,7 +558,7 @@ describe('Scripts list phone row (board L6)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       [
         'identity',
-        'JoyID · lock·Upgradable · 5 versions· by a multisig · since 2023-10-07',
+        'JoyID · lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
         '456,002,179.57000000 CKB',
       ],
       [

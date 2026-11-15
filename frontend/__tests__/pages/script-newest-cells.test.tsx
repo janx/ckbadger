@@ -20,8 +20,6 @@ vi.mock('@/lib/api', () => ({
   },
   ApiRequestError: class ApiRequestError extends Error {},
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 const route = vi.hoisted(() => ({ name: 'Default Lock' }));
@@ -147,11 +145,12 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     const rows = tableRows(section);
     expect(rows).toHaveLength(5);
     expect(rows.map((row) => within(row).getAllByRole('link')[0].textContent)).toEqual([
-      '0xfc7907…cf91:0',
-      '0x55d533…136f:2',
-      '0x55d533…136f:1',
-      '0x55d533…136f:0',
-      '0x3daee5…4722:2',
+      // U-09 (re-pinned): the table's out points at the row size
+      '0xfc79070b…5bcf91:0',
+      '0x55d53352…2a136f:2',
+      '0x55d53352…2a136f:1',
+      '0x55d53352…2a136f:0',
+      '0x3daee52a…b84722:2',
     ]);
     expect(
       within(within(section).getByRole('table', { name: 'Newest cells' }))
@@ -167,7 +166,7 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     const first = fixture.scripts['Default Lock'].newest[
       '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8:type'
     ].data.find((c) => c.txHash.startsWith('0xfc7907'))!;
-    const key = within(row).getByRole('link', { name: '0xfc7907…cf91:0' });
+    const key = within(row).getByRole('link', { name: '0xfc79070b…5bcf91:0' });
     expect(key).toHaveAttribute('href', `/mainnet/cell/${first.txHash}-0`);
     expect(key).toHaveAttribute('title', `${first.txHash}:0`);
     expect(key).toHaveClass('text-body', 'text-text-bright');
@@ -193,7 +192,7 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         name: `${first.address!.slice(0, 10)}…${first.address!.slice(-6)}`,
       })
     ).toHaveAttribute('title', first.address);
-    expect(within(row).getByRole('link', { name: '0xfc7907…cf91' })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: '0xfc79070b…5bcf91' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${first.txHash}`
     );
@@ -202,7 +201,7 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
       '/mainnet/blocks/20911460'
     );
     await waitFor(() =>
-      expect(row).toHaveTextContent('tx 0xfc7907…cf91 · #20,911,460 · 2026-11-03')
+      expect(row).toHaveTextContent('tx 0xfc79070b…5bcf91 · #20,911,460 · 2026-11-03')
     );
     expect(row.getAttribute('title')).toContain(`created in tx ${first.txHash}`);
     expect(row.getAttribute('title')).toContain(`owner ${first.address}`);
@@ -313,14 +312,15 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         {
           key: 'cell',
           tone: 'head',
-          left: '0xfa30a7…31b9:0',
-          right: expect.stringMatching(/^ckb1qzda0c…/),
+          // U-09 (re-pinned): the phone row's out point and owner at the tight size
+          left: '0xfa30…31b9:0',
+          right: 'ckb1…exld6f',
         },
         { key: 'what', tone: 'body', left: 'Nervos DAO withdrawal request', right: null },
         {
           key: 'created',
           tone: 'quiet',
-          left: 'tx 0xfa30a7…31b9 · #20,907,299 · 2026-11-03',
+          left: 'tx 0xfa30…31b9 · #20,907,299 · 2026-11-03',
           right: null,
         },
       ])

@@ -14,6 +14,8 @@ import {
 } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
+import { CHART_GRID_COLOR } from '@/lib/chart-colors';
+import { unitAfter, withUnit } from '@/lib/format-unit';
 
 export interface ChartPoint {
   label: string;
@@ -126,6 +128,13 @@ export interface ChartProps {
    * grid lines stay under the series either way.
    */
   insideYTicks?: boolean | 'over';
+  /**
+   * Lane A5 (UI review 2026-11-14, U-19): the y ticks are bare values ("1.5k"); the unit is said
+   * once, in `plotName`, which is then required. Off (the default), every tick carries its unit.
+   */
+  bareTicks?: boolean;
+  /** A count axis: whole-number ticks only, the step at least 1 (never "0.5 transfers"). */
+  integerTicks?: boolean;
   /** The first series' latest value written at the line's end, from its exact decimal. */
   endLabel?: (value: string) => string;
 }
@@ -156,7 +165,24 @@ const X_LABEL_ROW = 12;
 /** The band above the plot that keys its target lines, its label baseline and swatch length. */
 const REFERENCE_KEY_BAND = 14;
 const REFERENCE_KEY_Y = 10;
-const REFERENCE_SWATCH = 14;
+const REFERENCE_SWATCH = 18;
+/**
+ * A target line, drawn alike in the plot and as its key's sample (CH-21): a dash in the bright ink
+ * over a knock-out of the same dash in the page's ground, drawn after the data, so it reads where
+ * a series runs along it; the sample is that line, not a "---" that reads as text.
+ */
+const REFERENCE_DASH = { stroke: 'var(--c-text-bright)', strokeWidth: 1, strokeDasharray: '4 3' };
+const REFERENCE_KNOCKOUT = { ...REFERENCE_DASH, stroke: 'var(--c-base-bg)', strokeWidth: 3 };
+
+/** The target line from `x1` to `x2` at `y`: the knock-out, then the dash. */
+function ReferenceStroke({ x1, x2, y }: { x1: number; x2: number; y: number }) {
+  return (
+    <>
+      <line x1={x1} x2={x2} y1={y} y2={y} {...REFERENCE_KNOCKOUT} />
+      <line x1={x1} x2={x2} y1={y} y2={y} {...REFERENCE_DASH} />
+    </>
+  );
+}
 
 /** Target-line keys laid right to left from the plot's right edge: dashed swatch, then label. */
 function referenceKeys(
@@ -184,6 +210,8 @@ export type ChartValueAxisInput = Pick<
   | 'yDomain'
   | 'referenceLines'
   | 'formatAxis'
+  | 'bareTicks'
+  | 'integerTicks'
 >;
 
 /**
@@ -200,6 +228,8 @@ export function chartValueAxis({
   yDomain,
   referenceLines = [],
   formatAxis = formatTick,
+  bareTicks = false,
+  integerTicks = false,
 }: ChartValueAxisInput): {
   values: number[][];
   plotValues: number[];
@@ -239,22 +269,29 @@ export function chartValueAxis({
       yDomain[0] >= yDomain[1])
   )
     throw new Error(`${title}: invalid fixed value domain`);
+  if (integerTicks && yScale === 'log')
+    throw new Error(`${title}: a count axis is linear, not logarithmic`);
+  const counted = { integer: integerTicks };
   const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
     (value) => (yScale === 'log' ? Math.log10(value) : value)
   );
   const ticks = yDomain
-    ? niceTicks(yDomain[0], yDomain[1], 4)
+    ? niceTicks(yDomain[0], yDomain[1], 4, 0, counted)
     : plotValues.length
       ? niceTicks(
           kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
           kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
-          4
+          4,
+          0,
+          counted
         )
       : null;
+  // U-19 (lane A5): a bare tick is the value alone; its plot's name says the unit once.
+  const tickUnit = bareTicks ? '' : unit;
   const tickLabel = (value: number, step: number) =>
     yScale === 'log'
-      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
-      : `${formatAxis(value, step)} ${unit}`;
+      ? withUnit(formatAxis(10 ** value, 10 ** step), tickUnit)
+      : withUnit(formatAxis(value, step), tickUnit);
   const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
   return { values, plotValues, ticks, tickLabel, labels };
 }
@@ -299,6 +336,8 @@ export function Chart({
   pin,
   plotName,
   insideYTicks = false,
+  bareTicks = false,
+  integerTicks = false,
   endLabel,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
@@ -371,7 +410,11 @@ export function Chart({
     yDomain,
     referenceLines,
     formatAxis,
+    bareTicks,
+    integerTicks,
   });
+  if (bareTicks && plotName === undefined)
+    throw new Error(`${title}: bare ticks need the plot's name to say the unit`);
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
@@ -438,7 +481,10 @@ export function Chart({
   }, []);
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
-  /** An in-plot value (hierarchy v3): ghost ink, from the plot's left edge, above its line. */
+  /**
+   * An in-plot value (hierarchy v3): a figure, so the dim ink (R4), from the plot's left edge,
+   * above its line.
+   */
   const insideTickLabel = (v: number) =>
     ticks && (
       <text
@@ -446,7 +492,7 @@ export function Chart({
         data-role="y-tick"
         x={left + 8}
         y={yTick(v) - 5}
-        fill="var(--c-text-ghost)"
+        fill="var(--c-text-dim)"
         fontSize="11"
       >
         {tickLabel(v, ticks.step)}
@@ -493,13 +539,21 @@ export function Chart({
               {selected &&
                 series.map((s, i) => (
                   <span key={s.key}>
+                    {/* A legend's label is text, in the text ink; the series colour is on its
+                        swatch only (U-08: "Other scripts" in its slate read 1.4:1). */}
                     {series.length > 1 && (
-                      <span className="text-meta mr-2" style={{ color: color(i) }}>
+                      <span className="text-text text-meta mr-2">
+                        <span
+                          aria-hidden="true"
+                          data-swatch
+                          className="mr-1.5 inline-block h-2 w-2 align-middle"
+                          style={{ backgroundColor: color(i) }}
+                        />
                         {s.label}
                       </span>
                     )}
                     {formatValue(selected.values[s.key])}
-                    <span className="text-text-dim text-meta"> {unit}</span>
+                    <span className="text-text-dim text-meta">{unitAfter(unit)}</span>
                   </span>
                 ))}
             </span>
@@ -516,7 +570,8 @@ export function Chart({
                 <div className="flex flex-wrap justify-between gap-2">
                   <span>{p.label}</span>
                   <span className="tabular-nums">
-                    {formatValue(p.values[series[0].key])} {unit}
+                    {formatValue(p.values[series[0].key])}
+                    {unitAfter(unit)}
                   </span>
                 </div>
                 <div
@@ -574,7 +629,7 @@ export function Chart({
                         x2={right}
                         y1={yTick(v)}
                         y2={yTick(v)}
-                        stroke="var(--c-base-border-subtle)"
+                        stroke={CHART_GRID_COLOR}
                       />
                       {insideYTicks !== 'over' && insideTickLabel(v)}
                     </g>
@@ -586,7 +641,7 @@ export function Chart({
                       x2={right}
                       y1={yTick(v)}
                       y2={yTick(v)}
-                      stroke="var(--c-base-border-subtle)"
+                      stroke={CHART_GRID_COLOR}
                     />
                     <text
                       x={left - 8}
@@ -801,26 +856,15 @@ export function Chart({
               )}
               {referenceLines.map((line) => (
                 <g key={line.label} data-reference-line={line.label}>
-                  <line
-                    x1={left}
-                    x2={right}
-                    y1={y(line.value)}
-                    y2={y(line.value)}
-                    stroke="var(--c-text)"
-                    strokeOpacity="0.6"
-                    strokeDasharray="3 3"
-                  />
+                  <ReferenceStroke x1={left} x2={right} y={y(line.value)} />
                 </g>
               ))}
               {referenceKeys(referenceLines, right).map(({ label, swatch, textEnd }) => (
                 <g key={label} data-reference-key={label}>
-                  <line
+                  <ReferenceStroke
                     x1={swatch}
                     x2={swatch + REFERENCE_SWATCH}
-                    y1={REFERENCE_KEY_Y - 3}
-                    y2={REFERENCE_KEY_Y - 3}
-                    stroke="var(--c-text)"
-                    strokeDasharray="3 3"
+                    y={REFERENCE_KEY_Y - 3}
                   />
                   <text
                     x={textEnd}
@@ -880,7 +924,7 @@ export function Chart({
                     const shown = formatValue(data[activeIndex].values[s.key]);
                     if (typeof shown !== 'string' && typeof shown !== 'number')
                       throw new Error(`${title}: an in-plot reading needs a text value`);
-                    return `${series.length > 1 ? `${s.label} ` : ''}${shown} ${unit}`;
+                    return `${series.length > 1 ? `${s.label} ` : ''}${withUnit(String(shown), unit)}`;
                   });
                   const head = formatLabel(data[activeIndex].label);
                   const boxWidth = Math.max(head.length, ...rows.map((r) => r.length)) * 6.6 + 20;
@@ -895,7 +939,6 @@ export function Chart({
                         y={by}
                         width={boxWidth}
                         height={boxHeight}
-                        rx="6"
                         fill="var(--c-base-surface)"
                         stroke="var(--c-base-border)"
                       />
@@ -967,7 +1010,8 @@ export function Chart({
                       <Fragment key={s.key}>
                         {' · '}
                         {series.length > 1 && `${s.label} `}
-                        {formatValue(selected.values[s.key])} {unit}
+                        {formatValue(selected.values[s.key])}
+                        {unitAfter(unit)}
                       </Fragment>
                     ))}
               </>
@@ -983,7 +1027,7 @@ export function Chart({
                 <span
                   aria-hidden="true"
                   data-swatch
-                  className="inline-block h-2.5 w-2.5 shrink-0 self-center rounded-sm"
+                  className="inline-block h-2.5 w-2.5 shrink-0 self-center"
                   style={{ backgroundColor: color(i) }}
                 />
                 <span className="text-text">{s.label}</span>
@@ -991,7 +1035,7 @@ export function Chart({
               {selected && (
                 <span className="text-text-bright whitespace-nowrap tabular-nums">
                   {formatValue(selected.values[s.key])}
-                  <span className="text-text-dim text-meta"> {unit}</span>
+                  <span className="text-text-dim text-meta">{unitAfter(unit)}</span>
                 </span>
               )}
             </li>
@@ -1002,7 +1046,7 @@ export function Chart({
       {!pinnedReadout && (
         <span className="sr-only" aria-live="polite">
           {activeIndex !== null && selected
-            ? `${selected.label}: ${series.map((s) => `${s.label} ${selected.values[s.key]} ${unit}`).join(', ')}`
+            ? `${selected.label}: ${series.map((s) => `${s.label} ${withUnit(selected.values[s.key], unit)}`).join(', ')}`
             : ''}
         </span>
       )}

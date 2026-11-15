@@ -7,25 +7,26 @@ describe('Address', () => {
 
   describe('rendering', () => {
     it('renders an address link', () => {
-      render(<Address address={testAddress} />);
+      render(<Address address={testAddress} size="row" />);
       const link = screen.getByRole('link');
       expect(link).toBeInTheDocument();
       expect(link).toHaveAttribute('href', `/mainnet/address/${testAddress}`);
     });
 
     it('sets title attribute for full address on hover', () => {
-      render(<Address address={testAddress} />);
+      render(<Address address={testAddress} size="row" />);
       const link = screen.getByRole('link');
       expect(link).toHaveAttribute('title', testAddress);
     });
   });
 
   describe('truncation', () => {
-    it('truncates long addresses by default', () => {
-      render(<Address address={testAddress} />);
+    // U-09 (re-pinned): a shortened address names its size; there is no default length
+    it('shortens a long address at its size with the one ellipsis', () => {
+      render(<Address address={testAddress} size="head" />);
       const link = screen.getByRole('link');
-      expect(link.textContent).toContain('...');
-      expect(link.textContent?.length).toBeLessThan(testAddress.length);
+      expect(link.textContent).toBe('ckb1qzda0cr0…d9wj5clj');
+      expect(link.textContent).not.toContain('...');
     });
 
     it('shows full address when truncate is false', () => {
@@ -35,16 +36,17 @@ describe('Address', () => {
       expect(link.textContent).not.toContain('...');
     });
 
-    it('uses custom startChars and endChars', () => {
-      render(<Address address={testAddress} startChars={8} endChars={6} />);
+    // U-09 (re-pinned, the lead's ruling): a tight address is 4…6 (it was 8…6)
+    it('writes the tight size, 4…6 for an address (no length is passed)', () => {
+      render(<Address address={testAddress} size="tight" />);
       const link = screen.getByRole('link');
-      const expected = `${testAddress.slice(0, 8)}...${testAddress.slice(-6)}`;
-      expect(link.textContent).toBe(expected);
+      expect(link.textContent).toBe('ckb1…wj5clj');
     });
 
-    it('does not truncate short addresses', () => {
-      const shortAddress = 'ckb1qzda0cr08m';
-      render(<Address address={shortAddress} startChars={20} endChars={10} />);
+    it('does not shorten an address no longer than its shortened form', () => {
+      // 11 characters, the tight form's 4 + 1 + 6 (it was 14 against 8…6's 15)
+      const shortAddress = 'ckb1qzda0cr';
+      render(<Address address={shortAddress} size="tight" />);
       const link = screen.getByRole('link');
       expect(link.textContent).toBe(shortAddress);
     });

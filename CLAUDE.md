@@ -377,6 +377,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | TUI              | `crates/tui/src/`                                                                                                                                                                          |
 | Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                                                         |
 | Frontend API     | `frontend/lib/api.ts`                                                                                                                                                                      |
+| Formats          | `frontend/lib/shorten.ts` (an id shortened at one of three sizes, the one ellipsis), `frontend/lib/format-unit.ts` (a number with its unit, the one percentage)                            |
 | Theme / palette  | `frontend/lib/palette.ts` (both themes, one source), `frontend/lib/theme.ts` (preference store), `frontend/components/layout/theme-switcher.tsx`                                           |
 | Shell pieces     | `frontend/components/layout/wordmark.tsx` (the text logo), `status-line.tsx` (the 26 px terminal status line), `prompt-end.tsx` (the page's last prompt), `header.tsx`                     |
 | Prompt headings  | `frontend/components/ui/prompt-heading.tsx` (`■ command args · note`; `DetailSection`, `SectionHeading`, `TerminalPanelHeader` wrap it), `components/ui/comment.tsx` (the `#` voice lines) |
@@ -384,7 +385,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | Seal components  | `frontend/components/ui/seal.tsx`, `page-seal.tsx`, `row-seal.tsx`, `owner-seal.tsx`; the id builders `frontend/lib/cell-seal.ts`, `lib/address-cell-seal.ts`                              |
 | LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                                                                |
 | UI components    | `frontend/components/ui/`                                                                                                                                                                  |
-| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                                                             |
+| Pages            | `frontend/app/` (a dynamic route's page is `client-page.tsx`, which the router loads directly or through a `page.tsx` wrapper)                                                             |
 | Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` in one `tests/integration.rs` binary (shared helpers in `crates/api/tests/common/mod.rs`)                                  |
 | Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                                                              |
 | CI               | `.github/workflows/ci.yml`                                                                                                                                                                 |

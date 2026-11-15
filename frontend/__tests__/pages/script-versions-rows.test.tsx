@@ -20,8 +20,6 @@ vi.mock('@/lib/api', () => ({
     lookupScripts: vi.fn(),
   },
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/src/navigation', () => ({
@@ -108,13 +106,14 @@ describe('Code versions rows (table-rows L1-4)', () => {
     expect(deployed).toHaveTextContent(/^2025-11-21$/);
     expect(block).toHaveTextContent(/^#17,894,900$/);
     expect(within(block).getByRole('link')).toHaveClass('text-text-dim');
-    expect(cell).toHaveTextContent(/^0x673e18…55f9:0$/);
+    // U-09 (re-pinned): the table's out point at the row size
+    expect(cell).toHaveTextContent(/^0x673e1843…1355f9:0$/);
     expect(cell.firstElementChild).toHaveAttribute(
       'title',
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0'
     );
     // The out point opens the code cell too, in dim ink (T5: the version stays the bright thing).
-    const outpoint = within(cell).getByRole('link', { name: '0x673e18…55f9:0' });
+    const outpoint = within(cell).getByRole('link', { name: '0x673e1843…1355f9:0' });
     expect(outpoint).toHaveAttribute(
       'href',
       '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
@@ -157,13 +156,13 @@ describe('Code versions rows (table-rows L1-4)', () => {
       'code cell 0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0',
       '96,886.00000000 CKB',
       `data hash ${fixture.family.versions.find((v) => v.deployments[0].createdAtBlock === 11132140)!.versionHash}`,
-      'first deployed into multisig 0xd1db…b95c',
-      'held by multisig 0xd1db…b95c',
+      'first deployed into multisig 0xd1dbde92…0cb95c',
+      'held by multisig 0xd1dbde92…0cb95c',
       'consumed by v2',
     ])
       expect(title).toContain(part);
     expect(rows[2].getAttribute('title')).toContain(
-      'signed by multisig 0xd1db…b95c, hands it to 0x07a2…68ca'
+      'signed by multisig 0xd1dbde92…0cb95c, hands it to 0x07a21dc2…9d68ca'
     );
     expect(rows[0].getAttribute('title')).toContain('live · current');
   });

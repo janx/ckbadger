@@ -2,13 +2,15 @@
 
 import Link from '@/components/ui/link';
 import { formatShare } from '@/lib/activity-stats';
+import { formatPercent } from '@/lib/ckb-decimal';
 import { cn } from '@/lib/utils';
 
 export interface RankedRow {
   key: string;
   label: string;
-  /** count / total, in [0, 1]. */
-  share: number;
+  /** The row's count and the total it is a share of: the bar and the percentage read both. */
+  count: number;
+  total: number;
   /** Where the row leads, if anywhere. */
   href?: string;
 }
@@ -62,15 +64,17 @@ export function RankedBars({
               >
                 {row.label}
               </span>
-              <span className="bg-base-border-subtle flex h-1.5 rounded-full">
+              <span className="bg-bar-track flex h-1.5">
                 <span
                   data-role="share-fill"
-                  className="bg-jade h-1.5 min-w-[2px] rounded-full"
-                  style={{ width: `${(row.share * 100).toFixed(2)}%` }}
+                  className="bg-jade h-1.5 min-w-[2px]"
+                  style={{
+                    width: `${formatPercent(BigInt(row.count), BigInt(row.total), 2)}%`,
+                  }}
                 />
               </span>
               <span className="text-text-bright text-right tabular-nums">
-                {formatShare(row.share)}
+                {formatShare(row.count, row.total)}
               </span>
             </>
           );
@@ -81,7 +85,7 @@ export function RankedBars({
                   href={row.href}
                   className={cn(
                     grid,
-                    'hover:bg-base-elevated/60 focus-visible:bg-base-elevated/60 group -mx-1 rounded px-1 outline-none transition-colors'
+                    'hover:bg-base-elevated/60 focus-visible:bg-base-elevated/60 group -mx-1 px-1 outline-none transition-colors'
                   )}
                 >
                   {body}

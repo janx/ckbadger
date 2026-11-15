@@ -1,20 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import {
-  BAR_EMPTY,
-  BAR_FULL,
-  SPARK_GLYPHS,
-  blockBar,
-  blockBarCells,
-  sparkline,
-} from '@/lib/blocks-text';
+import { BAR_EMPTY, BAR_FULL, SPARK_GLYPHS, blockBarCells, sparkline } from '@/lib/blocks-text';
 
-describe('blockBar', () => {
-  it('draws whole cells: full ones, then empty ones', () => {
-    expect(blockBar(0.6, 10)).toBe('██████░░░░');
-    expect(blockBar(0, 10)).toBe('░░░░░░░░░░');
-    expect(blockBar(1, 10)).toBe('██████████');
-    expect(blockBar(0.5, 4)).toBe('██░░');
-    expect([...blockBar(0.37, 10)]).toHaveLength(10);
+// Lane E3 removed blockBar (the bar as one string), which nothing drew; the stats bar draws
+// blockBarCells' count in BAR_FULL and BAR_EMPTY itself, and the refusals were always its.
+describe('blockBarCells', () => {
+  it('draws a filled cell as █ and one still to fill as ░', () => {
     expect(BAR_FULL).toBe('█');
     expect(BAR_EMPTY).toBe('░');
   });
@@ -33,11 +23,11 @@ describe('blockBar', () => {
   });
 
   it('refuses a fraction outside [0, 1] or a width that is not whole cells', () => {
-    expect(() => blockBar(-0.01, 10)).toThrow('blockBar: fraction -0.01 is outside [0, 1]');
-    expect(() => blockBar(1.01, 10)).toThrow('outside [0, 1]');
-    expect(() => blockBar(Number.NaN, 10)).toThrow('outside [0, 1]');
-    expect(() => blockBar(0.5, 0)).toThrow('blockBar: width 0 is not a whole number of cells');
-    expect(() => blockBar(0.5, 2.5)).toThrow('not a whole number of cells');
+    expect(() => blockBarCells(-0.01, 10)).toThrow('blockBar: fraction -0.01 is outside [0, 1]');
+    expect(() => blockBarCells(1.01, 10)).toThrow('outside [0, 1]');
+    expect(() => blockBarCells(Number.NaN, 10)).toThrow('outside [0, 1]');
+    expect(() => blockBarCells(0.5, 0)).toThrow('blockBar: width 0 is not a whole number of cells');
+    expect(() => blockBarCells(0.5, 2.5)).toThrow('not a whole number of cells');
   });
 });
 

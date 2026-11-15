@@ -188,7 +188,7 @@ export function CompositionBadge({
       <span
         data-composition={tier}
         className={cn(
-          'inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full border border-transparent font-medium',
+          'inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap border border-transparent font-medium',
           size === 'sm' ? 'text-meta h-[18px] pl-1 pr-1.5' : 'text-meta h-[22px] pl-[5px] pr-[9px]',
           className
         )}

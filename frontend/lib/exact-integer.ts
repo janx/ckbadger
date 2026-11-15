@@ -27,7 +27,7 @@ export function formatCompactInteger(value: string, context: string): string {
     ['T', BigInt(10) ** BigInt(12)],
     ['B', BigInt(10) ** BigInt(9)],
     ['M', BigInt(10) ** BigInt(6)],
-    ['K', BigInt(10) ** BigInt(3)],
+    ['k', BigInt(10) ** BigInt(3)],
   ] as const) {
     if (integer >= divisor - divisor / BigInt(200000))
       return `${formatScaledInteger(integer, divisor, 2)}${suffix}`;
@@ -70,7 +70,7 @@ export function formatCompactRatio(numerator: bigint, denominator: bigint): stri
     ['T', BigInt(10) ** BigInt(12)],
     ['B', BigInt(10) ** BigInt(9)],
     ['M', BigInt(10) ** BigInt(6)],
-    ['K', BigInt(10) ** BigInt(3)],
+    ['k', BigInt(10) ** BigInt(3)],
   ] as const) {
     if (numerator * BigInt(200000) >= denominator * unit * BigInt(199999)) {
       return `${formatScaledInteger(numerator, denominator * unit, 2)}${suffix}`;
@@ -88,29 +88,4 @@ export function formatExactDecimal(value: string, context: string): string {
   if (!match) throw new Error(`${context}: invalid decimal ${JSON.stringify(value)}`);
   const [, sign = '', whole, fraction] = match;
   return `${sign}${BigInt(whole).toLocaleString('en-US')}${fraction ? `.${fraction}` : ''}`;
-}
-
-/** Share of exact decimal values. Zero total has no defined percentage. */
-export function formatExactShare(values: readonly [bigint, bigint][], index: number): string {
-  const gcd = (a: bigint, b: bigint): bigint => {
-    while (b !== BigInt(0)) [a, b] = [b, a % b];
-    return a;
-  };
-  if (
-    values.some(([numerator, denominator]) => numerator < BigInt(0) || denominator <= BigInt(0))
-  ) {
-    throw new Error('invalid chart share ratio');
-  }
-  const commonDenominator = values.reduce(
-    (lcm, [, denominator]) => (lcm / gcd(lcm, denominator)) * denominator,
-    BigInt(1)
-  );
-  const scaled = values.map(
-    ([numerator, denominator]) => numerator * (commonDenominator / denominator)
-  );
-  const part = scaled[index];
-  if (part === undefined) throw new Error(`missing chart share index ${index}`);
-  const total = scaled.reduce((sum, part) => sum + part, BigInt(0));
-  if (total === BigInt(0)) return '—';
-  return `${formatScaledInteger(part * BigInt(100), total, 2)}%`;
 }

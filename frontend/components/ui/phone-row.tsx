@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { unitNode } from '@/components/ui/units';
 
 /**
  * The three voices of a phone row (boards L1–L8): the identity line, the line that says what the
@@ -85,7 +86,7 @@ export function PhoneRow({
               line.grow && 'flex flex-1 items-center'
             )}
           >
-            {line.left}
+            {unitNode(line.left)}
           </span>
           {line.right !== undefined && line.right !== null && (
             <span
@@ -95,7 +96,7 @@ export function PhoneRow({
                 line.tone === 'head' && 'text-text text-small'
               )}
             >
-              {line.right}
+              {unitNode(line.right)}
             </span>
           )}
         </div>
@@ -104,17 +105,144 @@ export function PhoneRow({
   );
 }
 
-/** Parts of a line joined by a quiet middle dot, empty parts left out. */
-export function Dotted({ parts }: { parts: readonly ReactNode[] }) {
-  const shown = parts.filter((part) => part !== null && part !== undefined && part !== false);
-  return (
-    <>
-      {shown.map((part, i) => (
-        <span key={i}>
-          {i > 0 && <span className="text-text-dim"> · </span>}
-          {part}
+/** Set inside a separated list: a list inside another would break the hanging geometry. */
+const InDotted = createContext(false);
+
+const GROUP = Symbol('dotted group');
+
+/** A run of a list's parts that its page names as one thing (`data-role`), laid out as items. */
+export interface DottedGroup {
+  readonly [GROUP]: true;
+  readonly parts: readonly ReactNode[];
+  readonly role: string;
+  readonly className?: string;
+  /** A navigation landmark of the run's links (named by `label`) in place of a plain span. */
+  readonly nav?: { label: string };
+}
+
+/**
+ * Parts of a separated list that belong together (an activity head's protocol facts, its type
+ * calls): one element names them (`data-role`) and sets their voice, but it draws no box
+ * (`display: contents`), so each part is an item of the one list and wraps and separates as any.
+ */
+export function dottedGroup(
+  parts: readonly ReactNode[],
+  { role, className, nav }: { role: string; className?: string; nav?: { label: string } }
+): DottedGroup {
+  return { [GROUP]: true, parts, role, className, nav };
+}
+
+function isGroup(part: ReactNode | DottedGroup): part is DottedGroup {
+  return typeof part === 'object' && part !== null && GROUP in part;
+}
+
+const shownPart = (part: ReactNode) =>
+  part !== null && part !== undefined && part !== false && part !== '';
+
+/**
+ * The one separator-joined list (PA-25, PB-23): parts joined by a quiet middle dot, empty parts
+ * left out, so no separator is ever left with nothing after it. A separator belongs to the item
+ * after it: a line breaks before the dot, never after it, and a dot is not drawn when its item
+ * starts a line.
+ *
+ * The geometry, in CSS alone: the list is a wrapping flex row that clips what lies LEFT of its box
+ * and nothing else (clip-path inset(-1em -100vw -1em -0.75ch)): never its right, so a unit wider
+ * than the list shows past its edge, where the page-overflow check sees it, instead of being cut
+ * with no scroll and no error (overflow-hidden cut it). `min-w-0` lets it shrink inside a flex
+ * row. The left edge stands 0.75ch out: a hung "· " has its dot in the cell that ends 1ch left of
+ * the box, still clipped, while the first item's focus ring (1 px at a 2 px offset, 3 px out;
+ * 0.75ch is 4.95 px at 11 px, 5.85 px at 13 px) is not cut.
+ * Every item after the first hangs its " · " 2ch left of its own text (`pl-[2ch] -indent-[2ch]`)
+ * and pulls its box 2ch left (`-ml-[2ch]`). Mid-line the 3ch gap less those 2ch leaves 1ch before
+ * the dot ("a · b"); at a line's start the dot lies in the 2ch left of the list's box and is
+ * clipped, and the item's text starts at the list's edge. An item too long for a line wraps inside
+ * itself, its further lines at its padding edge, the list's edge. What an item holds is reset to
+ * no indent (`indent-0`), as text-indent is inherited.
+ *
+ * The parts are flat: a list inside another refuses to render (pass its parts to the outer list;
+ * a run the page names as one thing is a `dottedGroup`). The text reads "a · b · c" (the dots are
+ * hidden from assistive technology, which reads the parts as a list of phrases). `className` sets
+ * the list's own voice (size, ink); the gap is 3ch of it.
+ *
+ * `oneLine`: the same parts and separators as inline text, for a line that never wraps (a table
+ * cell that ends in an ellipsis): with no line to start, no separator can open or end one.
+ */
+export function Dotted({
+  parts,
+  className,
+  oneLine = false,
+}: {
+  parts: readonly (ReactNode | DottedGroup)[];
+  className?: string;
+  oneLine?: boolean;
+}) {
+  if (useContext(InDotted))
+    throw new Error('a separated list inside another: pass its parts to the outer list');
+  let index = 0;
+  const item = (part: ReactNode) => {
+    const i = index++;
+    if (oneLine)
+      return (
+        <span key={i} data-dotted-item="">
+          {i > 0 && (
+            <span data-dotted-separator="" aria-hidden="true" className="text-text-dim">
+              {' · '}
+            </span>
+          )}
+          {unitNode(part)}
         </span>
-      ))}
-    </>
+      );
+    return i === 0 ? (
+      <span key={i} data-dotted-item="" className="min-w-0">
+        {unitNode(part)}
+      </span>
+    ) : (
+      <span key={i} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
+        <span
+          data-dotted-separator=""
+          aria-hidden="true"
+          className="text-text-dim whitespace-nowrap"
+        >
+          {' · '}
+        </span>
+        <span className="indent-0">{unitNode(part)}</span>
+      </span>
+    );
+  };
+  const nodes = parts.flatMap((part, g) => {
+    if (!isGroup(part)) return shownPart(part) ? [item(part)] : [];
+    const shown = part.parts.filter(shownPart);
+    if (shown.length === 0) return [];
+    const Group = part.nav ? 'nav' : 'span';
+    return [
+      <Group
+        key={`g${g}`}
+        data-role={part.role}
+        aria-label={part.nav?.label}
+        className={cn('contents', part.className)}
+      >
+        {shown.map(item)}
+      </Group>,
+    ];
+  });
+  if (nodes.length === 0) return null;
+  if (oneLine)
+    return (
+      <span data-dotted="" className={cn('whitespace-nowrap', className)}>
+        {nodes}
+      </span>
+    );
+  return (
+    <InDotted.Provider value={true}>
+      <span
+        data-dotted=""
+        className={cn(
+          'flex min-w-0 flex-wrap items-baseline gap-x-[3ch] [clip-path:inset(-1em_-100vw_-1em_-0.75ch)]',
+          className
+        )}
+      >
+        {nodes}
+      </span>
+    </InDotted.Provider>
   );
 }

@@ -11,6 +11,7 @@ import type { SealId, SealState } from '@/lib/seal/stones';
 import { cn } from '@/lib/utils';
 import { CELL_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /** A transaction's stone (the seals by kind): its hash and the cells it consumed and created. */
 export type TxSealId = Extract<SealId, { kind: 'tx' }>;
@@ -244,11 +245,7 @@ export function TxStructure({
     />
   );
   const sheet = (side: Side, cells: readonly CellTileData[], total: string | undefined) => (
-    <TerminalPanel
-      data-sheet={side}
-      // from lg, square on the seam side; the panel's 8 px radius outside (and all round below lg)
-      className={cn('min-w-0', side === 'consumed' ? 'lg:rounded-r-none' : 'lg:rounded-l-none')}
-    >
+    <TerminalPanel data-sheet={side} className="min-w-0">
       {/* the sheet's lane on its seam side (SHEETS.lane: 35 px and the 1 px border); 12 px on
           the outer side, above and under its rows, which stay at the top (the fee directly under
           the last created tile) when the sheet stretches to its pair */}
@@ -390,7 +387,7 @@ export function TxStructure({
                     strokeDasharray="4 3"
                   />
                 </svg>
-                {l.from} → {l.to} · {l.label}
+                {unitNode(l.from)} → {l.to} · {l.label}
               </button>
             </li>
           ))}
@@ -399,7 +396,7 @@ export function TxStructure({
       {!hideGroups && groups.length > 0 && (
         <section>
           <h3 className="text-text-bright text-body mb-3 font-medium">{groupsTitle}</h3>
-          <div className="divide-base-elevated divide-y">
+          <div className="divide-row-rule divide-y">
             {groups.map((g) => (
               <div
                 key={g.id}
@@ -419,7 +416,7 @@ export function TxStructure({
                     'bg-base-surface'
                 )}
               >
-                <span className="min-w-0 break-all">
+                <span className="min-w-0 [overflow-wrap:anywhere]">
                   <span className="text-text-dim mr-2">{g.kind}</span>
                   <Link href={g.href} className="text-text-bright hover:text-jade">
                     {g.label}
@@ -429,8 +426,8 @@ export function TxStructure({
                   </span>
                 </span>
                 <span className="text-text-dim min-w-0 break-all">{g.cellIds.join(', ')}</span>
-                <div className="min-w-0 break-all">{g.witness}</div>
-                <div className="min-w-0 break-all">
+                <div className="min-w-0 [overflow-wrap:anywhere]">{g.witness}</div>
+                <div className="min-w-0 [overflow-wrap:anywhere]">
                   {g.dependency}
                   {g.cycles !== undefined && (
                     <span className="text-text-dim block">
@@ -497,7 +494,9 @@ function SheetHead({
       )}
     >
       <h3 className={cn('flex flex-col', mirrored)}>
-        <span className="text-text-bright text-section">{formatCount(count, 'cell')}</span>{' '}
+        <span className="text-text-bright text-section">
+          {unitNode(formatCount(count, 'cell'))}
+        </span>{' '}
         <span className="eyebrow text-text-dim text-meta order-first">{side}</span>
       </h3>
       {total !== undefined && (
@@ -568,7 +567,7 @@ function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
     <div
       data-fee=""
       data-testid="tx-fee"
-      className="text-small border-text-dim/60 text-text rounded border border-dashed px-3 py-2"
+      className="text-small border-text-dim/60 text-text border border-dashed px-3 py-2"
     >
       <span className="block">fee</span>
       <ExactCkb
@@ -589,7 +588,7 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
       data-inflow={inflow.tone}
       data-testid="tx-inflow"
       className={cn(
-        'text-small rounded border border-dashed px-3 py-2',
+        'text-small border border-dashed px-3 py-2',
         inflow.tone === 'dao' ? 'border-gold/60 text-gold' : 'border-text-dim/60 text-text'
       )}
     >

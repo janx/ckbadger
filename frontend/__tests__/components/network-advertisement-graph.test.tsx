@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
@@ -24,6 +24,32 @@ describe('AdvertisementGraph', () => {
       '1 retained endpoint alias observations'
     );
     expect(screen.getByRole('listitem')).toHaveTextContent('7065657241');
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the graph said "Crawler round changed; refreshing
+  // advertisement evidence…" while it waited.
+  it('says it is loading while its read is paused offline, then draws once back online', async () => {
+    server.use(
+      http.get('/api/:network/v1/network/advertisements', () =>
+        HttpResponse.json(producerAdvertisements)
+      )
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <AdvertisementGraph roundId={5} />
+        </QueryClientProvider>
+      );
+      expect(await screen.findByText('Loading advertisement evidence…')).toBeInTheDocument();
+      expect(screen.queryByText(/Crawler round changed/)).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByText('addrpeerC')).toBeInTheDocument();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('reconciles a newer completed round instead of leaving a stale-round message forever', async () => {
@@ -107,8 +133,9 @@ describe('AdvertisementGraph', () => {
       </QueryClientProvider>
     );
     const head = await screen.findByTitle(advertiser);
-    expect(head).toHaveTextContent(/^1220094f56\.\.\.0badc0de$/);
-    expect(screen.getByTitle(target)).toHaveTextContent(/^122007d7be\.\.\.b23985be$/);
+    // U-09 (re-pinned): the observation rows' peer ids at the row size, 10…6
+    expect(head).toHaveTextContent(/^1220094f56…adc0de$/);
+    expect(screen.getByTitle(target)).toHaveTextContent(/^122007d7be…3985be$/);
     const addr = screen.getByText(alias);
     expect(addr).toHaveClass('[overflow-wrap:anywhere]');
     expect(addr).not.toHaveClass('truncate');
@@ -149,9 +176,9 @@ describe('AdvertisementGraph', () => {
     expect(row).toHaveClass('flex', 'flex-wrap', 'items-baseline');
     const parts = Array.from(row.children).map((part) => part.textContent);
     expect(parts).toEqual([
-      expect.stringMatching(/^1220aaaa\w\w\.\.\./),
+      expect.stringMatching(/^1220aaaa\w\w…\w{6}$/),
       'named',
-      expect.stringMatching(/^1220bbbb\w\w\.\.\./),
+      expect.stringMatching(/^1220bbbb\w\w…\w{6}$/),
       edge(1).alias,
     ]);
     const [who, named, whom, addr] = Array.from(row.children);

@@ -79,8 +79,11 @@ describe('DetailLayout seal', () => {
 
   // RESPONSIVE_LAYOUT principle 5 (one step smaller at most): under the stone below md the name has
   // the full width, but at 30 px a short out point (19 characters, 330.6 px) and a short address
-  // (21, 365.4 px) are wider than the 328 px line at 360; at 26 px, 286.5 and 316.7.
-  it('sets a sealed entity’s name one type step smaller below md, and only a sealed one', () => {
+  // (21, 365.4 px) are wider than the 328 px line at 360; at 26 px, 286.5 and 316.7. PB-06 /
+  // PA-32 (UI review 2026-11-14): every entity h1 takes the step, sealed or not (the uncle page,
+  // a script by its code hash), as the asset, Fiber, fork and script heads now do; an index h1
+  // (26 px) has no step below it. Re-pinned on purpose: this test pinned "only a sealed one".
+  it('sets every entity’s name one type step smaller below md, sealed or not; an index h1 keeps its size', () => {
     const { rerender } = render(
       <DetailLayout
         title="0xbe1b9761…936cd8:1"
@@ -98,9 +101,17 @@ describe('DetailLayout seal', () => {
       'max-md:text-index'
     );
     expect(title.className).not.toMatch(/(^|\s)(sm|md|lg|xl):text-/);
-    rerender(<DetailLayout title="0xbe1b9761…936cd8:1">content</DetailLayout>);
+    rerender(<DetailLayout title="Uncle #8,775,637">content</DetailLayout>);
     expect(screen.getByRole('heading', { level: 1 }).className).toBe(
-      'text-text-bright break-words text-entity'
+      'text-text-bright break-words text-entity max-md:text-index'
+    );
+    rerender(
+      <DetailLayout title="Blocks" kind="index">
+        content
+      </DetailLayout>
+    );
+    expect(screen.getByRole('heading', { level: 1 }).className).toBe(
+      'text-text-bright break-words text-index'
     );
   });
 
@@ -167,7 +178,8 @@ describe('DetailLayout seal', () => {
 
   // Every page without a seal (indexes, topics, the entity pages that press none) keeps the head as
   // it was before the name plate: the title row (h1 and status, then actions), the identity, the
-  // lede, then the facts. Pinned as the markup itself, taken from the code before C10.
+  // lede, then the facts. Pinned as the markup itself, taken from the code before C10. Re-pinned on
+  // purpose for PB-06 / PA-32: an unsealed entity's h1 now takes the phone step too.
   it('renders an unsealed head exactly as before the name plate', () => {
     const { container, unmount } = render(
       <DetailLayout
@@ -208,7 +220,8 @@ describe('DetailLayout seal', () => {
     expect(entity.container.querySelector('header')!.outerHTML).toBe(
       '<header class="mb-8"><div class="flex flex-wrap items-baseline justify-between gap-3">' +
         '<div class="flex min-w-0 flex-wrap items-baseline gap-3">' +
-        '<h1 class="text-text-bright break-words text-entity"><span>Transaction</span></h1>' +
+        '<h1 class="text-text-bright break-words text-entity max-md:text-index">' +
+        '<span>Transaction</span></h1>' +
         '</div></div>' +
         '<div class="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
         '<span>0xabc</span></div></header>'

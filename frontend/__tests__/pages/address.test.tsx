@@ -42,6 +42,7 @@ import {
   pageFixture,
   fixtureHash,
 } from '@/__tests__/msw/fixtures/address';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -57,8 +58,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getAddressDotCellNames: vi.fn(),
     getAddressFiberChannels: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="header" /> }));
 let route = addressText;
@@ -126,8 +125,9 @@ const namedRight = {
 };
 const tab = async (name: string) =>
   fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${name}`) }));
-// Phase 5 (A21): the holdings heading runs on the address's live cells.
-const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+ cells?$/ });
+// Phase 5 (A21): the holdings heading runs on the address's live cells (U-16, re-pinned: the count
+// and its noun are one unit, a no-break space between them).
+const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+\scells?$/ });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -169,7 +169,7 @@ describe('Address v3', () => {
     expect(screen.queryByRole('heading', { name: /^Fiber channels/ })).not.toBeInTheDocument();
     // Consistency plan C1: the tab names the page.
     await waitFor(() =>
-      expect(document.title).toMatch(/^ck[bt]1[0-9a-z]{4}…[0-9a-z]{6} · address · CKBadger$/)
+      expect(document.title).toMatch(/^ck[bt]1…[0-9a-z]{6} · address · CKBadger$/)
     );
   });
 
@@ -190,8 +190,11 @@ describe('Address v3', () => {
   it('shows typed 404 evidence only when the address endpoint actually returns 404', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);
-    expect(await screen.findByText(`/addresses/${addressText}`)).toBeInTheDocument();
-    expect(screen.getByText('no address at this address.')).toBeInTheDocument();
+    expect(await screen.findByText('nothing at this address.')).toBeInTheDocument();
+    // U-18: the checked endpoint stands in the facts, the address shortened, once
+    expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
+      `/addresses/${addressText.slice(0, 10)}…${addressText.slice(-6)}`
+    );
   });
 
   // Visual finish V8: the page loads as the shared detail skeleton, not a "Loading…" line.
@@ -254,9 +257,15 @@ describe('Address v3', () => {
     // C10 round 2: the id line in the plate's one quiet voice, set by the plate: the full address
     // (it was text-body in the text ink) takes it; the copy button keeps its own classes
     expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
-    const full = within(idLine).getByText(addressText);
-    expect(full.className).toBe('font-mono min-w-0');
+    // A4 Chrome F3 (re-pinned): a full id in a head is the head's HeadId, one line where the
+    // measured line holds it, else equal unbreakable lines — never the own-box scroller it was
+    // (box 328 px for 698 px at 390)
+    const full = idLine.querySelector('[data-head-id]') as HTMLElement;
+    expect(full).not.toBeNull();
+    expect(full.textContent).toBe(addressText);
     expect(full).toHaveAttribute('title', addressText);
+    expect(full.className).not.toMatch(/(^|\s)text-/);
+    expect(idLine.querySelector('.overflow-x-auto')).toBeNull();
     expect(full.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     expect(screen.getByRole('button', { name: 'Copy address' })).toHaveClass(
       'hover:text-jade',
@@ -292,13 +301,26 @@ describe('Address v3', () => {
     expectOnePageSeal(container, { kind: 'script', hash: addressHash });
   });
 
-  it('keeps an invalid address 400 as a read error', async () => {
+  // U-06, PA-01, R11: a 400 says the address is not one: the voice page with its own first
+  // line and the API's reason, not a grey read-error line (nor the 404's "no address").
+  it('answers an invalid address 400 with the not-an-id page and the API’s reason', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(
       new ApiRequestError(400, 'bad_request', 'invalid address')
     );
     render(<AddressDetailPage />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('invalid address');
-    expect(screen.queryByText('no address at this address.')).not.toBeInTheDocument();
+    expect(await screen.findByText('that is not a ckb address.')).toBeInTheDocument();
+    expect(document.querySelector('.error-facts')).toHaveTextContent('invalid address');
+    expect(screen.queryByText('nothing at this address.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+  it('says a failed address read in the one shared line', async () => {
+    vi.mocked(api.getAddress).mockRejectedValue(
+      new ApiRequestError(500, 'internal_error', 'addr index mismatch')
+    );
+    render(<AddressDetailPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^Could not read this address: API error: 500 - addr index mismatch$/
+    );
   });
   it('uses one holdings snapshot for balance and the exact three-way partition', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -331,12 +353,30 @@ describe('Address v3', () => {
       within(nav)
         .getAllByRole('link')
         .map((l) => l.textContent)
+      // re-pinned (A4 round 2): each count a unit, its number and noun joined by a plain space
     ).toEqual(['5 DAO cells', '9 tokens', '14 objects', '1 identity']);
+    // PA-25 (the lead's follow-up): the nav opened with a loose "·" that was left alone at a line's
+    // start when the nav wrapped under the heading. The heading and the links are one separated
+    // list: each link carries its own dot, none is loose text.
+    const list = nav.closest('[data-dotted]');
+    expect(list).not.toBeNull();
+    expect(list).toContainElement(screen.getByRole('heading', { name: 'Holdings 40 cells' }));
+    expect(nav.querySelectorAll('[data-dotted-separator]')).toHaveLength(4);
+    const loose = [...nav.querySelectorAll('*'), nav].flatMap((el) =>
+      [...el.childNodes].filter(
+        (n) =>
+          n.nodeType === Node.TEXT_NODE &&
+          /·/.test(n.textContent ?? '') &&
+          !(el as Element).hasAttribute('data-dotted-separator')
+      )
+    );
+    expect(loose).toHaveLength(0);
     // Phase 5 (A21): the holdings run on the live cells; the count nav stands beside the heading,
     // outside its name, and the section is named by the heading.
     const heading = screen.getByRole('heading', { name: 'Holdings 40 cells' });
     expectPrompt(heading, 'Holdings', '40 cells');
-    expect(heading.parentElement).toContainElement(nav);
+    // re-pinned (PA-25): the heading and the nav are items of one separated list
+    expect(heading.closest('[data-dotted]')).toContainElement(nav);
     expect(heading).not.toContainElement(nav);
     expect(screen.getByRole('region', { name: 'Holdings 40 cells' })).toContainElement(heading);
     expect(screen.queryByText(/holdings, one mark each/)).toBeNull();
@@ -497,7 +537,7 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressHoldings).mockRejectedValue(new Error('owner index broken'));
     render(<AddressDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('owner index broken');
-    expect(screen.queryByText('0 holdings, one mark each')).not.toBeInTheDocument();
+    expect(screen.queryByText(fullText('0 holdings, one mark each'))).not.toBeInTheDocument();
   });
   it('shows real zero holdings without suppressing named-only .cell rights and history', async () => {
     vi.mocked(api.getAddressHoldings).mockResolvedValue(emptyHoldings);
@@ -628,6 +668,33 @@ describe('Address v3', () => {
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
+  });
+  // PA-17 (UI review 2026-11-14): "Activities 3  Transactions 3  Live cells 3" wrapped at 390,
+  // leaving "Live cells 3" alone on a second line like a heading. The labels alone are 32
+  // characters: 326.4 px at 17 px and the two 24 px gaps, 374.4, more than the 326 px at 360. One
+  // type step down below md (13 px labels, 11 px counts, a 6 px label–count gap, 16 px between
+  // tabs) they take 249.6 + 18 + 32 = 299.6 px, and three one-digit counts 19.8: 319.4 at 360.
+  it('sets the three history tabs one type step smaller below md, one row at 360 (PA-17)', async () => {
+    // the activity total the Activities tab counts (the shared fixture's page declares none)
+    vi.mocked(api.getAddressActivities).mockResolvedValue(pageFixture(addressActivitiesFixture, 3));
+    render(<AddressDetailPage />);
+    await loaded();
+    const views = screen.getByRole('group', { name: 'History views' });
+    expect(views).toHaveClass('gap-x-6', 'max-md:gap-x-4');
+    const tabs = within(views).getAllByRole('button');
+    expect(tabs.map((t) => t.firstChild?.textContent)).toEqual([
+      'Activities',
+      'Transactions',
+      'Live cells',
+    ]);
+    for (const t of tabs) {
+      expect(t).toHaveClass('text-section', 'max-md:text-body', 'gap-2', 'max-md:gap-1.5');
+      const count = t.querySelector('span');
+      if (count) expect(count).toHaveClass('text-small', 'max-md:text-meta');
+    }
+    await waitFor(() =>
+      expect(tabs.filter((t) => t.querySelector('span') !== null)).toHaveLength(3)
+    );
   });
   // F2 blocks (BA-35, R2b-a filter=script): one "Script" chip, as the Address board.
   it('uses one script-call filter and resets the activity cursor', async () => {
@@ -1007,7 +1074,10 @@ describe('Address v3', () => {
     }));
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('1 deposits · 1 withdrawal requests')).toBeInTheDocument();
+    // re-pinned (A4 round 2): the counts are units of their own in the line
+    expect(
+      await screen.findByText(fullText('1 deposit · 1 withdrawal request'))
+    ).toBeInTheDocument();
     const request = addressProducerCells.data.find((c) => c.dao?.status === 'withdrawing')!;
     expect(request.dao!.lockScriptHash).not.toBe(request.lockScriptHash);
     expect(screen.getByRole('link', { name: 'withdraw requested' })).toHaveAttribute(
@@ -1492,7 +1562,12 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(chips).not.toHaveTextContent('2+');
     for (const chip of within(chips).getAllByRole('button'))
       if (chip !== ckb) expect(chip).toHaveTextContent(/\d$/);
-    expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveClass('text-text-ghost');
+    // R4 (UI review 2026-11-14, re-pinned on purpose): an empty filter's "0" is a datum, so the
+    // chip is the dim ink of every other chip, never the ghost.
+    const dao = within(chips).getByRole('button', { name: /^DAO/ });
+    expect(dao).toHaveTextContent(/^DAO 0$/);
+    expect(dao).toHaveClass('text-text-dim');
+    expect(dao).not.toHaveClass('text-text-ghost');
     expect(api.getAddressActivities).toHaveBeenCalledWith(addressHash, {
       limit: 1,
       cursor: undefined,

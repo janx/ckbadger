@@ -9,7 +9,9 @@ import type { CellSeal } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn, truncateHash } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 export interface CellTileData {
   id: string;
@@ -73,11 +75,12 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       onFocus={() => onHover?.(cell.id)}
       onBlur={() => onHover?.(null)}
       className={cn(
-        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 rounded border px-3 pb-2 pt-3 transition-colors',
+        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 border px-3 pb-2 pt-3 transition-colors',
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',
-        dimmed && 'opacity-30'
+        // set back (R4): every word dim, the stones at full strength in their own state's ink
+        dimmed && 'quiet'
       )}
     >
       {/* One mark column, one text edge (seals by kind, C11): a 30 px column of marks and the
@@ -101,13 +104,15 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
             {cell.outPoint ? (
               <>
                 <span className="text-text-dim">{cell.label}</span>{' '}
-                {/* an out point with its index is one unit, never broken */}
+                {/* an out point with its index is one unit, never broken; tight: a tile's text
+                    column is under 200 px (U-09) */}
                 <Link
                   href={cell.href}
                   title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
                   className="text-text-dim hover:text-jade whitespace-nowrap"
                 >
-                  {truncateHash(cell.outPoint.txHash, 6, 4)}:{cell.outPoint.index}
+                  <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
+                  <OutpointIndex index={cell.outPoint.index} />
                 </Link>
               </>
             ) : (
@@ -146,7 +151,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
           ) : (
-            <div aria-hidden="true" className="bg-base-elevated h-1 w-14 shrink-0">
+            <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
               <div
                 className="bg-jade h-full"
                 style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}

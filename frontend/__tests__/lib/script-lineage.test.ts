@@ -5,13 +5,14 @@ import {
   codeHolders,
   deploymentOnDay,
   holderName,
+  holderParts,
   orderedVersions,
-  shortHex,
   signerOf,
   signingText,
   typeLineage,
   versionNumbers,
 } from '@/lib/script-lineage';
+import { shortenHash } from '@/lib/shorten';
 
 const family = fixture.family as unknown as ScriptFamilyDetail;
 const markers = family.history as ScriptHistoryMarkerApi[];
@@ -55,7 +56,7 @@ describe('script lineage (JoyID, five binaries under one Type ID)', () => {
   it('lists the three multisigs, what each signed and that the last never signed', () => {
     const lineage = typeLineage(markers)!;
     const holders = codeHolders(lineage, markers, versionNumbers(family));
-    expect(holders.map((h) => shortHex(h.lockArgs))).toEqual([
+    expect(holders.map((h) => shortenHash(h.lockArgs, 'tight'))).toEqual([
       '0xd1db…b95c',
       '0x07a2…68ca',
       '0x6598…d696',
@@ -69,7 +70,9 @@ describe('script lineage (JoyID, five binaries under one Type ID)', () => {
     expect(holders[2].neverSigned).toBe(true);
     expect(holders[0].until!.blockNumber).toBe(17117990);
     expect(holders[2].until).toBeNull();
-    expect(holderName(holders[0].custody)).toBe('multisig 0xd1db…b95c');
+    // U-09 (re-pinned): the name's lock args at the size of where it stands
+    expect(holderName(holders[0].custody, 'tight')).toBe('multisig 0xd1db…b95c');
+    expect(holderName(holders[0].custody, 'row')).toBe('multisig 0xd1dbde92…0cb95c');
   });
 
   it('says which deployment was in force on a chart day', () => {
@@ -77,5 +80,35 @@ describe('script lineage (JoyID, five binaries under one Type ID)', () => {
     expect(deploymentOnDay(lineage, '2023-10-06')).toBeNull();
     expect(deploymentOnDay(lineage, '2024-06-01')!.blockNumber).toBe(11133523);
     expect(deploymentOnDay(lineage, '2026-10-29')!.blockNumber).toBe(17894900);
+  });
+
+  // A4 Chrome F2: a holder is named either by a kind and its id ("multisig 0xd1db…b95c", a label
+  // with its id, one unit) or by a phrase ("an unspendable lock", words a line may break). The
+  // name says which where the kind is known, so a renderer keeps only the id form whole.
+  it('names a holder in parts: a kind with its id, or a phrase with none', () => {
+    const custody = markers.at(-1)!.custody;
+    expect(holderParts(custody, 'tight')).toEqual({ label: 'multisig', id: '0x6598…d696' });
+    expect(holderParts({ ...custody, class: 'one_key' }, 'tight')).toEqual({
+      label: 'one key',
+      id: '0x6598…d696',
+    });
+    expect(holderParts({ ...custody, class: 'unspendable' }, 'tight')).toEqual({
+      label: 'an unspendable lock',
+      id: null,
+    });
+    expect(holderParts({ ...custody, class: 'fixed' }, 'tight')).toEqual({
+      label: 'no one (pinned by data hash)',
+      id: null,
+    });
+    expect(holderParts({ ...custody, class: 'other' as never }, 'tight')).toEqual({
+      label: 'lock',
+      id: shortenHash(custody.lockCodeHash!, 'tight'),
+    });
+    expect(
+      holderParts({ ...custody, class: 'other' as never, lockCodeHash: null }, 'tight')
+    ).toEqual({ label: 'an unrecorded holder', id: null });
+    // the one string form joins the two with a space
+    expect(holderName(custody, 'tight')).toBe('multisig 0x6598…d696');
+    expect(holderName({ ...custody, class: 'unspendable' }, 'tight')).toBe('an unspendable lock');
   });
 });

@@ -1,10 +1,12 @@
 import { Component, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
+import { onlineManager } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import UncleDetailPage from '@/app/blocks/[id]/uncles/[index]/client-page';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 
 const params = vi.hoisted(() => ({ current: { id: '8775638', index: '0' } }));
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -28,7 +30,11 @@ describe('Uncle detail page', () => {
   it('reads the uncle through its including block, with header and DAO evidence', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
-    expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toBeInTheDocument();
+    // PB-06 / PA-32: an entity h1 without a seal takes the phone step too (30 → 26 px below md).
+    expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
     const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
     expect(sentence).toHaveTextContent('on the canonical chain is');
     expect(within(sentence).getByRole('link', { name: '#8,775,638' })).toHaveAttribute(
@@ -45,6 +51,18 @@ describe('Uncle detail page', () => {
     expect(decoded).toHaveTextContent('1.2065094518945692');
     expect(decoded).toHaveTextContent('S · compensation still owed + the burnt share');
     expect(screen.getByText(blockUncle.dao.raw)).toBeInTheDocument();
+  });
+
+  // The review's item E: the plate's id is the uncle's copy control; a click writes the WHOLE hash
+  it('copies the whole uncle hash when the plate’s id is clicked', async () => {
+    params.current = { id: '8775638', index: '0' };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const { container } = render(<UncleDetailPage />);
+    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    fireEvent.click(container.querySelector('[data-head-id]') as HTMLElement);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(blockUncle.hash));
+    expect(blockUncle.hash).toBe(`0x${'ee'.repeat(32)}`);
   });
 
   it('writes the header epoch like the facts and never breaks DAO prose mid-word (BA-41/BA-42)', async () => {
@@ -67,7 +85,7 @@ describe('Uncle detail page', () => {
         el.closest('.error-facts')
       )
     ).toBe(true);
-    expect(screen.getByText('no uncle at this address.')).toBeInTheDocument();
+    expect(screen.getByText('no uncle at this block and index.')).toBeInTheDocument();
   });
 
   it('refuses decoded DAO fields that disagree with the raw header bytes', async () => {
@@ -140,5 +158,49 @@ describe('Uncle detail page', () => {
     expect(screen.getByText('0x7080001001526').parentElement).toHaveTextContent(
       '0x7080001001526 = 5,414 · 1 / 1,800'
     );
+  });
+
+  // Lane E4: the Time fact's age reads the page's one clock, so it moves with no data change; it
+  // was written once at render and stood still. The clock stops with the page.
+  it('moves the Time fact’s age with no data change, and leaves no timer behind (E4)', async () => {
+    params.current = { id: '8775638', index: '0' };
+    vi.useFakeTimers({ now: T0 });
+    try {
+      server.use(
+        http.get('*/blocks/:id/uncles/:index', () =>
+          HttpResponse.json({ ...blockUncle, timestamp: new Date(T0 - 20_000).toISOString() })
+        )
+      );
+      const { unmount } = render(<UncleDetailPage />);
+      const age = () => screen.queryByText(/^\d+[smh] ago$/)?.textContent;
+      await loadUnderStillClock(() => age() !== undefined);
+      expect(age()).toBe('20s ago');
+      tick(1000);
+      expect(age()).toBe('21s ago');
+      tick(38_000);
+      expect(age()).toBe('59s ago');
+      tick(1000);
+      expect(age()).toBe('1m ago');
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the page drew nothing at all while it waited.
+  it('says it is loading while its read is paused offline, then shows the uncle once back online', async () => {
+    params.current = { id: '8775638', index: '0' };
+    onlineManager.setOnline(false);
+    try {
+      render(<UncleDetailPage />);
+      expect(await screen.findByText('Loading uncle…')).toHaveAttribute('role', 'status');
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toBeInTheDocument();
+      expect(screen.queryByText('Loading uncle…')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

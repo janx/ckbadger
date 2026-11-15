@@ -22,8 +22,6 @@ const NAME_LINE = 28;
 const NAME_LINE_2 = 16;
 /** Under the bars: the first and last day's labels. */
 const AXIS = 22;
-/** Ghost ink for the values written inside the plot (as the DAO page's charts, v3). */
-const GHOST = 'var(--c-text-ghost)';
 /** About 6.6 px a character at 11 px in the app's mono face. */
 const CHAR = 6.6;
 const UNCLES_KEY = 'uncles on chain, per day';
@@ -108,7 +106,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
         onBlur={() => pin.hover(null)}
       >
         <g data-role="chart-name">
-          <rect x="0" y="6" width="10" height="10" rx="2" fill={FORK_COLORS.uncles} opacity=".5" />
+          <rect x="0" y="6" width="10" height="10" fill={FORK_COLORS.uncles} opacity=".5" />
           <text x="14" y="15" fontSize="11" fill={FORK_COLORS.tick}>
             {UNCLES_KEY}
           </text>
@@ -117,7 +115,6 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
             y={6 + keyY2}
             width="10"
             height="10"
-            rx="2"
             fill={FORK_COLORS.nodeSwitches}
           />
           <text
@@ -134,7 +131,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
             {/* The scale's lines are grid: solid (visual finish V13 b). */}
             <line data-role="grid" x1="0" x2={W} y1={y(v)} y2={y(v)} stroke={FORK_COLORS.grid} />
             {written(v) && (
-              <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={GHOST}>
+              <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={FORK_COLORS.tick}>
                 {v.toLocaleString('en-US')}
               </text>
             )}
@@ -164,7 +161,6 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
                 y={y(day.uncles)}
                 width={width}
                 height={base - y(day.uncles)}
-                rx="1.5"
                 fill={FORK_COLORS.uncles}
                 fillOpacity=".35"
               />
@@ -175,7 +171,6 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
                   y={base - Math.max(base - y(day.nodeSwitches), 1)}
                   width={width}
                   height={Math.max(base - y(day.nodeSwitches), 1)}
-                  rx="1"
                   fill={FORK_COLORS.nodeSwitches}
                 />
               )}

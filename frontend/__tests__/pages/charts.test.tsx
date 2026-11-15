@@ -39,8 +39,6 @@ vi.mock('@/lib/api', () => ({
     getCkbVolumeChart: vi.fn(),
     getHardforks: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -281,16 +279,21 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Charts')).toBeInTheDocument();
 
     // Each section name is also its jump link in the header nav (CH-10): read the headings. The
-    // command runs on the section's chart count (phase 5, D5).
+    // command runs on the section's chart count (phase 5, D5). Re-pinned for CH-22: the DAO group
+    // lists DAO / circulation too, 29 cards in all.
     for (const name of [
       'Proof of work 4 charts',
-      'Nervos DAO & economics 6 charts',
+      'Nervos DAO & economics 7 charts',
       'Blocks 4 charts',
       'Activity 7 charts',
       'Common knowledge 7 charts',
     ])
       expect(screen.getByRole('heading', { level: 2, name })).toBeInTheDocument();
-    expect(screen.getAllByRole('article').length).toBe(28);
+    expect(screen.getAllByRole('article').length).toBe(29);
+    expect(screen.getByRole('link', { name: 'DAO / circulation' })).toHaveAttribute(
+      'href',
+      '/mainnet/charts/circulation-ratio'
+    );
     expect(screen.getByRole('link', { name: 'Scripts' })).toHaveAttribute(
       'href',
       '/mainnet/charts/most-utilized-scripts'
@@ -356,6 +359,7 @@ describe('ChartsPage', () => {
       'Nominal APC',
       'Inflation',
       'Secondary issuance',
+      'DAO / circulation',
       'Knowledge size',
       'Knowledge by kind',
       'Scripts',

@@ -30,11 +30,13 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
+import { formatUtc8Date } from '@/lib/utils';
+import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
-export type { ItemFeedHeadline, ItemFeedSubject } from '@/lib/feed-headlines';
+import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
 export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject): ItemFeedHeadline {
@@ -109,13 +111,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       minWidth: 178,
       render: (r) => (
         <AppLink href={`/tx/${r.hash}`}>
-          <Hash
-            hash={r.hash}
-            copyable={false}
-            startChars={10}
-            endChars={6}
-            className="text-small"
-          />
+          <Hash hash={r.hash} size="row" copyable={false} className="text-small" />
         </AppLink>
       ),
     },
@@ -129,7 +125,8 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
           <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
           <span className="text-text-dim">
             {' '}
-            · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
+            ·{' '}
+            {unitNode(identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />)}
           </span>
           <span className="text-text-dim text-meta block">tx {r.index} in block</span>
         </>
@@ -258,7 +255,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
         );
         const figures = [
           <span key="cells" className="whitespace-nowrap">
-            {r.inputsCount} → {r.outputsCount} cells
+            {r.inputsCount} → {formatCount(r.outputsCount, 'cell')}
           </span>,
           <span key="fee" className="whitespace-nowrap">
             fee <ExactCkb shannons={BigInt(r.fee)} signed={false} tone="plain" />
@@ -290,13 +287,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                 tone: 'head',
                 left: (
                   <AppLink href={`/tx/${r.hash}`}>
-                    <Hash
-                      hash={r.hash}
-                      copyable={false}
-                      startChars={10}
-                      endChars={6}
-                      className="text-body"
-                    />
+                    <Hash hash={r.hash} size="tight" copyable={false} className="text-body" />
                   </AppLink>
                 ),
                 right: (
@@ -306,7 +297,8 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                     </AppLink>
                     <span className="text-text">
                       {' '}
-                      · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
+                      ·{' '}
+                      {identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />}
                     </span>
                   </span>
                 ),
@@ -420,9 +412,11 @@ function RecentAssetFeed({
               onClick={() => onOpen('transactions')}
               className="text-text hover:text-text-bright tabular-nums"
             >
-              {recent.transactions === null
-                ? 'All transactions →'
-                : `${recent.transactions.toLocaleString('en-US')} transactions →`}
+              {unitNode(
+                recent.transactions === null
+                  ? 'All transactions →'
+                  : `${formatCount(recent.transactions, 'transaction')} →`
+              )}
             </button>
           </>
         }
@@ -450,7 +444,7 @@ function RecentAssetFeed({
             )}
           </>
         ) : (
-          <AssetReadState label="recent activity" error={acts.error} loading={acts.isLoading} />
+          <AssetReadState label="recent activity" error={acts.error} read={acts} />
         )}
       </div>
     </section>
@@ -488,7 +482,7 @@ function FeedActivityRow({
   } catch (error) {
     // A row that breaks the feed contract is reported in place; the page stays up.
     return (
-      <div className="border-base-elevated border-b py-3">
+      <div className="border-row-rule border-b py-3">
         <ActivityReadError txHash={a.txHash} error={error} />
       </div>
     );
@@ -497,7 +491,8 @@ function FeedActivityRow({
     <ActivityRow
       activity={a}
       headline={headline && <FeedHeadlineText headline={headline} />}
-      className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
+      // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded
+      className={headline?.neighbour ? 'quiet' : undefined}
       // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
       mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
       showScriptDetails={!plain}
@@ -551,7 +546,7 @@ function FullAssetFeed({
       <div
         role="tablist"
         aria-label="What happened"
-        className="border-base-border mb-3 flex flex-wrap items-center gap-6 border-b"
+        className="border-base-border mb-3 flex flex-wrap items-center gap-6 border-b max-md:gap-x-4"
       >
         {(['activities', 'transactions'] as const).map((t) => (
           <button
@@ -559,7 +554,7 @@ function FullAssetFeed({
             role="tab"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`text-section border-b-2 py-3 ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+            className={`text-section max-md:text-body border-b-2 py-3 ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
           >
             {t === 'activities' ? 'Activities' : 'Transactions'}
           </button>
@@ -606,7 +601,7 @@ function FullAssetFeed({
           />
         </>
       ) : (
-        <AssetReadState label={tab} error={current.error} loading={current.isLoading} />
+        <AssetReadState label={tab} error={current.error} read={current} />
       )}
     </section>
   );

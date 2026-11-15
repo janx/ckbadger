@@ -6,10 +6,10 @@ import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import type { Block, BlockProposalFees } from '@/lib/api';
 import { REWARD_COLORS } from '@/lib/design-tokens';
-import { formatScaledInteger } from '@/lib/exact-integer';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { percentFigure } from '@/lib/format-unit';
 
 type RewardBlock = Pick<
   Block,
@@ -126,8 +126,7 @@ export function RewardBreakdown({
     committed: `of ${plainCkb(fees)} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
     proposal: <SentenceNodes parts={proposalNote(proposalFees, proposalFeesError)} />,
   };
-  const share = (value: bigint) =>
-    total === BigInt(0) ? '0.00' : formatScaledInteger(value * BigInt(100), total, 2);
+  const share = (value: bigint) => (total === BigInt(0) ? '0.00' : percentFigure(value, total));
   return (
     <div className="text-small space-y-3">
       <div data-testid="reward-total" className="text-text-bright text-body font-medium">
@@ -135,7 +134,7 @@ export function RewardBreakdown({
         {block.minerAddress && (
           <>
             <span className="text-text-dim text-small font-normal"> to </span>
-            <Address address={block.minerAddress} className="text-body font-normal" />
+            <Address address={block.minerAddress} size="row" className="text-body font-normal" />
           </>
         )}
       </div>
@@ -143,7 +142,7 @@ export function RewardBreakdown({
         <div
           role="img"
           aria-label={`Reward shares: ${parts.map((p) => `${p.spoken} ${share(p.value)}%`).join(', ')}`}
-          className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden rounded-full"
+          className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden"
         >
           {parts
             .filter((p) => p.value > BigInt(0))
@@ -166,7 +165,7 @@ export function RewardBreakdown({
           <div key={p.key} className="contents">
             <span
               aria-hidden="true"
-              className="h-2 w-2 self-center rounded-sm"
+              className="h-2 w-2 self-center"
               style={{ backgroundColor: REWARD_COLORS[p.key] }}
             />
             <dt>{p.label}</dt>
@@ -196,7 +195,12 @@ export function RewardPaidBy({ block }: { block: RewardBlock }) {
         <>
           {' · '}
           <Link href={`/tx/${block.miningRewardTxHash}`}>
-            <Hash hash={block.miningRewardTxHash} copyable={false} className="text-small" />
+            <Hash
+              hash={block.miningRewardTxHash}
+              size="row"
+              copyable={false}
+              className="text-small"
+            />
           </Link>
         </>
       )}

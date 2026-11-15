@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { AlignedBar, AlignedBarFootnote } from '@/components/ui/aligned-bar';
+import { AlignedBar } from '@/components/ui/aligned-bar';
 import { IciclePartition } from '@/components/ui/icicle-partition';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { TenureBar } from '@/components/ui/tenure-bar';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { SharedGraphicsDemo } from '@/__tests__/fixtures/shared-graphics-demo';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -57,13 +58,6 @@ describe('AlignedBar (BA-01)', () => {
         />
       )
     ).toThrow('Cycles: 11 exceeds the scale 10');
-  });
-
-  it('puts the consensus cap in a footnote, not on the bar', () => {
-    render(<AlignedBarFootnote scale="0–4,000 B" cap="the consensus limit is 597,000 B" />);
-    expect(screen.getByText(/0–4,000 B/)).toHaveTextContent(
-      'Scale 0–4,000 B · the consensus limit is 597,000 B'
-    );
   });
 });
 
@@ -128,6 +122,14 @@ describe('IciclePartition (DAO-7)', () => {
     );
     expect(screen.getByRole('img', { name: 'Where secondary issuance goes' })).toBeInTheDocument();
   });
+  it('draws its boxes and the dashed placeholders under them square-cornered (U-02, R1)', () => {
+    const { container } = render(
+      <IciclePartition root={root} label="Where secondary issuance goes" formatValue={String} />
+    );
+    expect(container.querySelectorAll('rect[data-node]')).toHaveLength(6);
+    expect(container.querySelectorAll('[data-placeholder] rect')).toHaveLength(2);
+    expect(roundedRects(container)).toEqual([]);
+  });
   it('refuses children that do not partition their parent', () => {
     const bad = { ...root, children: [{ ...root.children[0], value: BigInt(11) }] };
     expect(() => render(<IciclePartition root={bad} label="x" formatValue={String} />)).toThrow(
@@ -148,8 +150,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
   const tree = node({
     align: 'inside',
     note: '1.344 billion CKB a year',
-    color: 'var(--c-ink-quiet)',
-    ink: 'bright',
+    fill: 'ink-quiet',
     children: [
       { key: 'm', label: 'to miners', value: BigInt(10), tone: 'ckb' as const, note: '10.00%' },
       {
@@ -166,7 +167,6 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
         value: BigInt(70),
         tone: 'other' as const,
         align: 'inside' as const,
-        ink: 'bright' as const,
       },
     ],
   });
@@ -186,6 +186,9 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     expect(label('total')).toHaveTextContent(
       'Secondary issuance since genesis 100 · 1.344 billion CKB a year'
     );
+    // the words inside a box take the ink its fill calls for (inkOnFill; re-pinned on purpose:
+    // the ink was a per-node 'bright' / 'dark'): the quiet slate at 90 % by night calls for the
+    // bright ink
     expect(label('total')).toHaveClass('fill-text-bright');
     expect(label('c').getAttribute('text-anchor')).toBe('end');
     expect(label('c').getAttribute('x')).toBe('350');
@@ -211,8 +214,7 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     label: 'Secondary issuance since genesis',
     value: BigInt(100),
     tone: 'ckb' as const,
-    color: 'var(--c-ink-quiet)',
-    ink: 'bright' as const,
+    fill: 'ink-quiet' as const,
     boxLabel: { name: 'secondary issuance since genesis', share: '100', unit: 'CKB' },
     children: [
       {
@@ -220,8 +222,7 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'to miners',
         value: BigInt(10),
         tone: 'ckb' as const,
-        color: 'var(--c-text)',
-        ink: 'dark' as const,
+        fill: 'text' as const,
         boxLabel: { name: 'miners', share: '10.00%' },
       },
       {
@@ -229,7 +230,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'compensation',
         value: BigInt(20),
         tone: 'dao' as const,
-        ink: 'dark' as const,
         boxLabel: { name: 'depositors', share: '20.00%' },
         children: [
           {
@@ -237,7 +237,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
             label: 'paid out',
             value: BigInt(10),
             tone: 'dao' as const,
-            ink: 'dark' as const,
             boxLabel: { name: 'paid out', share: '50.0%' },
           },
           {
@@ -245,7 +244,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
             label: 'still owed',
             value: BigInt(10),
             tone: 'dao' as const,
-            ink: 'bright' as const,
             boxLabel: { name: 'still owed', share: '50.0%' },
           },
         ],
@@ -255,7 +253,6 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
         label: 'burnt',
         value: BigInt(70),
         tone: 'other' as const,
-        ink: 'bright' as const,
         boxLabel: { name: 'burnt', share: '70.00%', note: 'no cell can ever claim it' },
       },
     ],
@@ -295,13 +292,15 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     expect(label('m')!.textContent).toBe('10.00%');
     expect(label('c')!.textContent).toBe('depositors 20.00%');
     expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
-    expect(label('b')!.querySelector('[data-part="note"]')).toHaveClass('fill-text-dim');
+    // the note is in the box's one ink, no dim ink on a fill (re-pinned on purpose)
+    expect(label('b')!.querySelector('[data-part="note"]')!.getAttribute('class')).toBeNull();
     // the 32 px row reads at 11 px: "paid out 50.0%" fits 118 px, "still owed 50.0%" does not
     expect(label('p')!.textContent).toBe('paid out 50.0%');
     expect(label('p')).toHaveAttribute('font-size', '11');
     expect(label('o')!.textContent).toBe('50.0%');
-    // ink: the page colour on light boxes, the bright ink on dark ones
-    expect(label('m')).toHaveClass('fill-base-bg');
+    // ink: the ink each fill calls for (inkOnFill, re-pinned on purpose: the dark ink was the page
+    // ground picked by hand): by night the well on the light text fill, the bright ink on the slate
+    expect(label('m')).toHaveClass('fill-base-void');
     expect(label('b')).toHaveClass('fill-text-bright');
     // no words under the boxes (R12)
     expect(container.querySelectorAll('[data-note]')).toHaveLength(0);
@@ -387,10 +386,17 @@ describe('ConcentrationBar with the group names inside its segments (hierarchy v
       'next 90 · 31.10%',
       'the other 16,541 · 42.70%',
     ]);
-    // The fade is the background's, so the words keep full ink: dark on the strong segments.
+    // The fade is the background's, so the words keep full ink. Re-pinned with DY-03 (UI review
+    // 2026-11-14): the ink is the one the fill's own luminance calls for in the theme (by night the
+    // well's dark ink on the two strong golds, the bright text on the two faint ones), not a class
+    // chosen by the segment's rank.
     expect(segments.map((s) => s.style.opacity)).toEqual(['', '', '', '']);
-    expect(segments[0]).toHaveClass('text-base-bg');
-    expect(segments[3]).toHaveClass('text-text-bright');
+    expect(segments.map((s) => s.style.color)).toEqual([
+      'var(--c-base-void)',
+      'var(--c-base-void)',
+      'var(--c-text-bright)',
+      'var(--c-text-bright)',
+    ]);
     expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
   });
 
@@ -546,6 +552,29 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
     const lapsed = container.querySelector('[data-lapsed]')!;
     expect(lapsed).toHaveAttribute('stroke-dasharray', '3 3');
     expect(screen.getByText('lapsed · not renewed')).toBeInTheDocument();
+  });
+  it('draws the paid, grace and lapsed spans with square ends (U-02, R1)', () => {
+    const graced = render(
+      <TenureBar
+        name="apt.cell"
+        periods={[{ label: 'registered, one year', start: reg, end: reg + 365 * day }]}
+        graceEnd={reg + 395 * day}
+        now={reg + 100 * day}
+      />
+    );
+    expect(graced.container.querySelector('[data-grace]')).not.toBeNull();
+    expect(roundedRects(graced.container)).toEqual([]);
+    const lapsed = render(
+      <TenureBar
+        name="888899.bit"
+        periods={[{ label: 'from minting', start: reg, end: reg + 365 * day }]}
+        now={reg + 549 * day}
+      />
+    );
+    expect(lapsed.container.querySelector('[data-lapsed]')).not.toBeNull();
+    expect(lapsed.container.querySelector('[data-elapsed]')).not.toBeNull();
+    expect(rects(lapsed.container).length).toBeGreaterThanOrEqual(2);
+    expect(roundedRects(lapsed.container)).toEqual([]);
   });
   it('writes day counts with thousands separators, as the rail does', () => {
     const { container } = render(

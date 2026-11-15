@@ -19,7 +19,9 @@ describe('ScriptDeploymentTimeline', () => {
       'href',
       '/mainnet/blocks/10'
     );
-    expect(within(evidence).getByRole('link', { name: 'Code cell 0x44444444…:0' })).toHaveAttribute(
+    expect(
+      within(evidence).getByRole('link', { name: 'Code cell 0x44444444…444444:0' })
+    ).toHaveAttribute(
       'href',
       '/mainnet/cell/0x4444444444444444444444444444444444444444444444444444444444444444-0'
     );

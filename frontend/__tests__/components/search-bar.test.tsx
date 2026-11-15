@@ -1,8 +1,66 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { renderPaused } from '@/__tests__/utils/paused-read';
+import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { api } from '@/lib/api';
 
-const SHARED_PLACEHOLDER = 'Search block / tx / address / cell ...';
+/** U-01 / R2 (the boards' header, lib.js `header()`): lowercase, no dots. */
+const SHARED_PLACEHOLDER = 'search block / tx / address / cell';
+/** The placeholder of a field whose text box cannot hold the long one: 6 characters, 46.8 px. */
+const PHONE_PLACEHOLDER = 'search';
+
+/**
+ * Lays the field out as a browser would (jsdom lays nothing out): every input `width` px wide
+ * (its border box) with the compact field's insets, 1 px borders, 28 px of left padding (the prompt
+ * square's) and `right` px of right padding (36 with the `/` key's room, from md; 12 without), so
+ * its text box is width − 30 − right. The field reads it before paint; `resize` sets a new width
+ * and has the ResizeObserver report it, as a browser does on a resize.
+ */
+function layOutField(width: number, right = 36) {
+  let border = width;
+  let report: () => void = () => {
+    throw new Error('layOutField: no ResizeObserver was made');
+  };
+  class ResizeObserverStub {
+    constructor(cb: ResizeObserverCallback) {
+      report = () => cb([], this as unknown as ResizeObserver);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return this instanceof HTMLInputElement ? ({ width: border } as DOMRect) : rect.call(this);
+  });
+  const style = window.getComputedStyle.bind(window);
+  vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
+    el instanceof HTMLInputElement
+      ? ({
+          display: 'block',
+          visibility: 'visible',
+          borderLeftWidth: '1px',
+          borderRightWidth: '1px',
+          paddingLeft: '28px',
+          paddingRight: `${right}px`,
+        } as unknown as CSSStyleDeclaration)
+      : style(el, pseudo)
+  );
+  return {
+    resize(next: number) {
+      border = next;
+      act(() => report());
+    },
+  };
+}
+
+/** A desktop header's field: 460.8 px at 1280 (36vw), a 394.8 px text box. */
+const DESKTOP_FIELD_PX = 460.8;
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -24,16 +82,21 @@ vi.mock('@/lib/api', () => ({
   api: {
     search: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 import { SearchBar } from '@/components/search-bar';
 
 describe('SearchBar', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     pushMock.mockReset();
+    // the placeholder follows the measured field: unless a test says otherwise, a desktop one
+    layOutField(DESKTOP_FIELD_PX);
     vi.mocked(api.search).mockResolvedValue({
       query: '12',
       results: [
@@ -60,6 +123,138 @@ describe('SearchBar', () => {
 
     rerender(<SearchBar variant="home" />);
     expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+  });
+
+  // PA-04 (UI review 2026-11-14): below md the header's field is what the row leaves, 180 px at
+  // 360 (326 px of content less the 90 px wordmark, the 40 px menu button and two 8 px gaps), and
+  // the full placeholder (38 characters at 13 px, 296.4 px) was cut mid-word at a different place
+  // on every page. The phone's 180 px field (a 138 px text box) carries the short placeholder,
+  // and no "/" key is drawn: a touch layout has no keyboard to hint at, so the text keeps the room
+  // the key took.
+  it('gives the phone field a short placeholder and no "/" key below md (PA-04)', () => {
+    vi.restoreAllMocks();
+    layOutField(180, 12);
+    const { unmount } = render(<SearchBar variant="compact" />);
+    const input = screen.getByPlaceholderText(PHONE_PLACEHOLDER);
+    expect(screen.queryByPlaceholderText(SHARED_PLACEHOLDER)).toBeNull();
+    // the key's 36 px of right padding only where the key is drawn
+    expect(input).toHaveClass('pr-3', 'md:pr-9');
+    expect(input).not.toHaveClass('pr-9');
+    const hints = screen.getByTestId('search-shortcut-hints');
+    expect(hints).toHaveClass('hidden', 'md:flex');
+    expect(hints).not.toHaveClass('flex');
+    // the block cursor's track ends where the text does
+    fireEvent.focus(input);
+    expect(screen.getByTestId('search-cursor-track')).toHaveClass('right-3', 'md:right-9');
+    unmount();
+    // the home field's keys follow the same breakpoint
+    render(<SearchBar variant="home" />);
+    expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-hints')).toHaveClass('hidden', 'md:flex');
+    expect(screen.getByTestId('search-shortcut-hints')).not.toHaveClass('sm:flex');
+  });
+
+  // U-01 (UI review 2026-11-14), R2: the boards' field (lib.js `.search .sq`) prompts with a 7 px
+  // square in the cinnabar mark, the wordmark's and the headings' square one pixel smaller; the
+  // build drew a celadon ">". The square is decoration (aria-hidden, no text), centred on the
+  // field's height, and the typed text starts after it at the board's 9 px gap: the square's left
+  // (12 px, 16 px in the home field) + 7 + 9 = 28 px (pl-7), 32 px (pl-8), the cursor track too.
+  it('prompts with the 7 px cinnabar square, the typed text 9 px after it (U-01)', () => {
+    const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+    const rule = css.match(/\.search-square\s*\{([^}]*)\}/);
+    expect(rule, '.search-square in globals.css').not.toBeNull();
+    expect(rule![1]).toContain('width: 7px;');
+    expect(rule![1]).toContain('height: 7px;');
+    expect(rule![1]).toContain('background: var(--c-mark);');
+    expect(rule![1]).not.toMatch(/border-radius|box-shadow/);
+    for (const [variant, left, inset] of [
+      ['compact', 'left-3', 'pl-7'],
+      ['default', 'left-3', 'pl-7'],
+      ['home', 'left-4', 'pl-8'],
+    ] as const) {
+      const { unmount } = render(<SearchBar variant={variant} />);
+      const prompt = screen.getByTestId('search-prompt');
+      expect(prompt, variant).toHaveAttribute('aria-hidden', 'true');
+      expect(prompt, variant).toBeEmptyDOMElement();
+      expect(prompt, variant).not.toHaveTextContent('>');
+      expect(prompt, variant).not.toHaveClass('text-jade');
+      expect(prompt, variant).toHaveClass(
+        'search-square',
+        'absolute',
+        left,
+        'top-1/2',
+        '-translate-y-1/2'
+      );
+      const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+      expect(input, variant).toHaveClass(inset);
+      fireEvent.focus(input);
+      expect(screen.getByTestId('search-cursor-track'), variant).toHaveClass(
+        inset.replace('pl-', 'left-')
+      );
+      unmount();
+    }
+  });
+
+  it('keeps the full placeholder in a desktop field, and the "/" key from md up (PA-04)', () => {
+    render(<SearchBar variant="compact" />);
+    expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
+    expect(screen.getByTestId('search-shortcut-hints')).toHaveClass('hidden', 'md:flex');
+  });
+
+  // Follow-up to PA-04 (RESPONSIVE_LAYOUT principle 4, "the measured width decides, not the
+  // breakpoint"): from md the long placeholder was drawn at every width, and the header's field
+  // holds about 105 px of text at 768–1023 (and less than the placeholder at 1024 beside the
+  // network switcher), so it was cut mid-word there. The field measures its text box (the input's
+  // content box, inside its borders and paddings) before paint and keeps it current, and draws the
+  // long placeholder only when the box holds all of it: 34 characters at 13 px, 0.6 em each, 265.2
+  // px; in the header's field from md (1 + 28 + 36 + 1 px of insets) that is 331.2 px wide.
+  describe('chooses its placeholder by the measured text box, not a breakpoint', () => {
+    it('draws the short one just under 265.2 px of text box and the long one just over', () => {
+      vi.restoreAllMocks();
+      layOutField(330.5); // a 264.5 px text box
+      const { unmount } = render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+      unmount();
+      vi.restoreAllMocks();
+      layOutField(332); // 266 px
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it('draws the short one in a narrow field at an md-wide viewport', () => {
+      vi.restoreAllMocks();
+      stubViewportFromMd(true);
+      layOutField(169); // the field at 768–1023: 736 px of row less 567 px of the rest
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(SHARED_PLACEHOLDER)).toBeNull();
+    });
+
+    it('draws the long one in a wide field below md', () => {
+      vi.restoreAllMocks();
+      stubViewportFromMd(false);
+      layOutField(400, 12);
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it('draws the short one until the field is laid out, so a narrow field never shows the long one', () => {
+      vi.restoreAllMocks();
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it('follows the field when it is resized', () => {
+      vi.restoreAllMocks();
+      const field = layOutField(DESKTOP_FIELD_PX);
+      render(<SearchBar variant="compact" />);
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+      field.resize(281); // 1024 beside the network switcher: a 215 px text box
+      expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
+      field.resize(368.6); // 1024 with one network: 302.6 px
+      expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+    });
   });
 
   it('renders shortcut hints in home variant', () => {
@@ -103,20 +298,21 @@ describe('SearchBar', () => {
     render(<SearchBar variant="compact" />);
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     // material pass v2 (move 2): the field is a well (`.well`: dark inset glass, the row-rule
-    // border; its corners stay the board's 6 px through --well-radius)
-    expect(input).toHaveClass('well', '[--well-radius:6px]', 'h-9');
-    expect(input).not.toHaveClass('bg-base-surface', 'rounded', 'border-base-border');
+    // border; square, ruling R1)
+    expect(input).toHaveClass('well', 'h-9');
+    expect(input).not.toHaveClass('bg-base-surface', 'border-base-border');
     expect(input).toHaveClass(
       // the jade-tinted focus border and its soft ring
       'focus:border-jade/50',
       'focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))]'
     );
     expect(input).not.toHaveClass('text-transparent');
-    // the prompt glyph is decoration, before the text (the field's padding makes room for it)
+    // the prompt is decoration, before the text (the field's padding makes room for it); since
+    // U-01 it is the cinnabar square, not a celadon ">"
     const prompt = screen.getByTestId('search-prompt');
-    expect(prompt).toHaveTextContent('>');
+    expect(prompt).toBeEmptyDOMElement();
     expect(prompt).toHaveAttribute('aria-hidden', 'true');
-    expect(prompt).toHaveClass('text-jade', 'pointer-events-none');
+    expect(prompt).toHaveClass('search-square', 'pointer-events-none');
     expect(input).toHaveClass('pl-7');
     // no cursor while the field is idle, and the native caret is the browser's
     expect(screen.queryByTestId('search-cursor')).toBeNull();
@@ -148,13 +344,13 @@ describe('SearchBar', () => {
 
   it('gives the default and home fields the same prompt and cursor (move 4)', () => {
     const { rerender } = render(<SearchBar />);
-    expect(screen.getByTestId('search-prompt')).toHaveTextContent('>');
+    expect(screen.getByTestId('search-prompt')).toHaveClass('search-square');
     let input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     expect(input).toHaveClass('pl-7', 'focus:border-jade/50');
     fireEvent.focus(input);
     expect(screen.getByTestId('search-cursor')).toHaveClass('cursor');
     rerender(<SearchBar variant="home" />);
-    expect(screen.getByTestId('search-prompt')).toHaveTextContent('>');
+    expect(screen.getByTestId('search-prompt')).toHaveClass('search-square');
     input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     expect(input).toHaveClass('pl-8');
     fireEvent.focus(input);
@@ -301,12 +497,12 @@ describe('SearchBar', () => {
       expect(api.search).toHaveBeenCalledWith('not-found');
     });
     await waitFor(() => {
-      expect(screen.getByText('No results found')).toBeInTheDocument();
+      expect(screen.getByText('No results.')).toBeInTheDocument();
     });
 
     fireEvent.submit(input.closest('form')!);
     expect(pushMock).not.toHaveBeenCalled();
-    expect(screen.getByText('No matches found.')).toBeInTheDocument();
+    expect(screen.getByText('No matches.')).toBeInTheDocument();
   });
 
   it('prefers exact block hash result on submit when hash query has mixed results', async () => {
@@ -352,5 +548,23 @@ describe('SearchBar', () => {
 
     fireEvent.submit(input.closest('form')!);
     expect(pushMock).toHaveBeenCalledWith(`/blocks/${hash}`);
+  });
+
+  // A1 review fix, round 2: a search paused offline, or in a hidden tab between retries, is still
+  // awaited: the field says it is searching, never "No results." / "No matches.", and a real
+  // empty answer still says so once back online.
+  it('says it is searching while its read is paused, then the true empty answer once back online', async () => {
+    vi.mocked(api.search).mockResolvedValue({ query: 'not-found', results: [] });
+    const { resume } = renderPaused(<SearchBar />);
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'not-found' } });
+    expect(await screen.findByText('Searching…')).toBeInTheDocument();
+    expect(screen.queryByText('No results.')).toBeNull();
+    fireEvent.submit(input.closest('form')!);
+    expect(screen.queryByText('No matches.')).toBeNull();
+    expect(pushMock).not.toHaveBeenCalled();
+    resume();
+    expect(await screen.findByText('No results.')).toBeInTheDocument();
   });
 });

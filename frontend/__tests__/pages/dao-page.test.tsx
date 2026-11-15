@@ -9,8 +9,6 @@ import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
 
 vi.mock('@/lib/api', () => ({
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
   api: {
     getDaoStatistics: vi.fn(),
     getDaoEvidence: vi.fn(),

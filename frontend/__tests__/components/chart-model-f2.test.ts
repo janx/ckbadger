@@ -116,12 +116,13 @@ describe('Charts index encodings (F2 charts)', () => {
   it('heads knowledge by kind with the leading share and lists every kind in a legend (CH-07)', () => {
     const model = chartModel(def('common-knowledge-composition'), composition);
     expect(model.headline).toEqual({ pre: 'nervos dao', display: '60.00', unit: '%' });
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'Nervos DAO 60.00 %',
-      'Plain CKB 20.00 %',
-      'Tokens 10.00 %',
-      'Objects 8.00 %',
-      'Other scripts 2.00 %',
+      'Nervos DAO 60.00%',
+      'Plain CKB 20.00%',
+      'Tokens 10.00%',
+      'Objects 8.00%',
+      'Other scripts 2.00%',
     ]);
   });
 
@@ -145,7 +146,11 @@ describe('Charts index encodings (F2 charts)', () => {
     expect(model.series).toHaveLength(8);
   });
 
-  it('summarises activity by type in the four groups of the board (CH-07)', () => {
+  // Re-pinned for CH-02 (UI review 2026-11-14): the card's bands are the six kinds in their class
+  // colours; the merged "Assets" band had no class colour to take. The review's item D: they stand
+  // in the page's fixed class order, not by size (the test said "largest first" and its data could
+  // not tell); here the largest kind is not first and the shares do not descend.
+  it('summarises activity by type in its six kinds, in the page’s fixed class order (CH-07, CH-02)', () => {
     const model = chartModel(def('activity-type-breakdown'), {
       title: 'Activity Type Breakdown',
       series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'].map((key) => ({
@@ -157,23 +162,26 @@ describe('Charts index encodings (F2 charts)', () => {
         {
           date: '2026-10-29',
           values: {
-            transfer: '10',
-            dao: '2',
+            transfer: '50',
+            dao: '22',
             token: '3',
             object: '4',
             identity: '1',
-            scriptCall: '80',
+            scriptCall: '20',
           },
         },
       ],
     });
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'Script calls 80.00 %',
-      'Transfers 10.00 %',
-      'Assets 8.00 %',
-      'DAO 2.00 %',
+      'Script calls 20.00%',
+      'CKB transfers 50.00%',
+      'Tokens 3.00%',
+      'Objects 4.00%',
+      'Identities 1.00%',
+      'Nervos DAO 22.00%',
     ]);
-    expect(model.headline).toEqual({ pre: 'script calls', display: '80.00', unit: '%' });
+    // the headline reads the first kind of the fixed order (unchanged here; said in the hand-back)
+    expect(model.headline).toEqual({ pre: 'script calls', display: '20.00', unit: '%' });
   });
 
   it('draws live cells as one live count, consumed cells kept apart (CH-08)', () => {
@@ -204,12 +212,15 @@ describe('Charts index encodings (F2 charts)', () => {
       yAxisLabel: 'Cells',
       data: [
         { date: '<100 CKB', value: '600', value2: '1' },
-        { date: '100+ CKB', value: '300', value2: '1' },
+        { date: '100-1k CKB', value: '300', value2: '1' },
         { date: '>=1m CKB', value: '100', value2: '1' },
       ],
     });
-    expect(cellSize.headline).toEqual({ pre: '<100 CKB', display: '60.00', unit: '%' });
-    expect(cellSize.summaryLabel).not.toBe('Largest bucket');
+    // Re-pinned for CH-12: the API's buckets only ('100+ CKB' is none of them), named in the
+    // axis' words, and a bucket's unit is its symbol ('h', was 'hours'; CH-14).
+    expect(cellSize.headline).toEqual({ pre: '< 100 CKB', display: '60.00', unit: '%' });
+    // Re-pinned for CH-18: no fact restates the head's bucket (was: not "Largest bucket").
+    expect(cellSize.facts).toBeUndefined();
     const epochs = chartModel(def('epoch-time-distribution'), {
       title: 'Epochs',
       yAxisLabel: 'Epochs',
@@ -219,7 +230,7 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '50.50', value: '1' },
       ],
     });
-    expect(epochs.headline).toEqual({ pre: 'most common', display: '4.02', unit: 'hours' });
+    expect(epochs.headline).toEqual({ pre: 'most common', display: '4.02', unit: 'h' });
     const cohort = chartModel(def('address-cohort-retention'), {
       title: 'Cohorts',
       yAxisLabel: '%',
@@ -228,7 +239,9 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '2026-09', value: '1.5', value2: '3' },
       ],
     });
-    expect(cohort.headline).toEqual({ pre: '2026-09', display: '1.50', unit: '%' });
+    // Re-pinned for CH-19 (UI review 2026-11-14): the newest cohort is the month still filling;
+    // the headline is the last complete cohort, the one before it (was 2026-09).
+    expect(cohort.headline).toEqual({ pre: '2024-06', display: '7.90', unit: '%' });
   });
 
   it('heads ranked cards with the leader share, grouped like every other number (CH-31)', () => {
@@ -279,7 +292,8 @@ describe('Charts index encodings (F2 charts)', () => {
       data: [{ date: '2026-10-29', value: '0.0257' }],
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
-    expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50 %' }]);
+    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
+    expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50%' }]);
     const inflation = chartModel(def('inflation-rate'), {
       title: 'Inflation',
       yAxisLabel: 'Nominal',
@@ -480,7 +494,8 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
     ]);
     expect(a.rankedPreview?.rows[1].label).toBe('MEMES · 0x5cb3…b4fa');
     // The fact names the leader like the rows do, its class as the mark (detail shot: "RGB++ (token)").
-    expect(a.summaryLabel).toBe('Largest asset: RGB++');
+    // Re-pinned for CH-18: the name is the fact's bright value, not part of its label.
+    expect(a.facts?.[0]).toMatchObject({ label: 'Largest asset', name: 'RGB++' });
     const unknown = series([
       ['top0', 'X', 'nft:0x01'],
       ['top1', 'Y', 'family:y'],

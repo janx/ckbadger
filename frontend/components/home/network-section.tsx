@@ -130,7 +130,7 @@ function BlockTimeFigure() {
     refetchInterval: 300_000,
   });
   const d = useMemo(
-    () => derive({ data, error }, (chart) => exactLineView(chart, 1), 'No block-time history yet'),
+    () => derive({ data, error }, (chart) => exactLineView(chart, 1), 'No block-time history.'),
     [data, error]
   );
   const v = viewOf(d);
@@ -197,7 +197,7 @@ function HashRateFigure() {
             }
           );
         },
-        'No hash-rate history yet'
+        'No hash-rate history.'
       ),
     [data, error]
   );
@@ -241,7 +241,7 @@ function UncleRateFigure() {
             view && { ...view, target, targetExact: formatOrphanRateTarget(chart.orphanRateTarget) }
           );
         },
-        'No uncle-rate history yet'
+        'No uncle-rate history.'
       ),
     [data, error]
   );
@@ -328,7 +328,7 @@ function TransactionsFigure() {
       derive(
         { data, error },
         (stats) => txView(txRange === '24h' ? stats.hourlyData : stats.dailyData, meta.series),
-        'No transactions yet'
+        'No transactions.'
       ),
     [data, error, txRange, meta.series]
   );
@@ -358,7 +358,7 @@ function TransactionsFigure() {
         <span
           role="group"
           aria-label="Transactions range"
-          className="border-base-border flex overflow-hidden rounded border"
+          className="border-base-border flex overflow-hidden border"
         >
           {(Object.keys(TX_RANGES) as TxRange[]).map((r) => (
             <button

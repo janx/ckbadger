@@ -13,12 +13,10 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { Address } from '@/components/ui/address';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { ActivityEventGroup, ParticipantLine } from '@/components/activity-event-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
-import { ObjectGalleryPanel } from '@/components/object/object-gallery-panel';
 import { ActivityStats } from '@/components/home/activity-stats';
-import type { Activity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import type { ParticipantInfo } from '@/lib/api';
 
 const ADDRESS =
   'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq22xdj8q4jdql98qkdhnqzgrsk4nqyavdcratvu9';
@@ -48,12 +46,12 @@ afterEach(() => {
 
 describe('resting chroma (V5): links in rows rest as ink and light up on hover', () => {
   it('Address rests as ink with the faint aqua underline; the global a:hover is its hover', () => {
-    render(<Address address={ADDRESS} />);
+    render(<Address address={ADDRESS} size="row" />);
     expectRestingLink(screen.getByRole('link'));
   });
 
   it('keeps the resting ink when a caller sets only the size (the blocks table miner)', () => {
-    render(<Address address={ADDRESS} startChars={10} endChars={6} className="text-small" />);
+    render(<Address address={ADDRESS} size="row" className="text-small" />);
     const link = screen.getByRole('link');
     expectRestingLink(link);
     expect(link).toHaveClass('text-small');
@@ -74,9 +72,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
         key: 'miner',
         label: 'Miner',
         minWidth: 200,
-        render: (b) => (
-          <Address address={b.miner} startChars={10} endChars={6} className="text-small" />
-        ),
+        render: (b) => <Address address={b.miner} size="row" className="text-small" />,
       },
     ];
     render(
@@ -91,7 +87,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const table = screen.getByRole('table', { name: 'Blocks' });
     const [, row] = within(table).getAllByRole('row');
     expectNoAquaLink(row);
-    expectRestingLink(within(row).getByRole('link', { name: 'ckb1qzda0c...ratvu9' }));
+    expectRestingLink(within(row).getByRole('link', { name: 'ckb1qzda0c…ratvu9' }));
   });
 
   it('a .cell records table row: its decoded address link rests as ink', () => {
@@ -122,11 +118,11 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       roles: [],
     };
     const { container, rerender } = render(
-      <ParticipantRefView participant={{ ...party, address: ADDRESS }} />
+      <ParticipantRefView participant={{ ...party, address: ADDRESS }} size="row" />
     );
     expectRestingLink(screen.getByRole('link'));
     for (const compact of [false, true]) {
-      rerender(<ParticipantRefView participant={party} compact={compact} />);
+      rerender(<ParticipantRefView participant={party} size="row" compact={compact} />);
       const link = screen.getByRole('link');
       expectNoAquaLink(container);
       expect(link).toHaveClass('text-text-dim', 'hover:text-jade');
@@ -155,103 +151,6 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       unmount();
     }
   });
-
-  const identities: ItemDelta[] = [
-    { kind: 'identity', standard: 'dotcell', identityId: `0x${'ab'.repeat(20)}`, delta: 1 },
-    { kind: 'identity', standard: 'dotbit', identityId: `0x${'cd'.repeat(20)}`, delta: -1 },
-  ];
-
-  it('an ActivityEventGroup: identity hash links rest as ink; the tx hash hovers jade', () => {
-    const activity: Activity = {
-      txHash: TX,
-      blockNumber: 10_000,
-      txIndex: 0,
-      timestamp: '1700000000',
-      ckbDelta: '-100000000',
-      usedDelta: '0',
-      isCellbase: false,
-      itemDeltas: identities,
-      typeCalls: [],
-      lockCalls: [],
-      protocolActions: [],
-      participants: [],
-      roles: [],
-      tags: 0,
-    };
-    const { container } = render(
-      <div data-feed-row={TX}>
-        <ActivityEventGroup activity={activity} formatTimeAgo={() => '2 hrs ago'} />
-      </div>
-    );
-    expectNoAquaLink(container);
-    const hashLinks = screen
-      .getAllByRole('link')
-      .filter((a) => a.getAttribute('href')?.includes('/identities/'));
-    // The group draws its narrow card and its wide grid cells, each with both identities.
-    expect(hashLinks).toHaveLength(2 * identities.length);
-    hashLinks.forEach(expectRestingLink);
-    const txLinks = screen
-      .getAllByRole('link')
-      .filter((a) => a.getAttribute('href')?.endsWith(`/tx/${TX}`));
-    expect(txLinks).toHaveLength(2);
-    for (const tx of txLinks) expect(tx).toHaveClass('text-text', 'hover:text-jade');
-  });
-
-  it("a participant line: an identity delta's hash link rests as ink", () => {
-    const { container } = render(
-      <ParticipantLine
-        participant={{
-          address: null,
-          lockHash: LOCK_HASH,
-          lockHashPrefix: null,
-          roles: [],
-          ckbDelta: '0',
-          usedDelta: '0',
-          itemDeltas: identities,
-          tags: 0,
-        }}
-      />
-    );
-    expectNoAquaLink(container);
-    const hashLinks = screen
-      .getAllByRole('link')
-      .filter((a) => a.getAttribute('href')?.includes('/identities/'));
-    expect(hashLinks).toHaveLength(2);
-    hashLinks.forEach(expectRestingLink);
-  });
-
-  it('an identity card in the object gallery: its label link rests as ink', () => {
-    render(
-      <ObjectGalleryPanel
-        totalCount={1}
-        isLoading={false}
-        page={1}
-        hasPrevious={false}
-        onNext={() => {}}
-        onPrevious={() => {}}
-        collectionItems={{
-          data: [
-            {
-              nftId: `0x${'cd'.repeat(20)}`,
-              name: 'badger.bit',
-              standard: 'dotbit',
-              ownerLockHash: LOCK_HASH,
-              ownerAddress: ADDRESS,
-              isLive: true,
-              createdAtBlock: 10_000,
-            },
-          ],
-          limit: 18,
-          hasMore: false,
-          nextCursor: null,
-        }}
-      />
-    );
-    const label = screen.getByRole('link', { name: 'badger.bit' });
-    expectRestingLink(label);
-    expect(label).toHaveClass('font-semibold');
-  });
-
   it('a section CTA outside every row keeps its aqua (text-interactive) — untouched', () => {
     stubChartWidth(560);
     render(<ActivityStats />);

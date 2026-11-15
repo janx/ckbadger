@@ -4,20 +4,13 @@ import type {
   ScriptHistoryMarkerApi,
   ScriptVersionDetail,
 } from '@/lib/api';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
  * Reading of a script family's code lineage from the API's own records (versions and history
  * markers). Nothing here classifies a lock or guesses an event: it orders, numbers and pairs
  * what `/scripts/{name}` returned, and throws when two of its records disagree.
  */
-
-/** `0xd1db…b95c`: the board's short form for lock args, code hashes and outpoints. */
-export function shortHex(value: string, head = 4, tail = 4): string {
-  if (!/^0x[0-9a-fA-F]+$/.test(value)) throw new Error(`Not a hex value: ${value}`);
-  return value.length <= 2 + head + tail + 1
-    ? value
-    : `${value.slice(0, 2 + head)}…${value.slice(-tail)}`;
-}
 
 /** Versions in deployment order (v1 = first deployed), the order the Code versions table uses. */
 export function orderedVersions(
@@ -156,22 +149,36 @@ export function deploymentOnDay(
   return current;
 }
 
-/** How the board names a code cell holder: `multisig 0xd1db…b95c`. */
-export function holderName(custody: ScriptCustodyApi): string {
+/**
+ * A code cell holder's name in its parts (A4 Chrome F2): a kind with the id that names it
+ * (`multisig` and its lock args, `lock` and its code hash, at the size of the place the name
+ * stands in, U-09), which a renderer keeps whole as a label with its id; or a phrase with no id
+ * (`an unspendable lock`), words a line may break between.
+ */
+export function holderParts(
+  custody: ScriptCustodyApi,
+  size: ShortSize
+): { label: string; id: string | null } {
   switch (custody.class) {
     case 'multisig':
-      return `multisig ${shortHex(custody.lockArgs ?? '0x')}`;
+      return { label: 'multisig', id: shortenHash(custody.lockArgs ?? '0x', size) };
     case 'one_key':
-      return `one key ${shortHex(custody.lockArgs ?? '0x')}`;
+      return { label: 'one key', id: shortenHash(custody.lockArgs ?? '0x', size) };
     case 'unspendable':
-      return 'an unspendable lock';
+      return { label: 'an unspendable lock', id: null };
     case 'fixed':
-      return 'no one (pinned by data hash)';
+      return { label: 'no one (pinned by data hash)', id: null };
     default:
       return custody.lockCodeHash
-        ? `lock ${shortHex(custody.lockCodeHash)}`
-        : 'an unrecorded holder';
+        ? { label: 'lock', id: shortenHash(custody.lockCodeHash, size) }
+        : { label: 'an unrecorded holder', id: null };
   }
+}
+
+/** How the board names a code cell holder in a string: `multisig 0xd1db…b95c`, `an unspendable lock`. */
+export function holderName(custody: ScriptCustodyApi, size: ShortSize): string {
+  const { label, id } = holderParts(custody, size);
+  return id === null ? label : `${label} ${id}`;
 }
 
 /** `3 of 5 signatures`, or why the threshold is not known. */

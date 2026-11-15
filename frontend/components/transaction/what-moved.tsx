@@ -26,7 +26,9 @@ import {
   type FlowEnd,
   type TxFlow,
 } from '@/lib/tx-flows';
-import { cn, truncateHash } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /** What the page lights in the cells diagram when a flow's party or asset is hovered. */
 export type WhatMovedHover =
@@ -81,17 +83,20 @@ function endStroke(end: FlowEnd): { opacity: number | null; dashed: boolean } {
   };
 }
 
-/** The asset's name, for the plate and for a reader. */
-function assetName(asset: FlowAsset): string {
+/**
+ * The asset's name, for the plate and for a reader; an id in it at the size of the strip's form
+ * (U-09): `row` in the ribbon, `tight` in the narrow list.
+ */
+function assetName(asset: FlowAsset, size: ShortSize): string {
   switch (asset.kind) {
     case 'ckb':
       return 'CKB';
     case 'token':
-      return asset.item.symbol?.trim() || truncateHash(asset.item.typeScriptHash, 8, 6);
+      return asset.item.symbol?.trim() || shortenHash(asset.item.typeScriptHash, size);
     case 'object':
       return asset.item.collection?.name?.trim() || 'Object';
     case 'identity':
-      return `${formatStandard(asset.item.standard)} ${truncateHash(asset.item.identityId, 8, 4)}`;
+      return `${formatStandard(asset.item.standard)} ${shortenHash(asset.item.identityId, size)}`;
   }
 }
 
@@ -109,7 +114,7 @@ function assetHref(asset: FlowAsset): string | null {
 }
 
 /** An end's exact amount in the asset's unit; an object or identity moves whole, so none. */
-function Amount({ asset, amount }: { asset: FlowAsset; amount: bigint }) {
+function Amount({ asset, amount, size }: { asset: FlowAsset; amount: bigint; size: ShortSize }) {
   if (asset.kind === 'ckb') return <ExactCkb shannons={amount} signed={false} tone="plain" />;
   if (asset.kind !== 'token') return null;
   const decimals = asset.item.decimals ?? null;
@@ -121,7 +126,7 @@ function Amount({ asset, amount }: { asset: FlowAsset; amount: bigint }) {
       {decimals !== null && (
         <>
           {' '}
-          <span className="text-text-dim text-meta">{assetName(asset)}</span>
+          <span className="text-text-dim text-meta">{assetName(asset, size)}</span>
         </>
       )}
     </span>
@@ -155,12 +160,14 @@ function EndText({
   end,
   lockCodeHashes,
   align,
+  size,
   onExpand,
 }: {
   asset: FlowAsset;
   end: FlowEnd;
   lockCodeHashes: ReadonlyMap<string, string>;
   align: 'left' | 'right';
+  size: ShortSize;
   onExpand?: () => void;
 }) {
   const alignClass = align === 'right' ? 'text-right' : 'text-left';
@@ -177,15 +184,21 @@ function EndText({
             align === 'right' && 'justify-end'
           )}
         >
-          <ParticipantRefView participant={end.party} compact quiet className="shrink-0" />
+          <ParticipantRefView
+            participant={end.party}
+            size={size}
+            compact
+            quiet
+            className="shrink-0"
+          />
           {codeHash !== null && (
             <span className="min-w-0 truncate">
-              <LockKind lockKind={end.party.lockKind ?? null} lockCodeHash={codeHash} />
+              <LockKind lockKind={end.party.lockKind ?? null} lockCodeHash={codeHash} size={size} />
             </span>
           )}
         </div>
         <div className="text-small">
-          <Amount asset={asset} amount={end.amount} />
+          <Amount asset={asset} amount={end.amount} size={size} />
         </div>
       </div>
     );
@@ -198,7 +211,7 @@ function EndText({
         <span className="text-text-dim small-caps lowercase">{role}</span>
       </div>
       <div className="text-small">
-        <Amount asset={asset} amount={end.amount} />
+        <Amount asset={asset} amount={end.amount} size={size} />
       </div>
     </>
   );
@@ -220,14 +233,16 @@ function EndText({
 function Plate({
   asset,
   flow,
+  size,
   plateRef,
 }: {
   asset: FlowAsset;
   flow: TxFlow;
+  size: ShortSize;
   plateRef?: Ref<HTMLDivElement>;
 }) {
   const href = assetHref(asset);
-  const name = assetName(asset);
+  const name = assetName(asset, size);
   const parties = (ends: readonly FlowEnd[]) => ends.filter((e) => e.t === 'party').length;
   const showTotal =
     (asset.kind === 'ckb' || asset.kind === 'token') &&
@@ -236,7 +251,7 @@ function Plate({
     <div
       ref={plateRef}
       data-flow-plate
-      className="bg-base-bg/95 text-small flex max-w-full flex-col items-center gap-0.5 whitespace-nowrap rounded border px-3 py-1.5"
+      className="bg-base-bg/95 text-small flex max-w-full flex-col items-center gap-0.5 whitespace-nowrap border px-3 py-1.5"
       style={{ borderColor: colorOf(asset) }}
     >
       <span className="text-text-bright flex items-center gap-1.5 font-medium">
@@ -257,12 +272,13 @@ function Plate({
           href={getObjectDetailHref(asset.item.objectId)}
           className="text-text-dim text-meta hover:text-jade"
         >
-          {truncateHash(asset.item.objectId, 10, 6)}
+          <ShortId value={asset.item.objectId} kind="hash" size={size} />
         </Link>
       )}
       {showTotal && (
         <span className="text-meta" data-flow-total>
-          <Amount asset={asset} amount={flow.total} /> <span className="text-text-dim">in all</span>
+          <Amount asset={asset} amount={flow.total} size={size} />{' '}
+          <span className="text-text-dim">in all</span>
         </span>
       )}
     </div>
@@ -374,7 +390,7 @@ function RibbonStrip({
           >
             <span
               aria-hidden="true"
-              className={cn('w-1 shrink-0 rounded-sm', terminal && 'border border-dashed')}
+              className={cn('w-1 shrink-0', terminal && 'border border-dashed')}
               style={terminal ? { borderColor: color } : { background: color, opacity: 0.9 }}
             />
             <div className="min-w-0 flex-1 py-0.5">
@@ -383,6 +399,7 @@ function RibbonStrip({
                 end={end}
                 lockCodeHashes={lockCodeHashes}
                 align={which === 'from' ? 'right' : 'left'}
+                size="row"
                 onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
               />
             </div>
@@ -394,7 +411,7 @@ function RibbonStrip({
   return (
     <div
       role="group"
-      aria-label={`${assetName(flow.asset)} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
+      aria-label={`${assetName(flow.asset, 'row')} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
       data-flow={flow.key}
       data-form="ribbons"
       className="grid grid-cols-[3fr_minmax(140px,4fr)_3fr] gap-x-2"
@@ -414,7 +431,7 @@ function RibbonStrip({
           onMouseEnter={() => onHover?.({ t: 'asset', asset: flow.asset })}
           onMouseLeave={() => onHover?.(null)}
         >
-          <Plate asset={flow.asset} flow={flow} plateRef={plateRef} />
+          <Plate asset={flow.asset} flow={flow} size="row" plateRef={plateRef} />
         </div>
       </div>
       {column(right, 'to')}
@@ -452,6 +469,7 @@ function ListStrip({
             end={end}
             lockCodeHashes={lockCodeHashes}
             align="left"
+            size="tight"
             onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
           />
         </li>
@@ -463,7 +481,7 @@ function ListStrip({
   return (
     <div
       role="group"
-      aria-label={`${assetName(flow.asset)} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
+      aria-label={`${assetName(flow.asset, 'tight')} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
       data-flow={flow.key}
       data-form="list"
       className="flex flex-col gap-2"
@@ -479,7 +497,7 @@ function ListStrip({
           onMouseEnter={() => onHover?.({ t: 'asset', asset: flow.asset })}
           onMouseLeave={() => onHover?.(null)}
         >
-          <Plate asset={flow.asset} flow={flow} />
+          <Plate asset={flow.asset} flow={flow} size="tight" />
         </div>
       </div>
       <span className="eyebrow text-text-dim text-meta">to</span>
@@ -520,12 +538,14 @@ export function WhatMoved({
   const Strip = form === 'ribbons' ? RibbonStrip : ListStrip;
   return (
     <TerminalPanel aria-label="What moved" data-testid="tx-what-moved" data-form={form}>
+      {/* The direction once, over the two ends of the ribbons; the list form labels each flow's
+          two groups itself, so its header keeps the hint alone (PA-11). */}
       <div className="border-base-border flex items-center justify-between gap-3 border-b px-3 py-1.5">
-        <span className="eyebrow text-text-dim text-small">from</span>
-        <TapOrHoverHint what="a party or an asset" className="text-text-ghost text-meta" />
-        <span className="eyebrow text-text-dim text-small">to</span>
+        {form === 'ribbons' && <span className="eyebrow text-text-dim text-meta">from</span>}
+        <TapOrHoverHint what="a party or an asset" className="text-meta" />
+        {form === 'ribbons' && <span className="eyebrow text-text-dim text-meta">to</span>}
       </div>
-      <div ref={ref} className="divide-base-border-subtle flex min-w-0 flex-col divide-y px-3">
+      <div ref={ref} className="divide-row-rule flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
           <div key={flow.key} className="py-4">
             <Strip flow={flow} lockCodeHashes={lockCodeHashes} onHover={onHover} />

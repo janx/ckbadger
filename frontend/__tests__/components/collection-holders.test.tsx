@@ -65,7 +65,14 @@ const distribution = [
 describe('Collection holders', () => {
   it('keeps whole-scope distribution and named-only prefixes without inventing addresses', async () => {
     const load = vi.fn().mockResolvedValue(page([named, resolved]));
-    render(<CollectionHolders load={load} queryKey="cluster" distribution={distribution} />);
+    render(
+      <CollectionHolders
+        assetClass="objects"
+        load={load}
+        queryKey="cluster"
+        distribution={distribution}
+      />
+    );
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(load).toHaveBeenCalledWith({ limit: 10, cursor: undefined });
     const rows = within(table).getAllByRole('row');
@@ -92,13 +99,53 @@ describe('Collection holders', () => {
         named,
       ])
     );
-    render(<CollectionHolders load={load} queryKey="kinds" />);
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="kinds" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     const rows = within(table).getAllByRole('row');
     expect(rows[1]).toHaveTextContent('JoyID');
-    expect(rows[2]).toHaveTextContent('0x434343...4343');
+    // U-09 (re-pinned): the table's code hash at the row size
+    expect(rows[2]).toHaveTextContent('lock 0x43434343…434343');
     // No indexed lock: neither a kind nor a code hash is shown.
     expect(rows[3]).not.toHaveTextContent(/JoyID|0x4343/);
+  });
+
+  // A4b review: a holder whose lock has no address form (args longer than an address can carry)
+  // comes with a null address and its lock's code hash and kind: it is named by its lock hash,
+  // linked to the address page that takes a lock hash, and by its kind — never "lock not indexed".
+  it('names a holder whose lock has no address form by its lock hash and kind (A4b review)', async () => {
+    const unaddressable = {
+      lockScriptHash: `0x${'88'.repeat(32)}`,
+      address: null,
+      itemCount: 2,
+      lockCodeHash: `0x${'9b'.repeat(32)}`,
+      lockKind: 'SECP256K1/blake160',
+    };
+    const addressPage = `/mainnet/address/0x${'88'.repeat(32)}`;
+    const load = vi.fn().mockResolvedValue(page([unaddressable], { total: 1 }));
+    try {
+      atContainerWidth(1248);
+      const { unmount } = render(
+        <CollectionHolders assetClass="objects" load={load} queryKey="no-address" />
+      );
+      const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+      const [, row] = within(table).getAllByRole('row');
+      expect(within(row).getByRole('link')).toHaveAttribute('href', addressPage);
+      expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
+      expect(row).toHaveAttribute(
+        'title',
+        `#1 · 0x${'88'.repeat(32)} · SECP256K1/blake160 · 2 items`
+      );
+      unmount();
+      atContainerWidth(358);
+      render(<CollectionHolders assetClass="objects" load={load} queryKey="no-address-phone" />);
+      const [phone] = await screen.findAllByTestId('holder-row-mobile');
+      expect(within(phone).getByRole('link')).toHaveAttribute('href', addressPage);
+      expect(phone).toHaveTextContent('SECP256K1/blake160');
+      expect(phone).not.toHaveTextContent(/not indexed/);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('uses backend ordering and cursor pages, and resets mode and cursor for a new collection', async () => {
@@ -111,7 +158,9 @@ describe('Collection holders', () => {
             : page([named], { limit, total: 51, hasMore: true, nextCursor: 'next-50' })
         )
       );
-    const { rerender } = render(<CollectionHolders load={load} queryKey="first" />);
+    const { rerender } = render(
+      <CollectionHolders assetClass="objects" load={load} queryKey="first" />
+    );
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     fireEvent.click(screen.getByRole('button', { name: 'All holders →' }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined }));
@@ -122,7 +171,7 @@ describe('Collection holders', () => {
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled());
-    rerender(<CollectionHolders load={load} queryKey="second" />);
+    rerender(<CollectionHolders assetClass="objects" load={load} queryKey="second" />);
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(load).toHaveBeenLastCalledWith({ limit: 10, cursor: undefined });
     expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
@@ -133,7 +182,7 @@ describe('Collection holders', () => {
     const load = vi.fn().mockResolvedValue(page([resolved]));
     render(
       <QueryClientProvider client={client}>
-        <CollectionHolders load={load} queryKey="retained" />
+        <CollectionHolders assetClass="objects" load={load} queryKey="retained" />
       </QueryClientProvider>
     );
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
@@ -149,7 +198,7 @@ describe('Collection holders', () => {
 
   it('shows a read failure separately from an empty collection', async () => {
     const load = vi.fn().mockRejectedValue(new Error('unavailable'));
-    render(<CollectionHolders load={load} queryKey="failure" />);
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="failure" />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load collection holders');
     expect(screen.queryByText('No current holders.')).not.toBeInTheDocument();
   });
@@ -157,11 +206,14 @@ describe('Collection holders', () => {
   it('sums full-scope counts exactly beyond a JavaScript safe integer', async () => {
     render(
       <CollectionHolders
+        assetClass="objects"
         load={vi.fn().mockResolvedValue(page([], { total: 0 }))}
         queryKey="exact-totals"
+        // Re-pinned with PB-12: every collection draws its holder counts as bars, whose round
+        // scale must itself be a safe integer; two 2^52 buckets still sum past one exactly.
         distribution={[
-          { range: '1', holders: Number.MAX_SAFE_INTEGER, items: Number.MAX_SAFE_INTEGER },
-          { range: '2', holders: 2, items: 4 },
+          { range: '1', holders: 2 ** 52, items: 2 ** 52 },
+          { range: '2', holders: 2 ** 52 + 1, items: 2 ** 52 + 3 },
         ]}
       />
     );
@@ -185,6 +237,7 @@ describe('Collection holders', () => {
       expect(() =>
         render(
           <CollectionHolders
+            assetClass="objects"
             load={vi.fn().mockResolvedValue(page([]))}
             queryKey="bad-distribution"
             distribution={buckets}
@@ -202,6 +255,7 @@ describe('Collection holders', () => {
     const load = vi.fn().mockResolvedValue(page([named, resolved]));
     render(
       <CollectionHolders
+        assetClass="objects"
         load={load}
         queryKey="moving"
         distribution={[{ holders: 1, items: 8, range: '6+' }]}
@@ -217,7 +271,9 @@ describe('Collection holders', () => {
 
   it('lets an empty distribution with no listed holders read as genuinely no holders', async () => {
     const load = vi.fn().mockResolvedValue(page([], { total: 0 }));
-    render(<CollectionHolders load={load} queryKey="none" distribution={[]} />);
+    render(
+      <CollectionHolders assetClass="objects" load={load} queryKey="none" distribution={[]} />
+    );
     expect(await screen.findByText('Full collection: 0 holders · 0 items')).toBeInTheDocument();
   });
 });
@@ -256,7 +312,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       '[&_a]:leading-[18px]',
       'flex-nowrap'
     );
-    expect(within(first).getByText('JoyID')).toHaveClass('border', 'rounded-sm', 'text-meta');
+    expect(within(first).getByText('JoyID')).toHaveClass('border', 'text-meta');
     const scale = resourceScale([6, 6]);
     expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
     expect(first.querySelector('[data-segment]')).toHaveStyle({
@@ -283,11 +339,15 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     const bucketBar = within(buckets).getAllByRole('row')[2].querySelector('[data-segment]');
     expect(bucketBar).toHaveStyle({ width: barWidth(1, resourceScale([0, 1, 0, 1]), 48) });
   });
-  it('keeps a plain count, without a bar, where the page gives no class colour', async () => {
+  // Re-pinned with PB-12 (UI review 2026-11-14): every collection gives its class colour (an
+  // identity collection no longer prints plain counts); the count still ends the row.
+  it('draws the counts of an identity collection as bars in the identity rose', async () => {
     const load = vi.fn().mockResolvedValue(page([joyid]));
-    render(<CollectionHolders load={load} queryKey="plain" />);
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="plain" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
-    expect(table.querySelector('[data-aligned-bar]')).toBeNull();
+    expect(table.querySelector('[data-segment]')).toHaveStyle({
+      backgroundColor: CLASS_COLORS.identities,
+    });
     expect(within(table).getAllByRole('row')[1]).toHaveTextContent(/6$/);
   });
 });
@@ -316,14 +376,18 @@ describe('Collection holders phone rows (board L5)', () => {
     expect(screen.queryByRole('table', { name: 'Top 10 collection holders' })).toBeNull();
     const second = phoneLines(rows[1]);
     expect(second.map((l) => l.key)).toEqual(['holder', 'share']);
+    // The first row carries the axis mark of the page's scale (6 items at most: 6).
+    expect(phoneLines(rows[0]).map((l) => l.key)).toEqual(['holder', 'axis', 'share']);
+    expect(phoneLines(rows[0])[1].left).toBe('06');
     // The rank is inline at the start of the first line, not a line of its own (B#19).
     expect(rows[1].querySelector('[data-line="holder"] [data-role="rank"]')).toHaveTextContent('2');
     expect(second[0].left).toMatch(/^2.*JoyID$/);
     expect(second[0].right).toBe('2 items');
-    // Against the largest holder on the page (6 items), as the table's bar.
+    // Re-pinned with ruling R7: on the table's scale for its Items bars, the page's rounded
+    // maximum (here 6, the largest itself is round).
     expect(rows[1].querySelector('[data-share-bar]')).toHaveAttribute(
       'data-share-bar',
-      `${(2 / 6) * 100}%`
+      `${Math.round((2 / resourceScale([6, 2])) * 10000) / 100}%`
     );
     // The three-column distribution (265 px) still fits a phone as a table (R1) …
     expect(
@@ -333,7 +397,14 @@ describe('Collection holders phone rows (board L5)', () => {
   it('folds the distribution into one-line rows where even it does not fit', async () => {
     atContainerWidth(240);
     const load = vi.fn().mockResolvedValue(page([named]));
-    render(<CollectionHolders load={load} queryKey="narrow" distribution={distribution} />);
+    render(
+      <CollectionHolders
+        assetClass="objects"
+        load={load}
+        queryKey="narrow"
+        distribution={distribution}
+      />
+    );
     const buckets = await screen.findAllByTestId('holder-bucket-row-mobile');
     expect(buckets).toHaveLength(4);
     expect(phoneLines(buckets[1])).toEqual([

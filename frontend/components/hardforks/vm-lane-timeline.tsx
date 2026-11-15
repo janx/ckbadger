@@ -2,6 +2,7 @@
 
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
+  DOT_HIT_PX,
   DeploymentEvidence,
   ScriptDeploymentTimeline,
   markName,
@@ -9,6 +10,7 @@ import {
 } from '@/components/hardforks/script-deployment-timeline';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2, HardforkScriptDeployment } from '@/lib/api';
 
@@ -41,6 +43,8 @@ const LANE_TEXT: Record<Lane, string> = {
 /** The VMs are one hue, deeper for newer: the board's encoding. */
 const VM_OPACITY = { VM0: 0.16, VM1: 0.32, VM2: 0.55 } as const;
 const UTC8_MS = 8 * 3_600_000;
+/** On a phone, the clear space kept above the first lane's header line for the rules. */
+const LANE_HEAD_CLEAR = 4;
 /** Average glyph width of the 10–11 px mono labels, for keeping labels apart. */
 const CHAR_PX = 6.5;
 /**
@@ -165,6 +169,23 @@ export function VmLaneTimeline({
   const bar = narrow ? { y: 18, h: 14, dots: [40, 48] } : { y: 6, h: 16, dots: [30, 38] };
   const bottom = top + laneH * LANE_ORDER.length;
   const height = bottom + 44;
+  /**
+   * PB-02: the vertical spans a rule may run through. On a phone each lane's header line (its label
+   * and count) is its own line, so the edition and year rules run behind the bars and dots only.
+   */
+  const laneSpans: [number, number][] = LANE_ORDER.map((_, i) => [
+    top + i * laneH + bar.y - 2,
+    top + (i + 1) * laneH - 6,
+  ]);
+  const ruleSpans = (from: number): [number, number][] =>
+    narrow
+      ? [
+          ...(from < top - LANE_HEAD_CLEAR
+            ? [[from, top - LANE_HEAD_CLEAR] as [number, number]]
+            : []),
+          ...laneSpans,
+        ]
+      : [[from, bottom]];
   const firstYear = new Date(genesisMs + UTC8_MS).getUTCFullYear() + 1;
   const lastYear = new Date(tipMs + UTC8_MS).getUTCFullYear();
   const allYears = Array.from(
@@ -207,7 +228,9 @@ export function VmLaneTimeline({
             const at = yearX(year);
             return (
               <g key={year}>
-                <line x1={at} x2={at} y1={top - 8} y2={bottom} stroke="var(--c-tile)" />
+                {ruleSpans(top - 8).map(([y1, y2]) => (
+                  <line key={y1} x1={at} x2={at} y1={y1} y2={y2} stroke="var(--c-tile)" />
+                ))}
                 <text data-year x={at + 3} y={bottom + 16} fontSize="11" fill="var(--c-text-dim)">
                   {year}
                 </text>
@@ -241,15 +264,18 @@ export function VmLaneTimeline({
           {editionLabels.map(({ edition, at, sub, turn, row }) => {
             return (
               <g key={edition.shortName}>
-                <line
-                  data-edition={edition.shortName}
-                  x1={at}
-                  x2={at}
-                  y1={band + 10}
-                  y2={bottom}
-                  stroke="var(--c-text-bright)"
-                  strokeWidth="1.2"
-                />
+                {ruleSpans(band + 10).map(([y1, y2]) => (
+                  <line
+                    key={y1}
+                    data-edition={edition.shortName}
+                    x1={at}
+                    x2={at}
+                    y1={y1}
+                    y2={y2}
+                    stroke="var(--c-text-bright)"
+                    strokeWidth="1.2"
+                  />
+                ))}
                 <text
                   x={turn ? at - 6 : at + 6}
                   y={band + NAME_Y + row * BLOCK_ROW}
@@ -285,7 +311,7 @@ export function VmLaneTimeline({
             // data2's note sits between the editions, clear of the Mirana line.
             const noteFrom = hashType === 'data2' ? t1 : genesisMs;
             const live = formatExactDecimal(lane.liveReferences, `${hashType} live references`);
-            const versions = `${lane.knownVersions.toLocaleString()} known version${lane.knownVersions === 1 ? '' : 's'}`;
+            const versions = `${lane.knownVersions.toLocaleString()} known ${countNoun(lane.knownVersions, 'version')}`;
             const dots = byTime.filter((deployment) => deployment.hashTypes!.includes(hashType));
             const rows = laneDotRows(dots.map((deployment) => x(deployment.timestampMs)));
             return (
@@ -313,7 +339,11 @@ export function VmLaneTimeline({
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
-                      {`${live} · ${lane.knownVersions.toLocaleString()} versions`}
+                      {`${live} · ${
+                        lane.knownVersions === 0
+                          ? 'no known script yet'
+                          : formatCount(lane.knownVersions, 'version')
+                      }`}
                     </text>
                   </>
                 ) : (
@@ -360,7 +390,7 @@ export function VmLaneTimeline({
                         y={y + 30}
                         textAnchor="middle"
                         fontSize="10"
-                        fill="var(--c-ink-quiet)"
+                        fill="var(--c-text-dim)"
                       >
                         not valid before {pinnedBy}
                       </text>
@@ -374,7 +404,6 @@ export function VmLaneTimeline({
                       y={y + bar.y}
                       width={Math.max(0, x(to) - x(from) - 2)}
                       height={bar.h}
-                      rx="3"
                       fill={DATA_COLOR}
                       fillOpacity={VM_OPACITY[vm]}
                     />
@@ -388,11 +417,11 @@ export function VmLaneTimeline({
                     </text>
                   </g>
                 ))}
-                {lane.knownVersions === 0 && (
+                {/* On a phone the empty lane says so on its header line (PB-02). */}
+                {lane.knownVersions === 0 && !narrow && (
                   <text
-                    x={narrow ? x(segments[hashType][0][0]) - 6 : x(segments[hashType][0][0]) + 40}
+                    x={x(segments[hashType][0][0]) + 40}
                     y={y + bar.y + bar.h - 4}
-                    textAnchor={narrow ? 'end' : 'start'}
                     fontSize="10.5"
                     fill="var(--c-text-bright)"
                   >
@@ -406,7 +435,7 @@ export function VmLaneTimeline({
                       key={deployment.versionHash}
                       {...readout.bind(deployment.versionHash)}
                       data-lane-dot={hashType}
-                      aria-label={`${markName(deployment)}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
+                      aria-label={`${markName(deployment, 'tight')}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
                       className="cursor-pointer"
                     >
                       <title>
@@ -423,6 +452,20 @@ export function VmLaneTimeline({
                     </g>
                   );
                 })}
+                {dots.length > 0 && (
+                  <DotHitArea
+                    lane={hashType}
+                    x={left}
+                    y={y + (bar.dots[0] + bar.dots[1]) / 2 - DOT_HIT_PX / 2}
+                    width={w - left - right}
+                    dots={dots.map((deployment, k) => ({
+                      key: deployment.versionHash,
+                      cx: x(deployment.timestampMs),
+                      cy: y + bar.dots[rows[k]],
+                    }))}
+                    readout={readout}
+                  />
+                )}
               </g>
             );
           })}
@@ -454,5 +497,52 @@ export function VmLaneTimeline({
         pinned={selected !== null && readout.isPinned(selected.versionHash)}
       />
     </div>
+  );
+}
+
+/**
+ * PB-02: a lane's version dots are read from one transparent band, DOT_HIT_PX tall, over their two
+ * rows: the dot nearest the pointer answers a hover or a tap, so overlapping 6 px dots are each
+ * reachable. The dots keep their own focus, Enter and Space for the keyboard.
+ */
+function DotHitArea({
+  lane,
+  x,
+  y,
+  width,
+  dots,
+  readout,
+}: {
+  lane: string;
+  x: number;
+  y: number;
+  width: number;
+  dots: readonly { key: string; cx: number; cy: number }[];
+  readout: ReturnType<typeof useDeploymentReadout>;
+}) {
+  const nearest = (event: { clientX: number; clientY: number; currentTarget: Element }) => {
+    const svg = event.currentTarget.closest('svg')!.getBoundingClientRect();
+    const px = event.clientX - svg.left;
+    const py = event.clientY - svg.top;
+    return dots.reduce((best, dot) =>
+      Math.hypot(dot.cx - px, dot.cy - py) < Math.hypot(best.cx - px, best.cy - py) ? dot : best
+    ).key;
+  };
+  return (
+    <rect
+      data-dot-hit={lane}
+      x={x}
+      y={y}
+      width={Math.max(0, width)}
+      height={DOT_HIT_PX}
+      fill="transparent"
+      className="cursor-pointer"
+      onPointerMove={(event) => readout.hover(nearest(event))}
+      onPointerLeave={() => {
+        // the readout is sticky: a hover outlasts the pointer unless a pin is waiting
+        if (readout.pinned !== null) readout.hover(null);
+      }}
+      onClick={(event) => readout.toggle(nearest(event))}
+    />
   );
 }

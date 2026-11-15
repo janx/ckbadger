@@ -6233,6 +6233,115 @@ async fn collection_holder_rows_carry_registry_lock_kind() {
     }
 }
 
+/// A4b review: a holder whose lock has no address form (args longer than an
+/// RFC-0021 full address can carry; lock args are unbounded on chain) is a
+/// valid owner. Every collection source names it by its lock hash, code hash
+/// and kind with a null address, and pages past it; it is never a 500 that
+/// leaves the holder list unreadable from that holder on.
+#[tokio::test]
+async fn collection_holders_page_through_a_holder_whose_lock_has_no_address_form() {
+    let store = test_store();
+    let class_id = [0x6cu8; 24];
+    let cluster_id = [0x6du8; 32];
+    let dotbit = ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
+    let dotcell = ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION;
+    let named = [0x44u8; 32];
+    let unaddressable = [0x88u8; 32];
+    let unnamed = [0x55u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    seed_unaddressable_lock(&store, &unaddressable);
+    let ranked = [(named, 3), (unaddressable, 2), (unnamed, 1)];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            name: Some("Long args".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 6,
+            live_count: 6,
+            holders_count: 3,
+            activities_count: 0,
+            ..Default::default()
+        },
+    );
+    for (collection, standard) in [
+        (dotbit, IdentityStandard::DotBit),
+        (dotcell, IdentityStandard::DotCell),
+    ] {
+        batch.put_identity_collection_aggregate(
+            &collection,
+            &IdentityCollectionAggregate {
+                name: None,
+                standard,
+                total_count: 6,
+                live_count: 6,
+                holders_count: 3,
+                activities_count: 0,
+            },
+        );
+    }
+    for (holder, count) in ranked {
+        batch.put_mnft_collection_owner_count(&class_id, &holder, count);
+        batch.put_cluster_owner_count(&cluster_id, &holder, count);
+        batch.put_identity_owner_count(&dotbit, &holder, count);
+        // `.cell` names its owner by the first 20 bytes of the lock hash.
+        batch.put_identity_owner20_count(&dotcell, &holder[..20], count);
+    }
+    batch.commit().unwrap();
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(named.to_vec()),
+                name: Some("Long args Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x33; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        format!("/assets/objects/0x{}/holders", hex::encode(class_id)),
+        format!("/spore/clusters/0x{}/holders", hex::encode(cluster_id)),
+        "/assets/identities/dotbit/holders".to_string(),
+        "/assets/identities/dotcell/holders".to_string(),
+    ] {
+        let (status, first) = get_json(&app, &format!("{path}?limit=1")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_string();
+        let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {second}");
+        let holder = &second["data"][0];
+        assert_eq!(
+            holder["lockScriptHash"],
+            format!("0x{}", hex::encode(unaddressable)),
+            "{path}: {second}"
+        );
+        assert!(holder["address"].is_null(), "{path}: {second}");
+        assert_eq!(
+            holder["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH,
+            "{path}: {second}"
+        );
+        assert_eq!(holder["lockKind"], "SECP256K1/blake160", "{path}: {second}");
+        // The holder after it is reachable.
+        let cursor = second["nextCursor"].as_str().unwrap().to_string();
+        let (status, third) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {third}");
+        assert_eq!(
+            third["data"][0]["lockScriptHash"],
+            format!("0x{}", hex::encode(unnamed)),
+            "{path}: {third}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn mnft_class_insights_serve_real_holder_distribution_and_weekly_rows() {
     let (store, class_id) = mnft_insights_fixture(6);
@@ -6442,4 +6551,164 @@ async fn object_path_insights_for_spore_cluster_match_spore_insights() {
     .await;
     assert_eq!(status, StatusCode::OK, "{object}");
     assert_eq!(object, spore);
+}
+
+// ── U-06 (UI review 2026-11-14): a malformed id is a 400, a well-formed unknown one a 404 ──
+
+/// Every object-collection route, as a suffix of `/assets/objects/{id}`.
+const OBJECT_COLLECTION_SUFFIXES: [&str; 8] = [
+    "",
+    "/items",
+    "/holders",
+    "/activities",
+    "/activity-feed",
+    "/transactions",
+    "/charts/capacity-history",
+    "/insights",
+];
+
+/// A live Spore cluster whose id begins `0x00`, with its aggregate and one
+/// member in the cluster membership index: the row a one-byte `0x00` (or any
+/// shorter prefix of the id) would "find" if it were read as a cluster id.
+fn store_with_cluster_starting_00() -> (Arc<CkbadgerStore>, [u8; 32]) {
+    let store = test_store();
+    let mut cluster = [0x5au8; 32];
+    cluster[0] = 0x00;
+    store
+        .put_spore_direct(&cluster, &regression_cluster_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cluster_aggregate(
+        &cluster,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 1,
+            owner_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_spore_by_cluster(&cluster, &[0x51; 32]);
+    batch.commit().unwrap();
+    (store, cluster)
+}
+
+/// `/assets/objects/0x00` answered 500 "missing aggregate for cluster 0x00 with
+/// 7 indexed spores": the assets path took any 1..=32-byte id and handed it to
+/// the Spore cluster lookup, whose membership count is a key-prefix scan, so a
+/// short id counted the members of every cluster it is a prefix of. An object
+/// collection is named by an identity alias, a 24-byte m-NFT class id or a
+/// 32-byte id; any other id is refused before it reaches a store read.
+#[tokio::test]
+async fn regression_malformed_object_collection_id_is_bad_request() {
+    let (store, cluster) = store_with_cluster_starting_00();
+    let app = create_router(test_config(store)).await;
+    let malformed = [
+        "0x00".to_string(),
+        format!("0x{}", hex::encode(&cluster[..31])),
+        format!("0x{}", hex::encode(&cluster[..20])),
+        format!("0x{}", "ab".repeat(33)),
+        "0xzz".to_string(),
+        "nonsense".to_string(),
+    ];
+    let mut failures = Vec::new();
+    for id in &malformed {
+        for suffix in OBJECT_COLLECTION_SUFFIXES {
+            let path = format!("/assets/objects/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            let message = json["message"].as_str().unwrap_or_default();
+            if status != StatusCode::BAD_REQUEST
+                || !message.starts_with("Invalid object collection ID")
+            {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A 24-byte id has an m-NFT class's width; one that names no class is
+/// unknown (404), never read as the prefix of a Spore cluster's id.
+#[tokio::test]
+async fn regression_unknown_class_width_collection_id_is_not_found() {
+    let (store, cluster) = store_with_cluster_starting_00();
+    let app = create_router(test_config(store)).await;
+    let mut failures = Vec::new();
+    for id in [hex::encode(&cluster[..24]), hex::encode([0xc5u8; 24])] {
+        for suffix in OBJECT_COLLECTION_SUFFIXES {
+            let path = format!("/assets/objects/0x{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::NOT_FOUND {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The m-NFT item routes: an m-NFT token id is its type args, at least the 28
+/// bytes of issuer, class and token index; a shorter id names no token (400),
+/// a well-formed one the index does not hold is unknown (404).
+#[tokio::test]
+async fn regression_mnft_item_routes_reject_malformed_id_and_miss_unknown() {
+    let app = create_router(test_config(test_store())).await;
+    let suffixes = ["", "/activities", "/activity-feed", "/transactions"];
+    let mut failures = Vec::new();
+    for id in [
+        "0x00".to_string(),
+        format!("0x{}", "ab".repeat(24)),
+        format!("0x{}", "ab".repeat(33)),
+        "0xzz".to_string(),
+    ] {
+        for suffix in suffixes {
+            let path = format!("/assets/objects/items/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::BAD_REQUEST
+                || !json["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("Invalid m-NFT token ID")
+            {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    for suffix in suffixes {
+        let path = format!("/assets/objects/items/0x{}{suffix}", "ab".repeat(28));
+        let (status, json) = get_json(&app, &path).await;
+        if status != StatusCode::NOT_FOUND {
+            failures.push(format!("{path}: {status} {json}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The identity collection routes: only the four identity collections exist,
+/// named by alias or sentinel; any other id is not one (400), and a collection
+/// the index holds nothing of is unknown (404).
+#[tokio::test]
+async fn identity_collection_routes_reject_malformed_id_and_miss_unknown() {
+    let app = create_router(test_config(test_store())).await;
+    let suffixes = ["", "/items", "/holders", "/activities"];
+    let mut failures = Vec::new();
+    for id in [
+        "0x00".to_string(),
+        format!("0x{}", "ab".repeat(32)),
+        "0xzz".to_string(),
+    ] {
+        for suffix in suffixes {
+            let path = format!("/assets/identities/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::BAD_REQUEST {
+                failures.push(format!("{path}: {status} {json}"));
+            }
+        }
+    }
+    for suffix in suffixes {
+        let path = format!("/assets/identities/dotbit{suffix}");
+        let (status, json) = get_json(&app, &path).await;
+        if status != StatusCode::NOT_FOUND {
+            failures.push(format!("{path}: {status} {json}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

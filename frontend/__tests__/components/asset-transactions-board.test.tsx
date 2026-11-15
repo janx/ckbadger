@@ -104,11 +104,12 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     expect(screen.queryByRole('table')).toBeNull();
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0x01010101...010101', expect.stringMatching(/^#1,001 · .+ ago$/)],
+      // U-09 (re-pinned): the phone row's hash at the tight size
+      ['identity', '0x0101…0101', expect.stringMatching(/^#1,001 · .+ ago$/)],
       ['what', 'Minted 3', '500.00000000 CKB'],
       [
         'figures',
-        '1 → 2 cells · fee 0.00001000 CKB · 1,930 B · 1,923,713 cycles · tx 1 in block',
+        '1 → 2\u00a0cells · fee 0.00001000 CKB · 1,930 B · 1,923,713 cycles · tx 1 in block',
         null,
       ],
     ]);
@@ -127,7 +128,7 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     const lines = phoneLines(row);
     expect(lines[0].right).toMatch(/^#1,001 · \d{4}-\d{2}-\d{2}$/);
     expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after: output 1', right: null });
-    expect(lines[2].left).toBe('1 → 2 cells · fee 0.00001000 CKB · 640 B · tx 1 in block');
+    expect(lines[2].left).toBe('1 → 2\u00a0cells · fee 0.00001000 CKB · 640 B · tx 1 in block');
   });
 
   it('folds into two lines at 608 px', () => {
@@ -135,11 +136,11 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     render(<AssetTransactions rows={[tx(1, 1930, null)]} />);
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0x01010101...010101', expect.stringMatching(/ago$/)],
+      ['identity', '0x0101…0101', expect.stringMatching(/ago$/)],
       [
         'what',
         '500.00000000 CKB',
-        '1 → 2 cells · fee 0.00001000 CKB · 1,930 B · cycles not computed · tx 1 in block',
+        '1 → 2\u00a0cells · fee 0.00001000 CKB · 1,930 B · cycles not computed · tx 1 in block',
       ],
     ]);
   });

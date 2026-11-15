@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  normalizeAssetId,
-  parseActivityCursor,
-  normalizeActivityAction,
-  formatCompositionTier,
-  formatExpiry,
-} from '@/lib/asset-utils';
+import { normalizeAssetId, parseActivityCursor, formatCompositionTier } from '@/lib/asset-utils';
 
 describe('normalizeAssetId', () => {
   it('returns input unchanged when already prefixed', () => {
@@ -40,20 +34,6 @@ describe('parseActivityCursor', () => {
   });
 });
 
-describe('normalizeActivityAction', () => {
-  it('normalizes burn to recycled', () => {
-    expect(normalizeActivityAction('burn')).toBe('recycled');
-  });
-
-  it('normalizes Burn (case-insensitive) to recycled', () => {
-    expect(normalizeActivityAction('Burn')).toBe('recycled');
-  });
-
-  it('lowercases other actions', () => {
-    expect(normalizeActivityAction('Transfer')).toBe('transfer');
-  });
-});
-
 describe('formatCompositionTier', () => {
   it('keeps DOB decode pending distinct from unknown or pure storage', () => {
     expect(formatCompositionTier('decode_pending')).toBe('Decode pending');
@@ -73,24 +53,5 @@ describe('formatCompositionTier', () => {
   it('returns Unknown for unrecognized tier', () => {
     expect(formatCompositionTier('unknown')).toBe('Unknown');
     expect(formatCompositionTier('something_else')).toBe('Unknown');
-  });
-});
-
-describe('formatExpiry', () => {
-  it('returns Not available for null', () => {
-    expect(formatExpiry(null)).toBe('Not available');
-  });
-
-  it('returns Not available for undefined', () => {
-    expect(formatExpiry(undefined)).toBe('Not available');
-  });
-
-  it('returns Not available for zero', () => {
-    expect(formatExpiry(0)).toBe('Not available');
-  });
-
-  it('formats a valid Unix timestamp', () => {
-    const result = formatExpiry(1800000000);
-    expect(result).toContain('2027');
   });
 });

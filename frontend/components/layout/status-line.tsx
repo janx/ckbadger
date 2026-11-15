@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import type { NetworkStats } from '@/lib/api';
 import { chainMode, type ChainMode } from '@/lib/chain-mode';
-import { clockText, localZone } from '@/lib/clock';
+import { clockNow, clockText, subscribeClock, zoned } from '@/lib/clock';
 import { formatBlockNumber } from '@/lib/format-block';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
@@ -54,8 +54,10 @@ function Segment({
  * clock. The API reports no node version, so none is shown.
  *
  * The narrow form (below md) is one row: the mode, the network, the tip and the clock. The release
- * and the key hints are the wide form's only: a touch screen has no keys, and the release is in the
- * `?` help (the footer's "Keyboard shortcuts" opens it on a phone) — designed, not dropped.
+ * and the key hints are the wide form's only: a touch screen has no keys. From md the release is
+ * here and the clock's zone in the `?` help; below md, where nothing opens the help (the footer's
+ * "Keyboard shortcuts" is drawn from md only, PA-29), the footer's last row says both
+ * (components/layout/site-footer.tsx) — designed, not dropped.
  *
  * It is a polite live region for the mode and the release; the tip (every block) and the clock
  * (every second) are `aria-live="off"`, so a screen reader is not read the time.
@@ -130,29 +132,18 @@ function modeTitle(
   return `Syncing: indexed ${formatBlockNumber(syncedBlock)} of ${formatBlockNumber(tipBlock)}`;
 }
 
-/** The clock: local time, ticking on the second (each tick waits for the next whole second). */
+/**
+ * The clock: local time, ticking on the second, read from the page's one clock (lib/clock.ts, the
+ * same the ages read; each tick waits for the next whole second).
+ */
 export function StatusClock() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const schedule = () => {
-      timer = setTimeout(
-        () => {
-          setNow(new Date());
-          schedule();
-        },
-        1000 - (Date.now() % 1000)
-      );
-    };
-    schedule();
-    return () => clearTimeout(timer);
-  }, []);
+  const now = new Date(useSyncExternalStore(subscribeClock, clockNow, clockNow));
   return (
     <time
       aria-live="off"
       data-testid="status-clock"
       dateTime={now.toISOString()}
-      title={`Local time, ${localZone()}`}
+      title={zoned('Local time')}
       className="tabular-nums"
     >
       {clockText(now)}

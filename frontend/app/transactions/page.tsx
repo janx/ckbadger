@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
@@ -22,7 +23,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo, formatUtc8DateTime, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -32,6 +33,8 @@ import {
   previousChainDay,
   totalActivities,
 } from '@/lib/activity-stats';
+import { formatCount } from '@/lib/format-count';
+import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 
 type TransactionKind =
   | 'all'
@@ -87,11 +90,13 @@ function poolSealId(tx: PoolRow): SealId {
 }
 
 /**
- * The hash in the pool table's Transaction column: "0x" and 10 digits, the ellipsis, 6 digits (21
- * characters at 13 px, 163.8 px), as before the transaction's row stone (old issue C). The phone
- * row's identity line, which shares its line with the status and the wait, keeps 10 + 6.
+ * When the newest pool transaction was seen, on the UTC+8 clock (lane P); how long ago is its
+ * hover, read from the page's one clock, so it moves with no data change (lane E4).
  */
-const POOL_HASH_CHARS = { start: 12, end: 6 } as const;
+function NewestSeen({ at }: { at: string }) {
+  const age = useAge(at);
+  return <Utc8DateTime timestamp={at} title={age} />;
+}
 
 /**
  * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
@@ -136,7 +141,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       {BigInt(tx.feeRate).toLocaleString('en-US')} shannon/KB
     </span>,
     <span key="cells" className="whitespace-nowrap">
-      {poolConsumed(tx)} → {tx.outputsCount} cells
+      {poolConsumed(tx)} → {formatCount(tx.outputsCount, 'cell')}
     </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize.toLocaleString('en-US')} B
@@ -155,13 +160,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} className="hover:underline">
-              <Hash
-                hash={tx.hash}
-                startChars={10}
-                endChars={6}
-                copyable={false}
-                className="text-body"
-              />
+              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
           right: (
@@ -171,7 +170,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
                 {poolStatusLabel(tx.status)}
               </span>
               <span className="text-text-dim">
-                · {formatTimeAgo(new Date(Number(tx.timestamp)))}
+                · <Utc8Age timestamp={tx.timestamp} />
               </span>
             </span>
           ),
@@ -284,12 +283,10 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash's 21 characters at
-      // 13 px (163.8 px) and the 16 px gap: 236.3 of its 237 px. The 30 px it gained over 207 are
-      // the widest container's own (1,232 px from 1280; the columns took 1,200 of it); the table
-      // is 1,230 px, the committed table's width, and both of the page's lists change form at
-      // the same width (old issue C: the stone had taken the 30 from the hash, 12 + 6 → 10 + 4).
-      // Every column is declared for its own widest content: the 32 px no longer hide one.
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
+      // characters at 13 px (132.6 px; it was 21 with three dots, 163.8 px), and the 16 px gap:
+      // 205.1 of its 237 px. The table is 1,230 px, the committed table's width, and both of the
+      // page's lists change form at the same width, so the column keeps its 237.
       minWidth: 237,
       render: (tx) => (
         <div className="flex items-start">
@@ -299,8 +296,7 @@ export default function TransactionsPage() {
             <Link href={`/tx/${tx.hash}`}>
               <Hash
                 hash={tx.hash}
-                startChars={POOL_HASH_CHARS.start}
-                endChars={POOL_HASH_CHARS.end}
+                size="row"
                 copyable={false}
                 className="text-body text-text-bright leading-[18px]"
               />
@@ -338,7 +334,9 @@ export default function TransactionsPage() {
           <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
             {poolStatusLabel(tx.status)}
           </span>
-          <span className="text-text-dim">· {formatTimeAgo(new Date(Number(tx.timestamp)))}</span>
+          <span className="text-text-dim">
+            · <Utc8Age timestamp={tx.timestamp} />
+          </span>
         </span>
       ),
     },
@@ -472,7 +470,7 @@ export default function TransactionsPage() {
                 id="transactions-kind"
                 value={kind}
                 onChange={(e) => chooseKind(e.target.value as TransactionKind)}
-                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 rounded border px-2"
+                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 border px-2"
               >
                 {KINDS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -488,7 +486,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === 'pool'}
                   onClick={() => setTab(tab === 'pool' ? 'committed' : 'pool')}
                   className={cn(
-                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border px-2.5',
+                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5',
                     tab === 'pool'
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'border-base-border-subtle text-text'
@@ -512,7 +510,7 @@ export default function TransactionsPage() {
                   aria-pressed={kind === option.value}
                   onClick={() => chooseKind(option.value)}
                   className={cn(
-                    'text-small flex min-h-[34px] items-center gap-2 rounded border px-3',
+                    'text-small flex min-h-[34px] items-center gap-2 border px-3',
                     kind === option.value
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'text-text-dim hover:text-text border-transparent'
@@ -523,7 +521,7 @@ export default function TransactionsPage() {
                   ) : option.value !== 'all' ? (
                     <span
                       aria-hidden="true"
-                      className="h-2 w-2 rounded-sm"
+                      className="h-2 w-2"
                       style={{ backgroundColor: option.color }}
                     />
                   ) : null}
@@ -545,7 +543,7 @@ export default function TransactionsPage() {
               <div
                 role="img"
                 aria-label={`Yesterday's kind occurrences; categories overlap`}
-                className="flex h-2 overflow-hidden rounded-sm"
+                className="flex h-2 overflow-hidden"
               >
                 {KINDS.filter(
                   (option) =>
@@ -582,7 +580,7 @@ export default function TransactionsPage() {
                     <Link
                       key={tx.hash}
                       href={`/tx/${tx.hash}`}
-                      title={`${tx.hash}: ${tx.txSize} bytes, ${tx.feeRate} shannon/KB`}
+                      title={`${tx.hash}: ${formatCount(tx.txSize, 'byte')}, ${tx.feeRate} shannon/KB`}
                       data-pool-status={tx.status}
                       className={cn('block', POOL_SQUARE[tx.status])}
                       style={{
@@ -606,17 +604,14 @@ export default function TransactionsPage() {
                     // Lane P: on the UTC+8 clock; how long ago is its hover.
                     <>
                       {' '}
-                      · newest seen{' '}
-                      <time title={formatTimeAgo(poolHead.data.summary.newestSeenAt)}>
-                        {formatUtc8DateTime(poolHead.data.summary.newestSeenAt)}
-                      </time>
+                      · newest seen <NewestSeen at={poolHead.data.summary.newestSeenAt} />
                     </>
                   )}
                 </span>
                 <button
                   type="button"
                   onClick={() => setTab('pool')}
-                  className="border-base-border text-text hover:text-text-bright rounded border px-3 py-2"
+                  className="border-base-border text-text hover:text-text-bright border px-3 py-2"
                 >
                   Open the pool →
                 </button>
@@ -625,11 +620,11 @@ export default function TransactionsPage() {
               <p className="text-text-dim text-small">Reading the pool…</p>
             )}
           </section>
-          <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+          <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
             <div
               role="group"
               aria-label="Transaction views"
-              className="hidden flex-wrap gap-6 sm:flex"
+              className="hidden flex-wrap gap-6 max-md:gap-x-4 sm:flex"
             >
               {(['committed', 'pool'] as const).map((value) => (
                 <button
@@ -638,7 +633,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === value}
                   onClick={() => setTab(value)}
                   className={cn(
-                    'text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium',
+                    'text-section max-md:text-body -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5',
                     tab === value
                       ? 'border-jade text-text-bright'
                       : 'text-text-dim border-transparent'
@@ -646,7 +641,7 @@ export default function TransactionsPage() {
                 >
                   {value === 'committed' ? 'Committed' : 'In the pool'}
                   {value === 'pool' && poolHead.data && (
-                    <span className="text-text-dim text-small font-normal">
+                    <span className="text-text-dim text-small max-md:text-meta font-normal">
                       {(
                         poolHead.data.totals.pending + poolHead.data.totals.proposed
                       ).toLocaleString('en-US')}
@@ -661,7 +656,7 @@ export default function TransactionsPage() {
                 : 'not yet in a block · newest first'}
             </span>
           </div>
-          {active.isLoading && (
+          {isAwaited(active) && (
             <p role="status" className="text-text-dim">
               Loading transactions…
             </p>

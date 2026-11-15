@@ -14,13 +14,13 @@ interface Props {
  */
 export function DotCellRecordsTable({ records }: Props) {
   if (records.length === 0) {
-    return <div className="text-text-dim text-body p-4 font-mono">No records set.</div>;
+    return <div className="text-text-dim text-body p-4 font-mono">No records.</div>;
   }
   return (
     <div className="overflow-x-auto">
       <table className="text-body w-full text-left font-mono">
         <thead>
-          <tr className="eyebrow border-base-border text-text-dim text-small border-b">
+          <tr className="eyebrow border-row-rule text-text-dim text-meta border-b">
             <th className="px-4 py-2 font-normal">Key</th>
             <th className="px-4 py-2 font-normal">Label</th>
             <th className="px-4 py-2 font-normal">Value</th>
@@ -31,11 +31,11 @@ export function DotCellRecordsTable({ records }: Props) {
           {records.map((record, index) => (
             <tr
               key={`${record.key}-${record.label}-${index}`}
-              className="border-base-border border-b last:border-b-0"
+              className="border-row-rule border-b last:border-b-0"
             >
               <td className="text-text-bright px-4 py-2 align-top">{record.key}</td>
               <td className="text-text-dim px-4 py-2 align-top">{record.label}</td>
-              <td className="text-text break-all px-4 py-2 align-top">
+              <td className="text-text px-4 py-2 align-top [overflow-wrap:anywhere]">
                 {record.decodedAddress ? (
                   <Link
                     href={`/address/${record.decodedAddress.address}`}

@@ -8,7 +8,6 @@ import {
   inkStyle,
   ROW_TAG_COLORS,
   SEARCH_RESULT_COLORS,
-  STORAGE_TIER_COLORS,
   STREAM_COLORS,
 } from '@/lib/design-tokens';
 import { PALETTE } from '@/lib/palette';
@@ -32,42 +31,6 @@ describe('inks with no theme token (V11)', () => {
     expect(PALETTE.dark['cell-lock']).toBe('#85a9d0');
     // the cell links are the lock blue, one value
     expect(BOARD_INKS.cellLink).toBe(CELL_COLORS.lock);
-  });
-
-  it('keeps the storage tiers’ inks at their keys and rubbing values', () => {
-    expect(STORAGE_TIER_COLORS).toEqual({
-      btc_ckb: {
-        ink: 'var(--c-tier-btc-ink)',
-        inkLit: 'var(--c-tier-btc-ink-lit)',
-        edge: 'var(--c-tier-btc-edge)',
-        edgeLit: 'var(--c-tier-btc-edge-lit)',
-        // `from-[#4a3a12]/50`
-        wash: 'rgb(var(--rgb-tier-btc-wash) / 0.5)',
-      },
-      pure_ckb: {
-        ink: 'var(--c-tier-pure-ink)',
-        inkLit: 'var(--c-tier-pure-ink-lit)',
-        edge: 'var(--c-tier-pure-edge)',
-        edgeLit: 'var(--c-tier-pure-edge-lit)',
-        // `from-[#0e3830]/50`
-        wash: 'rgb(var(--rgb-tier-pure-wash) / 0.5)',
-      },
-      centralized_mixture: { edge: 'var(--c-tier-centralized-edge)' },
-    });
-    const { dark } = PALETTE;
-    expect([dark['tier-btc-ink'], dark['tier-btc-ink-lit'], dark['tier-btc-edge']]).toEqual([
-      '#a7bc8a',
-      '#bdd3a0',
-      '#485036',
-    ]);
-    expect([dark['tier-btc-edge-lit'], dark['tier-btc-wash']]).toEqual(['#5f6c47', '#473b25']);
-    expect([dark['tier-pure-ink'], dark['tier-pure-ink-lit'], dark['tier-pure-edge']]).toEqual([
-      '#87b4a9',
-      '#b7d9d0',
-      '#404e48',
-    ]);
-    expect([dark['tier-pure-edge-lit'], dark['tier-pure-wash']]).toEqual(['#546a63', '#292e2a']);
-    expect(dark['tier-centralized-edge']).toBe('#57251a');
   });
 
   it('keeps the chrome inks and the family additions at their keys and rubbing values', () => {

@@ -19,8 +19,6 @@ vi.mock('@/lib/api', () => ({
     lookupScripts: vi.fn(),
   },
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/src/navigation', () => ({
@@ -77,7 +75,7 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     await renderJoyid();
     const table = screen.getByRole('table', { name: 'Its cells' });
     const [row] = within(table).getAllByRole('row').slice(1);
-    const key = within(row).getByRole('link', { name: '0x44e5e9…517f:1' });
+    const key = within(row).getByRole('link', { name: '0x44e5e96c…f8517f:1' });
     expect(key).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
     expect(row).toHaveClass('text-text');
     expect(row.querySelectorAll('.text-text-bright')).toHaveLength(1);
@@ -136,7 +134,7 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
       'title',
       expect.stringContaining('0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323')
     );
-    expect(within(rows[0]).getByRole('link', { name: /0x673e18…55f9:0/ })).toHaveAttribute(
+    expect(within(rows[0]).getByRole('link', { name: '0x673e1843…1355f9:0' })).toHaveAttribute(
       'href',
       '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
     );

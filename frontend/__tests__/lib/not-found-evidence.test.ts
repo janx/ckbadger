@@ -81,8 +81,10 @@ describe('not-found identifier evidence', () => {
       { kind: 'cell', identifier: outpoint, checkedEndpoint: `/cells/${hash}/2` },
       search
     );
-    expect(evidence.finding).toContain('“Cell (Dead, 100 CKB)”');
-    expect(evidence.finding).toContain('returned HTTP 404');
+    // U-18: the tail of the one diagnostics line; the line itself already says "→ 404"
+    expect(evidence.finding).toBe(
+      '/search lists it as “Cell (Dead, 100 CKB)”, so this 404 does not prove the cell never existed'
+    );
     expect(evidence.alternative).toBeUndefined();
   });
 
@@ -93,8 +95,41 @@ describe('not-found identifier evidence', () => {
       search
     );
     expect(evidence.alternative).toBeUndefined();
-    expect(evidence.finding).toMatch(/search returned no typed match/i);
+    expect(evidence.finding).toBe('/search: no transaction has this hash either');
     expect(evidence.finding).not.toMatch(/never existed|entire chain|pool/);
+  });
+
+  // U-18: a transaction page's 404 asks /search whether the hash is a block's; the miss said
+  // "no typed match for block:0x…", which read as the transaction being called a block.
+  it('says which kind /search was asked about, and never repeats the endpoint or the hash', async () => {
+    const search = vi.fn().mockResolvedValue({ query: `block:${hash}`, results: [] });
+    const evidence = await resolveNotFoundEvidence(
+      { kind: 'transaction', identifier: hash, checkedEndpoint: `/transactions/${hash}/detail` },
+      search
+    );
+    expect(evidence.finding).toBe('/search: no block has this hash either');
+    expect(evidence.finding).not.toContain(hash);
+  });
+
+  it('says what an exact hit is, the link being the way on', async () => {
+    const search = vi.fn().mockResolvedValue({
+      query: `block:${hash}`,
+      results: [
+        {
+          resultType: 'block',
+          id: '12',
+          label: 'Block #12',
+          url: `/blocks/${hash}`,
+          matchKind: 'exact_hash',
+        },
+      ],
+    });
+    const evidence = await resolveNotFoundEvidence(
+      { kind: 'transaction', identifier: hash, checkedEndpoint: `/transactions/${hash}/detail` },
+      search
+    );
+    expect(evidence.finding).toBe('/search: this hash is a block');
+    expect(evidence.alternative?.label).toBe('Block #12');
   });
 
   it('rejects a mislabeled or off-route search hit', async () => {
@@ -126,6 +161,8 @@ describe('not-found identifier evidence', () => {
     expect(search).not.toHaveBeenCalled();
     expect(evidence.query).toBeNull();
     expect(evidence.checkedEndpoint).toBe('/forks/7/a9bc1b75');
+    // nothing was searched, so the line has no /search tail
+    expect(evidence.finding).toBeNull();
   });
 
   it('works outside QueryClientProvider and exposes search failure separately from the entity 404', async () => {
@@ -136,7 +173,8 @@ describe('not-found identifier evidence', () => {
       useNotFoundEvidence({ kind: 'block', identifier: hash, checkedEndpoint: `/blocks/${hash}` })
     );
     await waitFor(() => expect(result.current.status).toBe('error'));
-    expect(result.current.error).toContain('search transport unavailable');
+    // the failure's own words, without its class name ("Error: …")
+    expect(result.current.error).toBe('search transport unavailable');
     spy.mockRestore();
   });
 

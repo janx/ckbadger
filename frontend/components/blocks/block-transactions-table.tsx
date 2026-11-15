@@ -8,11 +8,9 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { Transaction } from '@/lib/api';
+import { formatCount } from '@/lib/format-count';
 
 const TRACK = 96;
-
-/** The column budget fits the block page's main column (≈ 968 px at 1440) without scrolling. */
-export const BLOCK_TXS_MIN_WIDTH = 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172;
 
 /** Output capacity with its unit, for the phone row. */
 function capacity(tx: Transaction) {
@@ -43,7 +41,7 @@ function fee(tx: Transaction) {
 function cells(tx: Transaction) {
   return (
     <span className="whitespace-nowrap">
-      {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+      {tx.isCellbase ? 0 : tx.inputsCount} → {formatCount(tx.outputsCount, 'cell')}
     </span>
   );
 }
@@ -120,13 +118,7 @@ export function BlockTransactionsTable({
       minWidth: 140,
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash
-            hash={tx.hash}
-            startChars={8}
-            endChars={6}
-            copyable={false}
-            className="text-small"
-          />
+          <Hash hash={tx.hash} size="row" copyable={false} className="text-small" />
         </Link>
       ),
     },
@@ -148,7 +140,7 @@ export function BlockTransactionsTable({
           <span aria-hidden="true" className="text-text-dim mx-1.5">
             →
           </span>
-          <span>{tx.outputsCount}</span>
+          <span>{tx.outputsCount.toLocaleString('en-US')}</span>
         </span>
       ),
     },
@@ -242,13 +234,7 @@ export function BlockTransactionsTable({
                 <>
                   <span className="text-text-dim mr-2">{tx.index}</span>
                   <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                    <Hash
-                      hash={tx.hash}
-                      startChars={8}
-                      endChars={6}
-                      copyable={false}
-                      className="text-body"
-                    />
+                    <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
                   </Link>
                 </>
               ),

@@ -1,5 +1,3 @@
-import type { AssetTransfer } from '@/lib/api';
-
 export interface TokenAmountParts {
   /** Whole-token part, digit-grouped for display. */
   integer: string;
@@ -44,9 +42,6 @@ export function formatTokenBalance(balance: string, decimals: number | null): st
   return trimmedFraction === '' ? integer : `${integer}.${trimmedFraction}`;
 }
 
-/** Hover text for amounts rendered from a token whose decimals are unknown. */
-export const RAW_AMOUNT_TITLE = 'Token decimals unknown \u2014 raw base-unit amount';
-
 /**
  * Format a token balance and append an explicit " (raw)" marker when the
  * token's decimals are unknown, so an unscaled base-unit amount can never be
@@ -55,46 +50,4 @@ export const RAW_AMOUNT_TITLE = 'Token decimals unknown \u2014 raw base-unit amo
 export function formatTokenBalanceWithRawMarker(balance: string, decimals: number | null): string {
   const base = formatTokenBalance(balance, decimals);
   return decimals == null ? `${base} (raw)` : base;
-}
-
-export function formatAssetAmount(transfer: AssetTransfer): string {
-  if (!transfer.amount) return '1';
-  return formatTokenBalance(transfer.amount, transfer.tokenDecimals ?? null);
-}
-
-export function getAssetLabel(transfer: AssetTransfer): string {
-  if (transfer.tokenSymbol) return transfer.tokenSymbol;
-  if (transfer.tokenName) return transfer.tokenName;
-  switch (transfer.assetType) {
-    case 'spore':
-      return 'Spore';
-    case 'dob/0':
-    case 'dob/1':
-      return 'DOB';
-    case 'mnft':
-      return 'M-NFT';
-    case 'dotbit':
-      return '.bit';
-    case 'dao':
-      return 'DAO';
-    default:
-      return transfer.assetType.toUpperCase();
-  }
-}
-
-export function getAssetBadgeVariant(
-  category: string
-): 'green' | 'gold' | 'red' | 'gray' | 'purple' | 'blue' {
-  switch (category) {
-    case 'token':
-      return 'gold';
-    case 'object':
-      return 'purple';
-    case 'identity':
-      return 'blue';
-    case 'dao':
-      return 'gray';
-    default:
-      return 'gray';
-  }
 }

@@ -151,6 +151,37 @@ describe('ListTable measures its container (R1, R7)', () => {
     expect(screen.getAllByTestId('phone-row')).toHaveLength(2);
   });
 
+  // PA-02, PA-03: a part of the page that belongs to one form (the blocks legend, the scripts bar
+  // switch) follows the form this list chose, from the same measurement.
+  it('tells onForm the form it chose, and again when a resize changes it', () => {
+    let report: ((width: number) => void) | null = null;
+    class ResizeObserverStub {
+      constructor(private readonly cb: ResizeObserverCallback) {
+        report = (width) =>
+          this.cb(
+            [{ contentRect: { width } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver
+          );
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 608,
+    } as DOMRect);
+    const onForm = vi.fn();
+    render(table({ narrowColumns: NARROW, onForm }));
+    expect(onForm).toHaveBeenLastCalledWith('table');
+    act(() => report!(300));
+    expect(onForm).toHaveBeenLastCalledWith('narrow-table');
+    act(() => report!(200));
+    expect(onForm).toHaveBeenLastCalledWith('rows');
+    // once per form, not once per render
+    expect(onForm.mock.calls.map(([form]) => form)).toEqual(['table', 'narrow-table', 'rows']);
+  });
+
   it('keeps measuring when rows arrive after an empty first page', () => {
     stubChartWidth(358);
     const { rerender } = render(table({ rows: [] }));
@@ -187,9 +218,9 @@ describe('ListTable row scan (Midnight, continued, move 4)', () => {
     const t = screen.getByRole('table', { name: 'Holdings' });
     const body = Array.from(t.querySelectorAll('tbody tr'));
     expect(body).toHaveLength(2);
-    // material pass v2 (move 6): a row rule is the row-rule ink, #1a1f30 (border-subtle)
-    for (const tr of body)
-      expect(tr).toHaveClass('row-scan', 'border-b', 'border-base-border-subtle');
+    // material pass v2 (move 6): a row rule is the row-rule ink; R5 (re-pinned on purpose) gives
+    // it a key of its own, the hair by night, darker by day to clear the ruled paper
+    for (const tr of body) expect(tr).toHaveClass('row-scan', 'border-b', 'border-row-rule');
     expect(t.querySelector('thead tr')).not.toHaveClass('row-scan');
     unmount();
     vi.restoreAllMocks();

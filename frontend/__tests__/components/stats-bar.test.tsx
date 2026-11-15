@@ -9,8 +9,22 @@ vi.mock('@/lib/api', () => ({
   api: {
     getNetworkStats: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
+}));
+
+/** The page the strip is drawn on (the setup's stub answers '/', the home page). */
+const nav = vi.hoisted(() => ({ pathname: '/' }));
+vi.mock('@/src/navigation', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => nav.pathname,
+  useParams: () => ({}),
 }));
 
 function stats(overrides: Partial<NetworkStats> = {}): NetworkStats {
@@ -363,5 +377,87 @@ describe('VitalsStrip', () => {
     for (const label of ['Block', 'Epoch', 'Block time', 'Hash rate', 'Difficulty']) {
       expect(strip).toHaveTextContent(label);
     }
+  });
+});
+
+// PA-14 (UI review 2026-11-14): below md the three lines, with the 52 px header and the 26 px
+// status line, took 212 of an 844 px first screen on every page. Ruling: below md the home page
+// keeps the three lines; every other page has one line, the block number with the live mark and
+// the epoch with its bar, the three mining figures being the home page's. From md the strip is
+// the one wrapping row on every page. CSS decides the width (a layout CSS can do stays in CSS,
+// hooks/useFromMd), so these read the classes that do it.
+describe('VitalsStrip below md: three lines on the home page, one line elsewhere (PA-14)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useRealtimeStore.setState({ isConnected: true, socketHeld: true });
+  });
+  afterEach(() => {
+    nav.pathname = '/';
+    act(() => useRealtimeStore.getState().reset());
+  });
+
+  /** The three mining figures, the epoch's position and its time left. */
+  function homeOnly() {
+    return [
+      screen.getByText('Block time').parentElement as HTMLElement,
+      screen.getByRole('link', { name: /Hash rate/ }),
+      screen.getByRole('link', { name: /Difficulty/ }),
+      screen.getByText('246 / 1,590'),
+      screen.getByText('≈ 3h 8m left'),
+    ];
+  }
+
+  it('keeps the three lines on the home page', async () => {
+    nav.pathname = '/';
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+    expect(strip).toHaveClass('grid', 'grid-cols-3');
+    for (const el of homeOnly()) expect(el.className, el.textContent!).not.toMatch(/max-md:hidden/);
+    expect(screen.getByTestId('vitals-live').lastElementChild).not.toHaveClass('max-sm:sr-only');
+  });
+
+  it('draws one line on any other page: the block, the epoch and its bar, the live mark', async () => {
+    nav.pathname = '/blocks';
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+    // one wrapping flex line below md, 12 px apart; from md the row every page has
+    expect(strip).not.toHaveClass('grid');
+    expect(strip).toHaveClass('flex', 'flex-wrap', 'items-baseline', 'gap-x-3', 'py-2.5');
+    expect(strip).toHaveClass('md:gap-x-6', 'md:gap-y-2.5', 'md:py-3');
+    // what the line holds, drawn at every width, placed by no grid track
+    const block = screen.getByRole('link', { name: /Block #20,819,143/ });
+    const epoch = screen.getByTestId('vitals-epoch');
+    const live = screen.getByTestId('vitals-live');
+    for (const el of [block, epoch, screen.getByTestId('vitals-epoch-bar'), live]) {
+      expect(el.className).not.toMatch(/max-md:hidden|col-span|col-start|row-start/);
+    }
+    expect(epoch).toHaveTextContent('15,168');
+    // what is the home page's below md, drawn from md
+    for (const el of homeOnly()) expect(el, el.textContent!).toHaveClass('max-md:hidden');
+    // the live mark closes the line; below 640 it is its dot, the word kept for a screen reader
+    expect(live).toHaveClass('ml-auto');
+    expect(live).toHaveTextContent(/^Live$/);
+    expect(live.lastElementChild).toHaveTextContent('Live');
+    expect(live.lastElementChild).toHaveClass('max-sm:sr-only');
+    // the same items in the same order as the row from md
+    expect(Array.from(strip.children)).toEqual([block, epoch, ...homeOnly().slice(0, 3), live]);
+  });
+
+  it('holds the one line while the figures load', () => {
+    nav.pathname = '/tx/0xabc';
+    useRealtimeStore.setState({ socketHeld: false });
+    vi.mocked(api.getNetworkStats).mockImplementation(() => new Promise(() => {}));
+    render(<VitalsStrip />);
+    const strip = screen.getByRole('region', { name: 'Chain vitals' });
+    const [block, epoch, ...mining] = Array.from(strip.children) as HTMLElement[];
+    expect(block).toHaveTextContent('Block');
+    expect(epoch).toHaveTextContent('Epoch');
+    for (const el of [block, epoch]) expect(el.className).not.toMatch(/max-md:hidden|col-span/);
+    expect(mining.map((m) => m.textContent)).toEqual(['Block time', 'Hash rate', 'Difficulty']);
+    for (const m of mining) expect(m).toHaveClass('max-md:hidden');
   });
 });

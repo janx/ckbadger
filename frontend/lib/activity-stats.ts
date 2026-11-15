@@ -9,6 +9,8 @@ import type {
   GlobalActivityFilter,
   TxStatsResponse,
 } from '@/lib/api';
+import { shortenHash } from '@/lib/shorten';
+import { percentOf } from '@/lib/format-unit';
 
 /** The activity-type counters a summary or a daily row carries. */
 export type ActivityCounts = Pick<
@@ -79,10 +81,13 @@ export interface ScriptShares {
   others: { scripts: number; count: number; share: number } | null;
 }
 
-/** A script's name when the API knows one, else its short code hash. */
+/**
+ * A script's name when the API knows one, else its code hash at the tight size: the label of a
+ * share bar in the home page's stats card (U-09).
+ */
 export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>): string {
   const name = entry.name?.trim();
-  return name ? name : `${entry.codeHash.slice(0, 10)}…`;
+  return name ? name : shortenHash(entry.codeHash, 'tight');
 }
 
 /** Script calls ranked by count: the `limit` largest, then everything else as one row. */
@@ -108,14 +113,11 @@ export function scriptShares(entries: ScriptCountEntry[], limit = 5): ScriptShar
   };
 }
 
-/** A share as a percentage with one decimal; a non-zero share below 0.05 % reads `<0.1%`. */
-export function formatShare(share: number): string {
-  if (!Number.isFinite(share) || share < 0 || share > 1) {
-    throw new Error(`share ${share} is not in [0, 1]`);
-  }
-  const pct = share * 100;
-  if (pct > 0 && pct < 0.05) return '<0.1%';
-  return `${pct.toFixed(1)}%`;
+/** A count's share of the total, the one percentage (CH-14): `81.40%`, never a false `0.00%`. */
+export function formatShare(count: number, total: number): string {
+  if (!Number.isSafeInteger(count) || !Number.isSafeInteger(total) || count < 0 || count > total)
+    throw new Error(`share: ${count} is not a part of ${total}`);
+  return percentOf(BigInt(count), BigInt(total));
 }
 
 /** Same fixed UTC+8 calendar used by the indexer's ChainWindow day buckets. */

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import MinerAddressDistributionPage from '@/app/charts/miner-address-distribution/page';
 import { api } from '@/lib/api';
+import { fullText } from '@/__tests__/utils/full-text';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -9,8 +10,6 @@ vi.mock('@/lib/api', () => ({
     getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
     getHardforks: vi.fn().mockResolvedValue({ events: [] }),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 vi.mock('@/components/charts/chart-small-multiple', () => ({ ChartSmallMultiple: () => null }));
@@ -44,16 +43,20 @@ describe('MinerAddressDistributionPage', () => {
     });
     render(<MinerAddressDistributionPage />);
     expect(await screen.findByText('Miners')).toBeInTheDocument();
-    expect(screen.getByText(/2026-07-23–2026-07-29 · 10 blocks/)).toBeInTheDocument();
+    // Re-pinned for CH-03: the window with an arrow; a lock hash shortened like an address, its
+    // kind said once under the ranking instead of a bracketed word on each row.
+    // re-pinned (A4 round 2): the range and the count are units of their own in the line
+    expect(screen.getByText(fullText('2026-07-23 → 2026-07-29 · 10 blocks'))).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Resolved Pool' })).toHaveAttribute(
       'href',
       `/mainnet/address/${minerAddress}`
     );
-    expect(screen.getByRole('link', { name: unresolvedHash })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${unresolvedHash.slice(2)}`
-    );
-    expect(screen.getByText('(Address)')).toBeInTheDocument();
-    expect(screen.getByText('(Lock hash)')).toBeInTheDocument();
+    const unresolved = screen.getByRole('link', { name: `0x${'b'.repeat(8)}…${'b'.repeat(6)}` });
+    expect(unresolved).toHaveAttribute('href', `/mainnet/address/${unresolvedHash.slice(2)}`);
+    expect(unresolved).toHaveAttribute('title', unresolvedHash);
+    expect(screen.queryByText('(Address)')).toBeNull();
+    expect(
+      screen.getByText('A row beginning 0x is a miner known only by its lock hash.')
+    ).toBeInTheDocument();
   });
 });

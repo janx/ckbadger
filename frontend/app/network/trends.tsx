@@ -13,6 +13,7 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import { TopicSection } from '@/app/network/topic-section';
+import { unitNode, unitText } from '@/components/ui/units';
 
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
@@ -136,7 +137,7 @@ function coverageLine(from: number, to: number): string {
 
 function TrendPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border-base-border-subtle min-w-0 border-t pt-4">
+    <div className="border-row-rule min-w-0 border-t pt-4">
       <h3 className="text-text-bright text-body mb-3 font-mono font-medium">{title}</h3>
       {children}
     </div>
@@ -274,7 +275,9 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
               tone: 'body',
               left: leader(row),
               right: row.buckets?.length ? (
-                <span className="text-text-dim">{row.buckets.length.toLocaleString()} labels</span>
+                <span className="text-text-dim">
+                  {unitNode(formatCount(row.buckets.length, 'label'))}
+                </span>
               ) : undefined,
             },
             // A title is no hover on a touch screen: every label and count, quiet, last.
@@ -348,7 +351,7 @@ function usePeerHistories() {
   return { verifiedPeers, reachablePeers };
 }
 
-/** The board: reachable a jade area, verified a white line over it (CH-58). */
+/** The board: reachable an area in the data colour, verified a line in the bright ink over it (CH-58). */
 const PEER_SERIES: ChartSeries[] = [
   { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
   { key: 'verified', label: 'Verified (retained)', color: 'var(--c-text-bright)', lineOnly: true },
@@ -357,9 +360,10 @@ const PEER_UNIT = 'peers';
 const formatPeers = (value: string) => formatExactDecimal(value, 'peer count');
 
 /**
- * "Over time" (hierarchy v3): the chart named inside its plot with its values inside (no caption
- * block, no coloured key), the first and last day on the axis, one reading row that rests on the
- * latest day, and one caption. How to read it and its coverage are tier 2 (`NetworkTrendNotes`).
+ * "Over time" (hierarchy v3): the chart named inside its plot with its values in the gutter (no
+ * caption block, no coloured key), the first and last day on the axis, one reading row that rests
+ * on the latest day, a line saying what a shaded band is, and one caption. How to read it and its
+ * coverage are tier 2 (`NetworkTrendNotes`).
  */
 export function NetworkTrends() {
   const { verifiedPeers, reachablePeers } = usePeerHistories();
@@ -418,8 +422,12 @@ export function NetworkTrends() {
             formatValue={formatPeers}
             xTicks={xTicks}
             pointDots
-            plotName="verified and reachable peers per completed UTC+8 day"
-            insideYTicks
+            // U-19 / PB-01: the values in the dim gutter, where no gap band can cover them; the
+            // name fits beside it on a 360 px phone.
+            plotName="peers per completed UTC+8 day"
+            // U-19 (lane A5): bare whole-number values; the name says "peers" once
+            bareTicks
+            integerTicks
             pinnedReadout={{
               label: 'Peer reading',
               idle: `${last.label}${PEER_SERIES.map(
@@ -427,9 +435,23 @@ export function NetworkTrends() {
               ).join('')}`,
             }}
           />
+          {gaps.length > 0 && (
+            // PB-01: a band's own words fit only where it is wide; this line says it at any width.
+            <p
+              data-role="gap-legend"
+              className="text-text text-meta mt-2 flex items-center gap-1.5 font-mono"
+            >
+              <span
+                aria-hidden="true"
+                className="bg-base-surface border-base-border inline-block h-[9px] w-[9px] border"
+              />
+              no rounds: no retained crawl round that day
+            </p>
+          )}
+          {/* DY-04: the series by their form, which both themes share, not by a night colour. */}
           <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
-            The white line is every verified node the crawler retained that day; the jade area is
-            the part of them that was reachable.
+            The line is every verified node the crawler retained that day; the area under it is the
+            part of them that was reachable.
           </p>
         </>
       )}
@@ -451,7 +473,10 @@ export function NetworkTrendNotes() {
       (incomplete) day is excluded. Round counts were not recorded. Days older than the
       crawler&apos;s hourly retention show as gaps, never zero.
       {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
-        <> {coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo)}</>
+        <>
+          {' '}
+          {unitText(coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo))}
+        </>
       )}{' '}
       Shaded days have no retained round observation. Rounds per day are unavailable because the
       crawler did not record counts.

@@ -20,7 +20,7 @@ const object: TransactionCellDisplay = {
 
 describe('transaction cell semantics', () => {
   it('keeps the canonical object id reachable when optional names and media are unavailable', () => {
-    render(<TransactionCellContent display={object} cellHref="/cell/0xcell-0" />);
+    render(<TransactionCellContent size="row" display={object} cellHref="/cell/0xcell-0" />);
     expect(screen.getByText('Spore')).toBeInTheDocument();
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', `/mainnet/objects/${object.id}`);
@@ -31,6 +31,7 @@ describe('transaction cell semantics', () => {
   it('uses the verified BTC+CKB copper badge and names pending decode explicitly', () => {
     const { rerender } = render(
       <TransactionCellContent
+        size="row"
         display={{ ...object, compositionTier: 'btc_ckb' }}
         cellHref="/cell/x-0"
       />
@@ -46,6 +47,7 @@ describe('transaction cell semantics', () => {
     });
     rerender(
       <TransactionCellContent
+        size="row"
         display={{ ...object, compositionTier: 'decode_pending' }}
         cellHref="/cell/x-0"
       />
@@ -65,13 +67,16 @@ describe('transaction cell semantics', () => {
       amount: '9007199254740993123',
       symbol: 'USDI',
     };
-    const { rerender } = render(<TransactionCellContent display={token} cellHref="/cell/x-0" />);
+    const { rerender } = render(
+      <TransactionCellContent size="row" display={token} cellHref="/cell/x-0" />
+    );
     expect(screen.getByText(/9,007,199,254,740,993,123 \(raw\) USDI/)).toBeInTheDocument();
     // Lane B (B3): a token cell whose data holds no amount (mainnet 0xfbe2…c11c output 11, 0
     // bytes) says so, with the API's reason in the title — never an invented 0.
     const reason = 'xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)';
     rerender(
       <TransactionCellContent
+        size="row"
         display={{ ...token, amount: null, noAmountReason: reason }}
         cellHref="/cell/x-0"
       />
@@ -84,14 +89,18 @@ describe('transaction cell semantics', () => {
   it('fails fast on a token cell with neither an amount nor a reason for none', () => {
     const broken: TransactionCellDisplay = { ...object, kind: 'token', standard: 'xudt' };
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(() => render(<TransactionCellContent display={broken} cellHref="/cell/x-0" />)).toThrow(
-      `Token cell ${object.id}: no amount and no reason for none`
-    );
+    expect(() =>
+      render(<TransactionCellContent size="row" display={broken} cellHref="/cell/x-0" />)
+    ).toThrow(`Token cell ${object.id}: no amount and no reason for none`);
   });
 
   it('links mNFT item identifiers to the mNFT item route', () => {
     render(
-      <TransactionCellContent display={{ ...object, standard: 'm-nft' }} cellHref="/cell/x-0" />
+      <TransactionCellContent
+        size="row"
+        display={{ ...object, standard: 'm-nft' }}
+        cellHref="/cell/x-0"
+      />
     );
     expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/objects/mnft/${object.id}`);
   });

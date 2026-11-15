@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
 import Link from '@/components/ui/link';
 import { ActivityRow } from '@/components/activity/activity-row';
@@ -51,7 +52,7 @@ export function DaoSources() {
         <div role="alert" className="text-rouge text-small py-4">
           DAO activities could not be loaded: {String(activities.error)}
         </div>
-      ) : activities.isLoading ? (
+      ) : isAwaited(activities) ? (
         <div className="text-text-dim text-small py-7">Loading DAO activities…</div>
       ) : !rows?.length ? (
         <div className="text-text-dim text-small py-7">No DAO activities at this indexed tip.</div>
@@ -61,6 +62,7 @@ export function DaoSources() {
             key={`${row.txHash}:${row.txIndex}`}
             activity={row}
             lockColumn
+            age
             className="py-2.5"
           />
         ))

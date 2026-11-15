@@ -57,14 +57,14 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
     const { inputs } = cellTiles(tx, undefined);
     render(<CellTile cell={inputs[0]} />);
     const tile = screen.getByTestId('tx-io-input-0');
-    const link = within(tile).getByRole('link', { name: '0x9486...d667:3' });
+    const link = within(tile).getByRole('link', { name: '0x9486…d667:3' });
     expect(link).toHaveAttribute('href', `/mainnet/cell/${PREV}-3`);
     expect(link).toHaveAttribute('title', `${PREV}:3`);
     // the position stays, as text: one link to the cell, not two
-    expect(tile).toHaveTextContent(/^input 0 0x9486\.\.\.d667:3/);
+    expect(tile).toHaveTextContent(/^input 0 0x9486…d667:3/);
     expect(within(tile).queryByRole('link', { name: 'input 0' })).toBeNull();
     // the owner keeps its own link
-    expect(within(tile).getByRole('link', { name: /^ckb1qzda0c/ })).toHaveAttribute(
+    expect(within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
     );
@@ -74,10 +74,10 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
     const { outputs } = cellTiles(tx, undefined);
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
-    const link = within(tile).getByRole('link', { name: '0xdcd1...334d:0' });
+    const link = within(tile).getByRole('link', { name: '0xdcd1…334d:0' });
     expect(link).toHaveAttribute('href', `/mainnet/cell/${HASH}-0`);
     expect(link).toHaveAttribute('title', `${HASH}:0`);
-    expect(tile).toHaveTextContent(/^output 0 0xdcd1\.\.\.334d:0/);
+    expect(tile).toHaveTextContent(/^output 0 0xdcd1…334d:0/);
   });
 
   it('leaves a click on a link inside the tile to the link: the tile’s own click does not fire', () => {
@@ -90,8 +90,8 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
     const tile = screen.getByTestId('tx-io-output-0');
     // outside a router the anchors would ask jsdom to navigate, which it cannot
     tile.addEventListener('click', (event) => event.preventDefault());
-    fireEvent.click(within(tile).getByRole('link', { name: '0xdcd1...334d:0' }));
-    fireEvent.click(within(tile).getByRole('link', { name: /^ckb1qzda0c/ }));
+    fireEvent.click(within(tile).getByRole('link', { name: '0xdcd1…334d:0' }));
+    fireEvent.click(within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ }));
     expect(onClick).not.toHaveBeenCalled();
     fireEvent.click(tile);
     expect(onClick).toHaveBeenCalledTimes(1);

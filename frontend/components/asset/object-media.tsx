@@ -3,9 +3,14 @@ import type { SporeDetail, SporeDobDecoded } from '@/lib/api';
 import { SporePreview } from '@/components/object/spore-preview';
 import { detectPreview } from '@/lib/preview-utils';
 import { hexBytes } from '@/lib/hex-bytes';
-import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
+import { bitcoinTxHref, omigaDobHref, parseBtcfsUri, type BtcfsInscription } from '@/lib/btcfs';
+import { inscriptionList } from '@/lib/dob-genes';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { ClassMark } from '@/components/ui/class-mark';
+import { formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
+import { NoBreak } from '@/components/ui/no-break';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
@@ -31,7 +36,7 @@ function ViewImage({ href }: { href: string }) {
         target="_blank"
         rel="noopener noreferrer"
         title="Opens the object's picture on Omiga in a new tab"
-        className="bg-jade text-base-bg text-body focus-visible:outline-jade inline-flex h-9 items-center rounded px-4 font-mono font-medium transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+        className="bg-jade text-base-bg text-body focus-visible:outline-jade inline-flex h-9 items-center px-4 font-mono font-medium transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
       >
         View image ↗
       </a>
@@ -39,11 +44,99 @@ function ViewImage({ href }: { href: string }) {
     </div>
   );
 }
+/**
+ * One inscription as the media box reads it: the txid at the row size (U-09; it was 4…4), in words
+ * that break between them, never inside one (B3 round 3: break-all set "inscript / ion i0"); its
+ * two units hold, "Bitcoin tx" with its id and "inscription i<n>". Linked to its explorer where
+ * the network has one.
+ */
+function InscriptionReading({
+  inscription,
+  href,
+}: {
+  inscription: BtcfsInscription;
+  href: string | null;
+}) {
+  const label = (
+    <>
+      <NoBreak>
+        Bitcoin tx <ShortId value={inscription.txid} kind="hash" size="row" />
+      </NoBreak>{' '}
+      · <NoBreak>inscription i{inscription.index}</NoBreak>
+    </>
+  );
+  return href ? (
+    <a href={href} className="text-copper" target="_blank" rel="noopener noreferrer">
+      {label} ↗
+    </a>
+  ) : (
+    <span className="text-copper block">{label}</span>
+  );
+}
+
+const NO_EXPLORER = (
+  <span className="text-text-dim text-meta block">
+    The Bitcoin network of testnet inscriptions is not established, so no explorer link is given.
+  </span>
+);
+
+/**
+ * What a btcfs reference points at, read from its URI: the Bitcoin transaction and inscription,
+ * linked to an explorer where the network has one, else said in words. A `;`-list of inscriptions
+ * (one value, the inscriptions an object can point at) is read one inscription each, through the
+ * one path that decides what such a list is (`inscriptionList`, which traitDisplay counts: B3
+ * round 4); a URI that is neither, a list with an element that is not an inscription included, is
+ * said to be no inscription reference (anyone can mint spore content).
+ */
+function BtcfsReading({ uri, network }: { uri: string; network: string }) {
+  const single = parseBtcfsUri(uri);
+  const inscriptions = single ? [single] : inscriptionList(uri);
+  if (inscriptions === null)
+    return (
+      <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
+    );
+  const readings = inscriptions.map((inscription) => (
+    <InscriptionReading
+      key={`${inscription.txid}i${inscription.index}`}
+      inscription={inscription}
+      href={bitcoinTxHref(inscription.txid, network)}
+    />
+  ));
+  const linked = bitcoinTxHref(inscriptions[0].txid, network) !== null;
+  if (readings.length === 1)
+    return linked ? (
+      readings[0]
+    ) : (
+      <p className="space-y-1">
+        {readings[0]}
+        {NO_EXPLORER}
+      </p>
+    );
+  const list = (
+    <ul aria-label="Inscriptions" className="space-y-1">
+      {readings.map((reading) => (
+        <li key={reading.key}>{reading}</li>
+      ))}
+    </ul>
+  );
+  return linked ? (
+    list
+  ) : (
+    <div className="space-y-1">
+      {list}
+      {NO_EXPLORER}
+    </div>
+  );
+}
+
 export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: ObjectMediaProps) {
   const network = useActiveNetwork();
   const omiga = omigaDobHref(object.typeScriptHash, network);
   const profile = object.mediaProfile;
   const bitcoin = profile?.sources.filter((s) => s.scheme === 'btcfs') ?? [];
+  // PB-15: the box reads the first reference only, so its action stays under its title; the
+  // further ones are read in the disclosure that follows the box.
+  const [firstReference] = bitcoin;
   const bytes =
     contentHex === null
       ? undefined
@@ -52,43 +145,13 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
   return (
     <section aria-label="Object media" className="min-w-0 space-y-4">
       {/* F2 objects (OB-6): the composition badge and its sentence now open the page hero. */}
-      {bitcoin.length ? (
+      {firstReference ? (
         <figure className="border-copper/40 space-y-3 border p-6 text-center">
           <div className="text-copper text-hero">Its image lives on Bitcoin</div>
-          {bitcoin.map((s) => {
-            const inscription = parseBtcfsUri(s.uri);
-            const href = inscription && bitcoinTxHref(inscription.txid, network);
-            const label =
-              inscription &&
-              `Bitcoin tx ${inscription.txid.slice(0, 4)}…${inscription.txid.slice(-4)} · inscription i${inscription.index}`;
-            return (
-              <div key={s.uri} className="min-w-0 space-y-2">
-                <div className="text-text-dim text-meta break-all">{s.uri}</div>
-                {inscription === null ? (
-                  <p className="text-text-dim text-meta">
-                    Not a recognisable btcfs inscription reference.
-                  </p>
-                ) : href ? (
-                  <a
-                    href={href}
-                    className="text-copper break-all"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {label} ↗
-                  </a>
-                ) : (
-                  <p className="space-y-1">
-                    <span className="text-copper block break-all">{label}</span>
-                    <span className="text-text-dim text-meta block">
-                      The Bitcoin network of testnet inscriptions is not established, so no explorer
-                      link is given.
-                    </span>
-                  </p>
-                )}
-              </div>
-            );
-          })}
+          <div className="min-w-0 space-y-2">
+            <div className="text-text-dim text-meta break-all">{firstReference.uri}</div>
+            <BtcfsReading uri={firstReference.uri} network={network} />
+          </div>
           {omigaLink && omiga && <ViewImage href={omiga} />}
           <figcaption className="text-text-dim text-meta">
             CKBadger reads CKB only. This object points to Bitcoin; its inscription is not fetched
@@ -110,7 +173,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
         // picture, and the way to see it is its centre.
         <figure
           aria-label="No picture shown here"
-          className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 rounded border p-6 text-center"
+          className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 border p-6 text-center"
         >
           <ClassMark kind="objects" size={24} />
           <p className="text-text-dim text-meta">
@@ -124,15 +187,22 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
       {profile && (
         <details className="text-meta min-w-0">
           <summary className="cursor-pointer">
-            Media dependencies · {profile.sources.length} sources
+            Media dependencies · {unitNode(formatCount(profile.sources.length, 'source'))}
           </summary>
           <ul className="mt-3 space-y-3">
             {profile.sources.map((s, i) => (
-              <li key={`${s.uri}:${i}`} className="break-all">
+              <li key={`${s.uri}:${i}`}>
                 <span className="text-text-dim">
                   {s.scheme} · {s.sourceLocation} · {s.dependencyTier}
                 </span>
-                <div>{s.uri}</div>
+                {/* only the raw URI breaks anywhere; the words around it break between them */}
+                <div className="break-all">{s.uri}</div>
+                {/* A further Bitcoin reference is read here, where the box no longer does. */}
+                {s.scheme === 'btcfs' && s !== firstReference && (
+                  <div className="mt-1">
+                    <BtcfsReading uri={s.uri} network={network} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

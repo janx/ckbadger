@@ -78,7 +78,8 @@ interface ColumnBlockProps {
 
 /**
  * A mined block as a row: its number, its own proposal dots, then its tx line from the cellbase,
- * with "+N" and its uncle boxes at the end of the line.
+ * with "+N" and its uncle boxes at the end of the line. As in `BlockCard`, the age fade steps the
+ * row's shapes back and its words stay at full strength, letting the pointer through (R4).
  */
 export function ColumnBlock({
   card,
@@ -100,29 +101,20 @@ export function ColumnBlock({
       transform={`translate(${card.x},${card.y})`}
       className="cursor-pointer"
     >
-      <g data-age={age} style={{ opacity: ageOpacity(age) }}>
-        <g data-dim={dim}>
+      <g data-dim={dim}>
+        <g data-age={age} style={{ opacity: ageOpacity(age) }}>
           <rect
             data-box
             x={0.5}
             y={0.5}
             width={Math.max(1, card.w - 1)}
             height={Math.max(1, card.h - 1)}
-            rx={3}
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
             fillOpacity={1}
             strokeOpacity={highlighted ? 0.7 : 0}
             style={{ fill: TILE_FILL, stroke: tok('jade') }}
           />
-          <text
-            data-block-number
-            x={NAME_X}
-            y={nameY(card.h)}
-            className={numberInWindow ? T11G : T11C}
-          >
-            {tail4(block.number)}
-          </text>
           <g data-uncles>
             {card.uncles.map((un) => (
               <g key={un.ref.hash} data-uncle={un.index}>
@@ -131,42 +123,57 @@ export function ColumnBlock({
                   y={un.y}
                   width={un.w}
                   height={un.h}
-                  rx={3}
                   style={{ fill: tok('surface') }}
                 />
-                <text x={un.x + u.pad} y={un.y + countY(un.h)} className={T10}>
-                  {un.label}
-                </text>
-                {un.overflow > 0 && (
-                  <text
-                    x={un.x + un.w - u.pad}
-                    y={un.y + countY(un.h)}
-                    textAnchor="end"
-                    className={T10}
-                  >{`+${un.overflow}`}</text>
-                )}
               </g>
             ))}
           </g>
           <g data-chips>
             <Dots chips={card.chips} />
-            {card.chipOverflow > 0 && (
-              <text
-                data-chip-overflow
-                x={chipCount.x}
-                y={chipCount.y}
-                textAnchor="end"
-                className={T10}
-              >{`+${card.chipOverflow}`}</text>
-            )}
           </g>
           <g data-field>
             {card.squares.map((sq) => (
               <TxSquare key={sq.id} sq={sq} on={onIds?.has(sq.id)} />
             ))}
           </g>
+        </g>
+        <g data-words pointerEvents="none">
+          <text
+            data-block-number
+            x={NAME_X}
+            y={nameY(card.h)}
+            className={numberInWindow ? T11G : T11C}
+          >
+            {tail4(block.number)}
+          </text>
+          {card.uncles.map((un) => (
+            <g key={un.ref.hash} data-uncle-label={un.index}>
+              <text x={un.x + u.pad} y={un.y + countY(un.h)} className={T10}>
+                {un.label}
+              </text>
+              {un.overflow > 0 && (
+                <text
+                  x={un.x + un.w - u.pad}
+                  y={un.y + countY(un.h)}
+                  textAnchor="end"
+                  className={T10}
+                >{`+${un.overflow}`}</text>
+              )}
+            </g>
+          ))}
+          {card.chipOverflow > 0 && (
+            <g data-chips-label>
+              <text
+                data-chip-overflow
+                x={chipCount.x}
+                y={chipCount.y}
+                textAnchor="end"
+                className={T10B}
+              >{`+${card.chipOverflow}`}</text>
+            </g>
+          )}
           {card.hidden > 0 && (
-            <text data-count x={count.x} y={count.y} textAnchor="end" className={T10}>
+            <text data-count x={count.x} y={count.y} textAnchor="end" className={T10B}>
               {`+${card.hidden}`}
             </text>
           )}
@@ -189,7 +196,6 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
           y={0.5}
           width={Math.max(1, next.w - 1)}
           height={Math.max(1, next.h - 1)}
-          rx={3}
           strokeWidth={1}
           strokeDasharray="3 2"
           vectorEffect="non-scaling-stroke"
@@ -247,7 +253,6 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
                 y={q.y + 0.5}
                 width={q.s - 1}
                 height={q.s - 1}
-                rx={1}
                 fillOpacity={GHOST.square.fillOpacity}
                 strokeOpacity={GHOST.square.strokeOpacity}
                 strokeWidth={1}
@@ -321,7 +326,6 @@ function ColumnWell({
         y={band.y}
         width={scene.viewW - 2 * COL.x0}
         height={band.h}
-        rx={3}
         stroke="none"
         style={{ fill: WELL_FILL }}
       />

@@ -6,6 +6,8 @@
  * hold them as lanes a reader can tell apart. Pure, so the forms are tested without a browser.
  */
 
+import { clipLabel } from '@/lib/shorten';
+
 export const ALLELE_GEL = {
   /** The narrowest lane that still holds a band (R3). */
   laneFloor: 12,
@@ -15,7 +17,10 @@ export const ALLELE_GEL = {
   listAbove: 32,
   /** The content width at md (768 − 2 × 16): from here up a many-gene collection is a gel. */
   listBelow: 736,
-  /** The left gutter holds each row's genotype label ("this one", an object number). */
+  /**
+   * The left gutter holds each row's genotype tag ("this one"), the least it takes when a tag is
+   * always shown; with none, the lanes take the width (PB-04).
+   */
   gutter: 62,
   right: 22,
   /** One character of 10 px JetBrains Mono. */
@@ -40,10 +45,9 @@ export type AlleleGelLayout =
       head: number;
     };
 
-/** A gene name as drawn on the gel. */
+/** A gene name as drawn on the gel: a label cut to the gel's caption budget. */
 export function geneCaption(gene: string): string {
-  const max = ALLELE_GEL.captionChars;
-  return gene.length > max ? `${gene.slice(0, max - 1)}…` : gene;
+  return clipLabel(gene, ALLELE_GEL.captionChars);
 }
 
 export function alleleGelLayout({
@@ -55,6 +59,7 @@ export function alleleGelLayout({
   genes: readonly string[];
   width: number;
   subject: string;
+  /** The tags written in the left margin: those of the genotypes always shown. */
   overlayLabels?: readonly string[];
 }): AlleleGelLayout {
   const g = ALLELE_GEL;
@@ -64,7 +69,10 @@ export function alleleGelLayout({
   const n = genes.length;
   if (n > g.listAbove && width < g.listBelow) return { form: 'list' };
   const longest = Math.max(0, ...overlayLabels.map((label) => label.length));
-  const gutter = Math.max(g.gutter, Math.ceil(longest * g.charWidth + 4));
+  // PB-04: a margin only for a tag that needs it; without one the lanes start at the left edge.
+  const gutter = overlayLabels.length
+    ? Math.max(g.gutter, Math.ceil(longest * g.charWidth + 4))
+    : 0;
   const avail = width - gutter - g.right;
   if (avail < g.laneFloor)
     throw new Error(

@@ -1,6 +1,7 @@
 import { describe, it, expect, onTestFinished, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { render, screen, waitFor, within } from '../utils/test-utils';
+import { act, render, screen, waitFor, within } from '../utils/test-utils';
+import { onlineManager } from '@tanstack/react-query';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -12,6 +13,7 @@ import {
   NetworkTrends,
 } from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const API_BASE = '/api/:network/v1';
 
@@ -56,6 +58,43 @@ describe('NetworkDistributions', () => {
       screen.getByText('2 of the 7 verified nodes run on Hetzner, across 2 countries.')
     ).toBeInTheDocument();
     expect(screen.getByText('/ckb/2')).toBeInTheDocument();
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the three parts said "Failed to load …" while they
+  // waited.
+  it('waits while its read is paused offline, then draws the distributions once back online', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 5,
+          sameNetworkReachable: 5,
+          verifiedUnavailable: 0,
+          versions: [{ label: '0.114.0', count: 5 }],
+          countries: [{ label: 'Germany', count: 5 }],
+          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+          protocols: [{ label: '/ckb/2', count: 5 }],
+        })
+      )
+    );
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <>
+          <NetworkDistributions />
+          <HostingBar />
+          <NetworkProtocols />
+        </>
+      );
+      // let the paused read settle into its state before looking
+      await act(async () => {});
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByText('/ckb/2')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('renders an empty-state note when a distribution has no data', async () => {
@@ -110,11 +149,13 @@ describe('NetworkTrends', () => {
     ).toBeInTheDocument();
     expect(container.querySelector('[data-chart-gap="no rounds 01-12"]')).not.toBeNull();
     // D2: the API's days are UTC+8 calendar days, and the page says so.
-    expect(
-      screen.getByText('verified and reachable peers per completed UTC+8 day')
-    ).toBeInTheDocument();
+    // Re-pinned with U-19 / PB-01: a shorter name, so it fits beside the value gutter at 360 px.
+    expect(screen.getByText('peers per completed UTC+8 day')).toBeInTheDocument();
     expect(screen.queryByText(/UTC day/)).toBeNull();
-    expect(screen.getByText(/Coverage: 1970-01-11 through 1970-01-13\./)).toBeInTheDocument();
+    // re-pinned (A4 round 2): each day a unit of its own in the line
+    expect(
+      screen.getByText(fullText(/Coverage: 1970-01-11 through 1970-01-13\./))
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/Days older than the crawler's hourly retention show as gaps, never zero\./)
     ).toBeInTheDocument();
@@ -512,6 +553,7 @@ describe('NetworkTrends', () => {
     expect(rows).toHaveLength(4);
     expect(phoneLines(rows[0]).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['day', 'head', '2025-07-01', '22'],
+      // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
       ['leader', 'body', 'US 12', '2 labels'],
       ['labels', 'quiet', 'US 12 · DE 10', null],
     ]);

@@ -1,11 +1,13 @@
 'use client';
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
+import { HeadId } from '@/components/ui/head-id';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
@@ -13,7 +15,6 @@ import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   ActivityReadError,
-  DotJoined,
   ExactCkb,
   activityClassMark,
   activityHeadline,
@@ -34,6 +35,8 @@ import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+import { useCopy } from '@/hooks/useCopy';
+import { ReadFailure } from '@/components/read-failure';
 import {
   api,
   isNotFoundApiError,
@@ -48,6 +51,7 @@ import {
   type ParticipantInfo,
   type TransactionFeePayer,
 } from '@/lib/api';
+import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { exactCkbText } from '@/lib/ckb-decimal';
 import { txComment } from '@/lib/tx-comment';
@@ -57,7 +61,8 @@ import {
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { cn, truncateHash, formatUtc8DateTime } from '@/lib/utils';
+import { cn, formatUtc8DateTime } from '@/lib/utils';
+import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { formatAgeTwoUnits } from '@/lib/format-age';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
@@ -76,9 +81,14 @@ import { BlockLink } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 import type { SealState } from '@/lib/seal/stones';
+import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
+import { unitNode, unitText } from '@/components/ui/units';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
-  loading: () => <p className="text-text-dim text-small">Loading graph section...</p>,
+  loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
 });
 const POLL_MS = 3000;
 function provisional(tx: TransactionDetail | undefined): boolean {
@@ -107,7 +117,7 @@ function indexParam(value: string | null): number | null {
   return Number(value);
 }
 function PendingValue() {
-  return <span className="text-text-dim">pending...</span>;
+  return <span className="text-text-dim">pending…</span>;
 }
 /** The registry's name for a code hash, or null when it has none. */
 function registeredName(lookup: ScriptLookupResponse | undefined, codeHash: string) {
@@ -115,7 +125,7 @@ function registeredName(lookup: ScriptLookupResponse | undefined, codeHash: stri
   return name && name.toLowerCase() !== 'unknown' ? name : null;
 }
 function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return registeredName(lookup, g.script.codeHash) ?? truncateHash(g.script.codeHash, 10, 6);
+  return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
 }
 function groupHref(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
   return getScriptDetailHref({
@@ -135,16 +145,15 @@ function daoCompensation(activity: GlobalActivity): bigint | null {
 }
 
 function CopyHash({ hash }: { hash: string }) {
-  const [copied, setCopied] = useState(false);
+  // the one copy path (hooks/useCopy): "Copied" for a moment after a copy that worked, nothing
+  // after one that cannot (no clipboard over plain HTTP on a LAN address)
+  const { copied, copy } = useCopy(hash);
   return (
     <button
       type="button"
       aria-label="Copy transaction hash"
       title={copied ? 'Copied' : 'Copy transaction hash'}
-      onClick={async () => {
-        await navigator.clipboard.writeText(hash);
-        setCopied(true);
-      }}
+      onClick={copy}
       className="text-text-dim hover:text-jade -my-3 flex h-11 w-11 shrink-0 items-center justify-center"
     >
       <svg
@@ -163,7 +172,10 @@ function CopyHash({ hash }: { hash: string }) {
   );
 }
 
-/** `A`, `A and B`, `A, B and 3 more`: the parties on one side of a movement. */
+/**
+ * `A`, `A and B`, `A, B and 3 more`: the parties on one side of a movement, in the summary under
+ * the headline, the page's lede (U-09: head).
+ */
 function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
   const shown = parties.slice(0, 2);
   return (
@@ -171,7 +183,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
       {shown.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (parties.length > 2 ? ', ' : ' and ')}
-          <ParticipantRefView participant={p} compact quiet />
+          <ParticipantRefView participant={p} size="head" compact quiet />
         </Fragment>
       ))}
       {parties.length > 2 && ` and ${parties.length - 2} more`}
@@ -179,7 +191,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
   );
 }
 
-/** An item as the summary names it: its class mark and a link (`Nervape 3x 0x51c7...96f2`). */
+/** An item as the summary names it: its class mark and a link (`Nervape 3x 0x51c7a1b2c3…5e6f96f2`). */
 function ItemName({ item }: { item: ItemDelta }) {
   switch (item.kind) {
     case 'object':
@@ -191,7 +203,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             className="text-text-bright hover:text-jade"
           >
             {item.collection?.name ? `${item.collection.name} ` : 'Object '}
-            {truncateHash(item.objectId, 6, 4)}
+            <ShortId value={item.objectId} kind="hash" size="head" />
           </Link>
         </>
       );
@@ -203,7 +215,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             href={getTokenDetailHref(item.typeScriptHash)}
             className="text-text-bright hover:text-jade"
           >
-            {item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6)}
+            {item.symbol?.trim() || <ShortId value={item.typeScriptHash} kind="hash" size="head" />}
           </Link>
         </>
       );
@@ -215,7 +227,8 @@ function ItemName({ item }: { item: ItemDelta }) {
             href={getIdentityItemDetailHref(item.standard, item.identityId)}
             className="text-text-bright hover:text-jade"
           >
-            {formatStandard(item.standard)} {truncateHash(item.identityId, 6, 4)}
+            {formatStandard(item.standard)}{' '}
+            <ShortId value={item.identityId} kind="hash" size="head" />
           </Link>
         </>
       );
@@ -251,6 +264,7 @@ function FeePayer({
         lockHashPrefix: null,
         roles: [],
       }}
+      size="head"
       compact
       quiet
     />
@@ -274,7 +288,7 @@ function TxSummary({
       ? [
           ...new Set(
             activity.typeCalls.map((sc) =>
-              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })
+              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'head')
             )
           ),
         ]
@@ -312,10 +326,16 @@ function TxSummary({
         activity.protocolActions.map((pa, i) => (
           <Fragment key={i}>
             {readable(activity.txHash, () => {
-              const parts = protocolActionNoteParts(pa);
+              // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
+              const parts = protocolActionNoteParts(pa, 'head');
               return parts.length ? (
                 <>
-                  <DotJoined parts={parts} />
+                  {parts.map((part, j) => (
+                    <Fragment key={j}>
+                      {j > 0 && ', '}
+                      {part}
+                    </Fragment>
+                  ))}
                   {'. '}
                 </>
               ) : null;
@@ -332,7 +352,7 @@ function TxSummary({
   );
 }
 
-/** `pubkey hash 0x111111...1111`: the API's decoded lock args, as words. */
+/** `pubkey hash 0x11111111…111111`: the API's decoded lock args, as words. */
 function witnessKindLabel(kind: TransactionWitness['kind']): string {
   switch (kind) {
     case 'witness_args':
@@ -388,17 +408,17 @@ function WitnessRow({
   const noteText = (): string => {
     if (w.kind === 'cobuild' && w.actions && w.actions.length > 0) {
       const names = w.actions.map((a) => {
-        const script = groupNameByHash.get(a.scriptHash) ?? truncateHash(a.scriptHash, 8, 4);
+        const script = groupNameByHash.get(a.scriptHash) ?? shortenHash(a.scriptHash, 'row');
         return a.name
           ? `${script}: ${a.name}`
-          : `${script} (script info ${truncateHash(a.scriptInfoHash, 8, 4)})`;
+          : `${script} (script info ${shortenHash(a.scriptInfoHash, 'row')})`;
       });
       return `message: ${formatCount(w.actions.length, 'action')} for ${[...new Set(names)].join(', ')}`;
     }
     if (w.kind === 'cellbase') {
       const witness = required(tx.cellbaseWitness, tx.hash, 'cellbaseWitness');
       const lock =
-        registeredName(lookup, witness.lock.codeHash) ?? truncateHash(witness.lock.codeHash, 10, 6);
+        registeredName(lookup, witness.lock.codeHash) ?? shortenHash(witness.lock.codeHash, 'row');
       if (minerMessage && minerMessage.raw !== witness.message)
         throw new Error(
           `${tx.hash}: the block's miner message ${minerMessage.raw} is not its cellbase witness message ${witness.message}`
@@ -409,13 +429,15 @@ function WitnessRow({
           : minerMessage.text === null
             ? `${formatCount((witness.message.length - 2) / 2, 'byte')}, not text`
             : `“${minerMessage.text}”`;
-      return `miner lock ${lock}(${truncateHash(witness.lock.args, 6, 4)}) · message ${message}`;
+      return `miner lock ${lock}(${shortenHash(witness.lock.args, 'row')}) · message ${message}`;
     }
     return fields.map((f) => `${f.name} ${formatCount(f.end - f.start, 'B', 'B')}`).join(' · ');
   };
   const note = readable(tx.hash, () => {
     const text = noteText();
-    return text ? <span className="text-text-dim [overflow-wrap:anywhere]">{text}</span> : null;
+    return text ? (
+      <span className="text-text-dim [overflow-wrap:anywhere]">{unitText(text)}</span>
+    ) : null;
   });
   return (
     <button
@@ -429,7 +451,7 @@ function WitnessRow({
       onFocus={() => onHover({ t: 'witness', index: w.index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 rounded border-b px-1.5 py-2.5 text-left transition-opacity',
+        'border-row-rule text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 border-b px-1.5 py-2.5 text-left transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
@@ -442,7 +464,7 @@ function WitnessRow({
           )}
         </span>
         <span className="text-text-dim">
-          {formatCount(w.size, 'B', 'B')}
+          {unitNode(formatCount(w.size, 'B', 'B'))}
           {readers.length > 0 && ` · read by ${readers.join(', ')}`}
         </span>
       </span>
@@ -451,7 +473,7 @@ function WitnessRow({
           {fields.map((f, i) => (
             <span
               key={i}
-              className={cn('rounded-sm', OVERHEAD_FIELD.test(f.name) ? '' : 'bg-jade')}
+              className={OVERHEAD_FIELD.test(f.name) ? undefined : 'bg-jade'}
               style={{
                 width: Math.max(2, Math.round(((f.end - f.start) / scale) * 320)),
                 backgroundColor: OVERHEAD_FIELD.test(f.name) ? CLASS_COLORS.ckb : undefined,
@@ -517,7 +539,12 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
   );
 }
 
-/** One cell dep (TX-15): its out point, what it supplies code for, and its members. */
+/**
+ * One cell dep (TX-15): its out point, then one statement led by the kind of dep — what it supplies
+ * code for ("code for Spore · 76,752 B", "dep group for Default Lock"), or whose code it holds and
+ * that it does not run here — then a dep group's members. PA-12: the statement is said once, at
+ * every width (it was a left "supplies code for X" beside a right "for X").
+ */
 function DepRow({
   dep,
   index,
@@ -542,6 +569,7 @@ function DepRow({
     dep.depType === 'code'
       ? ` · ${size(required(dep.resolvedCells[0], dep.outPointTxHash, 'code dep cell').codeSize)}`
       : '';
+  const kind = dep.depType === 'dep_group' ? 'dep group' : 'code';
   return (
     <div
       id={`tx-dep-${index}`}
@@ -552,37 +580,39 @@ function DepRow({
       onFocus={() => onHover({ t: 'dep', index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated text-small -mx-1.5 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
+        'border-row-rule text-small -mx-1.5 flex flex-col gap-y-0.5 border-b px-1.5 py-2.5 transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
     >
       <Link
         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
-        className="text-text-bright decoration-aqua/35 min-w-0 underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
+        className="text-text-bright decoration-aqua/35 min-w-0 self-start underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
       >
-        {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
+        <ShortId value={dep.outPointTxHash} kind="hash" size="row" />
+        <OutpointIndex index={dep.outPointIndex} />
       </Link>
-      <span className="text-text-dim">{dep.depType === 'dep_group' ? 'dep group' : 'code'}</span>
       <span className="text-text-dim">
-        {serves.length > 0
-          ? `supplies code for ${serves.join(', ')}`
-          : attached.length > 0
-            ? `code of ${attached.join(', ')}`
-            : 'no script here runs it'}
+        {serves.length > 0 ? (
+          <>
+            {kind} for <span className="text-text">{serves.join(', ')}</span>
+          </>
+        ) : attached.length > 0 ? (
+          `${kind} of ${attached.join(', ')}, not run here`
+        ) : (
+          `${kind}, not run here`
+        )}
         {codeSize}
       </span>
-      <span className={serves.length > 0 ? 'text-text' : 'text-text-dim'}>
-        {serves.length > 0 ? `for ${serves.join(', ')}` : 'not run here'}
-      </span>
       {dep.depType === 'dep_group' && (
-        <div className="col-span-2 space-y-1 pl-3 pt-1">
+        <div className="space-y-1 pl-3 pt-1">
           {dep.resolvedCells.map((cell) => {
             const memberServes = names([...cell.scriptHashes, ...cell.outputLockScriptHashes]);
             return (
               <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
                 <Link href={`/cell/${cell.txHash}-${cell.index}`} className="hover:text-jade">
-                  ↳ {truncateHash(cell.txHash, 10, 6)}:{cell.index}
+                  ↳ <ShortId value={cell.txHash} kind="hash" size="row" />
+                  <OutpointIndex index={cell.index} />
                 </Link>
                 {memberServes.length > 0
                   ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
@@ -598,7 +628,7 @@ function DepRow({
 
 function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
-    <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
+    <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
       <h2 className="text-body text-text font-medium">{title}</h2>
       <span className="text-text-dim text-small">{note}</span>
     </div>
@@ -610,17 +640,14 @@ export default function TransactionDetailPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const {
-    data: tx,
-    error,
-    isLoading,
-  } = useQuery<TransactionDetail>({
+  const read = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
     refetchInterval: (q) =>
       provisional(q.state.data) || isServiceUnavailableError(q.state.error) ? POLL_MS : false,
     refetchIntervalInBackground: true,
   });
+  const { data: tx, error } = read;
   const isProvisional = provisional(tx);
   const awaitingInputs = isServiceUnavailableError(error);
   const { data: activity, error: activityError } = useQuery({
@@ -698,7 +725,9 @@ export default function TransactionDetailPage() {
       <main className="container mx-auto py-8">{children}</main>
     </div>
   );
-  if (isLoading) return shell(<DetailSkeleton />);
+  // Awaited, fetching or paused (offline, or a hidden tab between retries): isLoading is pending
+  // AND fetching, so a paused read would fall through as if it had completed.
+  if (isAwaited(read)) return shell(<DetailSkeleton />);
   if (awaitingInputs && !tx)
     return shell(
       <DetailLayout
@@ -711,10 +740,10 @@ export default function TransactionDetailPage() {
           className="text-text-dim text-small space-y-3"
         >
           <p>
-            waiting for the node... the inputs of this unconfirmed transaction cannot be resolved
-            yet. Retrying automatically.
+            waiting for the node… the inputs of this unconfirmed transaction cannot be resolved yet.
+            Retrying automatically.
           </p>
-          <p className="break-all">{error.apiMessage}</p>
+          <p className="[overflow-wrap:anywhere]">{error.apiMessage}</p>
         </div>
       </DetailLayout>
     );
@@ -729,15 +758,12 @@ export default function TransactionDetailPage() {
       />
     );
   }
+  if (!tx && isBadRequestApiError(error))
+    return <NotFoundPage notAnId={{ kind: 'transaction', reason: error.apiMessage }} />;
   if (!tx) {
-    const message = error instanceof Error ? error.message : 'Transaction response is empty';
-    return shell(
-      <DetailLayout title="Failed to load transaction">
-        <p role="alert" className="text-text-dim text-small break-words">
-          {message}
-        </p>
-      </DetailLayout>
-    );
+    // past pending, no error means the read succeeded: with no transaction, an API invariant broke
+    if (!error) throw new Error(`Transaction ${hash}: request completed without a transaction`);
+    return shell(<ReadFailure what="transaction" error={error} />);
   }
   // The transaction's stone (the seals by kind), pressed on the head and, from lg, across the cells:
   // its hash, the cells it consumed — the API's count, as its row in a list, but none for a
@@ -904,13 +930,13 @@ export default function TransactionDetailPage() {
       name: groupLabel(g, lookup),
       href: groupHref(g, lookup),
       mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
-      sub: (() => {
+      sub: (size: ShortSize) => {
         const line =
           g.kind === 'lock' && firstCell
-            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError)
+            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError, size)
             : null;
-        return line ?? `args ${truncateHash(g.script.args, 6, 4)}`;
-      })(),
+        return line ?? `args ${shortenHash(g.script.args, size)}`;
+      },
       ran: g.ran,
       cellIds: groupCells(g),
       cycles: g.cycles,
@@ -925,47 +951,50 @@ export default function TransactionDetailPage() {
               detail: w ? { kind: witnessKindLabel(w.kind), size: w.size } : null,
               onSelect: () => select(g.witnessIndex, selectedGroup === key ? null : key),
             },
-      code: !g.ran ? (
-        attachedDeps.length > 0 ? (
-          attachedDeps.map(({ d, i }) => (
-            <span key={i} className="text-text-dim block">
+      code: (size: ShortSize) =>
+        !g.ran ? (
+          attachedDeps.length > 0 ? (
+            attachedDeps.map(({ d, i }) => (
+              <span key={i} className="text-text-dim block">
+                <a href={`#tx-dep-${i}`} className="hover:text-jade">
+                  code
+                </a>{' '}
+                <Link
+                  href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
+                  className="hover:text-jade"
+                >
+                  <ShortId value={d.outPointTxHash} kind="hash" size={size} />
+                  <OutpointIndex index={d.outPointIndex} />
+                </Link>{' '}
+                · not run here
+              </span>
+            ))
+          ) : null
+        ) : isProvisional ? (
+          <span className="text-text-dim">read once committed</span>
+        ) : depsError ? (
+          <span className="text-text-dim">cell deps unreadable</span>
+        ) : !deps ? (
+          <span className="text-text-dim">Resolving code…</span>
+        ) : codeDeps.length === 0 ? (
+          <span className="text-text-dim">No matching dep</span>
+        ) : (
+          // The kind jumps to the dep row's evidence below; the out point opens the code cell.
+          codeDeps.map(({ d, i }) => (
+            <span key={i} className="block">
               <a href={`#tx-dep-${i}`} className="hover:text-jade">
-                code
+                {d.depType === 'dep_group' ? 'dep group' : 'code'}
               </a>{' '}
               <Link
                 href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-                className="hover:text-jade"
+                className="text-text-dim hover:text-jade"
               >
-                {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
-              </Link>{' '}
-              · not run here
+                <ShortId value={d.outPointTxHash} kind="hash" size={size} />
+                <OutpointIndex index={d.outPointIndex} />
+              </Link>
             </span>
           ))
-        ) : null
-      ) : isProvisional ? (
-        <span className="text-text-dim">read once committed</span>
-      ) : depsError ? (
-        <span className="text-text-dim">cell deps unreadable</span>
-      ) : !deps ? (
-        <span className="text-text-dim">Resolving code...</span>
-      ) : codeDeps.length === 0 ? (
-        <span className="text-text-dim">No matching dep</span>
-      ) : (
-        // The kind jumps to the dep row's evidence below; the out point opens the code cell.
-        codeDeps.map(({ d, i }) => (
-          <span key={i} className="block">
-            <a href={`#tx-dep-${i}`} className="hover:text-jade">
-              {d.depType === 'dep_group' ? 'dep group' : 'code'}
-            </a>{' '}
-            <Link
-              href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-              className="text-text-dim hover:text-jade"
-            >
-              {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
-            </Link>
-          </span>
-        ))
-      ),
+        ),
     };
   });
 
@@ -1049,7 +1078,7 @@ export default function TransactionDetailPage() {
     activityError ? (
       <span className="text-text-dim">unreadable without the transaction&rsquo;s activity</span>
     ) : (
-      <span className="text-text-dim">Reading...</span>
+      <span className="text-text-dim">Reading…</span>
     )
   ) : (
     readable(hash, () => {
@@ -1202,7 +1231,7 @@ export default function TransactionDetailPage() {
             }}
           />
         ) : (
-          <p className="text-text-dim py-4">Loading graph...</p>
+          <p className="text-text-dim py-4">Loading graph…</p>
         )}
       </details>
       <details>
@@ -1241,7 +1270,7 @@ export default function TransactionDetailPage() {
             // its own classes
             identity={
               <div className="flex min-w-0 items-center gap-0.5">
-                <span className="min-w-0">{tx.hash}</span>
+                <HeadId value={tx.hash} kind="hash" />
                 <CopyHash hash={tx.hash} />
               </div>
             }
@@ -1274,7 +1303,9 @@ export default function TransactionDetailPage() {
             </span>
             {!isProvisional && (
               <span className="text-text-dim text-small">
-                {formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')}
+                {unitNode(
+                  formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')
+                )}
               </span>
             )}
           </div>
@@ -1288,9 +1319,15 @@ export default function TransactionDetailPage() {
                   <time
                     dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}
                   >
-                    {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
+                    <NoBreak>
+                      {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
+                    </NoBreak>
                     <span className="text-text-dim text-small block">
-                      {formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'))}
+                      <ClockText
+                        text={(now) =>
+                          formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'), now)
+                        }
+                      />
                     </span>
                   </time>
                 )}
@@ -1323,11 +1360,14 @@ export default function TransactionDetailPage() {
                       lockHashPrefix: null,
                       roles: [],
                     }}
+                    size="row"
                     compact
                     quiet
                   />
-                  {feePaidBy.length > 1 &&
-                    ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`}
+                  {unitNode(
+                    feePaidBy.length > 1 &&
+                      ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`
+                  )}
                 </dd>
               )}
             </div>
@@ -1335,9 +1375,13 @@ export default function TransactionDetailPage() {
               <div className="flex flex-col gap-0.5">
                 <dt className="text-text-dim text-small">Pending since</dt>
                 <dd>
-                  {formatUtc8DateTime(tx.pendingSince)}
+                  <Utc8DateTime timestamp={tx.pendingSince} />
                   <span className="text-text-dim text-small block">
-                    {formatAgeTwoUnits(tx.pendingSince)}
+                    <ClockText
+                      text={(now) =>
+                        formatAgeTwoUnits(required(tx.pendingSince, hash, 'pendingSince'), now)
+                      }
+                    />
                   </span>
                 </dd>
               </div>
@@ -1504,7 +1548,7 @@ export default function TransactionDetailPage() {
                   {selectedGroup && (
                     <p
                       data-testid="tx-witness-focused-group"
-                      className="text-text-dim mt-3 break-all"
+                      className="text-text-dim mt-3 [overflow-wrap:anywhere]"
                     >
                       Focused script group: {selectedGroup}{' '}
                       <button
@@ -1558,7 +1602,7 @@ export default function TransactionDetailPage() {
                   />
                 ))
               ) : (
-                <p className="text-text-dim py-3">Resolving cell deps...</p>
+                <p className="text-text-dim py-3">Resolving cell deps…</p>
               )}
             </div>
             {headerDeps.length > 0 && (
@@ -1570,7 +1614,7 @@ export default function TransactionDetailPage() {
                 {headerDeps.map((h) => (
                   <div
                     key={h.blockHash}
-                    className="border-base-elevated flex flex-wrap justify-between gap-3 border-b py-2.5"
+                    className="border-row-rule flex flex-wrap justify-between gap-3 border-b py-2.5"
                   >
                     {h.blockNumber === null ? (
                       <span className="text-text-dim">block not indexed yet</span>
@@ -1579,7 +1623,9 @@ export default function TransactionDetailPage() {
                         {formatBlockNumber(h.blockNumber)}
                       </Link>
                     )}
-                    <span className="text-text-dim">{truncateHash(h.blockHash, 10, 6)}</span>
+                    <span className="text-text-dim">
+                      <ShortId value={h.blockHash} kind="hash" size="row" />
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1668,7 +1714,8 @@ export default function TransactionDetailPage() {
                           lifecycle.commitmentDistance !== undefined && (
                             <>
                               {' '}
-                              · committed {formatCount(lifecycle.commitmentDistance, 'block')} later
+                              · committed{' '}
+                              {unitNode(formatCount(lifecycle.commitmentDistance, 'block'))} later
                             </>
                           )}{' '}
                         · window {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
@@ -1686,7 +1733,7 @@ export default function TransactionDetailPage() {
               {hasCycles && cycles !== null ? (
                 cycles.toLocaleString('en-US')
               ) : isPaused ? null : isCalculating ? (
-                'Calculating...'
+                'Calculating…'
               ) : hasFailed ? (
                 'Calculation failed'
               ) : isProvisional ? (
@@ -1713,7 +1760,7 @@ export default function TransactionDetailPage() {
           {(tx.outputs ?? []).flatMap((cell, i) => {
             // R-8 (TX-20): an output lock read by a registry field layout, or — revised R-8 — one
             // whose args do not fit its layout, with the API's reason in place of the fields.
-            const line = lockArgsLine(cell.lockArgsDecoded, cell.lockArgsDecodeError);
+            const line = lockArgsLine(cell.lockArgsDecoded, cell.lockArgsDecodeError, 'row');
             const shown =
               cell.lock &&
               line !== null &&
@@ -1732,11 +1779,12 @@ export default function TransactionDetailPage() {
                     : `Lock of output ${i}`}
                 </dt>
                 <dd>
-                  {registeredName(lookup, cell.lock.codeHash) ??
-                    truncateHash(cell.lock.codeHash, 10, 6)}
+                  {registeredName(lookup, cell.lock.codeHash) ?? (
+                    <ShortId value={cell.lock.codeHash} kind="hash" size="row" />
+                  )}
                   ,{' '}
                   <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>
-                    {line}
+                    {unitText(line)}
                   </span>
                 </dd>
               </div>,
@@ -1758,7 +1806,7 @@ export default function TransactionDetailPage() {
           </div>
         </dl>
 
-        <details open={graphOpen} className="border-base-border-subtle border-t pt-4">
+        <details open={graphOpen} className="border-row-rule border-t pt-4">
           <summary className="text-text-dim hover:text-text text-small cursor-pointer">
             Raw data
           </summary>

@@ -17,18 +17,36 @@ import { DaoGrows } from '@/components/dao/dao-grows';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
+import { formatCapacity, formatDurationMs } from '@/lib/utils';
+import type { ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
+import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
+import {
+  IciclePartition,
+  icicleNodePaint,
+  type IcicleNode,
+} from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
+import {
+  CLASS_COLORS,
+  CLASS_KEYS,
+  DAO_ISSUANCE_COLORS,
+  DAO_ISSUANCE_KEYS,
+} from '@/lib/design-tokens';
+import { color, fade, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { percentOf } from '@/lib/format-unit';
+import { unitNode } from '@/components/ui/units';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -46,15 +64,24 @@ interface Props {
   historyError?: boolean;
 }
 
-function Amount({ value, signed = false }: { value: string; signed?: boolean }) {
+function Amount({
+  value,
+  signed = false,
+  plain = false,
+}: {
+  value: string;
+  signed?: boolean;
+  /** On a fill (DY-03): every digit in the fill's one ink, no dim fraction. */
+  plain?: boolean;
+}) {
   const amount = parseShannons(value, 'DAO amount');
   const parts = splitCkbAmount(amount);
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {signed ? parts.sign : null}
       {parts.integer}
-      <span className="text-text-dim">{parts.fraction}</span>
-      <span className="text-text-dim/50">{parts.ghost}</span>
+      <span className={plain ? undefined : 'text-text-dim'}>{parts.fraction}</span>
+      <span className={plain ? undefined : 'text-text-ghost'}>{parts.ghost}</span>
     </span>
   );
 }
@@ -128,7 +155,7 @@ function DepositedFigure({ shannons }: { shannons: string }) {
         {parts.integer}
         <span className="text-hero text-gold-dim font-normal">
           {parts.fraction}
-          <span className="opacity-50">{parts.ghost}</span>
+          <span className="text-text-ghost">{parts.ghost}</span>
         </span>
       </span>
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
@@ -137,15 +164,20 @@ function DepositedFigure({ shannons }: { shannons: string }) {
   );
 }
 
-/** A signed CKB decimal in its sign's hue: the fraction in the same hue's dim step. */
-function SignedCkbDecimal({ value, fractionClass }: { value: string; fractionClass: string }) {
+/**
+ * A signed CKB decimal in its sign's hue: the fraction in the sign's quieter ink (`AMOUNT_INK`, a
+ * named key at 4.5:1), the padding zeros ghost.
+ */
+function SignedCkbDecimal({ value }: { value: string }) {
   const parts = splitCkbAmount(parseCkbDecimal(value));
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {parts.sign}
       {parts.integer}
-      <span className={fractionClass}>{parts.fraction}</span>
-      <span className="opacity-40">{parts.ghost}</span>
+      <span data-fraction className={AMOUNT_INK[amountSign(parts.sign)].fraction}>
+        {parts.fraction}
+      </span>
+      <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
 }
@@ -166,8 +198,8 @@ export function DaoLede() {
   return (
     <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
       CKB locked in the DAO keeps its share of the supply.{' '}
-      <a href="#evidence" className="hover:text-text-bright whitespace-nowrap hover:underline">
-        How it works ↓
+      <a href="#evidence" className="hover:text-text-bright hover:underline">
+        How it works<span className="whitespace-nowrap"> ↓</span>
       </a>
     </p>
   );
@@ -249,17 +281,7 @@ function Hero({
                         : 'text-text'
                   }
                 >
-                  <SignedCkbDecimal
-                    value={change!}
-                    fractionClass={
-                      changeShannons > BigInt(0)
-                        ? 'text-positive-dim'
-                        : changeShannons < BigInt(0)
-                          ? 'text-negative-dim'
-                          : 'text-text-dim'
-                    }
-                  />{' '}
-                  CKB
+                  <SignedCkbDecimal value={change!} /> CKB
                 </span>
               )}{' '}
               <span className="text-text-dim">
@@ -323,13 +345,16 @@ function exactSafeMs(value: string, context: string): number {
   return Number(ms);
 }
 
-/** An exact CKB amount inside SVG text: whole part, then the significant decimals dimmed. */
+/**
+ * An exact CKB amount inside SVG text: whole part, then the significant decimals in the neutral
+ * fraction ink as a fill (`AMOUNT_INK`), at full strength.
+ */
 function SvgCkb({ shannons }: { shannons: bigint }) {
   const parts = splitCkbAmount(shannons);
   return (
     <>
       {parts.integer}
-      <tspan fillOpacity={0.7}>{parts.fraction}</tspan>
+      <tspan fill={color(AMOUNT_INK.neutral.fractionKey)}>{parts.fraction}</tspan>
     </>
   );
 }
@@ -342,6 +367,8 @@ const ICICLE_ROWS = { heights: [48, 48, 32], gap: 3 } as const;
  * 13 px → 8); a browser that does not uses 0.6 em. Fit tests use whichever is wider.
  */
 const monoAdvance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
+/** The claimable part of the requested withdrawals: the DAO gold at this alpha (R12). */
+const CLAIMABLE_FILL = 0.45;
 /** The capacity-use bar's segments sit 3 px apart. */
 const BAR_GAP_PX = 3;
 
@@ -379,8 +406,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
   const { mining, compensation, burnt, claimed, unclaimed, total, liveCells } =
     issuanceParts(statistics);
   const issuanceEmpty = total === BigInt(0);
-  const share = (v: bigint) => `${formatPercent(v, total, 2)}%`;
-  const ofCompensation = (v: bigint) => `${formatPercent(v, compensation, 1)}%`;
+  const share = (v: bigint) => percentOf(v, total);
+  const ofCompensation = (v: bigint) => percentOf(v, compensation);
   const root: IcicleNode | null = issuanceEmpty
     ? null
     : {
@@ -388,9 +415,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         label: 'Secondary issuance since genesis',
         value: total,
         tone: 'ckb',
-        color: DAO_ISSUANCE_COLORS.total,
+        fill: DAO_ISSUANCE_KEYS.total,
         opacity: 0.55,
-        ink: 'bright',
         // The board's root label: the whole as a whole number of CKB (cut, not rounded); the
         // exact parts are the line under the icicle.
         boxLabel: {
@@ -404,9 +430,8 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             label: 'to miners',
             value: mining,
             tone: 'ckb',
-            color: DAO_ISSUANCE_COLORS.miners,
+            fill: DAO_ISSUANCE_KEYS.miners,
             opacity: 1,
-            ink: 'dark',
             boxLabel: { name: 'miners', share: share(mining) },
           },
           {
@@ -415,7 +440,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             value: compensation,
             tone: 'dao',
             opacity: 1,
-            ink: 'dark',
             boxLabel: { name: 'depositors', share: share(compensation) },
             children: [
               {
@@ -424,7 +448,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
                 value: claimed,
                 tone: 'dao',
                 opacity: 1,
-                ink: 'dark',
                 boxLabel: { name: 'paid out', share: ofCompensation(claimed) },
               },
               {
@@ -433,7 +456,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
                 value: unclaimed,
                 tone: 'dao',
                 opacity: 0.4,
-                ink: 'bright',
                 boxLabel: { name: 'still owed', share: ofCompensation(unclaimed) },
               },
             ],
@@ -443,14 +465,22 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             label: 'burnt',
             value: burnt,
             tone: 'other',
-            color: DAO_ISSUANCE_COLORS.burnt,
+            fill: DAO_ISSUANCE_KEYS.burnt,
             opacity: 1,
-            ink: 'bright',
             boxLabel: { name: 'burnt', share: share(burnt), note: 'no cell can ever claim it' },
           },
         ],
       };
   const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
+  /** PB-25: a legend row's swatch is its block's paint, so every row names one block. */
+  const swatchOf = (key: string) => {
+    const find = (node: IcicleNode): IcicleNode | undefined =>
+      node.key === key ? node : node.children?.map(find).find(Boolean);
+    const node = root && find(root);
+    if (!node) throw new Error(`DAO issuance: no icicle block ${key} for its legend row`);
+    const { color: paint, opacity } = icicleNodePaint(node);
+    return <Swatch color={fade(paint, opacity)} />;
+  };
   return (
     <Section
       title="Where secondary issuance goes"
@@ -474,7 +504,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
               formatValue={(v) => <SvgCkb shannons={v} />}
               width={width}
               rows={ICICLE_ROWS}
-              hideLabels={narrow}
             />
           )
         )}
@@ -485,6 +514,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           className="text-small text-text-dim mt-3 space-y-1.5"
         >
           <li>
+            {swatchOf('total')}
             secondary issuance since genesis{' '}
             <span className="text-text">
               <Amount value={total.toString()} />
@@ -492,26 +522,28 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             CKB
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.miners} />
+            {swatchOf('miners')}
             miners {share(mining)} ·{' '}
             <span className="text-text">
               <Amount value={mining.toString()} />
             </span>
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
+            {swatchOf('compensation')}
             depositors {share(compensation)} ·{' '}
             <span className="text-text">
               <Amount value={compensation.toString()} />
             </span>
             <ul className="mt-1 space-y-1 pl-5">
               <li>
+                {swatchOf('paid')}
                 paid out {ofCompensation(claimed)} ·{' '}
                 <span className="text-text">
                   <Amount value={claimed.toString()} />
                 </span>
               </li>
               <li>
+                {swatchOf('owed')}
                 still owed {ofCompensation(unclaimed)} ·{' '}
                 <span className="text-text">
                   <Amount value={unclaimed.toString()} />
@@ -521,7 +553,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             </ul>
           </li>
           <li>
-            <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
+            {swatchOf('burnt')}
             burnt {share(burnt)} ·{' '}
             <span className="text-text">
               <Amount value={burnt.toString()} />
@@ -572,7 +604,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
 /** A mechanism tile (the "Two names for the same script" chain's tile, `script-byte-map.tsx`). */
 function MechanismTile({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5">
+    <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5">
       <b className="text-text-bright mb-0.5 block font-medium">{title}</b>
       {children}
     </div>
@@ -709,8 +741,8 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           const percent = formatPercent(part.value, issued, 4);
           const label =
             part.key === 'other'
-              ? `everything else ${formatPercent(part.value, issued, 2)}% → burnt`
-              : `${formatPercent(part.value, issued, 2)}%`;
+              ? `everything else ${percentOf(part.value, issued)} → burnt`
+              : percentOf(part.value, issued);
           // R9: a share is written inside its segment only where it fits (padding included).
           const segmentPx =
             width === null ? 0 : ((width - BAR_GAP_PX * (use.length - 1)) * Number(percent)) / 100;
@@ -719,7 +751,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
             <div
               key={part.key}
               title={`${part.title}: ${formatCapacity(part.value)}`}
-              className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap rounded ${part.key === 'other' ? 'text-text flex-1 px-2.5' : 'text-base-bg shrink-0 justify-center'}`}
+              className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap ${part.key === 'other' ? 'text-text flex-1 px-2.5' : 'text-base-bg shrink-0 justify-center'}`}
               style={{
                 width: part.key === 'other' ? undefined : `${percent}%`,
                 background: part.color,
@@ -733,21 +765,17 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
       <div className="text-text-dim text-meta mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.miners} />
-          occupied by cells <span className="text-text">
-            {formatPercent(occupied, issued, 2)}%
-          </span>{' '}
-          → miners
+          occupied by cells <span className="text-text">{percentOf(occupied, issued)}</span> →
+          miners
         </span>
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
           DAO deposits, free capacity + compensation accrued{' '}
-          <span className="text-text">{formatPercent(depositorWeight, issued, 2)}%</span> →
-          depositors
+          <span className="text-text">{percentOf(depositorWeight, issued)}</span> → depositors
         </span>
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
-          everything else <span className="text-text">{formatPercent(other, issued, 2)}%</span> →
-          burnt
+          everything else <span className="text-text">{percentOf(other, issued)}</span> → burnt
         </span>
       </div>
     </div>
@@ -758,14 +786,14 @@ function Swatch({ color }: { color: string }) {
   return (
     <span
       aria-hidden="true"
-      className="mr-1.5 inline-block h-[9px] w-[9px] rounded-sm align-middle"
+      className="mr-1.5 inline-block h-[9px] w-[9px] align-middle"
       style={{ background: color }}
     />
   );
 }
 
 function plural(count: number, word: string): string {
-  return `${count.toLocaleString('en-US')} ${word}${count === 1 ? '' : 's'}`;
+  return formatCount(count, word);
 }
 
 /**
@@ -798,13 +826,17 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     throw new Error(
       `DAO phase-1 readiness does not partition the requests at ${formatBlockNumber(evidence.tipBlockNumber)}`
     );
-  const claimable = (
+  const { resolved: theme } = useTheme();
+  // DY-03: inside its gold segment the words take the one ink the fill's luminance calls for;
+  // under the bar, on the page ground, they keep the line's inks.
+  const claimableInk = color(inkOnFill(theme, CLASS_KEYS.dao, CLAIMABLE_FILL).ink);
+  const claimable = (onFill: boolean) => (
     <>
       claimable now{' '}
-      <span className="text-text-bright">
-        <Amount value={ready.capacity} /> CKB
+      <span className={onFill ? undefined : 'text-text-bright'}>
+        <Amount value={ready.capacity} plain={onFill} /> CKB
       </span>{' '}
-      <span className="text-text-dim">· {plural(ready.count, 'cell')}</span>
+      <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
     </>
   );
   // R12: the claimable words sit inside their segment where they fit (12 px, 12 px padding).
@@ -836,15 +868,15 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 key={row.nominalDay}
                 role="listitem"
                 tabIndex={0}
-                aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
+                aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
                 onFocus={() => setSelectedDay(row.nominalDay)}
                 onMouseEnter={() => setSelectedDay(row.nominalDay)}
                 className="focus:outline-interactive group flex h-[200px] flex-col justify-end pt-6 focus:outline"
-                title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
+                title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
               >
                 <div
                   data-window-bar
-                  className={`bg-gold w-full rounded-t-sm transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
+                  className={`bg-gold w-full transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
                   style={{ height: `${height}%` }}
                 />
               </div>
@@ -880,7 +912,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                   <span className="text-text-bright">
                     Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
                     {row.throughEpochOffset} · <Amount value={row.capacity} /> CKB in{' '}
-                    {row.count.toLocaleString()} deposits
+                    {unitNode(formatCount(row.count, 'deposit'))}
                   </span>
                 );
               })()}
@@ -898,21 +930,25 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden"
             >
               <span
-                className="bg-gold/45 text-text flex items-center overflow-hidden whitespace-nowrap rounded px-3"
-                style={{ width: `${readyPercent}%` }}
+                className="flex items-center overflow-hidden whitespace-nowrap px-3"
+                style={{
+                  width: `${readyPercent}%`,
+                  backgroundColor: fade(CLASS_COLORS.dao, CLAIMABLE_FILL),
+                  color: claimableInk,
+                }}
               >
                 {/* One flex item, so the spaces between its words stay. */}
-                {claimableInside ? <span>{claimable}</span> : null}
+                {claimableInside ? <span>{claimable(true)}</span> : null}
               </span>
               <span
-                className="bg-gold rounded"
+                className="bg-gold"
                 style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
               />
             </div>
             <div
               className={`text-text-dim text-meta mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
             >
-              {!claimableInside && <span>{claimable}</span>}
+              {!claimableInside && <span>{claimable(false)}</span>}
               <span>
                 waiting for its window{' '}
                 <span className="text-text">
@@ -976,22 +1012,23 @@ function concentrationGroups(evidence: DaoEvidence) {
   return { total, groups };
 }
 
-function ownerLink(owner: Owner) {
+/** A depositor's address at the form's size (U-09): row in the table, tight in the phone row. */
+function ownerLink(owner: Owner, size: ShortSize) {
   return (
     <Link href={`/address/${owner.address}`} className="text-text-bright hover:underline">
-      {owner.address.slice(0, 12)}…{owner.address.slice(-7)}
+      <ShortId value={owner.address} kind="address" size={size} />
     </Link>
   );
 }
 
-function lockLink(owner: Owner) {
+function lockLink(owner: Owner, size: ShortSize) {
   return (
     <Link
       href={`/script/${owner.lockCodeHash}?hashType=${owner.lockHashType}&kind=lock`}
       className="text-text-dim hover:text-text-bright font-mono hover:underline"
       title={`${owner.lockCodeHash} (${owner.lockHashType})`}
     >
-      {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`}
+      {owner.lockKind ?? <ShortId value={owner.lockCodeHash} kind="hash" size={size} />}
     </Link>
   );
 }
@@ -1020,7 +1057,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     header: ownerHead('Depositor'),
     minWidth: 190,
     className: OWNER_CELL,
-    render: ownerLink,
+    render: (o) => ownerLink(o, 'row'),
   },
   {
     key: 'lock',
@@ -1028,7 +1065,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     header: ownerHead('Lock'),
     minWidth: 170,
     className: OWNER_CELL,
-    render: lockLink,
+    render: (o) => lockLink(o, 'row'),
   },
   {
     key: 'deposits',
@@ -1097,12 +1134,12 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0">
                 <span className="text-text-dim mr-2">{o.rank}</span>
-                {ownerLink(o)}
+                {ownerLink(o, 'tight')}
               </span>
               <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              {lockLink(o)}
+              {lockLink(o, 'tight')}
               <span className="text-text-bright">
                 <Amount value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
@@ -1200,7 +1237,7 @@ function RawEvidence({
         {fields.map((field) => (
           <div
             key={field.key}
-            className="border-base-elevated grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+            className="border-row-rule grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
           >
             <span className="text-text-bright">{field.key}</span>
             <span className="text-text-dim">bytes {field.bytes}</span>
@@ -1223,7 +1260,11 @@ function RawEvidence({
         <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
           {formatBlockNumber(anchor.blockNumber)}
         </Link>{' '}
-        (<span title={anchor.blockHash}>{truncateHash(anchor.blockHash)}</span>), S (
+        (
+        <span title={anchor.blockHash}>
+          <ShortId value={anchor.blockHash} kind="hash" size="row" />
+        </span>
+        ), S (
         <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
         <Amount value={owed.toString()} />) plus the burnt share (
         <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it does
@@ -1232,7 +1273,7 @@ function RawEvidence({
       {evidence.ar.year365 && (
         <div className="text-text-dim text-meta mt-2 font-mono">
           365-day anchor: block <BlockLink number={evidence.ar.year365.anchorBlockNumber} /> · chain
-          time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+          time <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
           {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
           {formatDurationMs(
             exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')

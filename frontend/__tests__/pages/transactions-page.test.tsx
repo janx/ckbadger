@@ -1,4 +1,5 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -7,6 +8,7 @@ import { ROW_SEAL } from '@/components/ui/row-seal';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '@/__tests__/utils/test-utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
@@ -24,8 +26,6 @@ vi.mock('@/lib/api', async () => ({
     getDailyActivityStats: vi.fn(),
     getTxStats: vi.fn(),
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -199,16 +199,17 @@ describe('Transactions pool view', () => {
     expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(1230).toBeLessThanOrEqual(1232);
-    // "0x" and 10 digits, the ellipsis, 6 digits: 21 characters of JetBrains Mono at 13 px (7.8)
+    // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
+    // characters of JetBrains Mono at 13 px (7.8; it was 21, 12 + 6 with three dots)
     const shown = within(table).getByTitle(`0x${'ab'.repeat(32)}`);
-    expect(shown).toHaveTextContent(/^0xababababab\.\.\.ababab$/);
+    expect(shown).toHaveTextContent(/^0xabababab…ababab$/);
     const chars = shown.textContent!.length;
-    expect(chars).toBe(21);
-    // the stone, the hash and the 16 px gap fit the 237 px; one more character would not
+    expect(chars).toBe(17);
+    // the stone, the hash and the 16 px gap fit the 237 px with 31.9 px to spare; the column keeps
+    // its 237 so both of the page's lists change form at the same width
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(236.3, 6);
-    expect(used).toBeLessThanOrEqual(237);
-    expect(used + 7.8).toBeGreaterThan(237);
+    expect(used).toBeCloseTo(205.1, 6);
+    expect(237 - used).toBeCloseTo(31.9, 6);
   });
 
   // Old issue C, round 2: at 1,200 px the pool's columns lived on the 32 px the 1,232 px container
@@ -279,7 +280,7 @@ describe('Transactions pool view', () => {
     expect(word).toBe('Confirming'.length);
     const now = Date.now();
     const waits = [59.5, 59 * 60 + 30, 23 * 3600 + 1800, 99 * 86400 + 43200].map((s) =>
-      formatTimeAgo(new Date(now - s * 1000))
+      formatTimeAgo(new Date(now - s * 1000), now)
     );
     expect(waits).toEqual(['59s ago', '59m ago', '23h ago', '99d ago']);
     const wait = Math.max(...waits.map((w) => `· ${w}`.length));
@@ -353,9 +354,9 @@ describe('Transactions pool view', () => {
         name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
       });
       expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
-      // the table's hash is 12 + 6, the phone row's 10 + 6
+      // U-09 (re-pinned): the table's hash at the row size, the phone row's at the tight size
       expect(within(shown).getByTitle(`0x${'ab'.repeat(32)}`)).toHaveTextContent(
-        form === 'table' ? /^0xababababab\.\.\.ababab$/ : /^0xabababab\.\.\.ababab$/
+        form === 'table' ? /^0xabababab…ababab$/ : /^0xabab…abab$/
       );
       unmount();
       vi.unstubAllGlobals();
@@ -444,8 +445,43 @@ describe('Transactions pool view', () => {
       expect(phoneSeal).not.toHaveClass('-my-[3px]');
       expectBefore(phoneSeal, within(card).getByTitle(ids[i].hash));
     });
-    expect(cards[1]).toHaveTextContent('0 → 1 cells');
+    expect(cards[1]).toHaveTextContent('0 → 1 cell');
   });
+  // Lane E4: the pool banner's "newest seen" age, its time's hover, reads the page's one clock, so
+  // it moves with no data change; it was written once at render. The clock stops with the page.
+  it('moves the age in the newest-seen time’s title with no data change (E4)', async () => {
+    vi.useFakeTimers({ now: T0 });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      summary: { ...emptyPool.summary, newestSeenAt: String(T0 - 20_000) },
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+    });
+    const { unmount } = render(<TransactionsPage />);
+    const seen = () =>
+      within(screen.getByTestId('pool-banner'))
+        .getByText(formatUtc8DateTime(T0 - 20_000))
+        .getAttribute('title');
+    await loadUnderStillClock(() => screen.queryByTestId('pool-banner') !== null);
+    expect(seen()).toBe('20s ago');
+    tick(1000);
+    expect(seen()).toBe('21s ago');
+    tick(38_000);
+    expect(seen()).toBe('59s ago');
+    tick(1000);
+    expect(seen()).toBe('1m ago');
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
@@ -520,8 +556,8 @@ describe('Transactions pool view', () => {
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
       expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
       expect(hash).not.toHaveClass('text-small');
-      // the table's 21 characters (old issue C: see the width budget above)
-      expect(hash).toHaveTextContent(/^0xababababab\.\.\.ababab$/);
+      // the table's 17 characters, the row size (U-09: see the width budget above)
+      expect(hash).toHaveTextContent(/^0xabababab…ababab$/);
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);
     }
@@ -574,7 +610,7 @@ describe('Transactions pool view', () => {
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '0xabababab...ababab', expect.stringMatching(/^Proposed· .+ ago$/)],
+      ['identity', '0xabab…abab', expect.stringMatching(/^Proposed· .+ ago$/)],
       [
         'what',
         'Interpretation unavailablepartial: an input is not yet resolvable',
@@ -583,7 +619,7 @@ describe('Transactions pool view', () => {
       [
         'figures',
         'fee 0.00012345 CKB',
-        '54,623 shannon/KB · 2 → 3 cells · 226 B · 1,709,221 cycles',
+        '54,623 shannon/KB · 2 → 3\u00a0cells · 226 B · 1,709,221 cycles',
       ],
     ]);
   });
@@ -875,5 +911,25 @@ describe('Transactions kind in the URL (D11)', () => {
         activityType: 'object',
       })
     );
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('TransactionsPage while its read is paused', () => {
+  it('says it is loading, not nothing; a real empty answer still says so once back online', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { resume } = renderPaused(<TransactionsPage />);
+    expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('No transactions.')).toBeNull();
+    resume();
+    expect(await screen.findByText('No transactions.')).toBeInTheDocument();
+    expect(screen.queryByText('Loading transactions…')).toBeNull();
   });
 });

@@ -29,7 +29,6 @@ function Sq({
       <rect
         width={size}
         height={size}
-        rx={1.5}
         fillOpacity={p.fillOpacity ?? undefined}
         strokeDasharray={p.strokeDasharray ?? undefined}
         style={{ fill: p.fill, stroke: p.stroke ?? 'none' }}
@@ -45,7 +44,6 @@ function Swatch({ fill, stroke = null }: { fill: string; stroke?: string | null 
       <rect
         width={10}
         height={4}
-        rx={2}
         fillOpacity={stroke ? 0.14 : 1}
         style={{ fill, stroke: stroke ?? 'none' }}
       />
@@ -78,7 +76,7 @@ export function PipelineLegend() {
     >
       <Key>
         <svg width={9} height={9} viewBox="0 0 9 9" aria-hidden>
-          <rect x={0.5} y={0.5} width={8} height={8} rx={1.5} style={{ fill: tok('ink') }} />
+          <rect x={0.5} y={0.5} width={8} height={8} style={{ fill: tok('ink') }} />
         </svg>
         tx
       </Key>

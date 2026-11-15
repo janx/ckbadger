@@ -1711,3 +1711,254 @@ async fn token_detail_with_fields_but_no_source_is_a_500() {
         "{json}"
     );
 }
+
+// ── U-15 / A4b (UI review 2026-11-14): a token party's lock code hash ──────
+//
+// The token page wrote "Lock kind unavailable" for an issuer, holder or
+// supply-event party whose lock the scripts registry does not name: those
+// answers carried `lockKind` but not the lock's code hash, so the page had
+// nothing to name the lock by. Each now carries `lockCodeHash`, as the
+// collection holders do; null only when the lock script is not indexed (and
+// then so is the address).
+
+#[tokio::test]
+async fn token_issuer_carries_its_lock_code_hash() {
+    let store = test_store();
+    let named = [0x44u8; 32];
+    let unnamed = [0x55u8; 32];
+    let not_indexed = [0x66u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    // Plain xUDT: the 32-byte args are the owner lock hash the script proves.
+    for owner in [named, unnamed, not_indexed] {
+        let mut token = placeholder_token_without_metadata();
+        token.type_args = owner.to_vec();
+        store.put_token_direct(&[owner[0] + 1; 32], &token).unwrap();
+    }
+
+    let (status, json) = token_detail(store.clone(), &[0x45; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["issuer"]["lockHash"],
+        format!("0x{}", hex::encode(named))
+    );
+    assert_eq!(
+        json["issuer"]["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH,
+        "{json}"
+    );
+    assert_eq!(json["issuer"]["lockKind"], "SECP256K1/blake160", "{json}");
+
+    let (status, json) = token_detail(store.clone(), &[0x56; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["issuer"]["lockCodeHash"],
+        unregistered_lock_code_hash_hex(),
+        "an unregistered lock is named by its code hash: {json}"
+    );
+    assert!(json["issuer"]["lockKind"].is_null(), "{json}");
+
+    let (status, json) = token_detail(store, &[0x67; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let issuer = json["issuer"].as_object().unwrap();
+    assert!(issuer.contains_key("lockCodeHash"), "{json}");
+    assert!(issuer["lockCodeHash"].is_null(), "{json}");
+    assert!(issuer["address"].is_null(), "{json}");
+    assert!(issuer["lockKind"].is_null(), "{json}");
+}
+
+#[tokio::test]
+async fn token_holders_carry_each_lock_code_hash() {
+    let store = test_store();
+    let type_hash = vec![0x7F; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+    let named = [0x44u8; 32];
+    let unnamed = [0x55u8; 32];
+    let not_indexed = [0x66u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, balance) in [(named, 900u128), (unnamed, 500), (not_indexed, 100)] {
+        batch.put_token_holder(&type_hash, &lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, &lock_hash, balance);
+        batch.put_addr_token_by_balance(&lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/tokens/0x{}/holders?limit=10", hex::encode(&type_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{json}");
+    assert_eq!(
+        rows[0]["lockScriptHash"],
+        format!("0x{}", hex::encode(named))
+    );
+    assert_eq!(rows[0]["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(rows[0]["lockKind"], "SECP256K1/blake160", "{json}");
+    assert_eq!(
+        rows[1]["lockScriptHash"],
+        format!("0x{}", hex::encode(unnamed))
+    );
+    assert_eq!(
+        rows[1]["lockCodeHash"],
+        unregistered_lock_code_hash_hex(),
+        "an unregistered lock is named by its code hash: {json}"
+    );
+    assert!(rows[1]["lockKind"].is_null(), "{json}");
+    assert_eq!(
+        rows[2]["lockScriptHash"],
+        format!("0x{}", hex::encode(not_indexed))
+    );
+    let not_indexed_row = rows[2].as_object().unwrap();
+    assert!(not_indexed_row.contains_key("lockCodeHash"), "{json}");
+    assert!(not_indexed_row["lockCodeHash"].is_null(), "{json}");
+    assert!(not_indexed_row["address"].is_null(), "{json}");
+}
+
+// ── A4b review: a party whose lock has no address form ──────────────────────
+//
+// Lock args are unbounded on chain; an RFC-0021 full address is not (bech32m
+// stops at 1023 characters, about 599 bytes of args). Such a lock is a valid
+// owner the API names by its lock hash, code hash and kind, with a null
+// address — never a 500 that leaves a token's holder list unreadable past it.
+
+#[tokio::test]
+async fn token_holders_page_through_a_holder_whose_lock_has_no_address_form() {
+    let store = test_store();
+    let type_hash = vec![0x7D; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+    let named = [0x44u8; 32];
+    let unaddressable = [0x88u8; 32];
+    let unnamed = [0x55u8; 32];
+    seed_named_and_unnamed_locks(&store, &named, &unnamed);
+    seed_unaddressable_lock(&store, &unaddressable);
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, balance) in [(named, 900u128), (unaddressable, 500), (unnamed, 100)] {
+        batch.put_token_holder(&type_hash, &lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, &lock_hash, balance);
+        batch.put_addr_token_by_balance(&lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let path = format!("/tokens/0x{}/holders?limit=1", hex::encode(&type_hash));
+
+    let (status, first) = get_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+    let (status, second) = get_json(&app, &format!("{path}&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let holder = &second["data"][0];
+    assert_eq!(
+        holder["lockScriptHash"],
+        format!("0x{}", hex::encode(unaddressable))
+    );
+    assert!(holder["address"].is_null(), "{second}");
+    assert_eq!(holder["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{second}");
+    assert_eq!(holder["lockKind"], "SECP256K1/blake160", "{second}");
+    // The holder after it is reachable.
+    let cursor = second["nextCursor"].as_str().unwrap().to_string();
+    let (status, third) = get_json(&app, &format!("{path}&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{third}");
+    assert_eq!(
+        third["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(unnamed))
+    );
+}
+
+#[tokio::test]
+async fn token_issuer_whose_lock_has_no_address_form_is_named_by_its_lock() {
+    let store = test_store();
+    let owner = [0x88u8; 32];
+    seed_unaddressable_lock(&store, &owner);
+    let mut token = placeholder_token_without_metadata();
+    token.type_args = owner.to_vec();
+    store.put_token_direct(&[0x89; 32], &token).unwrap();
+
+    let (status, json) = token_detail(store, &[0x89; 32]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let issuer = &json["issuer"];
+    assert_eq!(issuer["lockHash"], format!("0x{}", hex::encode(owner)));
+    assert!(issuer["address"].is_null(), "{json}");
+    assert_eq!(issuer["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(issuer["lockKind"], "SECP256K1/blake160", "{json}");
+}
+
+/// The token transfers and activities resolve their parties through the same
+/// resolver: a lock with no address form is a null address (as before, when
+/// every encoder failure was dropped), and a stored script that is not a CKB
+/// script (hash_type 9) is no longer dropped as if it had no address — it is
+/// an error naming the lock.
+#[tokio::test]
+async fn token_transfers_tell_a_lock_with_no_address_form_from_a_corrupt_one() {
+    let transfer_from = |from: [u8; 32]| {
+        let store = test_store();
+        let type_hash = [0x7B; 32];
+        let mut token = placeholder_token_without_metadata();
+        token.transfers_count = 1;
+        store.put_token_direct(&type_hash, &token).unwrap();
+        seed_unaddressable_lock(&store, &[0x88; 32]);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_lock_script(
+            &[0x99; 32],
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: vec![0x9b; 32],
+                hash_type: 9,
+                args: vec![0x11; 20],
+            },
+        );
+        batch.put_tx_hash_map(&[0xCC; 32], 100, 3);
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &ckbadger_store::types::TokenTransferRecord {
+                tx_hash: vec![0xCC; 32],
+                block_number: 100,
+                from_lock_hash: Some(from.to_vec()),
+                to_lock_hash: vec![0xB1; 32],
+                amount: 5,
+                is_mint: false,
+                is_burn: false,
+                timestamp: 1_700_000_000_000,
+            },
+        );
+        batch.commit().unwrap();
+        (store, format!("0x{}", hex::encode(type_hash)))
+    };
+
+    let (store, token) = transfer_from([0x88; 32]);
+    let app = create_router(test_config(store)).await;
+    for path in ["transfers", "activities"] {
+        let (status, json) = get_json(&app, &format!("/tokens/{token}/{path}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        let row = if path == "transfers" {
+            &json["data"][0]
+        } else {
+            &json["data"][0]["transfers"][0]
+        };
+        assert_eq!(
+            row["fromLockHash"],
+            format!("0x{}", "88".repeat(32)),
+            "{path}: {json}"
+        );
+        assert!(row["fromAddress"].is_null(), "{path}: {json}");
+    }
+
+    let (store, token) = transfer_from([0x99; 32]);
+    let app = create_router(test_config(store)).await;
+    for path in ["transfers", "activities"] {
+        let (status, json) = get_json(&app, &format!("/tokens/{token}/{path}")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains(&"99".repeat(32)) && message.contains("Unknown hash_type: 9"),
+            "{path}: {json}"
+        );
+    }
+}

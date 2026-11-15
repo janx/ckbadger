@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { TerminalRow } from '@/components/ui/terminal-panel';
 import { RowTag, type RowTagVariant } from '@/components/ui/row-tag';
 import { WIDE_ROW_MIN_WIDTH } from '@/components/ui/list-table';
@@ -17,7 +18,11 @@ import {
   type NetworkPeerSummary,
   type NetworkSessionInitiator,
 } from '@/lib/api';
-import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo } from '@/lib/utils';
+import { countNoun, formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import { ClockText } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 interface PeerFilters {
   state?: NetworkPeerDisplayState;
@@ -72,8 +77,13 @@ function orDash(value: string | null | undefined): string {
   return value != null && value.trim().length > 0 ? value : '—';
 }
 
-function optionalAge(timestamp: number | null): string {
-  return timestamp == null ? '—' : formatTimeAgo(timestamp * 1000);
+/** A crawler time (seconds) as its age, read from the page's one clock (lane E4). */
+function ago(seconds: number): ReactNode {
+  return <ClockText text={(now) => formatTimeAgo(seconds * 1000, now)} />;
+}
+
+function optionalAge(timestamp: number | null): ReactNode {
+  return timestamp == null ? '—' : ago(timestamp);
 }
 
 /**
@@ -139,7 +149,7 @@ function sessionInitiatorLabel(initiator: NetworkSessionInitiator): string {
 
 function ObservationList({ observations }: { observations: NetworkAddressProbeEvidence[] }) {
   if (observations.length === 0) {
-    return <p className="text-text-dim">No address observations recorded</p>;
+    return <p className="text-text-dim">No address observations recorded.</p>;
   }
   return (
     <ul className="space-y-1">
@@ -149,7 +159,7 @@ function ObservationList({ observations }: { observations: NetworkAddressProbeEv
           <span className="text-text-dim">
             {' '}
             · <span>{observationLabel(observation.result)}</span> · {observation.elapsedMs} ms ·
-            observed {formatTimeAgo(observation.observedAt * 1000)}
+            observed {ago(observation.observedAt)}
           </span>
         </li>
       ))}
@@ -171,23 +181,23 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
         </span>
         <span className="text-text-dim">
           Latest positive evidence:{' '}
-          <span className="text-text">{formatTimeAgo(detail.latestPositiveObservedAt * 1000)}</span>
+          <span className="text-text">{ago(detail.latestPositiveObservedAt)}</span>
         </span>
       </div>
 
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised aliases</h4>
         {detail.aliases.length === 0 ? (
-          <p className="text-text-dim">No aliases recorded</p>
+          <p className="text-text-dim">No aliases recorded.</p>
         ) : (
           <ul className="space-y-1">
             {detail.aliases.map((alias) => (
-              <li key={alias.address} className="text-text break-all">
-                {alias.address}{' '}
+              <li key={alias.address} className="text-text">
+                {/* the address alone breaks anywhere; the words after it break between them */}
+                <span className="break-all">{alias.address}</span>{' '}
                 <span className="text-text-dim">
-                  · first advertised {formatTimeAgo(alias.firstAdvertisedAt * 1000)} · last
-                  advertised {formatTimeAgo(alias.lastAdvertisedAt * 1000)} · last verified{' '}
-                  {optionalAge(alias.lastVerifiedAt)}
+                  · first advertised {ago(alias.firstAdvertisedAt)} · last advertised{' '}
+                  {ago(alias.lastAdvertisedAt)} · last verified {optionalAge(alias.lastVerifiedAt)}
                 </span>
               </li>
             ))}
@@ -198,7 +208,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Direct CKB session evidence</h4>
         {detail.directSessions.length === 0 ? (
-          <p className="text-text-dim">No retained direct-session observation</p>
+          <p className="text-text-dim">No retained direct-session observation.</p>
         ) : (
           <ul className="space-y-1">
             {detail.directSessions.map((session) => (
@@ -206,11 +216,12 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 <span className="text-text">{sessionInitiatorLabel(session.initiator)}</span> ·
                 observer{' '}
                 <span className="text-aqua" title={session.observerPeerId}>
-                  {truncateHash(session.observerPeerId)}
+                  <ShortId value={session.observerPeerId} kind="hash" size="row" />
                 </span>{' '}
-                · {session.clientVersion || 'unknown client'} · observed {session.observationCount}{' '}
-                completed round{session.observationCount === 1 ? '' : 's'} · latest{' '}
-                {formatTimeAgo(session.lastObservedAt * 1000)} · session address metadata:{' '}
+                · {session.clientVersion || 'unknown client'} · observed{' '}
+                {session.observationCount.toLocaleString('en-US')} completed{' '}
+                {countNoun(session.observationCount, 'round')} · latest{' '}
+                {ago(session.lastObservedAt)} · session address metadata:{' '}
                 {session.sessionAddresses.length === 0
                   ? 'none reported'
                   : session.sessionAddresses.join(', ')}
@@ -244,7 +255,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <ObservationList observations={detail.lastCompleted.observations} />
         </div>
       ) : (
-        <p className="text-text-dim">No completed probe observation</p>
+        <p className="text-text-dim">No completed probe observation.</p>
       )}
 
       {detail.active && (
@@ -260,7 +271,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <h4 className="text-text-bright mb-1 font-bold">Retained verification</h4>
           <p className="text-text-dim">
             {detail.verified.clientVersion} · last same-network Identify{' '}
-            {formatTimeAgo(detail.verified.lastReachableAt * 1000)} · protocols{' '}
+            {ago(detail.verified.lastReachableAt)} · protocols{' '}
             {detail.verified.protocols.join(', ') || '—'}
           </p>
           <h5 className="text-text-bright mb-1 mt-2 font-bold">Discovery</h5>
@@ -283,7 +294,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised by</h4>
         {detail.advertisers.length === 0 ? (
-          <p className="text-text-dim">No retained advertiser evidence</p>
+          <p className="text-text-dim">No retained advertiser evidence.</p>
         ) : (
           <ul className="space-y-1">
             {detail.advertisers.map((advertiser) => (
@@ -292,13 +303,12 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 className="text-text-dim"
               >
                 <span className="text-aqua" title={advertiser.advertiserPeerId}>
-                  {truncateHash(advertiser.advertiserPeerId)}
+                  <ShortId value={advertiser.advertiserPeerId} kind="hash" size="row" />
                 </span>{' '}
                 · <span className="break-all">{advertiser.alias}</span> · observed{' '}
-                {advertiser.observationCount} completed round
-                {advertiser.observationCount === 1 ? '' : 's'} · first round #
-                {advertiser.firstObservedRound} · latest round #{advertiser.lastObservedRound} ·{' '}
-                {formatTimeAgo(advertiser.lastObservedAt * 1000)}
+                {unitNode(formatCount(advertiser.observationCount, 'completed round'))} · first
+                round #{advertiser.firstObservedRound} · latest round #
+                {advertiser.lastObservedRound} · {ago(advertiser.lastObservedAt)}
               </li>
             ))}
           </ul>
@@ -367,7 +377,7 @@ function peerColumns(peer: NetworkPeerSummary): Array<{
     },
     {
       label: 'Latest evidence',
-      value: formatTimeAgo(peer.latestPositiveObservedAt * 1000),
+      value: ago(peer.latestPositiveObservedAt),
       cell: 'text-text-dim text-small',
     },
     {
@@ -395,7 +405,7 @@ function PeerEvidenceRow({ peerId }: { peerId: string }) {
   });
   return (
     <TerminalRow data-testid="peer-evidence-row">
-      {detail.isLoading ? (
+      {isAwaited(detail) ? (
         <div className="text-text-dim text-small px-4 py-3 font-mono">Loading evidence…</div>
       ) : detail.isError || !detail.data ? (
         <div className="text-negative text-small px-4 py-3 font-mono">
@@ -449,7 +459,7 @@ function PeerRow({
                 {expanded ? '▾' : '▸'}
               </span>
               <span className="text-aqua text-small whitespace-nowrap">
-                {truncateHash(peer.peerId)}
+                <ShortId value={peer.peerId} kind="hash" size="tight" />
               </span>
               {/* As wide as its words (R16), at most the column, cut to fit. */}
               <span
@@ -472,7 +482,7 @@ function PeerRow({
               {/* The id keeps its width (already cut in the middle); the dial state takes what is
                   left of the line and wraps inside its tag only when it must. */}
               <span className="text-aqua text-small whitespace-nowrap">
-                {truncateHash(peer.peerId)}
+                <ShortId value={peer.peerId} kind="hash" size="tight" />
               </span>
               <span className="min-w-0 justify-self-end">
                 <RowTag variant={state.variant} className="whitespace-normal">
@@ -518,7 +528,7 @@ function PeerRow({
             className="text-aqua text-small truncate text-left font-mono hover:underline"
           >
             {expanded ? '▾ ' : '▸ '}
-            <span>{truncateHash(peer.peerId)}</span>
+            <ShortId value={peer.peerId} kind="hash" size="row" />
           </button>
           {columns.slice(1).map((c) => (
             <span key={c.label} className={c.cell} title={c.title}>
@@ -553,11 +563,12 @@ export function PeersTable() {
   // Table-rows T8: a folded peer is one line where the row has the wide phone row's room.
   const oneLine = boxWidth !== null && boxWidth >= WIDE_ROW_MIN_WIDTH;
 
-  const { data, isLoading, isError, isFetching } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'peers', filters, cursor],
     queryFn: () =>
       api.getNetworkPeers({ ...filters, cursor, limit: cursor ? MORE_PEERS : FIRST_PEERS }),
   });
+  const { data, isError, isFetching } = read;
 
   useEffect(() => {
     if (!data) return;
@@ -574,8 +585,9 @@ export function PeersTable() {
     mergedTokenRef.current = null;
   }
 
-  const showSkeleton = isLoading && rows.length === 0;
-  const showEmpty = !isLoading && !isError && rows.length === 0;
+  // awaited, not isLoading: a read paused offline or between retries has not answered "no peers"
+  const showSkeleton = isAwaited(read) && rows.length === 0;
+  const showEmpty = !isAwaited(read) && !isError && rows.length === 0;
   const activeFilters = [
     filters.state,
     filters.observation,
@@ -594,7 +606,7 @@ export function PeersTable() {
           aria-expanded={filtersOpen}
           aria-controls={filtersId}
           onClick={() => setFiltersOpen((open) => !open)}
-          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 rounded border px-2.5 font-mono md:hidden"
+          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 border px-2.5 font-mono md:hidden"
         >
           filters{activeFilters > 0 ? ` · ${activeFilters}` : ''}{' '}
           <span aria-hidden="true" className="text-text-dim">
@@ -603,7 +615,7 @@ export function PeersTable() {
         </button>
       }
     >
-      <div aria-busy={isFetching} ref={boxRef} className="border-base-border-subtle border-y">
+      <div aria-busy={isFetching} ref={boxRef} className="border-row-rule border-y">
         <div>
           <div
             id={filtersId}
@@ -621,7 +633,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by crawler dial state"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             >
               <option value="">All crawler dial states</option>
               {STATE_OPTIONS.map((option) => (
@@ -641,7 +653,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by address observation"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             >
               <option value="">All address observations</option>
               {OBSERVATION_OPTIONS.map((option) => (
@@ -656,9 +668,9 @@ export function PeersTable() {
               onChange={(event) =>
                 applyFilters({ ...filters, country: event.target.value || undefined })
               }
-              placeholder="Country"
+              placeholder="country"
               aria-label="Filter by country"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             />
             <input
               type="text"
@@ -666,16 +678,16 @@ export function PeersTable() {
               onChange={(event) =>
                 applyFilters({ ...filters, version: event.target.value || undefined })
               }
-              placeholder="Version"
+              placeholder="version"
               aria-label="Filter by version"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
             />
           </div>
 
           <div>
             {!folded && (
               <div
-                className="border-base-border bg-base-surface/50 text-text-dim text-small grid items-center gap-x-4 border-b px-4 py-2 font-mono"
+                className="border-row-rule bg-base-surface/50 text-text-dim text-small grid items-center gap-x-4 border-b px-4 py-2 font-mono"
                 style={{ gridTemplateColumns: GRID_TEMPLATE, minWidth: GRID_MIN_PX }}
               >
                 {COLUMNS.map((label, index) => (
@@ -696,7 +708,7 @@ export function PeersTable() {
               </div>
             ) : showEmpty ? (
               <div className="text-text-dim text-body py-12 text-center font-mono">
-                No peers match these evidence filters
+                No peers match these evidence filters.
               </div>
             ) : (
               rows.map((peer) => (
@@ -707,7 +719,7 @@ export function PeersTable() {
         </div>
 
         {data?.nextCursor != null && (
-          <div className="border-base-border-subtle flex justify-center border-t px-4 py-2">
+          <div className="border-row-rule flex justify-center border-t px-4 py-2">
             <button
               type="button"
               onClick={() => setCursor(data.nextCursor ?? undefined)}

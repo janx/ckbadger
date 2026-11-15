@@ -1,4 +1,5 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
@@ -9,14 +10,6 @@ vi.mock('@/lib/api', () => ({
   api: {
     getScripts: vi.fn(),
   },
-  isWarmupPendingError: (error: unknown) =>
-    Boolean(
-      error &&
-      typeof error === 'object' &&
-      (error as { code?: string; status?: number }).code === 'warmup_pending' &&
-      (error as { code?: string; status?: number }).status === 503
-    ),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -105,7 +98,8 @@ describe('ScriptsPage', () => {
 
     render(<ScriptsPage />);
 
-    expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
+    // lowercase, as the header's field (U-01, R2)
+    expect(screen.getByPlaceholderText('search by name or code hash')).toBeInTheDocument();
   });
 
   it('uses server role totals and refetches the filtered family set', async () => {
@@ -215,7 +209,8 @@ describe('ScriptsPage', () => {
   it('routes Unknown script entries to code-hash detail page', async () => {
     const unknownCodeHash = '0x010445a300000000000000000000000000000000000000000000000000000001';
     const unknownScriptRefLabel = 'Unlabeled';
-    const unknownScriptRefDisplay = 'type · 0x010445a3...00000001';
+    // U-09 (re-pinned): the table's reference at the row size
+    const unknownScriptRefDisplay = 'type · 0x010445a3…000001';
     const unknownScriptRefFull = `type ref:${unknownCodeHash}`;
     vi.mocked(api.getScripts).mockResolvedValue({
       data: [
@@ -303,7 +298,7 @@ describe('ScriptsPage', () => {
         'Failed to load the script summary'
       )
     ).toBeInTheDocument();
-    expect(screen.queryByText('No scripts found')).toBeNull();
+    expect(screen.queryByText('No scripts.')).toBeNull();
   });
 
   it('shows warmup message and retries until scripts become available', async () => {
@@ -340,5 +335,19 @@ describe('ScriptsPage', () => {
     });
 
     expect(screen.queryByText(/data is being prepared/i)).toBeNull();
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('ScriptsPage while its read is paused', () => {
+  it('says it is loading, not "No scripts.", then lists the scripts once back online', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+    const { resume } = renderPaused(<ScriptsPage />);
+    expect(await screen.findByText('Loading scripts…')).toBeInTheDocument();
+    expect(screen.queryByText('No scripts.')).toBeNull();
+    resume();
+    expect((await screen.findAllByText('SECP256K1_BLAKE160')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Loading scripts…')).toBeNull();
   });
 });

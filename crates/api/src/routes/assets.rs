@@ -23,10 +23,12 @@ use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
+use crate::utils::hash::parse_fixed_hex;
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, parse_asset_id_max32, parse_block_tx_cursor,
-    parse_chart_date_range, resolve_collection_standard,
+    parse_chart_date_range, parse_hash32, resolve_collection_standard,
     resolve_object_collection_composition_tier_override, resolve_object_collection_name,
+    HASH32_LEN,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
@@ -155,6 +157,11 @@ pub(super) fn get_collection_aggregate(
             activities: CollectionActivityCount::Persisted(agg.activities_count),
             aggregate: agg.into(),
         }));
+    }
+    // A Spore cluster (and Sole Spores) is named by 32 bytes; an id of an
+    // m-NFT class's width that names no class names nothing.
+    if collection_id.len() != HASH32_LEN {
+        return Ok(None);
     }
     let Some((entry, cluster)) = super::spore::resolve_cluster(store, collection_id)? else {
         return Ok(None);
@@ -562,7 +569,8 @@ pub struct CollectionHolderResponse {
 /// A holder's or object owner's lock as one row shows it: its address, its
 /// code hash and the scripts registry's name for that code hash.
 pub(super) struct OwnerLock {
-    pub(super) address: String,
+    /// `None` when the lock has no address form (`encode_lock_address`).
+    pub(super) address: Option<String>,
     pub(super) lock_code_hash: String,
     pub(super) lock_kind: Option<String>,
 }
@@ -617,7 +625,7 @@ pub(super) fn holder_row(
     Ok(CollectionHolderResponse {
         lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
         owner_hash_prefix: None,
-        address: owner.as_ref().map(|owner| owner.address.clone()),
+        address: owner.as_ref().and_then(|owner| owner.address.clone()),
         lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
         lock_kind: owner.and_then(|owner| owner.lock_kind),
         item_count,
@@ -639,7 +647,7 @@ pub(super) fn lock_address(
                     hex::encode(lock_hash)
                 ))
             })?
-            .map(|resolved| resolved.address),
+            .and_then(|resolved| resolved.address),
     )
 }
 
@@ -1279,13 +1287,47 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
     format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
 }
 
-pub(super) fn decode_object_collection_id(
-    raw: &str,
-) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
+/// An m-NFT class id: the issuer's 20 bytes and the class index's 4.
+const MNFT_CLASS_ID_LEN: usize = 24;
+/// An m-NFT token id is its type args: issuer (20), class index (4) and token
+/// index (4) at least, never wider than the 32-byte key window.
+const MNFT_TOKEN_ID_MIN_LEN: usize = 28;
+const OBJECT_COLLECTION_ID_FIELD: &str =
+    "object collection ID (expected a 32-byte cluster or identity collection ID, or a 24-byte m-NFT class ID)";
+
+/// An object collection is named by an identity alias, a 24-byte m-NFT class
+/// id, or a 32-byte id (a Spore cluster, Sole Spores, an identity sentinel).
+/// Any other id is not a collection's, and is refused here with the parser the
+/// Spore cluster routes use: read further, a shorter id is a key prefix of
+/// other collections' rows (`0x00` once counted the members of every cluster
+/// whose id starts with that byte, and answered 500).
+pub(super) fn decode_object_collection_id(raw: &str) -> Result<Vec<u8>, ApiRouteError> {
     if let Some(standard) = identity_alias(raw) {
         return Ok(identity_sentinel_for(standard).to_vec());
     }
-    parse_asset_id_max32(raw, "object collection ID")
+    if raw.strip_prefix("0x").unwrap_or(raw).len() == MNFT_CLASS_ID_LEN * 2 {
+        return parse_fixed_hex::<MNFT_CLASS_ID_LEN>(
+            raw,
+            OBJECT_COLLECTION_ID_FIELD,
+            "m-NFT class ID",
+        )
+        .map(Vec::from);
+    }
+    parse_hash32(raw, OBJECT_COLLECTION_ID_FIELD)
+}
+
+/// The m-NFT item routes' id: an m-NFT token's, at least 28 bytes. A shorter
+/// id names no token; read as a right-padded key it could only alias another.
+pub(super) fn decode_mnft_token_id(raw: &str) -> Result<Vec<u8>, ApiRouteError> {
+    const FIELD: &str = "m-NFT token ID";
+    let id = parse_asset_id_max32(raw, FIELD)?;
+    if id.len() < MNFT_TOKEN_ID_MIN_LEN {
+        return Err(ApiError::bad_request(format!(
+            "Invalid {FIELD}: expected {MNFT_TOKEN_ID_MIN_LEN}..={HASH32_LEN} bytes of hex (issuer, class and token index), got {} bytes",
+            id.len()
+        )));
+    }
+    Ok(id)
 }
 
 pub(crate) fn decode_object_item_cursor(
@@ -1876,7 +1918,7 @@ async fn get_object_item_detail(
     State(state): State<Arc<AppState>>,
     Path(object_id): Path<String>,
 ) -> ApiResult<MnftItemDetailResponse> {
-    let object_id_bytes = decode_item_id(&object_id)?;
+    let object_id_bytes = decode_mnft_token_id(&object_id)?;
     let entry = state
         .store
         .get_mnft(&object_id_bytes)
@@ -2053,7 +2095,7 @@ async fn get_object_item_detail(
             .transpose()
             .map_err(|e| ApiError::internal(e.to_string()))?
             .flatten()
-            .map(|resolved| resolved.address),
+            .and_then(|resolved| resolved.address),
         nft_id: format!("0x{}", hex::encode(&object_id_bytes)),
         standard: "m-nft".to_string(),
         is_live: entry.is_live,
@@ -2155,13 +2197,21 @@ pub(crate) fn mnft_class_cell_of_tx(
         "class outpoint index row disagrees with its cell's type args: {} output={output_index}",
         context()
     );
+    // The answer's `address` is not nullable: a class cell whose lock has no
+    // address form is still refused here (A4b review: listed, not reshaped).
     let address = crate::utils::address::encode_lock_address(
         &cell.lock_script_hash(),
         &cell.lock_code_hash,
         cell.lock_hash_type,
         &cell.lock_args,
         &state.ckb_network,
-    )?;
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "class cell lock has no address form (its args are longer than an address can carry): {} output={output_index}",
+            context()
+        )
+    })?;
     Ok(Some(MnftClassCellRef {
         output_index,
         lock_hash: format!("0x{}", hex::encode(cell.lock_script_hash())),
@@ -2796,7 +2846,7 @@ async fn list_mnft_item_activities(
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
-    let object_id_bytes = decode_item_id(&object_id)?;
+    let object_id_bytes = decode_mnft_token_id(&object_id)?;
     // Validated before the existence lookup: request shape is a boundary
     // concern, so whether a malformed cursor is reported must not depend on
     // whether the item happens to exist.

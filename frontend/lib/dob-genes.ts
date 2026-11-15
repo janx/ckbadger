@@ -3,8 +3,11 @@
 // gene). Everything here reads the API's pattern, byte map and trait counts; nothing is guessed.
 import type { CollectionInsights, CurrentPattern, GeneDefinition, ObjectGenetics } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
+import { parseBtcfsUri, type BtcfsInscription } from '@/lib/btcfs';
+import { ELLIPSIS, SHORT_FORMS, shortenHash } from '@/lib/shorten';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { stepGenes } from '@/lib/dob-declared';
+import { formatCount } from '@/lib/format-count';
 
 export interface DnaTrait {
   name: string;
@@ -38,11 +41,82 @@ const CONTROL = /[\u0000-\u001f\u007f]/g;
 const MEDIA_VALUE = /^(?:btcfs|ipfs|ipns|ar|https?|data):/i;
 const SVG_VALUE = /^\s*<svg[\s>]/i;
 
-/** A trait value for people: control bytes dropped, empty named, pointers and markup described. */
+/**
+ * A `btcfs://<txid>i<n>` value as its inscription: the Bitcoin txid at the tight size and its index
+ * (U-09: a trait value stands in a chip, a gel label, a gene cell or a pattern line); null when the
+ * value is not one.
+ */
+export function inscriptionText(value: string): string | null {
+  const inscription = parseBtcfsUri(value.replace(CONTROL, '').trim());
+  return inscription && `${shortenHash(inscription.txid, 'tight')}i${inscription.index}`;
+}
+
+/**
+ * The inscription id inscriptionText writes, found in trait text: the txid's tight form (6…4 hex,
+ * lib/shorten.ts) and `i<index>`, standing alone (no letter or digit on either side). The index is
+ * bounded to six digits, so a unit is at most 18 characters: 129.6 px at 12 px, inside the 142 px
+ * the narrowest trait line gets (the object genes' dd at 360). Text that only looks like it, a
+ * longer hex run or a third-party string, is not matched and breaks as text does.
+ */
+const INSCRIPTION_ID = new RegExp(
+  `(?<![0-9A-Za-z])[0-9a-f]{${SHORT_FORMS.tight.hash.head}}${ELLIPSIS}` +
+    `[0-9a-f]{${SHORT_FORMS.tight.hash.tail}}i\\d{1,6}(?![0-9A-Za-z])`,
+  'g'
+);
+
+/** One part of trait text: words that wrap as text does, or a shortened id that is one unit. */
+export interface TraitTextPart {
+  text: string;
+  unit: boolean;
+}
+
+/**
+ * Trait text (a trait value, or a sentence built from trait values) in its parts: each shortened
+ * inscription id a unit, the text around it as it is (B3 round 2: UAX #14 allows a line break after
+ * the ellipsis, so "inscription 020172…cb69i0" broke as "inscription 020172…" / "cb69i0" on a phone). The parts
+ * join to the text exactly: nothing is added, the unit is made where the text is rendered.
+ */
+export function traitTextParts(text: string): TraitTextPart[] {
+  const parts: TraitTextPart[] = [];
+  let at = 0;
+  for (const m of text.matchAll(INSCRIPTION_ID)) {
+    if (m.index > at) parts.push({ text: text.slice(at, m.index), unit: false });
+    parts.push({ text: m[0], unit: true });
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), unit: false });
+  return parts;
+}
+
+/**
+ * A value that is two or more btcfs URIs joined by `;`, every one an inscription: its inscriptions
+ * (a pattern's option may list the inscriptions an object can point at); null when it is not such a
+ * list, one element that is not an inscription making it plain text. The one place that decides
+ * what such a list is: traitDisplay counts it, the media box reads each (B3 round 4).
+ */
+export function inscriptionList(value: string): BtcfsInscription[] | null {
+  const parts = value.split(';').map((part) => parseBtcfsUri(part.trim()));
+  if (parts.length < 2) return null;
+  return parts.every((part) => part !== null) ? (parts as BtcfsInscription[]) : null;
+}
+
+/**
+ * A trait value for people: control bytes dropped, empty named, pointers and markup described. An
+ * inscription is "inscription <txid>i<n>" (an inscription is Bitcoin's by definition, and the page
+ * says beside the picture where the image lives): 25 characters, inside the sequencing gel's
+ * 27-character value budget (the review's item B); a `;`-list of inscriptions is how many, through
+ * the count rule ("5 inscriptions", the lead's Chrome finding of 2026-11-15: five of them, 374
+ * characters with no break, overflowed two pages). Anything else, a btcfs text that is not an
+ * inscription, an https or ipfs URL included, is shown as it is, and every place that prints a
+ * trait value lets it break anywhere (`__tests__/lib/trait-values.test.tsx`).
+ */
 export function traitDisplay(value: string): string {
   const v = value.replace(CONTROL, '').trim();
   if (!v) return 'empty';
-  if (/^btcfs:\/\//i.test(v)) return `Bitcoin inscription …${v.slice(-6)}`;
+  const inscription = inscriptionText(v);
+  if (inscription) return `inscription ${inscription}`;
+  const inscriptions = inscriptionList(v);
+  if (inscriptions !== null) return formatCount(inscriptions.length, 'inscription');
   if (SVG_VALUE.test(v)) return `SVG image · ${value.length.toLocaleString('en-US')} characters`;
   return v;
 }

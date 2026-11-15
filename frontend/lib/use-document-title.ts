@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { shortenAddress, shortenHash } from '@/lib/shorten';
 
 /** The site's name, last in every page's `<title>` (consistency plan C1). */
 export const SITE_TITLE = 'CKBadger';
@@ -13,8 +14,8 @@ export function formatDocumentTitle(parts: readonly string[]): string {
 
 /**
  * Names the page in the browser tab while it is mounted and puts the previous title back on
- * unmount. The four shared headers call it (`DetailLayout`, `AssetDetailShell`, `TopicHero`,
- * `PageHeader`); a page without one of them calls it directly.
+ * unmount. The three shared headers call it (`DetailLayout`, `AssetDetailShell`, `TopicHero`); a
+ * page without one of them calls it directly.
  */
 export function useDocumentTitle(parts: readonly string[]): void {
   const title = formatDocumentTitle(parts);
@@ -37,17 +38,17 @@ export function DocumentTitle({ parts }: { parts: readonly string[] }): null {
   return null;
 }
 
-/** A hash as a tab names it (C1): `0xdcd1…334d`, the first 4 and last 4 hex digits. */
+/** A hash as a tab names it (C1): `0xdcd1…334d`, the tight size (U-09: a tab is narrow). */
 export function titleHash(hash: string): string {
   if (!/^0x[0-9a-f]{9,}$/i.test(hash)) throw new Error(`titleHash: not a hash: ${hash}`);
-  return `${hash.slice(0, 6)}…${hash.slice(-4)}`;
+  return shortenHash(hash, 'tight');
 }
 
-/** An address as a tab names it (C1): `ckb1qzda…hprdnn`, the first 8 and last 6 characters. */
+/** An address as a tab names it (C1): `ckb1…hprdnn`, the tight size. */
 export function titleAddress(address: string): string {
   if (!/^ck[bt]1[0-9a-z]{14,}$/.test(address))
     throw new Error(`titleAddress: not a CKB address: ${address}`);
-  return `${address.slice(0, 8)}…${address.slice(-6)}`;
+  return shortenAddress(address, 'tight');
 }
 
 /**

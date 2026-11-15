@@ -1,17 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { server } from '@/__tests__/msw/server';
 import { feedSamples, latestActivities } from '@/__tests__/msw/fixtures/home';
 import { MINUS } from '@/lib/chart-ticks';
-import { ActivityFeed, FEED_ROWS, formatOccupiedDelta } from '@/components/home/activity-feed';
+import { ActivityFeed, FEED_ROWS } from '@/components/home/activity-feed';
+import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction } from '@/lib/api';
-import { formatUtc8Date } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
+import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 
 const API = '/api/:network/v1';
 
@@ -50,8 +52,17 @@ function serveTransactions(txs: Transaction[]) {
 const rows = () => screen.getByTestId('feed-rows').querySelectorAll('[data-feed-row]');
 
 describe('ActivityFeed', () => {
-  beforeEach(() => usePipelineHoverStore.getState().clear());
-  afterEach(() => usePipelineHoverStore.getState().clear());
+  // The clock stands still in every test (Date only; timers stay real): a row's age and the
+  // expectation computed from the same timestamp read one time, so a second ticking over between
+  // render and assertion cannot change one and not the other (the lead's addendum 3)
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    usePipelineHoverStore.getState().clear();
+  });
+  afterEach(() => {
+    usePipelineHoverStore.getState().clear();
+    vi.useRealTimers();
+  });
 
   it('opens on Latest activity with real tab buttons and a view all link', async () => {
     render(<ActivityFeed />);
@@ -65,7 +76,11 @@ describe('ActivityFeed', () => {
     expect(activity).toHaveClass('text-body');
     expect(activity).not.toHaveClass('sm:text-section');
     expect(transactions).toHaveClass('whitespace-nowrap');
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveClass('whitespace-nowrap');
+    // re-pinned (A4 Chrome sweep): the phrase may break; only its arrow is held to its last word
+    const viewAll = screen.getByRole('link', { name: 'view all →' });
+    expect(viewAll).not.toHaveClass('whitespace-nowrap');
+    expect(viewAll.lastElementChild).toHaveClass('whitespace-nowrap');
+    expect(viewAll.lastElementChild!.textContent).toBe(' →');
     expect(transactions).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
       'href',
@@ -100,7 +115,8 @@ describe('ActivityFeed', () => {
     expect(headRow).toHaveClass(ACTIVITY_HEAD_CLASS);
     expect(headRow).toContainElement(heading);
     expect(tabRow).toContainElement(screen.getByRole('group', { name: 'Feed' }));
-    expect(tabRow).toHaveClass('border-b', 'border-base-border-subtle');
+    // the rule under the tabs is a row rule (R5, re-pinned on purpose: it was the hair)
+    expect(tabRow).toHaveClass('border-b', 'border-row-rule');
     expect(within(tabRow).queryByRole('link')).toBeNull();
     // the note follows the tab; the heading stays the feed's
     await user.click(screen.getByRole('button', { name: 'Transactions' }));
@@ -124,9 +140,8 @@ describe('ActivityFeed', () => {
       'href',
       '/mainnet/blocks/20819142'
     );
-    // T7 (option A): the headline links to the tx, the hash is the row's hover. Consistency C3:
-    // block · the absolute UTC+8 date on the right (was block · age); the age joins the hash in
-    // the row's hover.
+    // T7 (option A): the headline links to the tx, the hash is the row's hover, the age beside it
+    // (consistency C3); this feed is live, so its row ends block · age (PA-22; C3 had the date).
     expect(within(first).getByRole('link', { name: 'Script call' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
@@ -136,10 +151,10 @@ describe('ActivityFeed', () => {
       expect.stringMatching(new RegExp(`^${a.txHash} · \\d+s ago$`))
     );
     expect(evidence).not.toHaveTextContent('0x01ababab');
+    // PA-22 (re-pinned): the home feed is live, its row says its age (it was the date)
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#20,819,142 · ${formatUtc8Date(a.timestamp)}$`)
+      new RegExp(`^#20,819,142 · ${formatTimeAgo(a.timestamp, Date.now())}$`)
     );
-    expect(evidence).not.toHaveTextContent('ago');
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
@@ -151,7 +166,8 @@ describe('ActivityFeed', () => {
     // T7 (option A): the type names follow the headline on its line; each call with its args
     // is the name's hover.
     const type = first.querySelector('[data-role="row-head"] [data-role="detail"]') as HTMLElement;
-    expect(type).toHaveTextContent(/^\.bit Time Index State · \.bit Time Info$/);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(type).toHaveTextContent(/^· \.bit Time Index State · \.bit Time Info$/);
     expect(first).not.toHaveTextContent(/type calls/);
     // A line breaks between calls, never inside one.
     const call = within(type).getByRole('link', { name: '.bit Time Info' });
@@ -255,7 +271,7 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Fiber · Channel Close')).toBeInTheDocument();
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      'channel 0x0d3870bb...6e26:0 · 750.00000000 CKB'
+      'channel 0x0d3870bb…006e26:0 · 750.00000000 CKB'
     );
     expect(
       [
@@ -274,13 +290,14 @@ describe('ActivityFeed', () => {
     expect(within(row).getByText('Object transfer')).toBeInTheDocument();
     const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
     // T7: the calls by name, inline after the headline; the args are each name's hover.
-    expect(details).toEqual(['CKBFS', 'lock Nervape Shadow Lock']);
+    // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
     expect(within(row).getByRole('link', { name: 'CKBFS' })).toHaveAttribute(
       'title',
       `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
     );
-    expect(row).toHaveTextContent('object 0x51c75a...96f2 departed');
-    expect(row).toHaveTextContent('object 0x51c75a...96f2 arrived');
+    expect(row).toHaveTextContent('object 0x51c75a00…0096f2 departed');
+    expect(row).toHaveTextContent('object 0x51c75a00…0096f2 arrived');
     // A party with no item change is still listed.
     expect(row.querySelectorAll('[data-party]')).toHaveLength(3);
   });
@@ -294,10 +311,10 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Token transfer')).toBeInTheDocument();
     // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
-    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede...e09f');
-    expect(within(row).getByRole('link', { name: '0xab0ede...e09f' })).toHaveAttribute(
+    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede00…00e09f');
+    expect(within(row).getByRole('link', { name: '0xab0ede00…00e09f' })).toHaveAttribute(
       'title',
-      `0xab0ede...e09f(0x4b0000${'00'.repeat(14)}838e)`
+      `0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
     );
     expect(
       within(row).getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })
@@ -359,7 +376,9 @@ describe('ActivityFeed', () => {
 
   it('switches to Transactions: the old latest-transactions rows, View all pointing there', async () => {
     const user = userEvent.setup();
-    serveTransactions(Array.from({ length: 10 }, (_, i) => tx(i)));
+    // the rows served, kept: tx() stamps Date.now(), so a second call can be a second later
+    const served = Array.from({ length: 10 }, (_, i) => tx(i));
+    serveTransactions(served);
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
 
@@ -379,21 +398,67 @@ describe('ActivityFeed', () => {
       '/mainnet/blocks/8775638'
     );
     expect(first.querySelector('[data-role="headline"]')).toHaveTextContent('2 inputs → 3 outputs');
-    // The same row grammar: primary info left, the evidence quiet on the right. Consistency C3:
-    // the date closes it (was the age), the age is the date's hover.
+    // The same row grammar: primary info left, the evidence quiet on the right. PA-22
+    // (re-pinned): the age closes it on this live list, the full date-time its hover (it was the
+    // date, consistency C3).
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
     expect(evidence).toHaveTextContent(
-      new RegExp(`^#8,775,638 · 0x0000efef\\.\\.\\.efefef · ${formatUtc8Date(tx(0).timestamp)}$`)
+      new RegExp(
+        `^#8,775,638 · 0x0000efef…efefef · ${formatTimeAgo(served[0].timestamp, Date.now())}$`
+      )
     );
-    expect(within(evidence).getByText(formatUtc8Date(tx(0).timestamp))).toHaveAttribute(
-      'title',
-      expect.stringMatching(/ago$/)
-    );
+    expect(
+      within(evidence).getByText(formatTimeAgo(served[0].timestamp, Date.now()))
+    ).toHaveAttribute('title', formatUtc8DateTime(served[0].timestamp));
     // The row's hover is the activity row's: the hash and the age (was no title).
     expect(first).toHaveAttribute(
       'title',
-      expect.stringMatching(new RegExp(`^${tx(0).hash} · \\d+s ago$`))
+      expect.stringMatching(new RegExp(`^${served[0].hash} · \\d+s ago$`))
     );
+  });
+
+  // Lane E4: a row's hover (the hash and the age) reads the page's one clock, so its age moves with
+  // no data change, on the activity rows and on the transaction rows; it was written once at
+  // render. Only the row's title renders again, and the clock stops with the feed.
+  describe('a row’s hover reads the one clock (E4)', () => {
+    const at = new Date(T0 - 20_000).toISOString();
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ now: T0 });
+    });
+    const shown = () =>
+      Array.from(screen.queryByTestId('feed-rows')?.querySelectorAll('[data-feed-row]') ?? []);
+    const expectTitleTicks = (row: () => Element, hash: string) => {
+      expect(row()).toHaveAttribute('title', `${hash} · 20s ago`);
+      tick(1000);
+      expect(row()).toHaveAttribute('title', `${hash} · 21s ago`);
+      tick(38_000);
+      expect(row()).toHaveAttribute('title', `${hash} · 59s ago`);
+      tick(1000);
+      expect(row()).toHaveAttribute('title', `${hash} · 1m ago`);
+    };
+
+    it('on an activity row', async () => {
+      const activity = { ...feedSamples.tokenTransfer, timestamp: at };
+      server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([activity])));
+      const { unmount } = render(<ActivityFeed />);
+      await loadUnderStillClock(() => shown().length === 1);
+      expectTitleTicks(() => rows()[0], activity.txHash);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('on a transaction row', async () => {
+      const served = { ...tx(0), timestamp: at };
+      serveTransactions([served]);
+      const { unmount } = render(<ActivityFeed />);
+      await loadUnderStillClock(() => shown().length > 0);
+      fireEvent.click(screen.getByRole('button', { name: 'Transactions' }));
+      await loadUnderStillClock(() => shown()[0]?.getAttribute('data-tx-row') === served.hash);
+      expectTitleTicks(() => rows()[0], served.hash);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   it('cross-highlights a transaction row with the pipeline and hovers it back', async () => {

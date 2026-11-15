@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -12,17 +15,20 @@ const FIRST_OBSERVATIONS = 10;
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const [showAll, setShowAll] = useState(false);
   const queryClient = useQueryClient();
-  const { data, isLoading, error } = useQuery({
+  const read = useQuery({
     queryKey: ['network', 'advertisements', roundId],
     queryFn: api.getNetworkAdvertisements,
     refetchInterval: 30000,
   });
+  const { data, error } = read;
   useEffect(() => {
     if (data && data.roundId !== roundId) {
       void queryClient.invalidateQueries({ queryKey: ['network', 'summary'] });
     }
   }, [data, roundId, queryClient]);
-  if (isLoading) return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
+  // awaited, not isLoading: a read paused offline or between retries is still awaited
+  if (isAwaited(read))
+    return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
       <p role="alert" className="text-negative text-small">
@@ -53,7 +59,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
             <div
               role="listitem"
               key={edge.advertiserPeerId + ':' + edge.targetPeerId + ':' + edge.alias}
-              className="border-base-border-subtle flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t py-2.5"
+              className="border-row-rule flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t py-2.5"
             >
               {/* One line (table-rows T8): who, "named", whom — the row's one bright thing — then
                   the address it named. The ids are cut in the middle so both ends stay, whole in
@@ -63,14 +69,14 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
                 title={edge.advertiserPeerId}
                 className="text-text text-small whitespace-nowrap"
               >
-                {truncateHash(edge.advertiserPeerId)}
+                <ShortId value={edge.advertiserPeerId} kind="hash" size="row" />
               </span>
               <span className="text-text-dim text-meta">named</span>
               <span
                 title={edge.targetPeerId}
                 className="text-body text-text-bright whitespace-nowrap leading-[18px]"
               >
-                {truncateHash(edge.targetPeerId)}
+                <ShortId value={edge.targetPeerId} kind="hash" size="row" />
               </span>
               <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}
@@ -85,9 +91,11 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
           onClick={() => setShowAll((value) => !value)}
           className="text-jade text-meta mt-3 underline underline-offset-2"
         >
-          {showAll
-            ? `Show first ${FIRST_OBSERVATIONS} observations`
-            : `Show all ${data.edges.length.toLocaleString()} observations`}
+          {unitNode(
+            showAll
+              ? `Show first ${formatCount(FIRST_OBSERVATIONS, 'observation')}`
+              : `Show all ${formatCount(data.edges.length, 'observation')}`
+          )}
         </button>
       )}
     </div>

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import { VmLaneTimeline } from '@/components/hardforks/vm-lane-timeline';
 import producer from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
@@ -70,14 +71,14 @@ describe('VmLaneTimeline', () => {
       'data · pinned to VM0',
       'epoch 5,414',
       'epoch 12,293',
-      '1,830,780 · 59 versions',
+      '1,830,780 · 59\u00a0versions',
     ])
       expect(texts()).toContain(label);
     expect(texts()).not.toContain('epoch 5,414 · 2022-05-10');
-    const note = [...svg.querySelectorAll('text')].find(
-      (node) => node.textContent === 'no known script yet'
-    )!;
-    expect(note.getAttribute('text-anchor')).toBe('end');
+    // Re-pinned with PB-02 (UI review 2026-11-14): on a phone the empty lane says so on its own
+    // header line, after its count, instead of on its dotted lane line.
+    expect(texts()).toContain('0 · no known script yet');
+    expect(texts()).not.toContain('no known script yet');
     // Year labels never touch (visual pass at 390: "2020 2021 2022…" ran together).
     const years = [...svg.querySelectorAll('[data-year]')].map((n) => Number(n.getAttribute('x')));
     expect(years.length).toBeGreaterThan(2);
@@ -195,7 +196,7 @@ describe('VmLaneTimeline', () => {
       />
     );
     const svg = screen.getByRole('img');
-    const xudt = screen.getByRole('button', { name: /^xUDT · xUDT · version 0xbbbbbbbb…, data1/ });
+    const xudt = screen.getByRole('button', { name: /^xUDT · xUDT · version 0xbbbb…bbbb, data1/ });
     const readout = screen.getByRole('status', { name: 'Script version readout' });
     const evidence = screen.getByRole('complementary', {
       name: 'Selected script deployment evidence',
@@ -208,7 +209,9 @@ describe('VmLaneTimeline', () => {
     // a hover still names the version and keeps it once the pointer moves on, as before
     fireEvent.mouseEnter(xudt);
     fireEvent.mouseLeave(xudt);
-    expect(readout).toHaveTextContent(/^xUDT · xUDT · version 0xbbbbbbbb… · deployed 2024-01-08/);
+    expect(readout).toHaveTextContent(
+      /^xUDT · xUDT · version 0xbbbbbbbb…bbbbbb · deployed 2024-01-08/
+    );
     // a tap pins it; hovering another dot reads that one, leaving it shows the pin again
     fireEvent.click(xudt);
     expect(readout).toHaveTextContent(/^selected xUDT · xUDT/);
@@ -287,6 +290,26 @@ describe('VmLaneTimeline', () => {
     const genesis = [...svg.querySelectorAll('text')].find((t) => t.textContent === 'genesis')!;
     expect(Number(genesis.getAttribute('y')) - 12.5).toBeGreaterThanOrEqual(lastY + 8);
   });
+
+  it.each([358, 1200])(
+    'draws each lane’s VM bars with square ends at %i px (U-02, R1)',
+    (width) => {
+      stubChartWidth(width);
+      render(
+        <VmLaneTimeline
+          editions={editions}
+          lanes={lanes}
+          deployments={laned}
+          genesisMs={genesisMs}
+          tipMs={tipMs}
+          tipEpoch={15203}
+        />
+      );
+      const svg = screen.getByRole('img');
+      expect(rects(svg).length).toBeGreaterThanOrEqual(4);
+      expect(roundedRects(svg)).toEqual([]);
+    }
+  );
 
   it('refuses lanes out of VM order and hardforks outside the chain span', () => {
     stubChartWidth(1200);

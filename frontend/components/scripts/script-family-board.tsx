@@ -1,8 +1,11 @@
 'use client';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
+import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { Chart } from '@/components/ui/chart';
+import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   ScriptCustodyEvidence,
@@ -20,16 +23,19 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { BOARD_INKS, DATA_COLOR, HELD_CAPACITY_COLOR, inkStyle } from '@/lib/design-tokens';
 import {
   deploymentOnDay,
   holderName,
-  shortHex,
+  holderParts,
   signingText,
   type CodeHolder,
 } from '@/lib/script-lineage';
+import type { ShortSize } from '@/lib/shorten';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
+import { percentOf } from '@/lib/format-unit';
+import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
+import { unitNode, unitText } from '@/components/ui/units';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -82,14 +88,15 @@ export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   );
 }
 
+/** The holder as the hero's sentence names it, the page's lede (U-09: head). */
 function holderSentence(custody: ScriptCustodyApi): string {
   if (custody.class === 'multisig')
     return custody.witnessState === 'never_signed'
       ? 'a multisig that has never signed'
-      : `${holderName(custody)}`;
+      : `${holderName(custody, 'head')}`;
   if (custody.class === 'one_key') return 'a single key';
   if (custody.class === 'unspendable') return 'a lock that can never be unlocked';
-  return holderName(custody);
+  return holderName(custody, 'head');
 }
 
 /** The board's summary sentence: what the script guards, since when, and who can change it. */
@@ -126,14 +133,16 @@ export function ScriptSummarySentence({
       </span>
       ; <span className="text-text-bright">{family.cellsCount.toLocaleString('en-US')}</span> cells
       have used it
-      {Number.isFinite(firstDeployed) ? ` since ${formatUtc8Date(firstDeployed)}` : ''}.
+      {unitNode(Number.isFinite(firstDeployed) ? ` since ${formatUtc8Date(firstDeployed)}` : '')}.
       {code === 'immutable' && ' Its code is immutable: no one can replace it.'}
       {code === 'upgradable' && lineage && last && lineage.length > 1 && (
         <>
           {' '}
           Its code is upgradable: it has been replaced{' '}
-          <span className="text-text-bright">{formatCount(lineage.length - 1, 'time')}</span>, last
-          on {formatUtc8Date(last.timestamp)}, and its code cell now sits under{' '}
+          <span className="text-text-bright">
+            {unitNode(formatCount(lineage.length - 1, 'time'))}
+          </span>
+          , last on <Utc8Date timestamp={last.timestamp} />, and its code cell now sits under{' '}
           {holderSentence(last.custody)}.
         </>
       )}
@@ -168,20 +177,20 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
   const occupied = BigInt(family.ownedKnowledgeSum);
   if (occupied > capacity)
     throw new Error(`${family.name}: occupied ${occupied} exceeds capacity ${capacity}`);
-  const share = capacity === BigInt(0) ? null : scriptShare(occupied, capacity);
+  const share = capacity === BigInt(0) ? null : percentOf(occupied, capacity);
   return (
     <HeroFigure
       label="CKB in its cells"
       shannons={capacity}
-      companion={
+      companion={[
         <>
           in{' '}
           <a href="#its-cells" className="hover:text-text-bright hover:underline">
-            {family.liveCellsCount.toLocaleString('en-US')} live cells
+            {unitNode(formatCount(family.liveCellsCount, 'live cell'))}
           </a>
-          {share && ` · ${share} occupied`}
-        </>
-      }
+        </>,
+        share && `${share} occupied`,
+      ]}
     />
   );
 }
@@ -190,6 +199,23 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
  * The remaining figures in one quiet row (R13; the former facts rail): the code and who holds its
  * code cell, the first deployment and every cell that ever used it.
  */
+/**
+ * A code cell holder's name (A4 Chrome F2): its id is one unit, a line may break between the kind
+ * and the id; a phrase ("an unspendable lock") is words a line may break between. In the hero
+ * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360): "multisig 0x6598…d696",
+ * 204 px whole, is "multisig" over the 112.2 px id; it stands on one line from 640 (288 px).
+ */
+function HolderName({ custody, size }: { custody: ScriptCustodyApi; size: ShortSize }) {
+  const { label, id } = holderParts(custody, size);
+  return id === null ? (
+    <>{label}</>
+  ) : (
+    <>
+      {label} <NoBreak>{id}</NoBreak>
+    </>
+  );
+}
+
 export function ScriptHeroMetrics({
   family,
   lineage,
@@ -209,15 +235,18 @@ export function ScriptHeroMetrics({
         <HeroMetric
           label="Code"
           note={
-            code === 'upgradable' && last && lineage!.length > 1
-              ? `last replaced ${formatUtc8Date(last.timestamp)}`
-              : undefined
+            code === 'upgradable' && last && lineage!.length > 1 ? (
+              <>
+                last replaced <Utc8Date timestamp={last.timestamp} />
+              </>
+            ) : undefined
           }
-        >
-          {code === 'immutable'
-            ? 'Immutable'
-            : `Upgradable · ${formatCount(family.versionsCount, 'version')}`}
-        </HeroMetric>
+          parts={
+            code === 'immutable'
+              ? ['Immutable']
+              : ['Upgradable', formatCount(family.versionsCount, 'version')]
+          }
+        />
       )}
       {last && (
         <HeroMetric
@@ -228,7 +257,8 @@ export function ScriptHeroMetrics({
             href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
             className="hover:text-jade"
           >
-            {holderName(last.custody)}
+            {/* a hero tile, tight (U-09) */}
+            <HolderName custody={last.custody} size="tight" />
           </Link>
         </HeroMetric>
       )}
@@ -243,15 +273,15 @@ export function ScriptHeroMetrics({
                 title={deployment.codeCellTxHash}
                 className="hover:text-jade"
               >
-                {shortHex(deployment.codeCellTxHash, 6, 6)}
+                <ShortId value={deployment.codeCellTxHash} kind="hash" size="tight" />
               </Link>
             </>
           }
         >
-          {formatUtc8Date(deployment.deployedAt)}
+          <Utc8Date timestamp={deployment.deployedAt} />
         </HeroMetric>
       )}
-      <HeroMetric label="Ever used">{formatCount(family.cellsCount, 'cell')}</HeroMetric>
+      <HeroMetric label="Ever used">{unitNode(formatCount(family.cellsCount, 'cell'))}</HeroMetric>
     </dl>
   );
 }
@@ -280,18 +310,24 @@ function historyAxis(
   return { position, upgradeList: [...upgradeDays] };
 }
 
-/** Dashed upgrade lines over a panel, on the plot's x (the plots have no axis gutter). */
+/** Dashed upgrade lines over a panel, on the plot's x: from the plots' value gutter (`left`). */
 function UpgradeLines({
   upgradeList,
   position,
   attribute,
+  left,
 }: {
   upgradeList: readonly [string, number[]][];
   position: (day: string) => number | null;
   attribute: 'data-upgrade-line' | 'data-upgrade-tick';
+  left: number;
 }) {
   return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 right-[10px]">
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-y-0 right-[10px]"
+      style={{ left: `${left}px` }}
+    >
       {upgradeList.map(([day]) => {
         const at = position(day);
         return at === null ? null : (
@@ -324,14 +360,17 @@ function UpgradeLabels({
   position,
   width,
   plotName,
+  left,
 }: {
   upgradeList: readonly [string, number[]][];
   position: (day: string) => number | null;
   width: number | null;
   plotName: string;
+  /** The plots' value gutter: the plot, and these labels, start after it. */
+  left: number;
 }) {
   if (width === null) return null;
-  const plot = width - 10;
+  const plot = width - 10 - left;
   const taken: [number, number][] = [[0, LABEL_PAD * 2 + plotName.length * LABEL_ADVANCE]];
   const placed: { day: string; text: string; at: number; right: boolean }[] = [];
   const days = upgradeList
@@ -351,7 +390,8 @@ function UpgradeLabels({
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none absolute left-0 right-[10px] top-0 h-[28px]"
+      className="pointer-events-none absolute right-[10px] top-0 h-[28px]"
+      style={{ left: `${left}px` }}
     >
       {placed
         .sort((a, b) => a.at - b.at)
@@ -359,11 +399,8 @@ function UpgradeLabels({
           <span
             key={day}
             data-upgrade-label={day}
-            className={`text-meta absolute top-[5px] whitespace-nowrap leading-[14px] text-[color:var(--ink)] ${right ? 'pr-1' : 'pl-1'}`}
-            style={{
-              ...inkStyle(BOARD_INKS.quiet),
-              ...(right ? { right: `${100 - at}%` } : { left: `${at}%` }),
-            }}
+            className={`text-meta text-text-dim absolute top-[5px] whitespace-nowrap leading-[14px] ${right ? 'pr-1' : 'pl-1'}`}
+            style={right ? { right: `${100 - at}%` } : { left: `${at}%` }}
           >
             {text}
           </span>
@@ -401,11 +438,34 @@ export function ScriptHistoryFigure({
     values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
   }));
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
-  const plotName = `CKB in ${family.name} cells · occupied and free`;
-  const shared = {
+  // The token and collection plots' name: the same stack (occupied, free above it) in the same
+  // unit; the page's h1 says which script, and a script's name has no length bound (lane A5).
+  const plotName = HELD_PLOT_NAME;
+  const held: ChartValueAxisInput = {
+    title: `CKB in ${family.name} cells`,
     data,
     unit: 'CKB',
-    insideYTicks: true,
+    kind: 'stacked',
+    bareTicks: true,
+    series: [
+      { key: 'used', label: 'Occupied', color: DATA_COLOR },
+      { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+    ],
+  };
+  const occupied: ChartValueAxisInput = {
+    title: "Occupied by those cells' own bytes",
+    data,
+    unit: 'CKB',
+    kind: 'area',
+    bareTicks: true,
+    series: [{ key: 'used', label: 'Occupied', color: DATA_COLOR }],
+  };
+  // U-19: the round values sit in one gutter left of both plots, in the dim ink (inside, a spike
+  // crossed them), bare, each plot's name saying CKB once; the upgrade lines and labels start
+  // after the gutter, on the plots' x.
+  const plotLeft = alignedPlotLeft([held, occupied]);
+  const shared = {
+    plotLeft,
     hideCaption: true,
     activeIndex: active,
     onActiveIndexChange: onActive,
@@ -413,34 +473,33 @@ export function ScriptHistoryFigure({
   } as const;
   return (
     <div ref={ref} data-testid="script-history" className="relative mt-[18px] min-w-0">
-      <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-line" />
+      <UpgradeLines
+        upgradeList={upgradeList}
+        position={position}
+        attribute="data-upgrade-line"
+        left={plotLeft}
+      />
       <UpgradeLabels
         upgradeList={upgradeList}
         position={position}
         width={width}
         plotName={plotName}
+        left={plotLeft}
       />
       <Chart
         {...shared}
-        title={`CKB in ${family.name} cells`}
+        {...held}
         subtitle="Occupied and free capacity, indexed chain day"
         plotName={plotName}
-        kind="stacked"
         height={300}
-        series={[
-          { key: 'used', label: 'Occupied', color: DATA_COLOR },
-          { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
-        ]}
       />
       <div className="mt-2">
         <Chart
           {...shared}
-          title="Occupied by those cells' own bytes"
+          {...occupied}
           subtitle="Occupied capacity on its own scale"
-          plotName="occupied by those cells' own bytes"
-          kind="area"
+          plotName="CKB occupied by those cells' own bytes"
           height={96}
-          series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
         />
       </div>
     </div>
@@ -475,12 +534,12 @@ export function ScriptHistoryReading({
       aria-live="polite"
       aria-label="History reading"
       data-testid="script-history-reading"
-      className="border-base-border-subtle text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
+      className="border-row-rule text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
     >
       {point && used !== null && unused !== null ? (
         <>
           <span className="text-text-bright">
-            {point.date}
+            {unitNode(point.date)}
             {active === null && <span className="text-text-dim"> · last full day</span>}
           </span>
           <span className="flex items-baseline gap-1.5">
@@ -489,7 +548,7 @@ export function ScriptHistoryReading({
           <span className="flex items-baseline gap-1.5">
             <span
               aria-hidden="true"
-              className="inline-block h-2 w-2 rounded-sm"
+              className="inline-block h-2 w-2"
               style={{ backgroundColor: DATA_COLOR }}
             />
             <span>occupied</span> <ExactCkb shannons={used} signed={false} tone="plain" />
@@ -497,7 +556,7 @@ export function ScriptHistoryReading({
           <span className="flex items-baseline gap-1.5">
             <span
               aria-hidden="true"
-              className="inline-block h-2 w-2 rounded-sm"
+              className="inline-block h-2 w-2"
               style={{ backgroundColor: HELD_CAPACITY_COLOR }}
             />
             <span>free</span> <ExactCkb shannons={unused} signed={false} tone="plain" />
@@ -506,7 +565,7 @@ export function ScriptHistoryReading({
             <span className="flex items-baseline gap-1.5">
               <span>code</span>{' '}
               <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
-              <span>held by {holderName(deployment.custody)}</span>
+              <span>held by {holderName(deployment.custody, 'tight')}</span>
             </span>
           )}
         </>
@@ -552,7 +611,7 @@ export function ScriptHistoryNotes({
       {peak && (
         <Sentence data-testid="script-history-peak" className={block}>
           CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
-          on {peak.date}
+          on {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
@@ -560,7 +619,7 @@ export function ScriptHistoryNotes({
                 shannons={occupiedNow}
                 signed={false}
                 tone="plain"
-              />, {scriptShare(occupiedNow, capacity)} of what the cells hold
+              />, {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
           {inline && '.'}
@@ -647,9 +706,11 @@ export function ScriptCustodyFigure({
         {holders.map((holder, i) => (
           <li key={holder.lockArgs} data-holder={holder.lockArgs} className="text-small min-w-0">
             <div className="text-text-dim text-meta">
-              {holder.until
-                ? `${formatUtc8Date(holder.from.timestamp)} → ${formatUtc8Date(holder.until.timestamp)}`
-                : `since ${formatUtc8Date(holder.from.timestamp)}`}
+              {unitNode(
+                holder.until
+                  ? `${formatUtc8Date(holder.from.timestamp)} → ${formatUtc8Date(holder.until.timestamp)}`
+                  : `since ${formatUtc8Date(holder.from.timestamp)}`
+              )}
             </div>
             <div className="text-text-bright text-body mt-1">
               {i > 0 && (
@@ -661,7 +722,7 @@ export function ScriptCustodyFigure({
                   →{' '}
                 </span>
               )}
-              {holderName(holder.custody)}
+              {holderName(holder.custody, 'row')}
             </div>
             {signingText(holder) && (
               <div className={holder.neverSigned ? 'text-text-dim mt-1' : 'text-text mt-1'}>
@@ -676,7 +737,10 @@ export function ScriptCustodyFigure({
                   : 'no upgrade signed'}
             </div>
             {keyRows[i].length > 0 ? (
-              <ul aria-label={`Keys of ${holderName(holder.custody)}`} className="mt-3 space-y-1.5">
+              <ul
+                aria-label={`Keys of ${holderName(holder.custody, 'row')}`}
+                className="mt-3 space-y-1.5"
+              >
                 {keyRows[i].map((key) => (
                   <li
                     key={key}
@@ -692,14 +756,17 @@ export function ScriptCustodyFigure({
                         stroke="var(--c-text)"
                       />
                     </svg>
-                    <span className={kept(i, key) ? 'text-text-bright' : 'text-text-dim'}>
-                      {key.slice(0, 14)}…
-                    </span>
+                    <ShortId
+                      value={key}
+                      kind="hash"
+                      size="row"
+                      className={kept(i, key) ? 'text-text-bright' : 'text-text-dim'}
+                    />
                   </li>
                 ))}
               </ul>
             ) : holder.neverSigned ? (
-              <div className="text-meta border-text-ghost text-text mt-3 rounded border border-dashed p-3">
+              <div className="text-meta border-text-ghost text-text mt-3 border border-dashed p-3">
                 Its keys and threshold appear on chain the first time it signs.
               </div>
             ) : null}
@@ -708,8 +775,9 @@ export function ScriptCustodyFigure({
       </ol>
       {handovers.map((handover) => (
         <p key={handover.day} className="text-text-dim text-meta mt-2.5">
-          ● kept across the handover on {handover.day}: {handover.common} of {handover.total} keys ·
-          ○ replaced: {handover.total - handover.common} of {handover.total}
+          ● kept across the handover on {unitNode(handover.day)}: {handover.common} of{' '}
+          {unitNode(formatCount(handover.total, 'key'))} · ○ replaced:{' '}
+          {handover.total - handover.common} of {handover.total}
         </p>
       ))}
       <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
@@ -757,7 +825,7 @@ export function ScriptCustodyMechanism({
       )}
       {inline && lineage && ' '}
       <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-[640px]'}>
-        Code versions: {binaries}.
+        Code versions: {unitText(binaries)}.
       </Sentence>
     </>
   );

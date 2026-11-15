@@ -1,7 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { api, NetworkStats } from '@/lib/api';
+import type { NetworkStats } from '@/lib/api';
 import { TerminalNumber } from '@/components/ui/terminal-number';
 
 function formatRate(value: number | null | undefined): string | null {
@@ -9,7 +8,7 @@ function formatRate(value: number | null | undefined): string | null {
     return null;
   }
   if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}K`;
+    return `${(value / 1000).toFixed(1)}k`;
   }
   return value.toFixed(0);
 }
@@ -35,7 +34,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
             data-testid="sync-banner-live"
             className="bg-jade h-2 w-2 animate-pulse rounded-full"
           />
-          <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING...</span>
+          <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING…</span>
         </div>
         <span className="text-gold-dim text-body font-mono">
           <TerminalNumber value={syncStatus.progress.toFixed(1)} glowIntensity="subtle" />% (
@@ -61,48 +60,11 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}
-      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden rounded-full">
+      <div className="bg-base-bg mt-2 h-1.5 w-full overflow-hidden">
         <div
-          className="from-gold-dim via-gold-dim to-gold h-full rounded-full bg-gradient-to-r transition-all duration-500"
+          className="from-gold-dim via-gold-dim to-gold h-full bg-gradient-to-r transition-all duration-500"
           style={{ width: `${syncStatus.progress}%` }}
         />
-      </div>
-    </div>
-  );
-}
-
-export function StatsCards() {
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ['network-stats'],
-    queryFn: () => api.getNetworkStats(),
-    refetchInterval: 10000,
-  });
-
-  const cards = [
-    {
-      label: 'LATEST BLOCK',
-      value: stats?.latestBlock?.toLocaleString() ?? '-',
-      glow: 'strong' as const,
-    },
-    { label: 'AVG BLOCK TIME', value: stats?.avgBlockTime ?? '—', glow: 'subtle' as const },
-    { label: 'HASH RATE', value: stats?.hashRate ?? '—', glow: 'subtle' as const },
-    { label: 'DIFFICULTY', value: stats?.difficulty ?? '-', glow: 'subtle' as const },
-    { label: 'CURRENT EPOCH', value: stats?.epoch ?? '-', glow: 'subtle' as const },
-    { label: 'TPS (24H)', value: stats?.tps ?? '—', glow: 'subtle' as const },
-  ];
-
-  return (
-    <div>
-      {stats && <SyncBanner stats={stats} />}
-      <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-        {cards.map((card) => (
-          <div key={card.label} data-testid="stats-card" className="well p-4">
-            <div className="eyebrow text-text-dim text-small font-mono">{card.label}</div>
-            <div className="text-hero mt-1 font-semibold">
-              <TerminalNumber value={card.value} glowIntensity={card.glow} animate={!isLoading} />
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

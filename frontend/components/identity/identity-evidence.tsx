@@ -6,10 +6,13 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { AssetReadState } from '@/components/asset/detail-shell';
-import { truncateRecordHex } from '@/components/asset/identity-document';
 import type { IdentityStandard } from '@/components/identity/identity-header';
 import { formatUtc8DateTime, cn } from '@/lib/utils';
 import { retryTransientOnly } from '@/lib/query-client';
+import { formatCount, countNoun } from '@/lib/format-count';
+import { ShortId } from '@/components/ui/short-id';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { unitNode } from '@/components/ui/units';
 
 type Of<K extends ItemProtocol['kind']> = Extract<ItemProtocol, { kind: K }>;
 
@@ -24,12 +27,12 @@ export function identityDataTitle(standard: IdentityStandard) {
     const bytes = byteLength(version.dataHex, `${version.cell.txHash}:${version.cell.outputIndex}`);
     switch (standard) {
       case 'dotbit':
-        return `Account cell data · ${bytes} bytes`;
+        return `Account cell data · ${formatCount(bytes, 'byte')}`;
       case 'dotcell':
-        return `Name cell data · layout v${(version.decoded as { layoutVersion: number }).layoutVersion} · ${bytes} bytes`;
+        return `Name cell data · layout v${(version.decoded as { layoutVersion: number }).layoutVersion} · ${formatCount(bytes, 'byte')}`;
       case 'bit_cell':
       case 'did_ckb':
-        return `Cell data · ${bytes} bytes`;
+        return `Cell data · ${formatCount(bytes, 'byte')}`;
     }
   };
 }
@@ -72,7 +75,7 @@ function Rows({ rows }: { rows: [string, ReactNode][] }) {
       {rows.map(([term, value]) => (
         <div key={term} className="contents">
           <dt className="text-text-dim">{term}</dt>
-          <dd className="min-w-0 [overflow-wrap:anywhere]">{value}</dd>
+          <dd className="min-w-0 [overflow-wrap:anywhere]">{unitNode(value)}</dd>
         </div>
       ))}
     </dl>
@@ -113,7 +116,7 @@ function WitnessKey({ k, note }: { k: { algorithm: number; argsHex: string }; no
     <>
       <span
         data-role="algorithm"
-        className="text-meta text-text-dim border-base-border whitespace-nowrap rounded-sm border px-[5px] leading-4"
+        className="text-meta text-text-dim border-base-border whitespace-nowrap border px-[5px] leading-4"
       >
         algorithm {k.algorithm}
       </span>{' '}
@@ -144,14 +147,16 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       value: (
         <>
           <Field name="registered_at" label="registered">
-            {formatUtc8DateTime(Number(d.registeredAt) * 1000)}
+            <Utc8DateTime timestamp={Number(d.registeredAt) * 1000} />
           </Field>
           <Dim> → </Dim>
           <Field name="expired_at" label="expires">
-            {d.expiredAt === null ? (
-              <Dim>not recorded</Dim>
-            ) : (
-              formatUtc8DateTime(Number(d.expiredAt) * 1000)
+            {unitNode(
+              d.expiredAt === null ? (
+                <Dim>not recorded</Dim>
+              ) : (
+                formatUtc8DateTime(Number(d.expiredAt) * 1000)
+              )
             )}
           </Field>
         </>
@@ -189,7 +194,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
         <Items
           items={[
             <Field key="r" name="records">
-              {d.records.length} {d.records.length === 1 ? 'entry' : 'entries'}
+              {d.records.length} {countNoun(d.records.length, 'entry', 'entries')}
             </Field>,
             ...flags,
           ]}
@@ -225,7 +230,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           <div
             key={row.key}
             data-row={row.key}
-            className="border-base-border-subtle grid min-h-8 min-w-0 grid-cols-1 items-center gap-x-4 border-t py-1.5 sm:grid-cols-[168px_minmax(0,1fr)]"
+            className="border-row-rule grid min-h-8 min-w-0 grid-cols-1 items-center gap-x-4 border-t py-1.5 sm:grid-cols-[168px_minmax(0,1fr)]"
           >
             <span data-role="row-key" className="text-meta text-text-dim">
               {row.label}
@@ -236,10 +241,10 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </div>
         ))}
       </div>
-      <p className="text-text-ghost text-meta">
+      <p className="text-text-dim text-meta">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
-          <Hash hash={v.cell.txHash} copyable={false} className="text-meta" />
+          <Hash hash={v.cell.txHash} size="row" copyable={false} className="text-meta" />
         </AppLink>
       </p>
     </Tier2Section>
@@ -352,7 +357,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
   if (!d) throw new Error(`${protocol.itemId}: did:ckb has no versions`);
   const bytes = byteLength(d.documentCborHex, `${protocol.itemId} document`);
   return (
-    <Tier2Section title={`Document as stored · CBOR, ${bytes.toLocaleString('en-US')} bytes`}>
+    <Tier2Section title={`Document as stored · CBOR, ${formatCount(bytes, 'byte')}`}>
       <Rows
         rows={[
           ['DID', d.did],
@@ -360,7 +365,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
           ['data layout', `V${d.documentVersion} (union variant 0)`],
         ]}
       />
-      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap rounded px-3.5 py-3 [overflow-wrap:anywhere]">
+      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
         {JSON.stringify(d.document, null, 2)}
       </pre>
     </Tier2Section>
@@ -393,12 +398,13 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
             {d.records.map((r, i) => (
               <div
                 key={`${r.key}:${i}`}
-                className="border-base-border-subtle grid min-w-0 grid-cols-[minmax(0,160px)_70px_minmax(0,1fr)] gap-3 border-t py-1.5"
+                className="border-row-rule grid min-w-0 grid-cols-[minmax(0,160px)_70px_minmax(0,1fr)] gap-3 border-t py-1.5"
               >
                 <span className="[overflow-wrap:anywhere]">{r.key || '(empty key)'}</span>
                 <span className="text-text-dim">ttl {r.ttl}</span>
                 <span className="text-text min-w-0 [overflow-wrap:anywhere]">
-                  {truncateRecordHex(r.valueHex)}
+                  {/* a record's value is a hex id here, the row size (U-09; it was 18…8) */}
+                  <ShortId value={r.valueHex} kind="hash" size="row" />
                 </span>
               </div>
             ))}
@@ -418,7 +424,13 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               `Lock · ${v.cell.lockName ?? 'not named'}`,
               <>
                 <AppLink href={`/address/${v.cell.ownerAddress}`}>
-                  <Hash hash={v.cell.ownerAddress} copyable={false} className="text-small" />
+                  <Hash
+                    hash={v.cell.ownerAddress}
+                    kind="address"
+                    size="row"
+                    copyable={false}
+                    className="text-small"
+                  />
                 </AppLink>{' '}
                 <Dim>
                   · names are held under this lock; ownership is the owner field in the data
@@ -438,9 +450,9 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               ) : (
                 <>
                   <AppLink href={`/identities/dotcell/${d.nextId}`}>
-                    <Hash hash={d.nextId} copyable={false} className="text-small" />
+                    <Hash hash={d.nextId} size="row" copyable={false} className="text-small" />
                   </AppLink>
-                  <AssetReadState label="its name" error={next.error} loading={next.isLoading} />
+                  <AssetReadState label="its name" error={next.error} read={next} />
                 </>
               ),
             ],

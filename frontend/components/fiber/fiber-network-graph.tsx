@@ -12,7 +12,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import type { FiberNetwork, FiberParty } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { formatDurationMs, formatUtc8Date } from '@/lib/utils';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import {
@@ -26,6 +26,9 @@ import {
   type FiberGraphModel,
   type FiberGraphNode,
 } from '@/lib/fiber-network-model';
+import { Utc8Date } from '@/components/ui/utc8-date';
+import { ShortId } from '@/components/ui/short-id';
+import { unitNode } from '@/components/ui/units';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -75,10 +78,13 @@ export function useFiberGraphPin(): PinnedReadout<FiberGraphTarget> {
   return usePinnedReadout<FiberGraphTarget>(targetKey);
 }
 
+/** A party in the graph's reading panel, a row: its address, else its lock hash (U-09). */
 function PartyLink({ party }: { party: FiberParty }) {
-  const text = party.address
-    ? `${party.address.slice(0, 10)}…${party.address.slice(-6)}`
-    : `${party.lockScriptHash.slice(0, 10)}…${party.lockScriptHash.slice(-6)}`;
+  const text = party.address ? (
+    <ShortId value={party.address} kind="address" size="row" />
+  ) : (
+    <ShortId value={party.lockScriptHash} kind="hash" size="row" />
+  );
   return party.address ? (
     <Link href={`/address/${party.address}`} className="text-text-bright hover:text-jade">
       {text}
@@ -123,7 +129,7 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
       </div>
       <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
         {party.lockScriptName ? `${party.lockScriptName} · ` : ''}lock hash{' '}
-        {party.lockScriptHash.slice(0, 10)}…{party.lockScriptHash.slice(-6)}
+        <ShortId value={party.lockScriptHash} kind="hash" size="row" />
       </div>
       <Rows
         rows={[
@@ -145,7 +151,7 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
           [
             'first channel',
             <span key="first">
-              {formatUtc8Date(party.firstOpenTimestamp)} ·{' '}
+              <Utc8Date timestamp={party.firstOpenTimestamp} /> ·{' '}
               <Link href={`/blocks/${party.firstOpenBlock}`} className="hover:text-jade">
                 {formatBlockNumber(party.firstOpenBlock)}
               </Link>
@@ -165,7 +171,7 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
         …{partyTail(a)} ↔ …{partyTail(b)}
       </div>
       <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
-        {formatCount(pair.channels, 'channel')} between <PartyLink party={a} /> and{' '}
+        {unitNode(formatCount(pair.channels, 'channel'))} between <PartyLink party={a} /> and{' '}
         <PartyLink party={b} />
       </div>
       <Rows
@@ -353,7 +359,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                 width={model.width}
                 height={picture.height}
                 role="img"
-                aria-label={`The Fiber network on chain: ${model.nodes.length} parties and the ${model.edges.length} pairs that opened channels`}
+                aria-label={`The Fiber network on chain: ${formatCount(model.nodes.length, 'party', 'parties')} and the ${formatCount(model.edges.length, 'pair')} that opened channels`}
                 className="block"
               >
                 <text data-role="chart-name" x="8" y="14" fontSize="11" fill={FIBER_COLORS.note}>
@@ -497,7 +503,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
         {(activeNode || activeEdge) && (
           <div
             data-role="party-or-pair"
-            className="border-base-border-subtle mt-3 rounded border px-3.5 py-3"
+            className="border-base-border-subtle mt-3 border px-3.5 py-3"
           >
             {activeNode ? (
               <PartyPanel node={activeNode} partners={data.neighbours.get(activeNode.id)!.size} />
@@ -559,8 +565,10 @@ export function FiberPartiesNote({ network }: { network: FiberNetwork }) {
     <p>
       Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not
       which node ran it.
-      {data.unpairedChannels > 0 &&
-        ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${data.unpairedChannels === 1 ? 'is' : 'are'} not drawn.`}
+      {unitNode(
+        data.unpairedChannels > 0 &&
+          ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${countNoun(data.unpairedChannels, 'is', 'are')} not drawn.`
+      )}
     </p>
   );
 }

@@ -5,12 +5,16 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
 import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatTick, niceCeil, niceTicks } from '@/lib/chart-ticks';
+import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { color } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
+import { formatCount } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -127,13 +131,17 @@ function cutCkb(shannons: bigint): { sign: string; integer: string; fraction: st
   return { sign: parts.sign, integer: parts.integer, fraction: `.${digits.slice(0, 2)}` };
 }
 
+/** Exact CKB as text: the fraction in the sign's quieter ink (`AMOUNT_INK`), padding zeros ghost. */
 function ExactCkbText({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
   const parts = splitCkbAmount(shannons);
+  const ink = AMOUNT_INK[signed ? amountSign(parts.sign) : 'neutral'];
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {signed ? parts.sign : null}
       {parts.integer}
-      <span className="opacity-70">{parts.fraction}</span>
+      <span data-fraction className={ink.fraction}>
+        {parts.fraction}
+      </span>
       <span className="text-text-ghost">{parts.ghost}</span>
     </span>
   );
@@ -163,20 +171,24 @@ function timeTicks(days: readonly Day[], x: (i: number) => number) {
   return kept;
 }
 
-/** The pointer's day over a plot `el` whose first and last days sit at its left and right edges. */
-function dayAt(clientX: number, el: Element, last: number): number {
+/**
+ * The pointer's day over a plot `el` whose first day sits `left` px in (after its value gutter)
+ * and whose last day sits at its right edge.
+ */
+function dayAt(clientX: number, el: Element, last: number, left: number): number {
   const r = el.getBoundingClientRect();
-  const f = r.width > 0 ? (clientX - r.left) / r.width : 1;
+  const f = r.width > left ? (clientX - r.left - left) / (r.width - left) : 1;
   return Math.round(Math.min(1, Math.max(0, f)) * last);
 }
 
 /** Hover, tap (pin) and leave on one plot of the picture, shared by its three panels. */
-function plotHandlers(pin: PinnedReadout<number>, last: number) {
+function plotHandlers(pin: PinnedReadout<number>, last: number, left = 0) {
   return {
     onPointerMove: (e: PointerEvent<SVGSVGElement>) =>
-      pin.hover(dayAt(e.clientX, e.currentTarget, last)),
+      pin.hover(dayAt(e.clientX, e.currentTarget, last, left)),
     onPointerLeave: () => pin.hover(null),
-    onClick: (e: MouseEvent<SVGSVGElement>) => pin.toggle(dayAt(e.clientX, e.currentTarget, last)),
+    onClick: (e: MouseEvent<SVGSVGElement>) =>
+      pin.toggle(dayAt(e.clientX, e.currentTarget, last, left)),
   };
 }
 
@@ -197,7 +209,7 @@ export function HistoryRangeToggle({
           aria-pressed={range === choice}
           onClick={() => onChange(choice)}
           className={cn(
-            'text-small inline-flex h-7 items-center rounded border px-2.5 font-mono',
+            'text-small inline-flex h-7 items-center border px-2.5 font-mono',
             i > 0 && 'ml-1',
             range === choice
               ? 'border-base-border bg-base-border-subtle text-text-bright'
@@ -252,15 +264,19 @@ function DepositedPlot({
   const { days } = series;
   const fillId = `dao-deposited-${useId().replace(/:/g, '')}`;
   const last = days.length - 1;
-  const x = (i: number) => (i / last) * width;
   const ckb = (v: bigint) => Number(v) / 1e8;
   const ticks = niceTicks(0, Math.max(...days.map((d) => ckb(d.shannons))), 4);
   const top = ticks.values[ticks.values.length - 1];
   const y = (v: number) => MAIN_PLOT_H - (v / top) * (MAIN_PLOT_H - MAIN_NAME_BAND);
+  // U-19: the round values sit in a gutter left of the plot, in the dim ink (as every chart's),
+  // never inside it, where the line and its fill cross them.
+  const shown = ticks.values.filter((v) => v > 0 && y(v) >= MAIN_NAME_BAND + 12);
+  const left = tickGutter(shown.map((v) => formatTick(v, ticks.step)));
+  const x = (i: number) => left + (i / last) * (width - left);
   const path = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(ckb(d.shannons))}`).join(' ');
   const name = `CKB deposited · every complete day since ${days[0].date}`;
   // The name wraps after "CKB deposited" when one line does not fit the plot (390 px).
-  const oneLine = textWidth(name.length, NAME_PX) + 16 <= width;
+  const oneLine = textWidth(name.length, NAME_PX) + 16 <= width - left;
   const active = pin.active !== null && pin.active <= last ? pin.active : null;
   return (
     <svg
@@ -271,25 +287,24 @@ function DepositedPlot({
       height={MAIN_PLOT_H + AXIS_H}
       viewBox={`0 0 ${width} ${MAIN_PLOT_H + AXIS_H}`}
       className="block cursor-crosshair overflow-visible font-mono"
-      {...plotHandlers(pin, last)}
+      {...plotHandlers(pin, last, left)}
     >
-      {ticks.values
-        .filter((v) => v > 0 && y(v) >= MAIN_NAME_BAND + 12)
-        .map((v) => (
-          <g key={v}>
-            {/* Visual finish V13: the grid is solid; a dash means a reference. */}
-            <line x1={0} x2={width} y1={y(v)} y2={y(v)} className="stroke-base-border-subtle" />
-            <text
-              data-role="y-tick"
-              x={8}
-              y={y(v) - 5}
-              fontSize={NAME_PX}
-              className="fill-text-ghost"
-            >
-              {formatTick(v, ticks.step)}
-            </text>
-          </g>
-        ))}
+      {shown.map((v) => (
+        <g key={v}>
+          {/* Visual finish V13: the grid is solid; a dash means a reference. */}
+          <line x1={left} x2={width} y1={y(v)} y2={y(v)} className="stroke-row-rule" />
+          <text
+            data-role="y-tick"
+            x={left - 8}
+            y={y(v) + 3}
+            textAnchor="end"
+            fontSize="10"
+            className="fill-text-dim"
+          >
+            {formatTick(v, ticks.step)}
+          </text>
+        </g>
+      ))}
       {/* Visual finish V13: the gold is light, not paint — .28 at the top of the fill fading to 0
           at the baseline (the DAO gold the line's stroke-gold is). */}
       <defs>
@@ -303,14 +318,14 @@ function DepositedPlot({
         fill={`url(#${fillId})`}
       />
       <path d={path} fill="none" className="stroke-gold" strokeWidth={1.5} />
-      <line x1={0} x2={width} y1={MAIN_PLOT_H} y2={MAIN_PLOT_H} className="stroke-base-border" />
-      <text data-role="chart-name" x={8} y={16} fontSize={NAME_PX} className="fill-text-dim">
+      <line x1={left} x2={width} y1={MAIN_PLOT_H} y2={MAIN_PLOT_H} className="stroke-base-border" />
+      <text data-role="chart-name" x={left + 8} y={16} fontSize={NAME_PX} className="fill-text-dim">
         {oneLine ? (
           name
         ) : (
           <>
             CKB deposited
-            <tspan x={8} dy={14}>
+            <tspan x={left + 8} dy={14}>
               every complete day since {days[0].date}
             </tspan>
           </>
@@ -410,13 +425,7 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
               {...plotHandlers(pin, last)}
             >
               {/* The half-scale guide is grid, not a reference: solid (visual finish V13). */}
-              <line
-                x1={0}
-                x2={width}
-                y1={y(top / 2)}
-                y2={y(top / 2)}
-                className="stroke-base-border-subtle"
-              />
+              <line x1={0} x2={width} y1={y(top / 2)} y2={y(top / 2)} className="stroke-row-rule" />
               <path d={path} fill="none" className="stroke-text" strokeWidth={1.25} />
               <text
                 data-role="chart-name"
@@ -456,7 +465,7 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
   const cap = weeks.length ? weeklyCap(weeks) : 1;
   const ckb = (v: bigint) => Number(v) / 1e8;
   const clipped = weeks.filter((w) => Math.abs(ckb(w.net)) > cap).length;
-  const note = `±${formatTick(cap, cap)} scale${clipped === 0 ? '' : clipped === 1 ? ', 1 week cut' : `, ${clipped} weeks cut`}`;
+  const note = `±${formatTick(cap, cap)} scale${clipped === 0 ? '' : `, ${formatCount(clipped, 'week')} cut`}`;
   const latest = weeks.at(-1) ?? null;
   const end = latest ? cutCkb(latest.net) : null;
   const biggest = weeks.reduce<Week | null>(
@@ -549,7 +558,9 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
                 >
                   {end.sign}
                   {end.integer}
-                  <tspan fillOpacity={0.7}>{end.fraction}</tspan>
+                  <tspan fill={color(AMOUNT_INK[amountSign(end.sign)].fractionKey)}>
+                    {end.fraction}
+                  </tspan>
                 </EndLabel>
               )}
               {active !== null && (
@@ -598,7 +609,7 @@ export function DaoHistoryReading({
       {/* One row of facts, each its own item: a narrower column wraps between them. */}
       <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
         {pin.showingPin && <span>{pinWord} </span>}
-        <span className="text-text-bright">{day.date}</span>
+        <span className="text-text-bright">{unitNode(day.date)}</span>
         <span>
           {' '}
           · deposited{' '}

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
-import { layoutMapPoints, NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
+import { layoutCountryClusters, NetworkMapNotes } from '@/app/network/network-map';
+import { NetworkMapView } from '@/__tests__/utils/network-map-view';
 import type { NetworkMap } from '@/lib/api';
 import producerMap from '@/__tests__/fixtures/network-api-producer/network-map.json';
 
@@ -49,6 +50,30 @@ describe('NetworkMapView', () => {
     );
   });
 
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the map and its notes said "Crawler locations
+  // unavailable: null" while they waited.
+  it('waits while its read is paused offline, then draws the map once back online', async () => {
+    server.use(http.get('/api/:network/v1/network/map', () => HttpResponse.json(producerMap)));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    onlineManager.setOnline(false);
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <NetworkMapView neverVerified={0} />
+          <NetworkMapNotes />
+        </QueryClientProvider>
+      );
+      expect(await screen.findByText('Loading crawler locations…')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() => onlineManager.setOnline(true));
+      expect(await screen.findByLabelText('US peer 7065657241, reachable now')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   // Midnight, continued (review 2026-11-03, item 5, move 3): the map is an instrument, in the one
   // frame; the peer evidence rail beside it stays flat.
   it('draws the map inside the instrument frame, measured within it (move 3)', async () => {
@@ -66,7 +91,7 @@ describe('NetworkMapView', () => {
     expect(frame).not.toBeNull();
     expect(frame).toHaveAttribute('aria-label', 'Map of verified peers');
     // a flat tile since rubbing × Song print: no lit top edge
-    expect(frame).toHaveClass('rounded-lg', 'border', 'border-base-border');
+    expect(frame).toHaveClass('border', 'border-base-border');
     expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).not.toContainElement(
       screen.getByRole('complementary', { name: 'Selected peer evidence' })
@@ -74,7 +99,8 @@ describe('NetworkMapView', () => {
   });
 
   it('displaces coincident dots deterministically without changing source coordinates', () => {
-    const layout = layoutMapPoints([second, first]);
+    // the dots of the default 720 × 353 map (720 × 0.49, rounded)
+    const layout = layoutCountryClusters([second, first], 720, 353).dots;
     expect(layout.map(({ point }) => point.peerId)).toEqual(['a', 'b']);
     expect([layout[0].x, layout[0].y]).not.toEqual([layout[1].x, layout[1].y]);
     expect(Math.hypot(layout[0].x - layout[1].x, layout[0].y - layout[1].y)).toBeGreaterThanOrEqual(

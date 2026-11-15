@@ -59,6 +59,18 @@ describe('NetworkSwitcher', () => {
     expect(testnet).toHaveAttribute('aria-checked', 'false');
   });
 
+  // UI review 2026-11-14 (R4, U-08): the menu's eyebrow is a word, so it is the dim ink, not the
+  // ghost; "Current" and the trigger's chevron take the indigo's named dim step, not indigo at 70 %.
+  it('writes its eyebrow and its "Current" in named inks, never the ghost or a thinned ink', () => {
+    render(<NetworkSwitcher />);
+    const menu = screen.getByRole('menu', { name: 'CKB network' });
+    expect(within(menu).getByText('CKB network')).toHaveClass('text-text-dim');
+    expect(within(menu).getByText('Current')).toHaveClass('text-aqua-dim');
+    const trigger = screen.getByRole('button', { name: 'Select network' });
+    expect(trigger.querySelector('svg')).toHaveClass('text-aqua-dim');
+    expect(document.body.innerHTML).not.toMatch(/text-text-ghost|text-aqua\/70/);
+  });
+
   it('navigates to the same page under the chosen network prefix on selection', () => {
     render(<NetworkSwitcher />);
 

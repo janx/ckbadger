@@ -1,24 +1,25 @@
 'use client';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
 import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
-import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
+import { formatDurationMs } from '@/lib/utils';
+import { shortenHash } from '@/lib/shorten';
 import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
+import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { formatCount } from '@/lib/format-count';
+import { Utc8DateTime } from '@/components/ui/utc8-date';
 
 /** Links in a board ink; the global `a:hover` jade still wins over them. */
 const CELL_LINK = inkStyle(BOARD_INKS.cellLink);
 const LINK = inkStyle(BOARD_INKS.link);
-
-function short(hash: string, head = 8, tail = 6): string {
-  return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
-}
 
 export function TransactionEvidence({
   hash,
@@ -58,7 +59,7 @@ export function TransactionEvidence({
     queryKey: ['cell-transaction-deps', hash],
     queryFn: () => api.getTransactionCellDeps(hash),
   });
-  if (transaction.isPending || dependencies.isPending)
+  if (isAwaited(transaction) || isAwaited(dependencies))
     return (
       <p className="text-text-dim text-small">
         Loading {label.toLowerCase()} transaction evidence…
@@ -66,10 +67,13 @@ export function TransactionEvidence({
     );
   if (transaction.error || dependencies.error)
     return (
-      <p role="alert" className="text-rouge text-small break-all">
+      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
         {label} transaction evidence unavailable: {String(transaction.error ?? dependencies.error)}
       </p>
     );
+  // awaited and failed are answered above: an answered read without its evidence broke an invariant
+  if (!transaction.data || !dependencies.data)
+    throw new Error(`${label} transaction ${hash}: its read answered without its evidence`);
   const tx: TransactionDetail = transaction.data;
   if (
     tx.status !== 'committed' ||
@@ -83,7 +87,8 @@ export function TransactionEvidence({
   const scriptName = (codeHash: string) => {
     if (codeHash.toLowerCase() === TYPE_ID_CODE_HASH) return 'Type ID';
     const name = lookup.data?.[codeHash]?.name;
-    return name && name.toLowerCase() !== 'unknown' ? name : short(codeHash);
+    // a script group's name in the structure: the row size (U-09)
+    return name && name.toLowerCase() !== 'unknown' ? name : shortenHash(codeHash, 'row');
   };
   if (focus && ![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
     throw new Error(`${label} transaction ${hash} does not contain focused cell ${focus}`);
@@ -110,25 +115,25 @@ export function TransactionEvidence({
       witness:
         typeof witness === 'string'
           ? witness
-          : `Witness #${witness!.index} · ${witness!.size} bytes`,
-      // Prose wraps between words; only the outpoints may break anywhere (SC-C8).
+          : `Witness #${witness!.index} · ${formatCount(witness!.size, 'byte')}`,
+      // Prose wraps between words. A code dep is a reference here, so it reads as the transaction
+      // page writes it (U-16): its kind, then its out point shortened and linked, one unit.
       dependency: (
         <span className="break-normal">
           {tx.isCellbase
             ? 'Cellbase group: no script execution'
             : group.ran
               ? deps.length
-                ? deps.map((dep, i) => (
-                    <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`}>
-                      {i > 0 && ', '}
+                ? deps.map((dep) => (
+                    <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`} className="block">
+                      {dep.depType === 'dep_group' ? 'dep group' : 'code'}{' '}
                       <Link
                         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
-                        className="hover:text-jade [overflow-wrap:anywhere]"
+                        className="hover:text-jade"
                       >
-                        {dep.outPointTxHash}
+                        <ShortId value={dep.outPointTxHash} kind="hash" size="row" />
                         <OutpointIndex index={dep.outPointIndex} />
-                      </Link>{' '}
-                      ({dep.depType})
+                      </Link>
                     </span>
                   ))
                 : group.kind === 'type' &&
@@ -152,9 +157,11 @@ export function TransactionEvidence({
           {hash}
         </Link>
         {tx.timestamp && (
-          <time dateTime={tx.timestamp} className="text-text-dim">
-            {formatUtc8DateTime(tx.timestamp)}
-          </time>
+          <Utc8DateTime
+            timestamp={tx.timestamp}
+            dateTime={tx.timestamp}
+            className="text-text-dim"
+          />
         )}
       </div>
       <TxStructure
@@ -192,7 +199,7 @@ function NotSpentYet({
   return (
     <div
       data-testid="not-spent-yet"
-      className="text-small flex max-w-[640px] flex-col gap-1.5 rounded border border-dashed px-3 py-2.5"
+      className="text-small flex max-w-[640px] flex-col gap-1.5 border border-dashed px-3 py-2.5"
       style={{ borderColor: BOARD_INKS.quiet }}
     >
       <div className="flex flex-wrap justify-between gap-2">
@@ -224,8 +231,9 @@ function NotSpentYet({
                 className="text-text hover:text-jade"
                 title={`${requirement.hashType} ${requirement.referenceHash}`}
               >
-                {(requirement.kind === 'lock' ? lockName : typeName) ??
-                  short(requirement.referenceHash)}
+                {(requirement.kind === 'lock' ? lockName : typeName) ?? (
+                  <ShortId value={requirement.referenceHash} kind="hash" size="row" />
+                )}
               </Link>
               <span className="text-text-dim">
                 {' '}
@@ -249,7 +257,8 @@ function NotSpentYet({
                     style={LINK}
                     title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
                   >
-                    {short(candidate.txHash)}:{candidate.outputIndex}
+                    <ShortId value={candidate.txHash} kind="hash" size="row" />
+                    <OutpointIndex index={candidate.outputIndex} />
                   </Link>
                 </span>
               ))}

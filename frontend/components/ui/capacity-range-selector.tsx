@@ -30,7 +30,7 @@ export function CapacityRangeSelector({
               aria-pressed={active}
               onClick={() => onChange(option.key)}
               className={cn(
-                'text-small inline-flex h-7 items-center rounded border px-2.5 font-mono',
+                'text-small inline-flex h-7 items-center border px-2.5 font-mono',
                 i > 0 && 'ml-1',
                 active
                   ? 'border-base-border bg-base-border-subtle text-text-bright'
@@ -44,7 +44,7 @@ export function CapacityRangeSelector({
       </div>
     );
   return (
-    <div className="border-base-border bg-base-surface/50 flex items-center gap-1 rounded border p-1">
+    <div className="border-base-border bg-base-surface/50 flex items-center gap-1 border p-1">
       {CAPACITY_RANGE_OPTIONS.map((option) => {
         const active = value === option.key;
         return (
@@ -52,7 +52,7 @@ export function CapacityRangeSelector({
             key={option.key}
             type="button"
             onClick={() => onChange(option.key)}
-            className={`text-small rounded px-2 py-1 font-mono transition-colors ${
+            className={`text-small px-2 py-1 font-mono transition-colors ${
               active
                 ? 'bg-jade/15 text-jade border-jade-dim border'
                 : 'text-text-dim hover:bg-base-elevated hover:text-text-bright'

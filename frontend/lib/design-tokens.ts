@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { alpha, color } from '@/lib/palette';
+import { alpha, color, type PaletteKey } from '@/lib/palette';
 
 /**
  * The named colours the boards and graphics draw with. Every value is a CSS reference into the
@@ -8,14 +8,23 @@ import { alpha, color } from '@/lib/palette';
  * same roles on paper. A drawer that needs a concrete hex (a canvas) uses `useThemePalette()`.
  */
 
+/** The palette key of each class colour, for a drawer that reasons about the colour itself. */
+export const CLASS_KEYS = {
+  dao: 'gold',
+  tokens: 'token',
+  objects: 'object',
+  identities: 'identity',
+  ckb: 'slate-ckb',
+  other: 'slate-other',
+} as const satisfies Record<string, PaletteKey>;
 /** Canonical semantic encodings from the approved site review. */
 export const CLASS_COLORS = {
-  dao: color('gold'),
-  tokens: color('token'),
-  objects: color('object'),
-  identities: color('identity'),
-  ckb: color('slate-ckb'),
-  other: color('slate-other'),
+  dao: color(CLASS_KEYS.dao),
+  tokens: color(CLASS_KEYS.tokens),
+  objects: color(CLASS_KEYS.objects),
+  identities: color(CLASS_KEYS.identities),
+  ckb: color(CLASS_KEYS.ckb),
+  other: color(CLASS_KEYS.other),
 } as const;
 export type AssetClass = keyof typeof CLASS_COLORS;
 export const CELL_COLORS = {
@@ -30,7 +39,9 @@ export const BITCOIN_COLORS = {
   dark: color('bitcoin-dark'),
   inner: color('badge-inner-btc'),
 } as const;
-export const DATA_COLOR = color('jade');
+/** The data colour's palette key (celadon), and the colour. */
+export const DATA_KEY = 'jade' satisfies PaletteKey;
+export const DATA_COLOR = color(DATA_KEY);
 /**
  * The ribbons of the tx page's "What moved" flows (review 2026-11-03 v2): the class colours for
  * items; CKB a neutral grey bright enough for a stroke on the night sky (CLASS_COLORS.ckb is the
@@ -43,6 +54,21 @@ export const FLOW_COLORS = {
   ckb: color('flow-ckb'),
   fee: color('flow-fee'),
   compensation: CLASS_COLORS.dao,
+} as const;
+/** A script call's moss ink: the activity feed's script-call badge (`text-amber`). */
+export const SCRIPT_CALL_COLOR = color('amber');
+/**
+ * The activity kinds as the site colours them (UI review 2026-11-14, CH-02), keyed by the daily
+ * activity series: CKB transfers the data ink (the Activities chips' swatch), the DAO gold, each
+ * asset class its class colour, a script call the feed's moss ink. Full strength, both themes.
+ */
+export const ACTIVITY_KIND_COLORS = {
+  transfer: DATA_COLOR,
+  dao: CLASS_COLORS.dao,
+  token: CLASS_COLORS.tokens,
+  object: CLASS_COLORS.objects,
+  identity: CLASS_COLORS.identities,
+  scriptCall: SCRIPT_CALL_COLOR,
 } as const;
 /** Ended states (an expired identity term): neutral grey, never gold or the class colour. */
 export const EXPIRED_COLOR = color('text-dim');
@@ -130,12 +156,19 @@ export const BLOCK_POSITION_COLORS = { currentTile: color('tile-current') } as c
 /**
  * Nervos DAO secondary-issuance partition (board V63): the whole issuance a quiet slate, miners
  * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
+ * The keys, for a drawer that picks the ink of words on these fills (`inkOnFill`).
  */
+export const DAO_ISSUANCE_KEYS = {
+  total: 'ink-quiet',
+  miners: 'text',
+  compensation: CLASS_KEYS.dao,
+  burnt: CLASS_KEYS.other,
+} as const satisfies Record<string, PaletteKey>;
 export const DAO_ISSUANCE_COLORS = {
-  total: color('ink-quiet'),
-  miners: color('text'),
-  compensation: CLASS_COLORS.dao,
-  burnt: CLASS_COLORS.other,
+  total: color(DAO_ISSUANCE_KEYS.total),
+  miners: color(DAO_ISSUANCE_KEYS.miners),
+  compensation: color(DAO_ISSUANCE_KEYS.compensation),
+  burnt: color(DAO_ISSUANCE_KEYS.burnt),
 } as const;
 
 // ---- F2 group `fiber` (Fiber network, Fiber channel, Forks, Fork detail) ----
@@ -166,9 +199,12 @@ export const FORK_COLORS = {
   tileFill: color('tile'),
   tileStroke: color('slate-other'),
   tileStrokeLit: color('text-bright'),
-  /** The row-rule ink: every chart's grid is 1 px solid border-subtle (visual finish V13 b). */
-  grid: color('base-border-subtle'),
-  axis: color('base-border-subtle'),
+  /**
+   * The row-rule ink: every chart's grid is 1 px solid (visual finish V13 b), a rule on the ruled
+   * paper (R5, ruling 4c: the hair by night, darker by day); the base line too.
+   */
+  grid: color('row-rule'),
+  axis: color('row-rule'),
   tick: color('text-dim'),
   ink: color('text-bright'),
   dim: color('text'),
@@ -190,8 +226,11 @@ export const CODE_CLASS_COLORS = {
   ambiguous: { fill: color('base-bg'), edge: color('identity') },
   retired: { fill: color('base-border-subtle'), edge: color('text-ghost') },
 } as const;
-/** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
-export const FREE_CAPACITY_COLOR = color('base-border-subtle');
+/**
+ * Free capacity in a cell anatomy bar (the Script board's "free" swatch): the bar's empty part, in
+ * the bar-track ink, which clears the ruled paper by day (R5).
+ */
+export const FREE_CAPACITY_COLOR = color('bar-track');
 /** The neutral of plain CKB held: the area under occupied in a script's history. */
 export const HELD_CAPACITY_COLOR = CLASS_COLORS.ckb;
 /** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */
@@ -204,7 +243,9 @@ export const ELF_REGION_COLORS = {
   data: color('elf-data'),
   meta: color('elf-meta'),
   sectionHeaders: color('elf-header'),
-  padding: color('ink-quiet'),
+  // The padding's tone paints its hex digits on the cell page: a figure, so the dim ink (R4), apart
+  // from the sections' hues.
+  padding: color('text-dim'),
 } as const;
 
 // ---- F2 group `objects` (Object sequencing gel, collection allele gel, Inventory bars) ----
@@ -218,23 +259,33 @@ export const GENE_COLORS = {
   cycle: [color('aqua'), color('object'), color('text-dim')],
   shared: color('text-bright'),
 } as const;
-/** The gel plate: faint copper lanes, light wells, the byte ruler and the genotype overlay. */
+/**
+ * The gel plate: faint copper lanes, light wells, the byte ruler and the genotype overlay. The
+ * ruler's figures and a gene's empty value are words, in the dim ink (R4); only the arrow between
+ * a gene's raw bytes and its value, a separator, keeps the quiet slate.
+ */
 export const GEL_COLORS = {
   lane: BITCOIN_COLORS.copper,
   well: color('text-bright'),
   ruler: color('text-ghost'),
-  rulerText: color('ink-quiet'),
+  rulerText: color('text-dim'),
+  arrow: color('ink-quiet'),
   label: color('text-dim'),
   heading: color('text'),
   overlay: color('gel-overlay'),
-  bandText: color('gel-band-text'),
 } as const;
 /** Allele ink by the collection's composition (board `url(#ink)`, copper since FINAL_REVIEW 3). */
+export const GEL_INK_KEYS = {
+  btc_ckb: ['gel-ink-btc-0', 'gel-ink-btc-1', 'gel-ink-btc-2'],
+  pure_ckb: ['gel-ink-pure-0', 'gel-ink-pure-1', 'gel-ink-pure-2'],
+  other: [CLASS_KEYS.objects, CLASS_KEYS.objects, CLASS_KEYS.objects],
+} as const satisfies Record<string, readonly [PaletteKey, PaletteKey, PaletteKey]>;
+/** The same inks as colour references (a band's label reads the keys, to choose its own ink). */
 export const GEL_INK = {
-  btc_ckb: [color('gel-ink-btc-0'), color('gel-ink-btc-1'), color('gel-ink-btc-2')],
-  pure_ckb: [color('gel-ink-pure-0'), color('gel-ink-pure-1'), color('gel-ink-pure-2')],
-  other: [CLASS_COLORS.objects, CLASS_COLORS.objects, CLASS_COLORS.objects],
-} as const;
+  btc_ckb: GEL_INK_KEYS.btc_ckb.map(color),
+  pure_ckb: GEL_INK_KEYS.pure_ckb.map(color),
+  other: GEL_INK_KEYS.other.map(color),
+} as const satisfies Record<keyof typeof GEL_INK_KEYS, readonly string[]>;
 
 // ---- Inks with no theme token (visual finish V11) ---------------------------------------------
 // Values the pages drew as bracket-hex classes (`text-[#4b5266]`), named here so page code carries
@@ -257,8 +308,9 @@ export function inkStyle(color: string): CSSProperties {
 /** Inks the boards share. */
 export const BOARD_INKS = {
   /**
-   * The quiet slate between text.ghost and text.dim: separators (↔, vs, —, →), byte offsets, the
-   * version ruler's dates and day labels, the dashed frame of a note.
+   * The quiet slate between text.ghost and text.dim, under text grade: the separators between two
+   * names (↔, →), a version tick's rule, the dashed frame of a note. Never a word or a figure (R4):
+   * an offset, a date, a day label, "vs", a dash that stands for "none" are the dim ink.
    */
   quiet: color('ink-quiet'),
   /** A link on the cell, fiber and fork boards (hashes, outputs, a script): cyan under aqua. */
@@ -280,28 +332,4 @@ export const SEARCH_RESULT_COLORS = {
 export const STREAM_COLORS = {
   pending: color('stream-pending'),
   pendingHover: color('stream-pending-hover'),
-} as const;
-
-// ---- Storage tiers (composition card, content preview; visual finish V11) ----
-/**
- * The storage tiers' own inks: BTC+CKB a moss green over a dark amber wash, Pure CKB a deep jade
- * over a dark jade wash, centralised a dark rouge edge. `inkLit` / `edgeLit` are the tooltip
- * button's hover; a `wash` is the preview header gradient's start, at 50 % (it fades to nothing).
- */
-export const STORAGE_TIER_COLORS = {
-  btc_ckb: {
-    ink: color('tier-btc-ink'),
-    inkLit: color('tier-btc-ink-lit'),
-    edge: color('tier-btc-edge'),
-    edgeLit: color('tier-btc-edge-lit'),
-    wash: alpha('tier-btc-wash', 0.5),
-  },
-  pure_ckb: {
-    ink: color('tier-pure-ink'),
-    inkLit: color('tier-pure-ink-lit'),
-    edge: color('tier-pure-edge'),
-    edgeLit: color('tier-pure-edge-lit'),
-    wash: alpha('tier-pure-wash', 0.5),
-  },
-  centralized_mixture: { edge: color('tier-centralized-edge') },
 } as const;

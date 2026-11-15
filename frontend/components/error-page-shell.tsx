@@ -21,11 +21,12 @@ import { Header } from '@/components/layout/header';
 import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { Wordmark } from '@/components/layout/wordmark';
+import { NoBreak } from '@/components/ui/no-break';
+import { ShortId } from '@/components/ui/short-id';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { api } from '@/lib/api';
-import { truncateHash } from '@/lib/utils';
 
 interface ErrorPageShellProps {
   /** The eyebrow: what happened (`Not found · 404`, `Error · not a 404`). */
@@ -37,7 +38,7 @@ interface ErrorPageShellProps {
   children: ReactNode;
   /**
    * Drawn in place of AppFrame — the frame route's error boundary caught a failure of the frame
-   * itself: the shell draws its own header, page end and footer and fills the screen. Otherwise
+   * itself: the shell draws its own header, footer and page end and fills the screen. Otherwise
    * (the not-found route, a page's not-found, a page's route error) it renders inside the frame,
    * under the frame's header (visual finish V6), and fills what the header leaves.
    */
@@ -86,7 +87,7 @@ export function ErrorPageShell({
           <p className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-1">
             <span aria-hidden="true" className="section-mark self-center" />
             <span
-              className="eyebrow text-text-dim"
+              className="eyebrow text-text-dim text-meta"
               data-eyebrow
               onPointerEnter={eggOn}
               onPointerLeave={eggOff}
@@ -104,8 +105,10 @@ export function ErrorPageShell({
           {!contextSafe && <TipSeal />}
         </div>
       </main>
-      {wholeScreen && <PromptEnd />}
+      {/* U-20: the footer is the last quiet row, then the empty prompt ends the page, as the
+          frame's pages end */}
       {standalone && <SiteFooter />}
+      {wholeScreen && <PromptEnd />}
     </div>
   );
 }
@@ -160,9 +163,12 @@ function TipSeal() {
           />
         </Suspense>
       </div>
-      <p data-seal-caption="" className="text-text-ghost text-meta m-0 mt-8 min-w-0">
-        behind: the seal of the newest block, <BlockLink number={block.number} /> ·{' '}
-        <span className="break-all">{truncateHash(block.hash)}</span>
+      <p data-seal-caption="" className="text-text-dim text-meta m-0 mt-8 min-w-0">
+        behind: the seal of the newest block, <BlockLink number={block.number} />{' '}
+        {/* U-16: the shortened hash is one unit, and the dot goes with it to a new line */}
+        <NoBreak>
+          · <ShortId value={block.hash} kind="hash" size="row" />
+        </NoBreak>
       </p>
     </>
   );

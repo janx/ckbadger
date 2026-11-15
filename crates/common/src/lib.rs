@@ -20,7 +20,7 @@ pub mod types;
 pub mod utxoswap;
 pub mod work;
 
-pub use address::script_to_address;
+pub use address::{script_to_address, ScriptAddressError};
 pub use error::{Error, Result};
 pub use hardfork::*;
 pub use hash_type::{hash_type_from_label, hash_type_label};

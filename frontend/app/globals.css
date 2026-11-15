@@ -109,6 +109,9 @@
   --pipeline-jade: var(--color-emphasis);
   --pipeline-aqua: var(--color-interactive);
   --pipeline-gold: var(--c-gold);
+  /* The gold of a word on a tile (an in-window block number): gold by night, its bright step by
+     day, where the gold is under 4.5:1 on the tile (lib/palette.ts). */
+  --pipeline-word-gold: var(--c-pipeline-word-gold);
   /* Stage fills: aqua / gold / jade stepped to OKLCH L≈0.66 for filled marks on dark; the light
      theme steps them down to the same contrast on paper (lib/palette.ts). */
   --pipeline-pending: var(--c-pipeline-pending);
@@ -182,10 +185,6 @@ body * {
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-
   .tabular-nums {
     font-feature-settings: 'tnum';
     font-variant-numeric: tabular-nums;
@@ -231,20 +230,6 @@ body * {
     transform: scale(1.1);
   }
 
-  .digit-slot {
-    display: inline-block;
-    overflow: hidden;
-    vertical-align: bottom;
-  }
-
-  .digit-value {
-    display: inline-block;
-  }
-
-  .digit-value.changing {
-    animation: digit-tick 0.2s ease-out;
-  }
-
   /*
    * Row scan (Midnight, continued: move 4): a faint jade band crosses a hovered row once, in
    * 0.5 s. Painted as the row's own background image — a gradient three rows wide whose middle
@@ -268,53 +253,6 @@ body * {
   .row-scan:hover {
     animation: row-scan-sweep 0.5s ease-out forwards;
   }
-
-  .byte-hover-breathe {
-    animation: byte-breathe 1.15s ease-in-out infinite;
-  }
-
-  .status-marquee-shine {
-    display: inline-block;
-    background-image: linear-gradient(
-      90deg,
-      var(--c-ink-muted) 0%,
-      var(--c-text-bright) 45%,
-      var(--c-ink-muted) 100%
-    );
-    background-size: 220% 100%;
-    background-position: 220% 0;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-
-  .cycles-calculating-marquee {
-    display: inline-block;
-    background-image: linear-gradient(
-      90deg,
-      var(--c-ink-muted) 0%,
-      var(--c-text-bright) 45%,
-      var(--c-ink-muted) 100%
-    );
-    background-size: 220% 100%;
-    background-position: 220% 0;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cycles-marquee-shine 2.8s linear infinite;
-  }
-}
-
-@keyframes cycles-marquee-shine {
-  0% {
-    background-position: 220% 0;
-  }
-  100% {
-    background-position: -220% 0;
-  }
 }
 
 @keyframes terminal-border-scan-ltr {
@@ -323,29 +261,6 @@ body * {
   }
   100% {
     transform: translateX(520%);
-  }
-}
-
-@keyframes digit-tick {
-  0% {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes byte-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    filter: brightness(1);
-  }
-  50% {
-    transform: scale(1.08);
-    filter: brightness(1.15);
   }
 }
 
@@ -481,6 +396,15 @@ h2.text-section::before {
   content: '';
   margin-right: 10px;
 }
+/* The search field's prompt (the boards' `.search .sq`, UI review 2026-11-14, U-01): the same
+   cinnabar square, one pixel smaller, 7 px. Placed by the field (components/search-bar.tsx). */
+.search-square {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--c-mark);
+}
 h2.text-section {
   text-transform: lowercase;
 }
@@ -596,10 +520,6 @@ svg a:hover {
 :root[data-theme='light'] .chart-line-halo {
   filter: none;
 }
-:root[data-theme='light'] .glow-neon,
-:root[data-theme='light'] .glow-soft {
-  text-shadow: none;
-}
 
 /* Reduced motion: no sweep, no blink; the halos are static anyway. */
 @media (prefers-reduced-motion: reduce) {
@@ -612,20 +532,6 @@ svg a:hover {
   }
 }
 
-/* A stat figure's glow, held close (the rubbing's bloom is 6 px, never a wide neon wash): a 1 px
-   core in the figure's colour and two short halos (components/ui/stat-block.tsx sets the three). */
-.glow-neon {
-  text-shadow:
-    0 0 1px var(--glow-color),
-    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
-}
-.glow-soft {
-  text-shadow:
-    0 0 6px var(--glow-color-mid, rgb(var(--rgb-jade) / calc(0.25 * var(--m-glow)))),
-    0 0 12px var(--glow-color-far, rgb(var(--rgb-jade) / calc(0.15 * var(--m-glow))));
-}
-
 /* A live mark breathes: the square's ink fades to 45 % and back over 1.5 s (no bloom: the prompt
    square is ink, not phosphor). */
 @keyframes live-pulse {
@@ -636,64 +542,6 @@ svg a:hover {
   50% {
     opacity: 0.45;
   }
-}
-
-/* Shield storage cards from CRT scanline overlay */
-.storage-card-no-crt {
-  position: relative;
-  z-index: 10000;
-}
-
-/* --- Storage tier border-glow breathing --- */
-.storage-card-ckb {
-  animation: storage-breathe-ckb 4s ease-in-out infinite;
-}
-.storage-card-both {
-  animation: storage-breathe-both 4s ease-in-out infinite;
-}
-@keyframes storage-breathe-ckb {
-  0%,
-  100% {
-    border-color: rgb(var(--rgb-jade) / 0.25);
-    box-shadow: 0 0 0 rgb(var(--rgb-jade) / calc(0 * var(--m-glow)));
-  }
-  50% {
-    border-color: rgb(var(--rgb-jade) / 0.5);
-    box-shadow: 0 0 6px rgb(var(--rgb-jade) / calc(0.08 * var(--m-glow)));
-  }
-}
-@keyframes storage-breathe-both {
-  0%,
-  100% {
-    border-color: rgb(var(--rgb-tier-btc-edge-lit) / 0.25);
-    box-shadow: 0 0 0 rgb(var(--rgb-tier-btc-edge-lit) / calc(0 * var(--m-glow)));
-  }
-  50% {
-    border-color: rgb(var(--rgb-tier-btc-edge-lit) / 0.5);
-    box-shadow: 0 0 6px rgb(var(--rgb-tier-btc-edge-lit) / calc(0.08 * var(--m-glow)));
-  }
-}
-
-/* Storage tier text effects */
-.storage-text-gem {
-  color: var(--c-gem-jade-1);
-  text-shadow: 0 0 6px rgb(var(--rgb-gem-jade-1) / calc(0.45 * var(--m-glow)));
-}
-/* Both text: gold→emerald split */
-.storage-text-split {
-  background: linear-gradient(
-    135deg,
-    var(--c-gem-gold-0) 0%,
-    var(--c-gem-gold-1) 40%,
-    var(--c-gem-jade-0) 60%,
-    var(--c-gem-jade-1) 100%
-  );
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 -1px 0 rgb(var(--rgb-gold-bright) / calc(0.25 * var(--m-glow))))
-    drop-shadow(0 0 6px rgb(var(--rgb-jade-bright) / calc(0.25 * var(--m-glow))));
 }
 
 /* Ambient glow breathing animation for on-chain preview */
@@ -783,22 +631,27 @@ svg a:hover {
 }
 
 /* Move 2b — a well: inset, for what is typed into (the search field, a filter, the command palette)
-   and what is read as bytes (a hex dump, raw JSON). 3 px corners, the row-rule ink; `--well-radius`
-   lets the header's search field keep the board's 6 px. The inset is the boards' (`inset 0 1px
-   3px`, 60 % black by night, the ink at 8 % by day); the lower lip (visual finish V4) is kept as a
-   material and set transparent: the rubbing has none. */
+   and what is read as bytes (a hex dump, raw JSON). Square corners (UI review 2026-11-14, ruling
+   R1): it sets no radius. The row-rule ink; the inset is the boards' (`inset 0 1px 3px`, 60 % black by night, the
+   ink at 8 % by day); the lower lip (visual finish V4) is kept as a material and set transparent:
+   the rubbing has none. */
 .well {
   background: var(--c-well-bg);
   border: 1px solid var(--c-base-border-subtle);
-  border-radius: var(--well-radius, 3px);
   box-shadow:
     inset 0 1px 3px var(--m-well-inset),
     0 1px 0 var(--m-well-lip);
 }
 
 /* Move 2c — tier-2 ground: the evidence tier sits one step deeper, its ground bleeding through
-   the page gutters (the container's 16 px, 24 px from lg) under the tube. */
+   the page gutters (the container's 16 px, 24 px from lg) under the tube. The ground decides its
+   rule (R5, ruling 4b): inside it the row rule and the bar track resolve to their deeper keys, so
+   every border-row-rule and bg-bar-track in tier 2 clears the darker ground and its ruled lines. */
 .tier2-ground {
+  --c-row-rule: var(--c-row-rule-deep);
+  --rgb-row-rule: var(--rgb-row-rule-deep);
+  --c-bar-track: var(--c-bar-track-deep);
+  --rgb-bar-track: var(--rgb-bar-track-deep);
   background: var(--m-tier2-ground);
   margin-left: -1rem;
   margin-right: -1rem;
@@ -870,6 +723,18 @@ h1.text-index {
   border-bottom: 1px solid rgb(var(--rgb-jade) / 0.6);
 }
 
+/* Set back (UI review 2026-11-14, ruling R4): a row or a tile that is context, not the subject —
+   a cellbase row, the cells a transaction structure does not follow, a neighbour's row in an
+   identity's feed — is the quiet variant: every word in it (its key, its figures, its links) in
+   the dim ink, nothing faded. The padding zeros keep the ghost, and a seal keeps its own state's
+   ink at full strength: its SVG paints by attribute, outside the rule. `:where()` keeps the rule
+   at one class's weight, after the utilities, so it outranks a word's own ink while a link's hover
+   (`a:hover`, `hover:text-jade`) still lights. */
+.quiet,
+.quiet :where(:not(svg, svg *, .text-text-ghost)) {
+  color: var(--c-text-dim);
+}
+
 /* Reduced motion: no flare (the hook is a no-op too; the figure still updates). */
 @media (prefers-reduced-motion: reduce) {
   .phosphor-flare {
@@ -899,10 +764,12 @@ h1.text-index {
 }
 
 /* Material pass v2, leftovers — tier-2 prose (components/ui/prose.tsx): an explanation reads at
-   14 px on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is the true
-   italic (the 400 italic face above). The piece carries the class; its paragraphs carry nothing. */
+   the body step, 13 px (R12: the scale has no stylesheet-only size, and tier 2 is never larger
+   than tier 1), on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is
+   the true italic (the 400 italic face above). The piece carries the class; its paragraphs carry
+   nothing. */
 .prose-tier2 p {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.7;
   max-width: 64ch;
   color: var(--c-text-dim);

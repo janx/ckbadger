@@ -73,7 +73,10 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
       standalone={standalone || contextSafe}
       contextSafe={contextSafe}
     >
-      <span role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">
+      <span
+        role="alert"
+        className="text-negative min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]"
+      >
         ✗ {message}
       </span>
       {/* words wrap between words; only the route, one long token, may break anywhere */}
@@ -84,23 +87,24 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         <button
           type="button"
-          className="text-jade focus-visible:outline-jade whitespace-nowrap underline-offset-4 hover:underline focus-visible:outline"
+          className="text-jade focus-visible:outline-jade underline-offset-4 hover:underline focus-visible:outline"
           onClick={() => window.location.reload()}
         >
-          ↻ try again
+          <span className="whitespace-nowrap">↻ </span>try again
         </button>
         <button
           type="button"
-          className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+          className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
           onClick={copyDetails}
         >
-          → copy details for a bug report
+          <span className="whitespace-nowrap">→ </span>copy details for a bug report
         </button>
         <Link
           href={recovery.href}
-          className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+          className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
         >
-          ← {recovery.label}
+          <span className="whitespace-nowrap">← </span>
+          {recovery.label}
         </Link>
       </div>
       {copyState !== 'idle' && (

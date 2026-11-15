@@ -1,6 +1,6 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, expect, vi } from 'vitest';
-import { ByteGroupDisplay, HexDisplay } from '@/components/ui/hex-display';
+import { HexDisplay } from '@/components/ui/hex-display';
 
 describe('HexDisplay', () => {
   beforeEach(() => {
@@ -25,20 +25,13 @@ describe('HexDisplay', () => {
     expect(container).toHaveTextContent('0xabcdef12');
   });
 
-  it('groups bytes with separators in byte group mode', () => {
+  // U-09 (re-pinned): it shortens at its size, the one ellipsis between the halves
+  it('shortens a long hex value at its size', () => {
     const { container } = render(
-      <ByteGroupDisplay value="0xabcdef12" bytesPerGroup={1} color="aqua" />
+      <HexDisplay value="0xabcdef1234567890abcdef1234567890" size="row" copyable={false} />
     );
 
-    expect(container).toHaveTextContent('0xab cd ef 12');
-  });
-
-  it('truncates long hex values by default', () => {
-    const { container } = render(
-      <HexDisplay value="0xabcdef1234567890abcdef1234567890" truncate copyable={false} />
-    );
-
-    expect(container).toHaveTextContent('0xabcdef1234...34567890');
+    expect(container).toHaveTextContent('0xabcdef12…567890');
   });
 
   it('copies the full hex value when clicked', async () => {
@@ -51,5 +44,30 @@ describe('HexDisplay', () => {
     await waitFor(() => {
       expect(container).toHaveTextContent('Copied');
     });
+  });
+
+  // A4 review 3: the one copy path (hooks/useCopy): its tick's timer goes with it, and a copy
+  // without a clipboard says nothing.
+  it('leaves no timer when it goes while it says Copied, and says nothing without a clipboard', async () => {
+    const value = '0xabcdef1234567890abcdef1234567890';
+    vi.useFakeTimers();
+    try {
+      const first = render(<HexDisplay value={value} truncate={false} />);
+      await act(async () => {
+        fireEvent.click(first.getByTitle(`Click to copy: ${value}`));
+      });
+      expect(first.container).toHaveTextContent('Copied');
+      first.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      Object.assign(navigator, { clipboard: undefined });
+      const second = render(<HexDisplay value={value} truncate={false} />);
+      await act(async () => {
+        fireEvent.click(second.getByTitle(`Click to copy: ${value}`));
+      });
+      expect(second.container).not.toHaveTextContent('Copied');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

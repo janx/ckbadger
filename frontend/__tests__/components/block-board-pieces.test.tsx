@@ -3,11 +3,9 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakdown';
-import {
-  BLOCK_TXS_MIN_WIDTH,
-  BlockTransactionsTable,
-} from '@/components/blocks/block-transactions-table';
-import { positionSentence } from '@/components/blocks/block-position';
+import { BlockTransactionsTable } from '@/components/blocks/block-transactions-table';
+import { positionParts } from '@/components/blocks/block-position';
+import { sentenceText } from '@/components/ui/block-link';
 import { BlocksLimitsFootnote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
@@ -75,6 +73,13 @@ describe('RewardBreakdown', () => {
   });
 });
 
+// The position sentence as text: the parts the page renders, read as one line (lane E3 moved this
+// composition here when its last caller in the app went).
+const positionSentence = (
+  block: Parameters<typeof positionParts>[0],
+  links: Parameters<typeof positionParts>[1]
+) => sentenceText(positionParts(block, links));
+
 describe('positionSentence', () => {
   const block = { number: 932, proposalsCount: 2, unclesCount: 1 };
   it('reads the incoming and outgoing proposal links and the uncles', () => {
@@ -83,14 +88,14 @@ describe('positionSentence', () => {
         { from: 930, to: 932 },
         { from: 932, to: 934 },
       ])
-    ).toBe('committed what #930 proposed, proposed what #934 committed, and included 1 uncle');
+    ).toBe('committed what #930 proposed, proposed what #934 committed, and included 1\u00a0uncle');
   });
   it('says what is missing instead of inventing a link', () => {
     expect(positionSentence({ number: 5, proposalsCount: 0, unclesCount: 0 }, [])).toBe(
       'committed no proposed transactions, proposed nothing, and included no uncle'
     );
     expect(positionSentence({ number: 5, proposalsCount: 3, unclesCount: 2 }, [])).toBe(
-      'committed no proposed transactions, proposed 3 transactions, none committed yet, and included 2 uncles'
+      'committed no proposed transactions, proposed 3\u00a0transactions, none committed yet, and included 2\u00a0uncles'
     );
   });
 });
@@ -120,8 +125,11 @@ describe('BlockTransactionsTable', () => {
   });
   it('fits the block page main column at 1440 (visual pass: the Cycles column was cut off)', () => {
     wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
-    expect(BLOCK_TXS_MIN_WIDTH).toBeLessThanOrEqual(968);
-    expect(screen.getByRole('table').style.minWidth).toBe(`${BLOCK_TXS_MIN_WIDTH}px`);
+    // the columns' minimums, 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172 = 938 px (re-pinned by
+    // lane E3 from the table's own constant, which nothing in the app read)
+    const minWidth = screen.getByRole('table').style.minWidth;
+    expect(minWidth).toBe('938px');
+    expect(parseFloat(minWidth)).toBeLessThanOrEqual(968);
   });
   // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
   // drawn (a 96 px tick row 3 px under the name), so the lift changes no pixel.
@@ -186,9 +194,10 @@ describe('BlockTransactionsTable', () => {
     expect(screen.queryByRole('table')).toBeNull();
     const [base, user] = screen.getAllByTestId('block-tx-row-mobile');
     expect(phoneLines(user).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '10x111111...111111', 'proposed in #5 +2'],
+      // U-09 (re-pinned): the phone row's hash at the tight size
+      ['identity', '10x1111…1111', 'proposed in #5 +2'],
       ['amounts', '0.00000100 CKB', 'fee 0.00030000 CKB'],
-      ['figures', '2 → 1 cells', '300 B · 1,000 cycles'],
+      ['figures', '2 → 1\u00a0cell', '300 B · 1,000 cycles'],
     ]);
     expect(phoneLines(base)[0].right).toBe('proposed in cellbase');
     expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
@@ -202,9 +211,9 @@ describe('BlockTransactionsTable', () => {
     wrap(<BlockTransactionsTable transactions={[tx(1, { cycles: 1000 })]} blockNumber={7} />);
     const [row] = screen.getAllByTestId('block-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '10x111111...111111', '0.00000100 CKB'],
+      ['identity', '10x1111…1111', '0.00000100 CKB'],
       // Consistency plan C4: a zero fee is "0 CKB" (was "0.00000000 CKB").
-      ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1 cells · 300 B · 1,000 cycles'],
+      ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1\u00a0cell · 300 B · 1,000 cycles'],
     ]);
   });
 });

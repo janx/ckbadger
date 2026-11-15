@@ -27,8 +27,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getGlobalActivities: vi.fn(),
   },
   isNotFoundApiError: () => false,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/src/navigation', () => ({
@@ -156,7 +154,7 @@ describe('the genesis block page', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('No proposals in this block')).toBeInTheDocument();
+    expect(screen.getByText('No proposals in this block.')).toBeInTheDocument();
     expect(screen.getByText('No uncles in this block.')).toBeInTheDocument();
   });
 });

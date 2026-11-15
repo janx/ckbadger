@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderPaused } from '@/__tests__/utils/paused-read';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -101,8 +102,9 @@ describe('FiberChannelsPage', () => {
         .map((dd) => dd.textContent)
     ).toEqual([
       '3 · since 2023-11-15 · 1 in USDI',
+      // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
       '2 · in 1 pair',
-      '1 m 40 s · 2 of 2 closed within an hour',
+      '1m 40s · 2 of 2 closed within an hour',
     ]);
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();
     // R11: the figure is tier 1's only jade text
@@ -191,11 +193,15 @@ describe('FiberChannelsPage', () => {
         .map((h) => h.textContent)
     ).toEqual(['Channel', 'Parties', 'Capacity', 'Opened', 'Open for']);
     expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
-    expect(within(table).getByText('3 m 20 s')).toBeInTheDocument();
-    // a party reads by its last six characters, as the graph names it (board L8, R16); the whole
-    // lock hash (or address) stays its title and link
-    expect(within(table).getByText('…aaaaaa')).toHaveAttribute('title', `0x${'aa'.repeat(32)}`);
-    expect(within(table).queryByText('0xaaaaaaaa…aaaaaa')).toBeNull();
+    expect(within(table).getByText('3m 20s')).toBeInTheDocument();
+    // U-09 (re-pinned): a party reads head and tail at the row size (it was its last six
+    // characters alone, as the graph named it); the whole lock hash (or address) stays its title
+    // and link
+    expect(within(table).getByText('0xaaaaaaaa…aaaaaa').closest('[title]')).toHaveAttribute(
+      'title',
+      `0x${'aa'.repeat(32)}`
+    );
+    expect(within(table).queryByText('…aaaaaa')).toBeNull();
     // R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), a 20.8 px line
     // with 6 px above and below
     for (const cell of within(table).getAllByRole('cell'))
@@ -268,12 +274,18 @@ describe('Fiber channel phone row (board L8)', () => {
     const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
     expect(screen.queryByRole('table', { name: 'Open channels' })).toBeNull();
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
-      ['channel', 'head', '0x01010101…010101', 'open'],
-      ['pair', 'body', '…pr3prn ⇄ …bbbbbb Default Lock · unnamed lock', '3,000.00000000 CKB'],
+      // U-09 (re-pinned): the phone row's ids at the tight size
+      ['channel', 'head', '0x0101…0101', 'open'],
+      [
+        'pair',
+        'body',
+        'ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
+        '3,000.00000000 CKB',
+      ],
       [
         'time',
         'quiet',
-        expect.stringMatching(/^opened 2023-11-15 \d\d:\d\d · open for 3 m 20 s$/),
+        expect.stringMatching(/^opened 2023-11-15 \d\d:\d\d · open for 3m 20s$/),
         null,
       ],
     ]);
@@ -295,10 +307,26 @@ describe('Fiber channel phone row (board L8)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       [
         'channel',
-        '0x01010101…010101 · …pr3prn ⇄ …bbbbbb Default Lock · unnamed lock',
+        '0x0101…0101 · ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
         '3,000.00000000 CKB',
       ],
-      ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3 m 20 s$/), 'open'],
+      ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],
     ]);
+  });
+});
+
+// A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
+// awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
+describe('FiberChannelsPage while its read is paused', () => {
+  it('says it is loading, not nothing, then lists the channels once back online', async () => {
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
+    );
+    const { resume } = renderPaused(<FiberChannelsPage />);
+    expect(await screen.findByText('Loading channels…')).toBeInTheDocument();
+    resume();
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    expect(screen.queryByText('Loading channels…')).toBeNull();
   });
 });

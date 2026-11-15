@@ -5,25 +5,33 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type Address, type AddressHoldings, type AddressCellClass } from '@/lib/api';
 import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
+import { ShortId } from '@/components/ui/short-id';
+import { shortenHash } from '@/lib/shorten';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, countNoun } from '@/lib/format-count';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { META_CHAR_PX } from '@/lib/byte-map';
+import { NoBreak } from '@/components/ui/no-break';
+import { Utc8Date } from '@/components/ui/utc8-date';
+import { Dotted, dottedGroup } from '@/components/ui/phone-row';
+import { percentOf } from '@/lib/format-unit';
+import { isAwaited, type ReadState } from '@/lib/query-state';
+import { unitNode } from '@/components/ui/units';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -33,22 +41,31 @@ export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: Asse
   { key: 'script', label: 'Other scripts', mark: 'other' },
   { key: 'plain', label: 'Plain CKB', mark: 'ckb' },
 ];
+/**
+ * An address section's read as the section states it: its failure once it has failed, "Loading
+ * …" while it is awaited (`isAwaited`: fetching, or paused offline or between retries), and
+ * "… unavailable." only once it has answered with nothing; a disabled read says nothing.
+ */
 export function AddressLoadState({
   error,
-  loading,
+  read,
   label,
 }: {
   error: Error | null;
-  loading: boolean;
+  read: ReadState;
   label: string;
 }) {
+  const sentence = error
+    ? `Could not load ${label}: ${error.message}`
+    : isAwaited(read)
+      ? `Loading ${label}…`
+      : read.status === 'success'
+        ? `${label} unavailable.`
+        : null;
+  if (sentence === null) return null;
   return (
     <p className="text-text-dim text-small py-3" role={error ? 'alert' : 'status'}>
-      {error
-        ? `Could not load ${label}: ${error.message}`
-        : loading
-          ? `Loading ${label}…`
-          : `${label} unavailable.`}
+      {sentence}
     </p>
   );
 }
@@ -114,7 +131,9 @@ function TokenAmount({ amount, decimals }: { amount: string; decimals: number | 
       {integer}
       {fraction && (
         <>
-          <span className="opacity-[0.78]">{significant ? '.' + significant : ''}</span>
+          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
+            {significant ? '.' + significant : ''}
+          </span>
           <span data-ghost className="text-text-ghost">
             {significant ? '' : '.'}
             {fraction.slice(significant.length)}
@@ -200,7 +219,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
       { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
-  const share = (v: bigint) => `${formatScaledInteger(v * BigInt(100), sum, 2)} %`;
+  const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const { integer, decimal } = formatCkbAmount(sum);
   const zero = sum === BigInt(0);
@@ -213,7 +232,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           <span className="eyebrow text-text-dim text-meta block w-fit">balance</span>
           <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
             {zero ? (
-              <span data-ghost className="text-text-ghost text-entity sm:text-display">
+              <span data-zero className="text-text-dim text-entity sm:text-display">
                 0
               </span>
             ) : (
@@ -229,8 +248,11 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           </div>
         </div>
         <span className="text-text-dim text-body tabular-nums">
-          in <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
-          live {holdings.liveCellsCount === 1 ? 'cell' : 'cells'}
+          in{' '}
+          <NoBreak>
+            <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
+            {countNoun(holdings.liveCellsCount, 'live cell')}
+          </NoBreak>
         </span>
       </div>
       {!zero && (
@@ -251,7 +273,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                   data-part={p.key}
                   title={`${label} · ${exact(p.value)}`}
                   className={cn(
-                    'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-sm tabular-nums',
+                    'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap tabular-nums',
                     fits && 'px-2',
                     p.ink
                   )}
@@ -374,7 +396,7 @@ export function AddressMetrics({
               })}
               className="text-text-bright"
             >
-              {lockName ?? `${lock.codeHash.slice(0, 10)}…${lock.codeHash.slice(-4)}`}
+              {lockName ?? <ShortId value={lock.codeHash} kind="hash" size="row" />}
             </Link>
           ),
           note: `${lock.hashType} · ${argsNote(lock.args)}`,
@@ -418,7 +440,7 @@ function HoldingSection({
         if (!e.currentTarget.contains(e.relatedTarget)) onActive(null);
       }}
     >
-      <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
+      <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
         <h3 className="text-text-bright text-body flex items-center gap-2 font-medium">
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
@@ -496,7 +518,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   );
   const summary = (kind: AddressCellClass) => (
     <>
-      {formatCount(holdings.classes[kind].cellCount, 'cell')} ·{' '}
+      {unitNode(formatCount(holdings.classes[kind].cellCount, 'cell'))} ·{' '}
       <ExactCkb
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
@@ -514,39 +536,41 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   return (
     <section aria-labelledby="holdings-heading" className="space-y-7">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-          {/* Rubbing × Song print, phase 5 (A21): the holdings, run on the live cells they are;
-              the count nav stays beside, the classes it does not hold are the note. */}
-          <PromptHeading
-            id="holdings-heading"
-            command="Holdings"
-            args={formatCount(holdings.liveCellsCount, 'cell')}
-          />
-          {held.length > 0 && (
-            <nav aria-label="Holdings" className="text-text-dim text-small">
-              ·{' '}
-              {held.map((c, i) => (
-                <span key={c.key}>
-                  {i > 0 && ' · '}
-                  <a
-                    href={`#holdings-${c.key}`}
-                    className="hover:text-jade tabular-nums"
-                    onMouseEnter={() => setActive(c.key)}
-                    onMouseLeave={() => setActive(null)}
-                    onFocus={() => setActive(c.key)}
-                    onBlur={() => setActive(null)}
-                  >
-                    {formatCount(c.count, c.one, c.many)}
-                  </a>
-                </span>
-              ))}
-            </nav>
-          )}
-        </div>
+        {/* Rubbing × Song print, phase 5 (A21): the holdings, run on the live cells they are;
+            the count nav stays beside, the classes it does not hold are the note. PA-25: the
+            heading and the nav's links are one separated list, so a link that wraps under the
+            heading starts its line with no dot. */}
+        <Dotted
+          className="text-small gap-y-1"
+          parts={[
+            <PromptHeading
+              key="heading"
+              id="holdings-heading"
+              command="Holdings"
+              args={formatCount(holdings.liveCellsCount, 'cell')}
+            />,
+            dottedGroup(
+              held.map((c) => (
+                <a
+                  key={c.key}
+                  href={`#holdings-${c.key}`}
+                  className="hover:text-jade tabular-nums"
+                  onMouseEnter={() => setActive(c.key)}
+                  onMouseLeave={() => setActive(null)}
+                  onFocus={() => setActive(c.key)}
+                  onBlur={() => setActive(null)}
+                >
+                  {unitNode(formatCount(c.count, c.one, c.many))}
+                </a>
+              )),
+              { role: 'holdings-nav', className: 'text-text-dim', nav: { label: 'Holdings' } }
+            ),
+          ]}
+        />
         {/* The right-prompt note, drawn as PromptHeading draws one: the count nav stands between
             the heading and it, and PromptHeading's own row has no place for that. */}
         {missing.length > 0 && (
-          <span data-prompt-note="" className="text-text-ghost text-meta ml-auto">
+          <span data-prompt-note="" className="text-text-dim text-meta ml-auto">
             {missing.map((c) => c.none).join(' · ')}
           </span>
         )}
@@ -563,13 +587,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           <span className="text-text-dim">On-chain space they take</span>
           <span>
             {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
-            {formatCount(holdings.liveCellsCount, 'cell')}
+            {unitNode(formatCount(holdings.liveCellsCount, 'cell'))}
           </span>
         </div>
         <div
           role="img"
           aria-label="Occupied capacity by class"
-          className="flex h-2.5 gap-0.5 overflow-hidden rounded"
+          className="flex h-2.5 gap-0.5 overflow-hidden"
         >
           {spaceOrder(holdings)
             .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) > BigInt(0))
@@ -614,12 +638,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 </span>
                 {occupied > BigInt(0) && (
                   <span className="text-text-dim">
-                    {formatScaledInteger(
-                      BigInt(holdings.classes[c.key].occupiedCapacity) * BigInt(100),
-                      occupied,
-                      2
-                    )}
-                    %
+                    {percentOf(BigInt(holdings.classes[c.key].occupiedCapacity), occupied)}
                   </span>
                 )}
               </button>
@@ -652,7 +671,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           summary={
             <>
               {holdings.holdings.object.toLocaleString('en-US')} in{' '}
-              {formatCount(holdings.objectCollections.length, 'collection')} · {held_('object')}
+              {unitNode(formatCount(holdings.objectCollections.length, 'collection'))} ·{' '}
+              {held_('object')}
             </>
           }
           active={active}
@@ -669,8 +689,10 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             ) : (
               <>
                 <p className="text-text-dim text-small pt-3">
-                  {holdings.depositCellsCount} deposits · {holdings.withdrawalRequestCellsCount}{' '}
-                  withdrawal requests
+                  {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
+                  {unitNode(
+                    formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')
+                  )}
                 </p>
                 <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
                   <div>
@@ -733,7 +755,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         <div
                           key={`${cell.txHash}:${cell.outputIndex}`}
                           data-dao-cell
-                          className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
+                          className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
                         >
                           <span className="text-text-dim">
                             <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
@@ -747,7 +769,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                             <Link href={`/blocks/${eventBlock}`}>
                               {formatBlockNumber(eventBlock)}
                             </Link>{' '}
-                            · {formatUtc8Date(eventTimestamp)}
+                            · <Utc8Date timestamp={eventTimestamp} />
                           </span>
                           <ExactCkb
                             shannons={BigInt(cell.capacity)}
@@ -769,11 +791,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     />
                   </>
                 ) : (
-                  <AddressLoadState
-                    label="DAO deposits"
-                    error={deposits.error}
-                    loading={deposits.isLoading}
-                  />
+                  <AddressLoadState label="DAO deposits" error={deposits.error} read={deposits} />
                 )}
               </>
             )}
@@ -785,7 +803,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             summary={
               <>
                 {holdings.holdings.token.toLocaleString('en-US')} kinds in{' '}
-                {formatCount(holdings.classes.token.cellCount, 'cell')} · {held_('token')}
+                {unitNode(formatCount(holdings.classes.token.cellCount, 'cell'))} · {held_('token')}
               </>
             }
             active={active}
@@ -800,7 +818,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   <div
                     key={t.typeScriptHash}
                     data-token-row={t.typeScriptHash}
-                    className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
+                    className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                   >
                     <span className="min-w-0">
                       <Link
@@ -808,7 +826,12 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         className="text-text-bright hover:text-jade"
                       >
                         {tokenName(t) ?? (
-                          <Hash hash={t.typeScriptHash} copyable={false} className="text-small" />
+                          <Hash
+                            hash={t.typeScriptHash}
+                            size="row"
+                            copyable={false}
+                            className="text-small"
+                          />
                         )}
                       </Link>{' '}
                       <span className="text-text-dim">{formatStandard(t.standard)}</span>
@@ -816,8 +839,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         <span data-type-hash className="text-meta ml-2">
                           <Hash
                             hash={t.typeScriptHash}
-                            startChars={4}
-                            endChars={2}
+                            size="row"
                             copyable={false}
                             className="text-meta"
                           />
@@ -841,7 +863,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 />
               </>
             ) : (
-              <AddressLoadState label="tokens" error={tokens.error} loading={tokens.isLoading} />
+              <AddressLoadState label="tokens" error={tokens.error} read={tokens} />
             )}
           </HoldingSection>
         )}
@@ -866,14 +888,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   return (
                     <div
                       key={`${c.txHash}:${c.outputIndex}`}
-                      className="border-base-elevated space-y-1 border-b py-3"
+                      className="border-row-rule space-y-1 border-b py-3"
                     >
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link
                           href={getIdentityItemDetailHref(d.standard, d.id)}
                           className="text-text-bright text-body"
                         >
-                          {d.name ?? <Hash hash={d.id} copyable={false} />}
+                          {d.name ?? <Hash hash={d.id} size="row" copyable={false} />}
                         </Link>
                         <span className="text-text-dim text-small">
                           {formatStandard(d.standard)}
@@ -881,9 +903,11 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       </div>
                       <div className="text-text-dim text-small flex flex-wrap justify-between gap-2">
                         <span>
-                          {c.expiresAt === null
-                            ? 'Expiry unavailable'
-                            : `expires ${formatUtc8Date(c.expiresAt * 1000)}`}{' '}
+                          {unitNode(
+                            c.expiresAt === null
+                              ? 'Expiry unavailable'
+                              : `expires ${formatUtc8Date(c.expiresAt * 1000)}`
+                          )}{' '}
                           · held since{' '}
                           <Link href={`/blocks/${c.heldSinceBlock!}`}>
                             {formatBlockNumber(c.heldSinceBlock!)}
@@ -905,11 +929,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 />
               </>
             ) : (
-              <AddressLoadState
-                label="identities"
-                error={identities.error}
-                loading={identities.isLoading}
-              />
+              <AddressLoadState label="identities" error={identities.error} read={identities} />
             )}
           </HoldingSection>
         )}
@@ -964,7 +984,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
       <div className={cn(COLLECTION_GRID, 'text-text-dim text-meta h-7')}>
         <span>Collection</span>
         <span className="hidden sm:block">
-          Items <span className="text-text-ghost">0 — {max.toLocaleString('en-US')}</span>
+          Items <span className="text-text-dim">0 — {max.toLocaleString('en-US')}</span>
         </span>
         <span className="text-right">Items</span>
         <span className="hidden sm:block">Made of</span>
@@ -973,11 +993,12 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
       {groups.map((g) => {
         const key = `${g.standard}:${g.id}`;
         const isOpen = open === key;
-        const label =
+        // the group's id at the row size (U-09): as text in the names its objects' table takes
+        const labelText =
           g.name ??
-          (g.id === null
-            ? `Uncollected ${formatStandard(g.standard)}`
-            : `${g.id.slice(0, 10)}…${g.id.slice(-4)}`);
+          (g.id === null ? `Uncollected ${formatStandard(g.standard)}` : shortenHash(g.id, 'row'));
+        const label =
+          g.id === null || g.name ? labelText : <ShortId value={g.id} kind="hash" size="row" />;
         const href =
           g.id === null ? null : g.standard === 'm-nft' ? `/classes/${g.id}` : `/clusters/${g.id}`;
         return (
@@ -987,7 +1008,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
               onClick={() => setOpen(isOpen ? null : key)}
               className={cn(
                 COLLECTION_GRID,
-                'border-base-border-subtle text-small min-h-[41px] cursor-pointer border-t py-1',
+                'border-row-rule text-small min-h-[41px] cursor-pointer border-t py-1',
                 isOpen && 'bg-base-surface'
               )}
             >
@@ -1005,9 +1026,9 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
                   <span className="text-text-bright text-body min-w-0 truncate">{label}</span>
                 )}
               </span>
-              <span aria-hidden="true" className="bg-base-border hidden h-2 rounded-sm sm:block">
+              <span aria-hidden="true" className="bg-base-border hidden h-2 sm:block">
                 <span
-                  className="bg-text block h-full rounded-sm"
+                  className="bg-text block h-full"
                   style={{ width: `${max === 0 ? 0 : (g.itemCount / max) * 100}%` }}
                 />
               </span>
@@ -1034,7 +1055,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
               <AddressCollectionObjects
                 addr={holdings.lockScriptHash}
                 group={g}
-                label={label}
+                label={labelText}
                 href={href}
               />
             )}
@@ -1103,10 +1124,7 @@ function AddressCollectionObjects({
                 <div
                   key={`${c.txHash}:${c.outputIndex}`}
                   role="row"
-                  className={cn(
-                    OBJECT_GRID,
-                    'border-base-border-subtle min-h-[41px] border-t py-1'
-                  )}
+                  className={cn(OBJECT_GRID, 'border-row-rule min-h-[41px] border-t py-1')}
                 >
                   <span role="cell" className="flex min-w-0 items-center gap-2">
                     <ClassMark kind="objects" size={12} />
@@ -1116,7 +1134,7 @@ function AddressCollectionObjects({
                       title={d.id}
                       className="text-text-bright text-body min-w-0 truncate"
                     >
-                      {d.name ?? `${d.id.slice(0, 10)}…${d.id.slice(-4)}`}
+                      {d.name ?? <ShortId value={d.id} kind="hash" size="row" />}
                     </Link>
                   </span>
                   <span role="cell" className="min-w-0">
@@ -1143,7 +1161,7 @@ function AddressCollectionObjects({
               );
             })}
           </div>
-          <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
+          <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
             <CursorPagination
               total={group.itemCount}
               totalLabel="objects"
@@ -1163,11 +1181,7 @@ function AddressCollectionObjects({
           </div>
         </>
       ) : (
-        <AddressLoadState
-          label={`${label} objects`}
-          error={objects.error}
-          loading={objects.isLoading}
-        />
+        <AddressLoadState label={`${label} objects`} error={objects.error} read={objects} />
       )}
     </div>
   );

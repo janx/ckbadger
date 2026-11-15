@@ -11,12 +11,13 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatUtc8Date } from '@/lib/utils';
+
 import { retryTransientOnly } from '@/lib/query-client';
 import { hexBytes } from '@/lib/hex-bytes';
-
-const short = (value: string, head = 10, tail = 6) =>
-  value.length > head + tail + 1 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
+import { formatCount } from '@/lib/format-count';
+import { unitText } from '@/components/ui/units';
+import { ShortId } from '@/components/ui/short-id';
+import { Utc8Date } from '@/components/ui/utc8-date';
 
 /**
  * "The cluster cell, byte by byte" (consistency C5, Main board tier 2): the current cluster cell's
@@ -45,19 +46,19 @@ export function ClusterCellEvidence({
         <dt className="text-text-dim">{cell.isLive ? 'live cell' : 'cell'}</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`} title={cell.txHash}>
-            {short(cell.txHash, 8, 4)}
+            <ShortId value={cell.txHash} kind="hash" size="row" />
             <OutpointIndex index={cell.outputIndex} />
           </AppLink>{' '}
           · created in{' '}
           <AppLink href={`/blocks/${cell.blockNumber}`}>
             {formatBlockNumber(cell.blockNumber)}
           </AppLink>{' '}
-          · {formatUtc8Date(cell.timestamp)}
+          · <Utc8Date timestamp={cell.timestamp} />
         </dd>
         <dt className="text-text-dim">held by</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
-            {short(cell.ownerAddress, 12, 6)}
+            <ShortId value={cell.ownerAddress} kind="address" size="row" />
           </AppLink>{' '}
           · {cell.lockName ?? 'Unregistered lock'}
         </dd>
@@ -73,7 +74,7 @@ export function ClusterCellEvidence({
                   scriptKind: 'type',
                 })}
               >
-                {cell.typeName ?? short(type.codeHash)}
+                {cell.typeName ?? <ShortId value={type.codeHash} kind="hash" size="row" />}
               </AppLink>
               {type.args.toLowerCase() === clusterId.toLowerCase()
                 ? ' · the cluster id is this cell’s type args'
@@ -166,7 +167,7 @@ export function ClusterPatternReading({
       <AssetReadState
         label="an object to read"
         error={sample.error}
-        loading={sample.isLoading}
+        read={sample}
         retained={!!sample.data}
       />
     </div>
@@ -238,8 +239,8 @@ export function MnftClassEvidence({
             <dt className="text-text-dim">issuer</dt>
             <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               {issuerDetail.name ?? 'Unnamed issuer'} ·{' '}
-              {issuerDetail.classCount.toLocaleString('en-US')} classes ·{' '}
-              {issuerDetail.setCount.toLocaleString('en-US')} sets
+              {unitText(formatCount(issuerDetail.classCount, 'class', 'classes'))} ·{' '}
+              {unitText(formatCount(issuerDetail.setCount, 'set'))}
             </dd>
           </>
         )}

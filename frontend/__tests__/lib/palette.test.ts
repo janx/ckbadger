@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AMOUNT_INK } from '@/components/activity-event-row';
 import {
   alpha,
   color,
@@ -10,6 +11,7 @@ import {
   material,
   MATERIAL_KEYS,
   MATERIALS,
+  overGround,
   PALETTE,
   PALETTE_KEYS,
   relativeLuminance,
@@ -40,6 +42,9 @@ const TEXT_GRADE: PaletteKey[] = [
   'lavender',
   'lavender-dim',
   'amber',
+  // the cinnabar text's quiet step, like every other `*-dim` (re-pinned on purpose: it was a 3:1
+  // secondary ink, and it is used as text); the fraction ink of a negative amount (R4, DY-06)
+  'rouge-dim',
   'token',
   'object',
   'identity',
@@ -49,15 +54,21 @@ const TEXT_GRADE: PaletteKey[] = [
   'cell-data',
   'data-framing',
   'board-link',
-  'tier-btc-ink',
-  'tier-pure-ink',
+  // Lane E2 round 3 (ruling): an ELF region's hue paints the hex digits of its bytes on the cell
+  // page, so each is text grade, also on the evidence tier's ground (below). The program headers
+  // are the header a step lighter by night and a step darker by day (round 4's ruling).
+  'elf-header',
+  'elf-program-headers',
+  'elf-rodata',
+  'elf-eh-frame',
+  'elf-data',
+  'elf-meta',
 ];
 
 /** Hover and secondary inks: ≥ 3:1 (large text, UI components). */
 const UI_GRADE: PaletteKey[] = [
+  // a mark's ink at 3:1 (a rule, a tick, a swatch), never a word's: see "the inks under text grade"
   'ink-muted',
-  // the cinnabar text dimmed: a secondary ink, never body text
-  'rouge-dim',
   'jade-bright',
   'aqua-bright',
   'gold-bright',
@@ -189,6 +200,23 @@ describe('the palette: one source for both themes', () => {
     expect(failures).toEqual([]);
   });
 
+  // Lane E2 follow-up (ruling R4 is about what an ink is used for, not its name): the ghost, the
+  // quiet and the muted ink sit under text grade on purpose. They are for marks, rules, ticks,
+  // swatches, frames, the padding zeros of a number and pure decoration, never for a word or a
+  // figure; the muted's 3:1 pin above is a mark's, not a text pin. The ink gate refuses all three
+  // on words (__tests__/lib/ink-gate.test.ts); a quieter word is the dim ink.
+  it('keeps the inks under text grade (ghost, quiet, muted) out of the text grade: marks, never words', () => {
+    for (const key of ['text-ghost', 'ink-quiet', 'ink-muted'] as const) {
+      expect(TEXT_GRADE).not.toContain(key);
+      for (const theme of THEMES) {
+        const worst = Math.min(
+          ...GROUNDS.map((g) => contrastRatio(PALETTE[theme][key], PALETTE[theme][g]))
+        );
+        expect(worst, `${theme} ${key}`).toBeLessThan(4.5);
+      }
+    }
+  });
+
   it('keeps hover and secondary inks at UI contrast on every ground', () => {
     const failures: string[] = [];
     for (const theme of THEMES)
@@ -282,6 +310,275 @@ describe('the rubbing / Song print finish', () => {
     }
   });
 });
+
+/** A key's hex in a theme, by name (a key a test names before the palette declares it reads undefined). */
+function ink(theme: (typeof THEMES)[number], key: string): string {
+  return (PALETTE[theme] as Readonly<Record<string, string>>)[key];
+}
+
+// UI review 2026-11-14, ruling R4 (DY-06, U-08): the digits after an amount's decimal point are a
+// step quieter than its sign's ink, in a named ink of that sign at body contrast on every ground —
+// never the sign's ink at an opacity (78 % put the cinnabar at 3.7:1 by night, the celadon at
+// about 3.2–3.7:1 and the neutral at 3.5:1 by day).
+const FRACTION_INKS = [
+  { sign: 'positive', ink: 'jade', fraction: 'jade-dim' },
+  { sign: 'negative', ink: 'rouge', fraction: 'rouge-dim' },
+  { sign: 'neutral', ink: 'text', fraction: 'text-dim' },
+] as const;
+
+// Lane E2 round 3: the gold of a word on a pipeline tile is the plain gold by night (the home
+// page's approved look) and the gold's bright step by day, where the gold is 4.15:1 on the tile.
+// One key, two existing values: pinned equal so it can never drift from either.
+describe('the pipeline word gold', () => {
+  it('is the gold by night and the gold’s bright step by day', () => {
+    expect(PALETTE.dark['pipeline-word-gold']).toBe(PALETTE.dark.gold);
+    expect(PALETTE.light['pipeline-word-gold']).toBe(PALETTE.light['gold-bright']);
+  });
+});
+
+describe('the fraction inks (R4, DY-06)', () => {
+  // Lane E2: the keys pinned here are the ones the renderers read, HTML and SVG alike.
+  it('pins the table every amount renderer reads (AMOUNT_INK), sign by sign', () => {
+    expect(
+      Object.fromEntries(Object.entries(AMOUNT_INK).map(([sign, ink]) => [sign, ink.fractionKey]))
+    ).toEqual(Object.fromEntries(FRACTION_INKS.map((f) => [f.sign, f.fraction])));
+  });
+
+  it('reads every sign’s fraction ink at body contrast on every ground, in both themes', () => {
+    const short: string[] = [];
+    for (const theme of THEMES)
+      for (const { fraction } of FRACTION_INKS)
+        for (const ground of GROUNDS) {
+          const hex = ink(theme, fraction);
+          expect(hex, `${theme} ${fraction}`).toMatch(HEX);
+          const ratio = contrastRatio(hex, PALETTE[theme][ground]);
+          if (ratio < 4.5) short.push(`${theme} ${fraction} on ${ground}: ${ratio.toFixed(2)}`);
+        }
+    expect(short).toEqual([]);
+  });
+
+  it('sets each fraction a step quieter than its sign’s ink on the page ground', () => {
+    for (const theme of THEMES)
+      for (const { ink: whole, fraction } of FRACTION_INKS) {
+        const ground = PALETTE[theme]['base-bg'];
+        expect(
+          contrastRatio(ink(theme, fraction), ground),
+          `${theme} ${fraction} under ${whole}`
+        ).toBeLessThan(contrastRatio(ink(theme, whole), ground));
+      }
+  });
+
+  it('gives the negative one rouge-dim, moved in OKLCH lightness only until it reads at 4.5:1', () => {
+    // rouge-dim was a secondary ink at 3:1 (#aa503c / #a6594c, 3.05 / 3.92 at worst) and used as
+    // text; lightened by night (L +0.094) and darkened by day (L −0.033), hue and chroma kept, it
+    // is the cinnabar's quiet step at text grade like every other `*-dim`: one key, one meaning.
+    expect(PALETTE.dark['rouge-dim']).toBe('#ca6c57');
+    expect(PALETTE.light['rouge-dim']).toBe('#9b4f43');
+    expect(PALETTE_KEYS as string[]).not.toContain('rouge-fraction');
+  });
+});
+
+// UI review 2026-11-14, ruling R5 (DY-01, DY-08): by day the page is ruled paper — the ink at the
+// scanline alpha in 1 px of every 3, over the sky — and the hair (`base-border-subtle`, #e3dbcc)
+// and the elevated tint (`base-elevated`, #e9e2d4) are 1.09:1 and 1.03:1 on a ruled line, so a row
+// rule is one more ruled line and a bar's empty track is not there. A row rule and a bar track are
+// keys of their own, each clearing the paper and a ruled line by 1.25:1; by night they stay the
+// boards' hair and elevated tint, lighter than the ground as they were.
+describe('the row rule and the bar track (R5, DY-01)', () => {
+  const day = PALETTE.light;
+  const ruledLine = overGround(
+    'light',
+    'text-bright',
+    rgbaAlpha(MATERIALS.light['scanline-ink']),
+    'base-bg'
+  );
+
+  it('computes the ruled line from the palette: the day ink at 4.5 % over the paper', () => {
+    expect(MATERIALS.light['scanline-ink']).toBe(hexAlpha(day['text-bright'], 0.045));
+    expect(ruledLine).toBe('#e9e5db');
+    // the old keys are what the review measured: a rule and a track that are not there
+    expect(contrastRatio(day['base-border-subtle'], ruledLine)).toBeLessThan(1.1);
+    expect(contrastRatio(day['base-elevated'], ruledLine)).toBeLessThan(1.05);
+  });
+
+  it.each(['row-rule', 'bar-track'])(
+    'clears the paper and a ruled line by 1.25:1 by day: %s',
+    (key) => {
+      const hex = ink('light', key);
+      expect(hex, key).toMatch(HEX);
+      expect(contrastRatio(hex, day['base-bg']), `${key} on the paper`).toBeGreaterThanOrEqual(
+        1.25
+      );
+      expect(contrastRatio(hex, ruledLine), `${key} on a ruled line`).toBeGreaterThanOrEqual(1.25);
+      // darker than both: a rule is ink on paper, never a lighter line
+      expect(relativeLuminance(hex)).toBeLessThan(relativeLuminance(ruledLine));
+    }
+  );
+
+  it('derives them from the hair and the elevated tint, darker in OKLCH lightness only', () => {
+    expect(ink('light', 'row-rule')).toBe('#d5cdbf');
+    expect(ink('light', 'bar-track')).toBe('#d4cdc0');
+  });
+
+  it('keeps them the boards’ hair and elevated tint by night, lighter than the ground', () => {
+    expect(ink('dark', 'row-rule')).toBe(PALETTE.dark['base-border-subtle']);
+    expect(ink('dark', 'bar-track')).toBe(PALETTE.dark['base-elevated']);
+    for (const key of ['row-rule', 'bar-track']) {
+      const hex = ink('dark', key);
+      expect(relativeLuminance(hex), key).toBeGreaterThan(
+        relativeLuminance(PALETTE.dark['base-bg'])
+      );
+      expect(contrastRatio(hex, PALETTE.dark['base-bg']), key).toBeGreaterThanOrEqual(1.1);
+    }
+  });
+});
+
+/** A material `rgba(r, g, b, a)` laid over a ground key, as the eye sees it. */
+function materialOver(theme: (typeof THEMES)[number], value: string, ground: PaletteKey) {
+  const m = value.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
+  if (!m) throw new Error(`${value} is not rgba(r, g, b, a)`);
+  const a = Number(m[4]);
+  const under = hexToRgb(PALETTE[theme][ground]);
+  const ch = (f: string, g: number) =>
+    Math.round(a * Number(f) + (1 - a) * g)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(m[1], under.r)}${ch(m[2], under.g)}${ch(m[3], under.b)}`;
+}
+
+// Ruling 4b (UI review 2026-11-14): the ground decides its rule. The evidence tier lies on its own
+// ground (`tier2-ground`, the elevated tint at 90 % by day over the sky), where the day row rule and
+// track read 1.24:1 over the ground and 1.14:1 over a ruled line on it. Inside `.tier2-ground` the
+// variables behind `row-rule` and `bar-track` resolve to deeper keys that clear both by 1.25:1;
+// the whole site's rule is not darkened (it would pass the frame border, `base-border`).
+describe('the row rule and the bar track on the tier-2 ground (R5, ruling 4b)', () => {
+  const dayGround = materialOver('light', MATERIALS.light['tier2-ground'], 'base-bg');
+  const scan = MATERIALS.light['scanline-ink'].match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/)!;
+  const dayRuled = (() => {
+    const a = Number(scan[4]);
+    const g = hexToRgb(dayGround);
+    const ch = (f: string, under: number) =>
+      Math.round(a * Number(f) + (1 - a) * under)
+        .toString(16)
+        .padStart(2, '0');
+    return `#${ch(scan[1], g.r)}${ch(scan[2], g.g)}${ch(scan[3], g.b)}`;
+  })();
+
+  it('computes the day tier-2 ground and its ruled line from the palette', () => {
+    expect(dayGround).toBe('#eae3d6');
+    expect(dayRuled).toBe('#e1dacd');
+    // the tier-1 keys fall short there
+    expect(contrastRatio(PALETTE.light['row-rule'], dayRuled)).toBeLessThan(1.25);
+    expect(contrastRatio(PALETTE.light['bar-track'], dayRuled)).toBeLessThan(1.25);
+  });
+
+  it.each(['row-rule-deep', 'bar-track-deep'])(
+    'clears the tier-2 ground and a ruled line on it by 1.25:1 by day: %s',
+    (key) => {
+      const hex = ink('light', key);
+      expect(hex, key).toMatch(HEX);
+      expect(contrastRatio(hex, dayGround), `${key} on the ground`).toBeGreaterThanOrEqual(1.25);
+      expect(contrastRatio(hex, dayRuled), `${key} on a ruled line`).toBeGreaterThanOrEqual(1.25);
+    }
+  );
+
+  it('derives them from the tier-1 keys, darker in OKLCH lightness only (L −0.030)', () => {
+    expect(ink('light', 'row-rule-deep')).toBe('#cbc3b5');
+    expect(ink('light', 'bar-track-deep')).toBe('#cac3b6');
+  });
+
+  it('keeps the tier-1 values by night, where they clear the tier-2 ground by 1.1:1 or more', () => {
+    const nightGround = materialOver('dark', MATERIALS.dark['tier2-ground'], 'base-bg');
+    expect(nightGround).toBe('#100e0b');
+    for (const [deep, flat] of [
+      ['row-rule-deep', 'row-rule'],
+      ['bar-track-deep', 'bar-track'],
+    ] as const) {
+      expect(ink('dark', deep), deep).toBe(PALETTE.dark[flat]);
+      expect(contrastRatio(ink('dark', deep), nightGround), deep).toBeGreaterThanOrEqual(1.1);
+    }
+  });
+});
+
+// Lane E2 round 3 (ruling): the ELF region hues are text. They paint the hex digits of a code
+// cell's bytes in the cell microscope, which sits in the evidence tier, so besides the four grounds
+// (TEXT_GRADE) each reads at 4.5:1 on the tier-2 ground (`tier2-ground` over the sky), in both
+// themes. A key short of it moves in OKLCH lightness only, hue and chroma kept.
+describe('the ELF region hues on the evidence tier', () => {
+  const ELF_KEYS = [
+    'elf-header',
+    'elf-program-headers',
+    'elf-rodata',
+    'elf-eh-frame',
+    'elf-data',
+    'elf-meta',
+  ] as const;
+
+  it('reads at body-text contrast on the tier-2 ground, in both themes', () => {
+    const short: string[] = [];
+    for (const theme of THEMES) {
+      const ground = materialOver(theme, MATERIALS[theme]['tier2-ground'], 'base-bg');
+      for (const key of ELF_KEYS) {
+        const ratio = contrastRatio(PALETTE[theme][key], ground);
+        if (ratio < 4.5) short.push(`${theme} ${key} on tier-2 ${ground}: ${ratio.toFixed(2)}`);
+      }
+    }
+    expect(short).toEqual([]);
+  });
+
+  it('moves only the day keys that fell short, darker in OKLCH lightness only (hue and chroma kept)', () => {
+    // rodata L −0.007, eh-frame L −0.030, data L −0.021, meta L −0.041 (from #3d7249, #5f7362,
+    // #82672c, #7468a7); the header cleared and stays; every night value cleared and stays
+    expect(PALETTE.light['elf-rodata']).toBe('#3b7047');
+    expect(PALETTE.light['elf-eh-frame']).toBe('#576a5a');
+    expect(PALETTE.light['elf-data']).toBe('#7c6126');
+    expect(PALETTE.light['elf-meta']).toBe('#695c9a');
+    expect(PALETTE.light['elf-header']).toBe('#416a7a');
+    // round 4: the header's hue and chroma at L 0.430 (the night pair's 0.0706 below the header)
+    expect(PALETTE.light['elf-program-headers']).toBe('#2d5665');
+    expect([
+      PALETTE.dark['elf-header'],
+      PALETTE.dark['elf-program-headers'],
+      PALETTE.dark['elf-rodata'],
+      PALETTE.dark['elf-eh-frame'],
+      PALETTE.dark['elf-data'],
+      PALETTE.dark['elf-meta'],
+    ]).toEqual(['#7898a3', '#8daeb9', '#9ac09b', '#aab9aa', '#d5b985', '#b8acd0']);
+  });
+
+  // Round 4's ruling: by night the program headers are the header's hue a step lighter; by day a
+  // lighter step cannot be text grade (at 4.5:1 it lands on the header), so, as the `*-bright`
+  // keys do, the step turns: by day the header's hue and chroma a step darker, spaced from the
+  // header as the night pair is.
+  it('makes the day program headers the header a step darker, as far as the night pair is apart', () => {
+    const night =
+      oklch(PALETTE.dark['elf-program-headers']).L - oklch(PALETTE.dark['elf-header']).L;
+    expect(night).toBeGreaterThan(0.07);
+    const header = oklch(PALETTE.light['elf-header']);
+    const program = oklch(PALETTE.light['elf-program-headers']);
+    expect(header.L - program.L).toBeGreaterThanOrEqual(night);
+    // the header's hue and chroma, to the rounding of a hex at this low chroma
+    expect(Math.abs(program.C - header.C)).toBeLessThan(0.002);
+    expect(Math.abs(program.hue - header.hue)).toBeLessThan(1.5);
+  });
+});
+
+/** A hex in OKLCH (Björn Ottosson's OKLab): lightness, chroma and hue in degrees. */
+function oklch(hex: string): { L: number; C: number; hue: number } {
+  const lin = (v: number) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const { r, g, b } = hexToRgb(hex);
+  const [R, G, B] = [lin(r), lin(g), lin(b)];
+  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+  const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+  const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+  const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+  const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const Bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  return { L, C: Math.hypot(A, Bb), hue: (Math.atan2(Bb, A) * 180) / Math.PI };
+}
 
 describe('the palette as CSS', () => {
   it('declares a colour, its channels and the materials per theme', () => {

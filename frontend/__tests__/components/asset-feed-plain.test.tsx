@@ -83,7 +83,9 @@ it('drops the script-call lines and gives the lock kind its own column (OB-12, I
   expect(container.querySelector('[data-role="detail"]')).toBeNull();
   const kinds = container.querySelectorAll('[data-role="lock-kind"]');
   expect([...kinds].map((k) => k.textContent)).toEqual(['UTXOSwap Intent Lock', 'PW Lock']);
-  expect(kinds[0]).toHaveClass('whitespace-nowrap');
+  // re-pinned (A4 Chrome sweep): 'UTXOSwap Intent Lock' is words, not one unit; the row's lock
+  // kind is an item of its wrapping line and moves whole
+  expect(kinds[0]).not.toHaveClass('whitespace-nowrap');
 });
 
 it('keeps the script-call lines on a feed that does not ask for plain rows', async () => {

@@ -1,3 +1,5 @@
+import { clipLabel } from '@/lib/shorten';
+
 export interface ClusterMetadataEntry {
   key: string;
   label: string;
@@ -36,11 +38,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function truncate(value: string, maxLength: number = MAX_VALUE_LENGTH): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength)}...`;
+/** A long value cut to the description's budget: a label cut, with the one ellipsis. */
+function truncate(value: string): string {
+  return clipLabel(value, MAX_VALUE_LENGTH);
 }
 
 function normalizeKeyLabel(key: string): string {

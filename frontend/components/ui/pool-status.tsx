@@ -1,7 +1,9 @@
 'use client';
 
 import { Badge } from '@/components/ui/page-header';
+import { useClockText } from '@/components/ui/utc8-date';
 import type { PoolInterpretation, PoolStatus } from '@/lib/api';
+import { ageInOneUnit, CLOCK_BEHIND } from '@/lib/format-age';
 
 /**
  * A transaction in the node's pool is a proposed transition that proof-of-work
@@ -28,21 +30,18 @@ export function PoolStatusBadge({ status }: { status: PoolStatus }) {
   );
 }
 
-/** How long the node has held this transaction, e.g. `5m`. */
-export function formatPoolDuration(since: string): string {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86400)}d`;
-}
-
 /**
  * Replaces the block time on an unconfirmed row. A pool transaction has no
- * block time; how long it has waited is the fact that exists.
+ * block time; how long it has waited is the fact that exists, and it grows
+ * while the row is shown: the wait reads the page's one clock (lane E4).
  */
 export function TimeInPool({ since, className }: { since: string; className?: string }) {
-  return <span className={className}>in pool for {formatPoolDuration(since)}</span>;
+  // the one age form (lib/format-age.ts); a time further ahead than consensus allows says so
+  const wait = useClockText((now) => {
+    const age = ageInOneUnit(since, now);
+    return age === null ? CLOCK_BEHIND : `in pool for ${age}`;
+  });
+  return <span className={className}>{wait}</span>;
 }
 
 function reasonText(reason: { code: string; detail?: string }): string {

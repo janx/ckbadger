@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import { render } from '../utils/test-utils';
 import ForkDetailPage from '@/app/forks/[height]/[orphan]/client-page';
 import { api } from '@/lib/api';
@@ -10,11 +11,10 @@ import unincludedFixture from '@/__tests__/fixtures/fork-api-producer/fork-uninc
 import multiFixture from '@/__tests__/fixtures/fork-api-producer/fork-multi-uncle-detail.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fullText } from '@/__tests__/utils/full-text';
 
 const route = { height: '10', orphan: '17404795' };
-const notFound = vi.fn();
 vi.mock('@/src/navigation', () => ({
-  notFound: () => notFound(),
   useParams: () => route,
   usePathname: () => `/forks/${route.height}/${route.orphan}`,
 }));
@@ -22,8 +22,6 @@ vi.mock('@/lib/api', () => ({
   api: { getForkAt: vi.fn() },
   isNotFoundApiError: (error: unknown) =>
     typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
 }));
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
@@ -47,17 +45,18 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
   it('asks the API for the fork at that height and orphan and titles it "Fork at #N" (FF-D3)', async () => {
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     render(<ForkDetailPage />);
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })
-    ).toBeInTheDocument();
+    // PB-06 / PA-32: an entity h1, one type step smaller below md (30 → 26 px), as every entity's.
+    expect(await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })).toHaveClass(
+      'text-entity',
+      'max-md:text-index'
+    );
     expect(api.getForkAt).toHaveBeenCalledWith(10, '17404795');
     // Consistency plan C1: the tab names the page.
     await waitFor(() => expect(document.title).toBe('#10 · 17404795 · fork · CKBadger'));
-    expect(
-      screen.getByText(
-        '1 block deep · detected 2025-08-01 06:13:20 UTC+8 · this node switched once'
-      )
-    ).toBeInTheDocument();
+    // U-16 (re-pinned): the detection time is one unit of its own, inside the line
+    expect(screen.getByText(fullText(/block deep/))).toHaveTextContent(
+      '1 block deep · detected 2025-08-01 06:13:20 UTC+8 · this node switched once'
+    );
     expect(screen.queryByText(/Fork event #1754000000000/)).toBeNull();
     expect(
       within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByRole('link', {
@@ -104,7 +103,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     expect(within(switches).queryByRole('link', { name: /#11/ })).toBeNull();
     // the legend's times fit their column: the date is in the header (visual pass)
-    expect(screen.getByText('before 06:13:20 UTC+8')).toBeInTheDocument();
+    expect(screen.getByText(fullText('before 06:13:20 UTC+8'))).toBeInTheDocument();
     // drawn to the width at every size: no sideways scroller and no "scroll sideways" caption (V4)
     expect(screen.queryByText('scroll sideways for both branches')).toBeNull();
     expect(tree.closest('.overflow-x-auto')).toBeNull();
@@ -132,7 +131,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(
       screen.getByText(/An uncle earns its miner nothing; it counts toward the uncle rate/)
     ).toBeInTheDocument();
-    expect(screen.queryByText('1 blocks')).toBeNull();
+    expect(screen.queryByText(fullText('1 blocks'))).toBeNull();
   });
 
   it('folds the blocks and the dropped transactions into phone rows at 358 px (no board: L1 rules)', async () => {
@@ -150,6 +149,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(phoneLines(dropped).map((l) => l.key)).toEqual(['identity', 'miner', 'fate']);
     expect(phoneLines(dropped)[0].left).toMatch(/^#11′ 0x/);
     expect(phoneLines(dropped)[1].left).toMatch(/^miner /);
+    // re-pinned (A4 round 2): a count is a unit, its number and noun joined by a plain space
     expect(phoneLines(dropped)[1].right).toMatch(/^\d+ txs?$/);
     const txs = screen.getAllByTestId('fork-tx-row-mobile');
     const orphanHash = unincludedFixture.orphanedTransactions[1].hash;
@@ -182,9 +182,66 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       'href',
       '/mainnet/blocks/12'
     );
-    expect(
-      within(tier2).getByText(`${uncleFixture.orphanedBlocks[0].hash} · #11`)
-    ).toBeInTheDocument();
+    // U-16 (re-pinned): the uncle's hash and number are two items of one list, the hash one token
+    const uncleHash = within(tier2)
+      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
+      .find((e) => e.closest('[data-dotted]'));
+    expect(uncleHash!.closest('[data-dotted]')).toHaveTextContent(
+      `${uncleFixture.orphanedBlocks[0].hash} · #11`
+    );
+  });
+
+  // U-16, PB-05 (UI review 2026-11-14): tier 2's full hashes wrapped across two lines in the middle
+  // ("0xcd29f0b0…8402a67d72b4b3fb5" / "bfaece30ba50b3"); a full hash is one token, whole on its
+  // line or scrolled in its own box. U-15: "miner witness unavailable" was an internal state.
+  it('writes tier 2’s full hashes as one line each and says "not recorded" for a missing miner (U-16, U-15)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    const event = uncleFixture.event;
+    for (const hash of [
+      event.forkPointHash,
+      event.firstOrphanHash!,
+      event.oldTipHash,
+      event.newTipHash,
+      uncleFixture.orphanedBlocks[0].hash,
+    ]) {
+      for (const full of within(tier2).getAllByText(hash)) {
+        expect(full).toHaveAttribute('data-full-value');
+        expect(full).toHaveClass('whitespace-nowrap', 'overflow-x-auto', 'max-w-full');
+        expect(full.closest('.break-all')).toBeNull();
+      }
+    }
+    // the uncle's number follows its hash as the next item of one list, never a loose "·"
+    const uncle = within(tier2)
+      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
+      .map((e) => e.closest('[data-dotted]'))
+      .find(Boolean);
+    expect(uncle).toHaveTextContent(`${uncleFixture.orphanedBlocks[0].hash} · #11`);
+    expect(within(tier2).getByText('not recorded')).toBeInTheDocument();
+    expect(tier2).not.toHaveTextContent('miner witness unavailable');
+  });
+
+  // A4 Chrome F4: at 1280 tier 2's two columns gave each hash 466 px (588 less a 110 px label
+  // column and its 12 px gap) for 475.2 (66 characters at 12 px), a 9 px scroll; at 1024, 338. The
+  // label column takes its labels' width ("first dropped", 13 characters: 93.6 px), and the
+  // columns are as many as hold a fact row with a whole hash, 93.6 + 12 + 475.2 = 580.8 px: two
+  // from a 1217.6 px grid (1280's 1232), one below (1024's 976), a phone's below 581 px.
+  it('gives tier 2’s full hashes their room: label columns by their labels, columns by the hash (A4 Chrome F4)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    const columns = tier2.querySelector('.grid') as HTMLElement;
+    expect(columns).toHaveClass('grid-cols-[repeat(auto-fill,minmax(min(100%,581px),1fr))]');
+    expect(columns.className).not.toMatch(/lg:grid-cols-2/);
+    const facts = [...tier2.querySelectorAll<HTMLElement>('.grid.text-small')];
+    expect(facts.length).toBeGreaterThanOrEqual(2);
+    for (const grid of facts) {
+      expect(grid).toHaveClass('sm:grid-cols-[max-content_minmax(0,1fr)]');
+      expect(grid.className).not.toMatch(/110px/);
+    }
   });
 
   it('keeps the originally adopted branch distinct from a block that came back', async () => {
@@ -280,11 +337,13 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     const { container } = render(<ForkDetailPage />);
     expect(await screen.findByTestId('fork-narrative')).toHaveTextContent(
-      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (…93hhsj).'
+      // U-09 (re-pinned): an unnamed miner is its address at the place's size, head and tail (it
+      // was the tail alone): the narrative's head size, the table's row size, the tree's tight
+      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (ckb1qzda0cr0…qw93hhsj).'
     );
     const table = screen.getByRole('table', { name: 'Blocks' });
-    expect(within(table).getAllByRole('link', { name: '…93hhsj' })).toHaveLength(3);
-    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('…93hhsj');
+    expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })).toHaveLength(3);
+    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1…93hhsj');
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByRole('link', { name: address })).toHaveAttribute(
       'href',
@@ -342,7 +401,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     render(<ForkDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'its event names first orphan 0x17404795000'
+      'its event names first orphan 0x17404795…000000'
     );
   });
 
@@ -396,7 +455,8 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
         'Branch evidence needs the node store: this API runs without the node reader, so the blocks of both branches, their miners and what became of them are not shown. Below is what this node recorded when it switched.'
       );
       expect(screen.getByTestId('fork-narrative')).toHaveTextContent(
-        'This node switched from #11 0x17404795…a3e72a to #12 0xb057fd60…9a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
+        // U-09 (re-pinned): the story is the page's lede, its hashes at the head size
+        'This node switched from #11 0x1740479523…39a3e72a to #12 0xb057fd605c…e29a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
       );
       expect(container.querySelector('svg[data-fork-tree]')).toBeNull();
       expect(screen.queryByRole('table', { name: 'Blocks' })).toBeNull();
@@ -443,10 +503,32 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     ).toBe(true);
   });
 
-  it('sends a malformed address (the old millisecond id) to not-found without a request', () => {
+  // U-06, R11: a malformed address is not an id: the voice page with its own first line, not
+  // the route 404's "no page at this path."
+  it('answers a malformed address (the old millisecond id) as not an id, without a request', () => {
     at('1754000000000', '');
     render(<ForkDetailPage />);
-    expect(notFound).toHaveBeenCalled();
+    expect(screen.getByText('that is not a fork height and orphan.')).toBeInTheDocument();
+    expect(screen.getByText('Not an id · 400')).toBeInTheDocument();
     expect(api.getForkAt).not.toHaveBeenCalled();
+  });
+
+  // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
+  // without fetching, so isLoading is false: the page drew nothing at all while it waited.
+  it('says it is loading while its read is paused offline, then shows the fork once back online', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    onlineManager.setOnline(false);
+    try {
+      render(<ForkDetailPage />);
+      expect(await screen.findByText('Loading fork evidence…')).toHaveAttribute('role', 'status');
+      expect(api.getForkAt).not.toHaveBeenCalled();
+      act(() => onlineManager.setOnline(true));
+      expect(
+        await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading fork evidence…')).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

@@ -17,7 +17,7 @@ use crate::response::{
 };
 use crate::utils::{
     accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
-    parse_chart_date_range, parse_hash32, parse_optional_block_tx_cursor, script_to_address,
+    parse_chart_date_range, parse_hash32, parse_optional_block_tx_cursor,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
@@ -186,20 +186,27 @@ pub struct SameSymbolToken {
     pub holders_count: i64,
 }
 
+/// A token party's lock as the collection holders name it
+/// ([`super::assets::owner_lock`]): `address`, `lock_code_hash` and
+/// `lock_kind` are all `None` when the lock's script is not indexed;
+/// `lock_kind` alone is `None` when the scripts registry names none.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenIssuer {
     pub lock_hash: String,
     pub address: Option<String>,
+    pub lock_code_hash: Option<String>,
     pub lock_kind: Option<String>,
 }
 
+/// One holder; its lock as [`TokenIssuer`] names it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenHolderResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub balance: String,
+    pub lock_code_hash: Option<String>,
     pub lock_kind: Option<String>,
 }
 
@@ -631,17 +638,12 @@ async fn get_token(
                 let lock: [u8; 32] = info.type_args[..32]
                     .try_into()
                     .expect("validated owner hash width");
+                let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
                 response.issuer = Some(TokenIssuer {
                     lock_hash: format!("0x{}", hex::encode(lock)),
-                    address: crate::utils::address::resolve_lock_address(
-                        &state.store,
-                        &lock,
-                        &state.ckb_network,
-                    )
-                    .map_err(|error| ApiError::internal(error.to_string()))?
-                    .map(|resolved| resolved.address),
-                    lock_kind: super::activities::participant_lock_kind(&state.store, &lock, None)
-                        .map_err(|error| ApiError::internal(error.to_string()))?,
+                    address: owner.as_ref().and_then(|owner| owner.address.clone()),
+                    lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                    lock_kind: owner.and_then(|owner| owner.lock_kind),
                 });
             }
             ok(response)
@@ -667,22 +669,14 @@ async fn get_token_holders(
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let network = state.ckb_network.clone();
-    let (_token, holders_count, total_supply, mut page, addresses) =
+    let (_token, holders_count, total_supply, mut page) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let token = store
                 .get_token(&hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
             let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
-            // Resolve only the rendered rows: the `limit + 1`-th row exists solely to
-            // detect `has_more` and is truncated away below.
-            let addresses = resolve_lock_addresses(
-                &store,
-                &network,
-                page.iter().take(limit).map(|(lock, _)| lock.as_slice()),
-            )?;
-            Ok((token, holders_count, total_supply, page, addresses))
+            Ok((token, holders_count, total_supply, page))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -719,6 +713,8 @@ async fn get_token_holders(
         None
     };
 
+    // Only the rendered rows: the `limit + 1`-th row existed solely to detect
+    // `has_more` and was truncated away above.
     let holders: Vec<TokenHolderResponse> = page
         .into_iter()
         .map(|(lock_script_hash, balance)| {
@@ -726,11 +722,12 @@ async fn get_token_holders(
                 .as_slice()
                 .try_into()
                 .map_err(|_| ApiError::internal("invalid token holder lock length"))?;
+            let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
             Ok(TokenHolderResponse {
-                lock_kind: super::activities::participant_lock_kind(&state.store, &lock, None)
-                    .map_err(|e| ApiError::internal(e.to_string()))?,
-                address: addresses.get(&lock_script_hash).cloned(),
-                lock_script_hash: format!("0x{}", hex::encode(lock_script_hash)),
+                address: owner.as_ref().and_then(|owner| owner.address.clone()),
+                lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_kind: owner.and_then(|owner| owner.lock_kind),
+                lock_script_hash: format!("0x{}", hex::encode(lock)),
                 balance: balance.to_string(),
             })
         })
@@ -783,10 +780,11 @@ pub struct ActivityParams {
     cursor: Option<String>,
 }
 
-/// Resolve lock hashes to CKB addresses through the single existing path:
-/// `CF_LOCK_SCRIPTS` (`get_lock_script`) + the shared `script_to_address`
-/// encoder. Lock hashes with no stored script (or an unencodable script) are
-/// simply absent from the map and render as null — never guessed.
+/// Resolve lock hashes to CKB addresses through the one party resolver,
+/// `resolve_lock_address`. A lock whose script is not indexed, and one whose
+/// script has no address form, is absent from the map and renders as null —
+/// never guessed; a store read failure or a stored script that is not a CKB
+/// script is an error naming the lock hash.
 fn resolve_lock_addresses<'a>(
     store: &CkbadgerStore,
     network: &str,
@@ -797,15 +795,12 @@ fn resolve_lock_addresses<'a>(
         if lock_hash.is_empty() || addresses.contains_key(lock_hash) {
             continue;
         }
-        let Some(entry) = store.get_lock_script(lock_hash)? else {
-            continue;
-        };
-        let Ok(address) =
-            script_to_address(&entry.code_hash, entry.hash_type, &entry.args, network)
-        else {
-            continue;
-        };
-        addresses.insert(lock_hash.to_vec(), address);
+        if let Some(address) =
+            crate::utils::address::resolve_lock_address(store, lock_hash, network)?
+                .and_then(|resolved| resolved.address)
+        {
+            addresses.insert(lock_hash.to_vec(), address);
+        }
     }
     Ok(addresses)
 }

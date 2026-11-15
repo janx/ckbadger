@@ -84,7 +84,7 @@ describe('useDocumentTitle (C1)', () => {
       titleAddress(
         'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfs6k9ygrwtdrn828l4a04ns9fnes960jg3x8k26'
       )
-    ).toBe('ckb1qzda…3x8k26');
+    ).toBe('ckb1…3x8k26');
     expect(() => titleHash('Default Lock')).toThrow(/not a hash/);
     expect(() => titleAddress('0xdcd1')).toThrow(/not a CKB address/);
   });

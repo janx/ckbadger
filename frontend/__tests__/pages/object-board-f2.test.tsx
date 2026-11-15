@@ -64,7 +64,9 @@ function lifeVersions(): ItemCellVersions {
 
 beforeEach(() => {
   mockItemReads();
-  // the gels lay themselves out for their measured box (V2)
+  // the gels lay themselves out for their measured box (V2): 896 px is the DNA plate at 1280,
+  // where the sequencing gel's gene columns fit beside the lanes (the review's item B: 8da9b2b5
+  // had moved this to 937 px, a width no viewport gives)
   stubChartWidth(896);
   vi.spyOn(api, 'getSporeObject').mockResolvedValue({
     ...sporeDetailProducer,

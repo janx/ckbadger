@@ -2,19 +2,14 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
-  truncateHash,
   formatUtc8Date,
   formatCkbAmount,
   formatCkbCompact,
-  formatCkbValue,
-  formatCompactCkbDelta,
   formatTimeAgo,
   formatDurationMs,
   formatUtc8DateTime,
   formatUtc8Time,
   formatUnixSecondsUtc8,
-  hexToBytes,
-  bytesToHex,
   cn,
 } from '@/lib/utils';
 
@@ -37,36 +32,6 @@ describe('formatCkbCompact', () => {
   it('rounds a large shannon amount without losing the threshold bit', () => {
     expect(formatCkbCompact('100499999999999999999').value).toBe('1.00T');
     expect(formatCkbCompact('100500000000000000000').value).toBe('1.01T');
-  });
-});
-
-describe('exact CKB decimal readouts', () => {
-  it('keeps fractional CKB from a large API decimal string', () => {
-    expect(formatCkbValue('9007199254740993.00000001').full).toBe('9,007,199,254,740,993.00000001');
-  });
-
-  it('rounds signed activity deltas only at display precision', () => {
-    expect(formatCompactCkbDelta('-9007199254740993.005')).toEqual({
-      compact: '9007199.25B',
-      direction: 'down',
-    });
-  });
-});
-
-describe('truncateHash', () => {
-  it('truncates long hashes', () => {
-    const hash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-    expect(truncateHash(hash)).toBe('0x12345678...90abcdef');
-  });
-
-  it('does not truncate short hashes', () => {
-    const hash = '0x1234';
-    expect(truncateHash(hash)).toBe('0x1234');
-  });
-
-  it('uses custom start and end lengths', () => {
-    const hash = '0x1234567890abcdef';
-    expect(truncateHash(hash, 4, 4)).toBe('0x12...cdef');
   });
 });
 
@@ -111,29 +76,32 @@ describe('formatCkbAmount', () => {
 });
 
 describe('formatTimeAgo', () => {
+  // Lane E4 (re-pinned): the age takes its time, read from the page's one clock on screen; here a
+  // still time, so the fixture and the age read one time (they read the wall clock twice).
+  const AT = Date.parse('2026-11-14T12:00:00Z');
   it('formats seconds ago', () => {
-    const date = new Date(Date.now() - 30 * 1000);
-    expect(formatTimeAgo(date)).toBe('30s ago');
+    const date = new Date(AT - 30 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('30s ago');
   });
 
   it('formats minutes ago', () => {
-    const date = new Date(Date.now() - 5 * 60 * 1000);
-    expect(formatTimeAgo(date)).toBe('5m ago');
+    const date = new Date(AT - 5 * 60 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('5m ago');
   });
 
   it('formats hours ago', () => {
-    const date = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    expect(formatTimeAgo(date)).toBe('3h ago');
+    const date = new Date(AT - 3 * 60 * 60 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('3h ago');
   });
 
   it('formats days ago', () => {
-    const date = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    expect(formatTimeAgo(date)).toBe('2d ago');
+    const date = new Date(AT - 2 * 24 * 60 * 60 * 1000);
+    expect(formatTimeAgo(date, AT)).toBe('2d ago');
   });
 
   it('handles string timestamps', () => {
-    const timestamp = new Date(Date.now() - 60 * 1000).toISOString();
-    expect(formatTimeAgo(timestamp)).toBe('1m ago');
+    const timestamp = new Date(AT - 60 * 1000).toISOString();
+    expect(formatTimeAgo(timestamp, AT)).toBe('1m ago');
   });
 
   // Review 45fd finding 3 (ruling D4): the same rule as the facts rail's two-unit age.
@@ -148,30 +116,32 @@ describe('formatTimeAgo', () => {
     });
 
     it('reads up to 15 s ahead as 0s ago, never a negative age', () => {
-      expect(formatTimeAgo(new Date(NOW + 3000))).toBe('0s ago');
-      expect(formatTimeAgo(String(NOW + 15_000))).toBe('0s ago');
+      expect(formatTimeAgo(new Date(NOW + 3000), NOW)).toBe('0s ago');
+      expect(formatTimeAgo(String(NOW + 15_000), NOW)).toBe('0s ago');
     });
 
     it('says the device clock is behind when the time is further ahead', () => {
-      expect(formatTimeAgo(NOW + 16_000)).toBe("this device's clock is behind");
-      expect(formatTimeAgo(new Date(NOW + 10 * 60 * 1000).toISOString())).toBe(
+      expect(formatTimeAgo(NOW + 16_000, NOW)).toBe("this device's clock is behind");
+      expect(formatTimeAgo(new Date(NOW + 10 * 60 * 1000).toISOString(), NOW)).toBe(
         "this device's clock is behind"
       );
     });
 
     it('refuses a timestamp it cannot read', () => {
-      expect(() => formatTimeAgo('yesterday-ish')).toThrow('Invalid timestamp "yesterday-ish"');
+      expect(() => formatTimeAgo('yesterday-ish', NOW)).toThrow(
+        'Invalid timestamp "yesterday-ish"'
+      );
     });
   });
 });
 
 describe('formatDurationMs', () => {
   it('formats chain ages without raw millisecond dumps', () => {
-    expect(formatDurationMs(500)).toBe('500 ms');
-    expect(formatDurationMs(30000)).toBe('30 s');
-    expect(formatDurationMs(60000)).toBe('1 m');
-    expect(formatDurationMs(3661000)).toBe('1 h 1 m');
-    expect(formatDurationMs(90000000)).toBe('1 d 1 h');
+    expect(formatDurationMs(500)).toBe('500ms');
+    expect(formatDurationMs(30000)).toBe('30s');
+    expect(formatDurationMs(60000)).toBe('1m');
+    expect(formatDurationMs(3661000)).toBe('1h 1m');
+    expect(formatDurationMs(90000000)).toBe('1d 1h');
   });
 });
 
@@ -217,37 +187,6 @@ describe('one site clock: UTC+8 (D2)', () => {
     walk(join(root, 'components'));
     walk(join(root, 'lib'));
     expect(offenders).toEqual([]);
-  });
-});
-
-describe('hexToBytes', () => {
-  it('converts hex string to bytes', () => {
-    const bytes = hexToBytes('0x1234');
-    expect(bytes).toEqual(new Uint8Array([0x12, 0x34]));
-  });
-
-  it('handles hex without 0x prefix', () => {
-    const bytes = hexToBytes('abcd');
-    expect(bytes).toEqual(new Uint8Array([0xab, 0xcd]));
-  });
-});
-
-describe('bytesToHex', () => {
-  it('converts bytes to hex string', () => {
-    const hex = bytesToHex(new Uint8Array([0x12, 0x34, 0xab, 0xcd]));
-    expect(hex).toBe('0x1234abcd');
-  });
-
-  it('pads single digit bytes', () => {
-    const hex = bytesToHex(new Uint8Array([0x01, 0x02]));
-    expect(hex).toBe('0x0102');
-  });
-
-  it('roundtrips correctly', () => {
-    const original = '0x1234567890abcdef';
-    const bytes = hexToBytes(original);
-    const result = bytesToHex(bytes);
-    expect(result).toBe(original);
   });
 });
 

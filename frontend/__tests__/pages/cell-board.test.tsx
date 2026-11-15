@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
@@ -69,6 +69,37 @@ describe('Cell page against the Cell board', () => {
     mockObjectReads();
   });
 
+  // A4 review 3: the out point's copy button copies through the one copy path (hooks/useCopy):
+  // where there is no clipboard (plain HTTP on a LAN address) it claims no copy and rejects
+  // nothing; a copy that worked says "copied".
+  it('copies the out point through the one copy path, claiming nothing without a clipboard', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      Object.assign(navigator, { clipboard: undefined });
+      const { unmount } = view();
+      const button = await screen.findByRole('button', { name: 'Copy out point' });
+      await act(async () => {
+        fireEvent.click(button);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(button).toHaveTextContent(/^copy$/);
+      expect(rejections).toEqual([]);
+      unmount();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      view();
+      const again = await screen.findByRole('button', { name: 'Copy out point' });
+      fireEvent.click(again);
+      await waitFor(() => expect(again).toHaveTextContent(/^copied$/));
+      expect(writeText).toHaveBeenCalledWith(`${cell.txHash}:${cell.outputIndex}`);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+      Object.assign(navigator, { clipboard: undefined });
+    }
+  });
+
   it('presses the cell’s own seal: a Spore object, its hexagon window and type glyph (seal kinds, C3)', async () => {
     const { container } = view();
     await screen.findByRole('heading', { level: 1 });
@@ -96,7 +127,8 @@ describe('Cell page against the Cell board', () => {
     const { container } = view();
     const line = await screen.findByTestId('cell-inventory');
     expect(await within(line).findByText(/Nervape 3x/)).toBeInTheDocument();
-    expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6…2796f2 BTC\+CKB$/);
+    // U-09 (re-pinned): the hero's lede line writes the id at the head size
+    expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6c5…002796f2 BTC\+CKB$/);
     expect(within(line).getByRole('link')).toHaveAttribute(
       'href',
       `/mainnet/objects/${cell.type!.args}`
@@ -122,7 +154,10 @@ describe('Cell page against the Cell board', () => {
     expect(kindLine.children).toHaveLength(2);
     expect(kindLine).toHaveTextContent(/^Celllive$/);
     expect(title).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
-    expect(title.children).toHaveLength(0);
+    // U-09, the lead's question 2 (re-pinned on purpose): the h1 holds one thing, the out point as
+    // TitleId writes it (the row form until its line is measured), where it held the bare text
+    expect(title.children).toHaveLength(1);
+    expect(title.firstElementChild).toHaveAttribute('data-title-id', 'row');
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expect(nameBox.children).toHaveLength(2);
     const idLine = nameBox.lastElementChild as HTMLElement;
@@ -167,9 +202,9 @@ describe('Cell page against the Cell board', () => {
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
     const origin = screen.getByTestId('cell-origin');
     expect(origin).toHaveTextContent(
-      /^output 1 of transaction 0xbe1b9761…936cd8 · live since #20,801,533$/
+      /^output 1 of transaction 0xbe1b9761b6…df936cd8 · live since #20,801,533$/
     );
-    expect(within(origin).getByRole('link', { name: '0xbe1b9761…936cd8' })).toHaveAttribute(
+    expect(within(origin).getByRole('link', { name: '0xbe1b9761b6…df936cd8' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${cell.txHash}`
     );
@@ -191,7 +226,7 @@ describe('Cell page against the Cell board', () => {
     );
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     expect(facts).toHaveTextContent('Occupied320 B');
-    expect(facts).toHaveTextContent('Unspent for3 d 10 h');
+    expect(facts).toHaveTextContent('Unspent for3d 10h');
     expect(facts).toHaveTextContent('as of #20,834,844');
     expect(within(facts).getByRole('link', { name: '#20,834,844' })).toHaveAttribute(
       'href',
