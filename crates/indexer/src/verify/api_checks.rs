@@ -7505,14 +7505,17 @@ mod tests {
         items_total: i64,
         holders_total: i64,
     ) {
+        // The list snapshot and every live read stand at one block, so a count
+        // difference in this fixture is the index's.
+        mount_view_anchor(runtime, server, 1);
         runtime.block_on(async {
             for (asset_type, data) in [("token", json!([])), ("object", json!([object]))] {
                 Mock::given(method("GET"))
                     .and(path("/api/v1/assets"))
                     .and(query_param("type", asset_type))
-                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                        "data": data, "total": data.as_array().unwrap().len(), "nextCursor": null
-                    })))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(list_snapshot_json(data, Some(1))),
+                    )
                     .mount(server)
                     .await;
             }
@@ -7702,6 +7705,386 @@ mod tests {
                 result.findings
             );
         }
+    }
+
+    const RACE_TOKEN: &str = "0x797bfd0b7b883bc9dba43678e285999507c6d0b971a2740c76623f70636f4080";
+
+    fn anchor_json(block_number: i64) -> serde_json::Value {
+        json!({ "blockNumber": block_number, "blockHash": format!("0x{block_number:064x}") })
+    }
+
+    /// One answer of the cached `/assets` list: the count it holds and the
+    /// block its snapshot was built at (`None`: built across more than one).
+    #[derive(Clone, Copy)]
+    struct ListSnapshot {
+        count: i64,
+        anchor: Option<i64>,
+    }
+
+    fn list_snapshot_json(rows: serde_json::Value, anchor: Option<i64>) -> serde_json::Value {
+        json!({
+            "data": rows, "total": rows.as_array().unwrap().len(), "nextCursor": null,
+            "anchor": anchor.map(anchor_json)
+        })
+    }
+
+    /// `/assets?type=<asset_type>` answering `stale` for its first
+    /// `stale_reads` reads and `fresh` from then on — the snapshot before and
+    /// after the API rebuilt it. `row` builds the one list row from a count.
+    fn mount_asset_list_snapshots(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        asset_type: &str,
+        row: impl Fn(i64) -> serde_json::Value,
+        stale: Option<(ListSnapshot, u64)>,
+        fresh: ListSnapshot,
+    ) {
+        runtime.block_on(async {
+            if let Some((stale, stale_reads)) = stale {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/assets"))
+                    .and(query_param("type", asset_type))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(list_snapshot_json(
+                            json!([row(stale.count)]),
+                            stale.anchor,
+                        )),
+                    )
+                    .up_to_n_times(stale_reads)
+                    .with_priority(1)
+                    .mount(server)
+                    .await;
+            }
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .and(query_param("type", asset_type))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(list_snapshot_json(json!([row(fresh.count)]), fresh.anchor)),
+                )
+                .with_priority(2)
+                .mount(server)
+                .await;
+        });
+    }
+
+    /// The API's own view: every live read answers at block `view`.
+    fn mount_view_anchor(runtime: &tokio::runtime::Runtime, server: &MockServer, view: i64) {
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets/summary"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "anchor": anchor_json(view) })),
+                )
+                .mount(server)
+                .await;
+        });
+    }
+
+    /// The top token list holds one token; its detail and its holder page
+    /// (no holder rows — only the counts are under test) are read live at
+    /// block `view`; no object collection exists.
+    fn mount_token_count_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        stale: Option<(ListSnapshot, u64)>,
+        fresh: ListSnapshot,
+        live_holders: i64,
+        view: i64,
+    ) {
+        mount_asset_list_snapshots(
+            runtime,
+            server,
+            "token",
+            |count| {
+                json!({
+                    "id": RACE_TOKEN, "assetType": "token", "standard": "sudt",
+                    "holdersCount": count
+                })
+            },
+            stale,
+            fresh,
+        );
+        mount_view_anchor(runtime, server, view);
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .and(query_param("type", "object"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(list_snapshot_json(json!([]), Some(view))),
+                )
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{RACE_TOKEN}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "typeScriptHash": RACE_TOKEN, "holdersCount": live_holders
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{RACE_TOKEN}/holders")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [], "total": live_holders, "nextCursor": null,
+                    "anchor": anchor_json(view)
+                })))
+                .mount(server)
+                .await;
+        });
+    }
+
+    fn finding_details(result: &CheckResult) -> Vec<&str> {
+        result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Regression (mainnet 2026-11-15, run 20261115T023435Z-c99ffc6a): block
+    /// 21016902 gave USDC its 865th holder 22 s before the check read it.
+    /// `/assets` answers from a snapshot the API rebuilds when the tip moves,
+    /// so it still held 864 while the detail, read live, held 865 — two reads
+    /// of two blocks, reported as `detail holdersCount=865 != list
+    /// holdersCount=864`. Once the snapshot reaches the block the detail was
+    /// read at, the two agree.
+    #[test]
+    fn asset_top_holders_list_snapshot_behind_the_tip_is_not_a_count_mismatch() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            Some((
+                ListSnapshot {
+                    count: 864,
+                    anchor: Some(21_016_901),
+                },
+                2,
+            )),
+            ListSnapshot {
+                count: 865,
+                anchor: Some(21_016_902),
+            },
+            865,
+            21_016_902,
+        );
+        let completed = execute_check(
+            &AssetTopHoldersAddressConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Pass, "{completed:?}");
+        let detail = completed.result.unwrap().detail.unwrap();
+        assert!(
+            detail.contains("1 asset(s) agreed on a re-read"),
+            "the re-read must be on the result line: {detail}"
+        );
+    }
+
+    /// The other side of the same rule: a difference seen with the list
+    /// snapshot and every live read at one block is the index's, and fails.
+    #[test]
+    fn asset_top_holders_count_mismatch_at_one_block_is_a_failure() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            None,
+            ListSnapshot {
+                count: 864,
+                anchor: Some(21_016_902),
+            },
+            865,
+            21_016_902,
+        );
+        let result = AssetTopHoldersAddressConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert_eq!(result.status, CheckStatus::Fail, "{result:?}");
+        let details = finding_details(&result);
+        assert!(
+            details.contains(&"detail holdersCount=865 != list holdersCount=864"),
+            "{details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("every read at block 21016902")),
+            "a failure names the block it was read at: {details:?}"
+        );
+    }
+
+    /// A snapshot that never reaches the block the live reads answer at proves
+    /// nothing either way: neither a pass nor a failure.
+    #[test]
+    fn asset_top_holders_mismatch_never_read_at_one_block_is_inconclusive() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            None,
+            ListSnapshot {
+                count: 864,
+                anchor: Some(21_016_901),
+            },
+            865,
+            21_016_902,
+        );
+        let completed = execute_check(
+            &AssetTopHoldersAddressConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Inconclusive, "{completed:?}");
+        let reason = completed.status_reason.unwrap();
+        for expected in [
+            RACE_TOKEN,
+            "detail holdersCount=865 != list holdersCount=864",
+            "list snapshot at block 21016901",
+            "live reads at block 21016902",
+        ] {
+            assert!(reason.contains(expected), "missing {expected}: {reason}");
+        }
+    }
+
+    /// A snapshot built while the tip moved has no single block (`anchor:
+    /// null`); a difference against it is not comparable either.
+    #[test]
+    fn asset_top_holders_mismatch_against_an_unanchored_snapshot_is_inconclusive() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_token_count_fixture(
+            &runtime,
+            &server,
+            None,
+            ListSnapshot {
+                count: 864,
+                anchor: None,
+            },
+            865,
+            21_016_902,
+        );
+        let completed = execute_check(
+            &AssetTopHoldersAddressConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Inconclusive, "{completed:?}");
+        assert!(
+            completed
+                .status_reason
+                .as_deref()
+                .unwrap()
+                .contains("list snapshot spans more than one block"),
+            "{completed:?}"
+        );
+    }
+
+    /// `anchor: null` is a statement; a list without the key is an API that
+    /// does not say what it read, and the check cannot classify against it.
+    #[test]
+    fn asset_list_without_an_anchor_key_is_a_contract_error() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [], "total": 0, "nextCursor": null
+                })))
+                .mount(&server)
+                .await;
+        });
+        for check in [
+            &ObjectAssetCollectionConsistency as &dyn Check,
+            &AssetTopHoldersAddressConsistency,
+        ] {
+            let completed = execute_check(check, &mock_ctx(&server), &ProgressReporter::new(None));
+            assert_eq!(completed.status, CheckStatus::Error, "{completed:?}");
+            assert!(
+                completed
+                    .status_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("anchor"),
+                "{completed:?}"
+            );
+        }
+    }
+
+    /// The object list/detail check reads the same snapshot: a collection
+    /// whose live count moved after the snapshot was built is not a mismatch.
+    #[test]
+    fn object_collection_list_snapshot_behind_the_tip_is_not_a_count_mismatch() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let row = |live_count: i64| {
+            json!({
+                "id": "0x1234", "assetType": "object", "standard": "m-nft",
+                "holdersCount": 0, "totalSupply": "7", "liveCount": live_count
+            })
+        };
+        mount_asset_list_snapshots(
+            &runtime,
+            &server,
+            "object",
+            row,
+            Some((
+                ListSnapshot {
+                    count: 2,
+                    anchor: Some(100),
+                },
+                2,
+            )),
+            ListSnapshot {
+                count: 3,
+                anchor: Some(101),
+            },
+        );
+        mount_view_anchor(&runtime, &server, 101);
+        runtime.block_on(async {
+            for (endpoint, response) in [
+                (
+                    "/api/v1/assets/objects/0x1234",
+                    json!({
+                        "collectionId": "0x1234", "totalCount": 7,
+                        "liveCount": 3, "holdersCount": 0
+                    }),
+                ),
+                (
+                    "/api/v1/assets/objects/0x1234/items",
+                    json!({ "data": [], "total": 7, "nextCursor": null }),
+                ),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(endpoint))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .mount(&server)
+                    .await;
+            }
+        });
+        let completed = execute_check(
+            &ObjectAssetCollectionConsistency,
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        );
+        assert_eq!(completed.status, CheckStatus::Pass, "{completed:?}");
+        let result = completed.result.unwrap();
+        assert_eq!(result.items_checked, 1);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("1 asset(s) agreed on a re-read"),
+            "{result:?}"
+        );
     }
 
     fn mount_burnt_charts(
