@@ -320,9 +320,14 @@ function AllocationReady({ view }: { view: AllocationView }) {
     <div className={cn(ALLOCATION_CLASS, 'flex flex-col gap-3.5')}>
       <div
         data-testid="ckbytes-circulating"
-        // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's
+        // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's. A
+        // wrapping row of two items, the figure and its label (A4 Chrome F1): the label goes under
+        // the figure, starting its line with no indent, when the line cannot hold both — the
+        // figure ≈ 570 px from 640 (14 + 9 characters at 40 px and " CKB" at 20, −0.03 em) and
+        // 314.5 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
+        // 682.8 px (1280's 840-px column), two at 1024 (660.8), 640 (608), 390 (358), 360 (326).
         className={cn(
-          'text-text-bright text-index sm:text-display tabular-nums tracking-[-0.01em]',
+          'text-text-bright text-index sm:text-display flex flex-wrap items-center gap-x-3 tabular-nums tracking-[-0.01em]',
           flare
         )}
       >
@@ -336,12 +341,12 @@ function AllocationReady({ view }: { view: AllocationView }) {
           <span className="text-text-dim text-[0.5em]"> CKB</span>
         </span>
         {/* what the figure is, now the heading says `supply` (the board's label); the block it
-            is read at is the heading's note, said once. One unit, so it moves under the figure
-            whole rather than break ('in' / 'circulation' at 1024), at its own tracking, not the
-            display figure's −0.03 em */}
+            is read at is the heading's note, said once. An item of the row, so it moves under
+            the figure whole rather than break ('in' / 'circulation' at 1024), at its own
+            tracking, not the display figure's −0.03 em */}
         <span
           data-testid="ckbytes-label"
-          className="text-text-dim text-small ml-3 whitespace-nowrap align-middle font-normal tracking-normal"
+          className="text-text-dim text-small font-normal tracking-normal"
         >
           in circulation
         </span>
