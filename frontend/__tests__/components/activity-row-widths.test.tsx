@@ -162,7 +162,9 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     const line = container.querySelector('[data-role="participant"]') as HTMLElement;
     expect(line).toHaveClass('flex-wrap');
     expect(line.querySelector('[data-party]')).toHaveClass('max-w-full');
-    expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
+    // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping line, so it moves to
+    // the next line whole; a registered name is words, never made nowrap
+    expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('whitespace-nowrap');
   });
 });
 
