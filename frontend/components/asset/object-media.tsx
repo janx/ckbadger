@@ -3,7 +3,8 @@ import type { SporeDetail, SporeDobDecoded } from '@/lib/api';
 import { SporePreview } from '@/components/object/spore-preview';
 import { detectPreview } from '@/lib/preview-utils';
 import { hexBytes } from '@/lib/hex-bytes';
-import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
+import { bitcoinTxHref, omigaDobHref, parseBtcfsUri, type BtcfsInscription } from '@/lib/btcfs';
+import { inscriptionList } from '@/lib/dob-genes';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { ClassMark } from '@/components/ui/class-mark';
 import { formatCount } from '@/lib/format-count';
@@ -44,20 +45,18 @@ function ViewImage({ href }: { href: string }) {
   );
 }
 /**
- * What a btcfs reference points at, read from its URI: the Bitcoin transaction and inscription,
- * linked to an explorer where the network has one, else said in words; a URI that is not an
- * inscription reference is said to be so (anyone can mint spore content).
+ * One inscription as the media box reads it: the txid at the row size (U-09; it was 4…4), in words
+ * that break between them, never inside one (B3 round 3: break-all set "inscript / ion i0"); its
+ * two units hold, "Bitcoin tx" with its id and "inscription i<n>". Linked to its explorer where
+ * the network has one.
  */
-function BtcfsReading({ uri, network }: { uri: string; network: string }) {
-  const inscription = parseBtcfsUri(uri);
-  if (inscription === null)
-    return (
-      <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
-    );
-  const href = bitcoinTxHref(inscription.txid, network);
-  // the media box's reading: the txid at the row size (U-09; it was 4…4), in words that break
-  // between them, never inside one (B3 round 3: break-all set "inscript / ion i0"); its two units
-  // hold, "Bitcoin tx" with its id and "inscription i<n>"
+function InscriptionReading({
+  inscription,
+  href,
+}: {
+  inscription: BtcfsInscription;
+  href: string | null;
+}) {
   const label = (
     <>
       <NoBreak>
@@ -71,13 +70,62 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
       {label} ↗
     </a>
   ) : (
-    <p className="space-y-1">
-      <span className="text-copper block">{label}</span>
-      <span className="text-text-dim text-meta block">
-        The Bitcoin network of testnet inscriptions is not established, so no explorer link is
-        given.
-      </span>
-    </p>
+    <span className="text-copper block">{label}</span>
+  );
+}
+
+const NO_EXPLORER = (
+  <span className="text-text-dim text-meta block">
+    The Bitcoin network of testnet inscriptions is not established, so no explorer link is given.
+  </span>
+);
+
+/**
+ * What a btcfs reference points at, read from its URI: the Bitcoin transaction and inscription,
+ * linked to an explorer where the network has one, else said in words. A `;`-list of inscriptions
+ * (one value, the inscriptions an object can point at) is read one inscription each, through the
+ * one path that decides what such a list is (`inscriptionList`, which traitDisplay counts: B3
+ * round 4); a URI that is neither, a list with an element that is not an inscription included, is
+ * said to be no inscription reference (anyone can mint spore content).
+ */
+function BtcfsReading({ uri, network }: { uri: string; network: string }) {
+  const single = parseBtcfsUri(uri);
+  const inscriptions = single ? [single] : inscriptionList(uri);
+  if (inscriptions === null)
+    return (
+      <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
+    );
+  const readings = inscriptions.map((inscription) => (
+    <InscriptionReading
+      key={`${inscription.txid}i${inscription.index}`}
+      inscription={inscription}
+      href={bitcoinTxHref(inscription.txid, network)}
+    />
+  ));
+  const linked = bitcoinTxHref(inscriptions[0].txid, network) !== null;
+  if (readings.length === 1)
+    return linked ? (
+      readings[0]
+    ) : (
+      <p className="space-y-1">
+        {readings[0]}
+        {NO_EXPLORER}
+      </p>
+    );
+  const list = (
+    <ul aria-label="Inscriptions" className="space-y-1">
+      {readings.map((reading) => (
+        <li key={reading.key}>{reading}</li>
+      ))}
+    </ul>
+  );
+  return linked ? (
+    list
+  ) : (
+    <div className="space-y-1">
+      {list}
+      {NO_EXPLORER}
+    </div>
   );
 }
 

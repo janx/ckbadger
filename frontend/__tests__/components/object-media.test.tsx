@@ -354,7 +354,7 @@ it('reads a ;-list of inscriptions one reading each, and keeps the notice for a 
     within(box).getByRole('link', { name: 'Bitcoin tx cdcdcdcdcd…cdcdcd · inscription i2 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${second}`);
   expect(within(box).queryByText('Not a recognisable btcfs inscription reference.')).toBeNull();
-  const details = screen.getByText('Media dependencies · 2 sources').closest('details')!;
+  const details = screen.getByText(fullText('Media dependencies · 2 sources')).closest('details')!;
   expect(
     within(details).getByText('Not a recognisable btcfs inscription reference.')
   ).toBeInTheDocument();
