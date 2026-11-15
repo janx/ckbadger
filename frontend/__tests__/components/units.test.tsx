@@ -14,7 +14,8 @@ const units = (text: string) => {
   return {
     container,
     whole: [...container.querySelectorAll('[data-nobreak]')].map((u) => u.textContent),
-    counts: [...container.querySelectorAll<HTMLElement>('[data-count]')],
+    // re-pinned (A4 round 3): the unit's own marker; `data-count` is the filter chips' number
+    counts: [...container.querySelectorAll<HTMLElement>('[data-count-unit]')],
   };
 };
 
@@ -59,6 +60,30 @@ describe('unitText: the units a composed string carries', () => {
     expect(container.textContent).toBe(
       'one type id, 0x9bd7e06f…a3cce8, 1 binary · then 30 days of grace, to 2027-10-21'
     );
+  });
+
+  // A4 round 3: an underline is not drawn into an inline block, so "Show all 6,396 observations"
+  // was underlined on "Show all" only. The unit takes its parent's decoration (text-decoration:
+  // inherit): a link's or a button's underline, static or on hover, runs through the count.
+  it('takes its parent’s text decoration, so an underline runs through it', () => {
+    const [count] = units('Show all 6,396 observations').counts;
+    expect(count).toHaveClass('[text-decoration:inherit]');
+  });
+
+  // A4 round 3: the unit holds the whole noun formatCount was given ("live cell", "DAO cell"),
+  // read from formatCount's own joins (its words joined by the no-break space), never guessed from
+  // the string; the noun is one piece, so where the count is wider than its line the break is
+  // between the number and the noun only. A byte size written the same way ("85 B") is a count
+  // by the same rule, by design.
+  it('holds the whole noun it was given, the noun one piece after its number', () => {
+    const [cells] = units('in 795,441 live cells').counts;
+    expect(cells.textContent).toBe('795,441 live cells');
+    const noun = cells.lastElementChild as HTMLElement;
+    expect(noun.textContent).toBe('live cells');
+    expect(noun).toHaveClass('whitespace-nowrap');
+    expect(cells.firstChild!.textContent).toBe('795,441 ');
+    expect(units('1 DAO cell').counts.map((c) => c.textContent)).toEqual(['1 DAO cell']);
+    expect(units('85 B · fee').counts.map((c) => c.textContent)).toEqual(['85 B']);
   });
 
   it('leaves a string with no unit as it is, and a node it is not given as text', () => {

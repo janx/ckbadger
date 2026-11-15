@@ -136,6 +136,10 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     );
     expect(section).toHaveTextContent('not live');
     expect(section).toHaveTextContent('2025-04-24');
+    // A4 round 3: the registered and expiry date-times are units (they were free to break in the
+    // rows' dd); the rows protect the values they are given (unitNode)
+    const registered = within(section).getByText(/^2025-04-24 \d{2}:\d{2}:\d{2} UTC\+8$/);
+    expect(registered).toHaveAttribute('data-nobreak');
   });
 
   it('keeps the did:ckb document as stored, with its layout and local ID, in tier 2', () => {

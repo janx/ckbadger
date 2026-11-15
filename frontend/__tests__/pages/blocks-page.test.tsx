@@ -161,7 +161,7 @@ describe('BlocksPage', () => {
 
     expect(screen.getByRole('table', { name: 'Latest blocks' })).toHaveTextContent('0.00012345');
     expect(
-      screen.getAllByRole('img', { name: /Cellbase, 1\suser transaction\b/ }).length
+      screen.getAllByRole('img', { name: /Cellbase, 1\suser\stransaction\b/ }).length
     ).toBeGreaterThan(0);
     expect(screen.queryByText('Browse all blocks on the CKB network')).not.toBeInTheDocument();
     expect(screen.getByText('Blocks')).toBeInTheDocument();

@@ -98,20 +98,108 @@ function insideUnit(child: ts.JsxExpression): boolean {
 
 export interface UnitFinding {
   line: number;
-  kind: 'date' | 'id' | 'count' | 'field';
+  kind: 'date' | 'id' | 'count' | 'field' | 'decoration';
   text: string;
 }
 
+/**
+ * Whether `node` stands in text position on its way up to `top`: the value itself, a template
+ * literal's span, a concatenation, a ternary's branch — never a call's argument or a property's
+ * object, whose result need not carry it.
+ */
+function inTextPosition(node: ts.Node, top: ts.Node): boolean {
+  for (let n: ts.Node = node; n !== top; n = n.parent) {
+    const p = n.parent;
+    if (p === top) return true;
+    const passes =
+      ts.isTemplateSpan(p) ||
+      ts.isTemplateExpression(p) ||
+      ts.isParenthesizedExpression(p) ||
+      (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.PlusToken) ||
+      (ts.isConditionalExpression(p) && n !== p.condition);
+    if (!passes) return false;
+  }
+  return true;
+}
+
+/**
+ * A value named `date` used as a value (not a property's name in `x.date`, not a declaration's or
+ * a parameter's name, not an attribute's or an object key's).
+ */
+function isDateValue(n: ts.Node): n is ts.Identifier {
+  if (!ts.isIdentifier(n) || n.text !== 'date') return false;
+  const p = n.parent;
+  if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
+  if ((ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isBindingElement(p)) && p.name === n)
+    return false;
+  if (ts.isPropertyAssignment(p) && p.name === n) return false;
+  if (ts.isJsxAttribute(p)) return false;
+  return true;
+}
+
+/** The units an expression writes, read by the same rules (its formatter calls, date fields). */
+function unitsIn(expr: ts.Node): UnitFinding['kind'] | null {
+  let kind: UnitFinding['kind'] | null = null;
+  const visit = (n: ts.Node) => {
+    if (kind) return;
+    // JSX held in a name is read where it is written: its own children are checked there
+    if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n) || ts.isJsxFragment(n)) return;
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n);
+      if (DATE_FORMATTERS.has(name)) kind = 'date';
+      else if (ID_SHORTENERS.has(name)) kind = 'id';
+      else if (COUNT_FORMATTERS.has(name)) kind = 'count';
+    }
+    if (ts.isPropertyAccessExpression(n) && DATE_FIELDS.has(n.name.text) && inTextPosition(n, expr))
+      kind = 'field';
+    if (isDateValue(n) && inTextPosition(n, expr)) kind = 'date';
+    ts.forEachChild(n, visit);
+  };
+  visit(expr);
+  return kind;
+}
+
+/**
+ * The value a name stands for in this file, where the source says it exactly: the nearest
+ * enclosing `const name = …` (a block's, a function's or the file's), and when that is a call to a
+ * function the file declares by name, that function's body. Null for a parameter, an import or
+ * anything declared elsewhere.
+ */
+function resolveConst(name: string, from: ts.Node): ts.Node | null {
+  for (let n: ts.Node | undefined = from.parent; n; n = n.parent) {
+    if (!(ts.isBlock(n) || ts.isSourceFile(n))) continue;
+    for (const statement of n.statements) {
+      if (ts.isFunctionDeclaration(statement) && statement.name?.text === name)
+        return statement.body ?? null;
+      if (!ts.isVariableStatement(statement)) continue;
+      if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+      for (const d of statement.declarationList.declarations)
+        if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer) {
+          const init = d.initializer;
+          if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return init.body;
+          if (ts.isCallExpression(init) && ts.isIdentifier(init.expression))
+            return resolveConst(init.expression.text, n.statements[0] ?? n) ?? init;
+          return init;
+        }
+    }
+  }
+  return null;
+}
+
+const DECORATION = /(^|[\s'"`:])(underline|line-through|overline)([\s'"`]|$)/;
+
 export function unprotectedUnits(file: ts.SourceFile): UnitFinding[] {
   const found: UnitFinding[] = [];
-  const report = (node: ts.Node, kind: UnitFinding['kind']) => {
-    const child = renderingChild(node);
-    if (!child || renderedAsUnits(node, child) || insideUnit(child)) return;
+  const push = (node: ts.Node, kind: UnitFinding['kind']) =>
     found.push({
       line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
       kind,
       text: node.getText().replace(/\s+/g, ' ').slice(0, 90),
     });
+  const report = (node: ts.Node, kind: UnitFinding['kind']) => {
+    const child = renderingChild(node);
+    if (!child || renderedAsUnits(node, child) || insideUnit(child)) return;
+    push(node, kind);
   };
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
@@ -128,6 +216,36 @@ export function unprotectedUnits(file: ts.SourceFile): UnitFinding[] {
       (ts.isJsxElement(node.parent.parent) || ts.isJsxFragment(node.parent.parent))
     )
       report(node, 'field');
+    // a value named `date` written into the text: `{date}`, `${date}` (A4 round 3)
+    if (isDateValue(node)) {
+      const child = renderingChild(node);
+      if (child?.expression && inTextPosition(node, child.expression)) report(node, 'date');
+    }
+    // a name the file declares, rendered as it is: `{title}` where `const title = …` writes a
+    // unit, directly or through the file's own function it calls (A4 round 3)
+    if (
+      ts.isJsxExpression(node) &&
+      node.expression &&
+      ts.isIdentifier(node.expression) &&
+      (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent)) &&
+      !insideUnit(node)
+    ) {
+      const value = resolveConst(node.expression.text, node);
+      const kind = value ? unitsIn(value) : null;
+      if (kind) push(node, kind);
+    }
+    // a unit renderer's child under a decoration it cannot take: the decoration is on a farther
+    // element, not on its parent (an inline block takes only its parent's, by inherit) (A4 round 3)
+    if (ts.isCallExpression(node) && UNIT_RENDERERS.has(calleeName(node))) {
+      const child = renderingChild(node);
+      if (child && ts.isJsxElement(child.parent)) {
+        const parentDecorated = DECORATION.test(classText(child.parent.openingElement));
+        let farther = false;
+        for (let n: ts.Node | undefined = child.parent.parent; n; n = n.parent)
+          if (ts.isJsxElement(n) && DECORATION.test(classText(n.openingElement))) farther = true;
+        if (farther && !parentDecorated) push(node, 'decoration');
+      }
+    }
     ts.forEachChild(node, visit);
   };
   visit(file);

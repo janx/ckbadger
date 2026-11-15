@@ -45,6 +45,47 @@ describe('the unit gate reads the AST exactly (self-tests)', () => {
     expect(scan(`<dd>{formatCount(n, 'cell')}</dd>`)).toEqual(["count: formatCount(n, 'cell')"]);
   });
 
+  // A4 round 3: two sites escaped through a name — "Blocks of ${date} (UTC+8)" held in a const and
+  // rendered as {title}; the cellbase note composed by the file's own function and rendered as
+  // {text}. The gate follows a name to the file's `const` (and to the file's function it calls).
+  it('follows a name to the const or the function the file declares', () => {
+    expect(
+      unprotectedUnits(
+        parse('const title = `Blocks of ${date} (UTC+8)`;\nconst x = (<span>{title}</span>);')
+      ).map((f) => f.kind)
+    ).toEqual(['date']);
+    expect(
+      unprotectedUnits(
+        parse(
+          [
+            'function Note() {',
+            "  const noteText = () => `miner lock (${shortenHash(a, 'row')})`;",
+            '  const text = noteText();',
+            '  return <span>{text}</span>;',
+            '}',
+          ].join('\n')
+        )
+      ).map((f) => f.kind)
+    ).toEqual(['id']);
+    // protected, a parameter (not declared here), a date passed to a call (not written as text)
+    expect(scan('<p>{unitText(`Blocks of ${date}`)}</p>')).toEqual([]);
+    expect(
+      unprotectedUnits(parse('function A({ title }: { title: string }) { return <b>{title}</b>; }'))
+    ).toEqual([]);
+    expect(scan('<p>{api.getBlocksByDay(date).length}</p>')).toEqual([]);
+  });
+
+  // A4 round 3: an underline is not drawn into an inline block; the count unit takes its parent's
+  // decoration only (text-decoration: inherit), so a decoration on a farther element is refused.
+  it('refuses a unit renderer under a decoration its parent does not carry', () => {
+    expect(scan('<a className="hover:underline"><span>{unitNode(x)}</span></a>')).toEqual([
+      'decoration: unitNode(x)',
+    ]);
+    expect(scan('<a className="hover:underline">{unitNode(x)}</a>')).toEqual([]);
+    expect(scan('<button className="underline">Show all {unitNode(x)}</button>')).toEqual([]);
+    expect(scan('<a className="text-jade"><span>{unitNode(x)}</span></a>')).toEqual([]);
+  });
+
   it('passes a unit rendered as a unit, a string given to unitText, an attribute and SVG text', () => {
     expect(scan(`<NoBreak>{formatUtc8Date(t)}</NoBreak>`)).toEqual([]);
     expect(scan(`<time>{formatUtc8DateTime(t)}</time>`)).toEqual([]);

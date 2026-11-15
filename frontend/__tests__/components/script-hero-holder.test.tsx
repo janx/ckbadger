@@ -85,6 +85,7 @@ describe('the hero tiles break no word at a phone width (A4 round 2)', () => {
     }
     // the count: its number and its noun, one unit where the line holds it
     const ever = within(screen.getByText('Ever used').parentElement!).getByText(/78,675,029/);
-    expect(ever.closest('[data-count]')).toHaveTextContent(/^78,675,029 cells$/);
+    // re-pinned (A4 round 3): the unit's own marker, data-count-unit
+    expect(ever.closest('[data-count-unit]')).toHaveTextContent(/^78,675,029 cells$/);
   });
 });

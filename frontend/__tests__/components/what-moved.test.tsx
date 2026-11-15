@@ -235,7 +235,7 @@ describe('WhatMoved, the ribbon form', () => {
     const [token] = screen.getAllByRole('group');
     const from = token.querySelector('[data-flow-side="from"]')!;
     expect(from.querySelectorAll('[data-flow-end="party"]')).toHaveLength(5);
-    const more = within(from as HTMLElement).getByRole('button', { name: /4\smore parties/ });
+    const more = within(from as HTMLElement).getByRole('button', { name: /4\smore\sparties/ });
     expect(more).toHaveTextContent('4 more parties expand');
     // the four folded give 95 + 94 + 93 + 92 raw units = 0.00000374 RGB++ at 8 decimals
     expect(more).toHaveTextContent('0.00000374 RGB++');

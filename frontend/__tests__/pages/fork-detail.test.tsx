@@ -131,7 +131,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(
       screen.getByText(/An uncle earns its miner nothing; it counts toward the uncle rate/)
     ).toBeInTheDocument();
-    expect(screen.queryByText('1 blocks')).toBeNull();
+    expect(screen.queryByText(fullText('1 blocks'))).toBeNull();
   });
 
   it('folds the blocks and the dropped transactions into phone rows at 358 px (no board: L1 rules)', async () => {

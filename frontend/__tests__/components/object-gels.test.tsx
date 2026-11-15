@@ -531,7 +531,7 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     expect(within(rows[0]).getAllByRole('cell')[0]).toHaveTextContent(/^gene5$/);
     expect(rows[0]).toHaveTextContent('2 of 6');
     const more = screen.getByRole('button', {
-      name: /^62\smore genes: 61 with 2\svariants and 1 with 1\svariant/,
+      name: /^62\smore\sgenes: 61 with 2\svariants and 1 with 1\svariant/,
     });
     fireEvent.click(more);
     expect(within(table).getAllByRole('row').slice(1)).toHaveLength(72);

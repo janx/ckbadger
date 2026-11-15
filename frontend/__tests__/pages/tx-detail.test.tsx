@@ -13,6 +13,7 @@ import { CELL_COLORS } from '@/lib/design-tokens';
 import { expectOnePageSeal } from '@/__tests__/utils/seals';
 import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 import type { SealState } from '@/lib/seal/stones';
+import { fullText } from '@/__tests__/utils/full-text';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -508,8 +509,8 @@ describe('TransactionDetailPage', () => {
     await waitFor(() =>
       expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/)
     );
-    expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
-    expect(screen.getByText(/\d confirmations?$/)).toBeInTheDocument();
+    expect(screen.queryByText(fullText(/\b1 cells\b/))).toBeNull();
+    expect(screen.getByText(fullText(/\d confirmations?$/))).toBeInTheDocument();
   });
 
   it('shows commit time as UTC+8 with a relative age, not a raw ISO Z string (TX-10)', async () => {
@@ -749,7 +750,7 @@ describe('TransactionDetailPage', () => {
     // Indexed: `poolStatus` is gone, the committed view renders, polling stops.
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
-    expect(await screen.findByText(/4\s+confirmations/)).toBeInTheDocument();
+    expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
     expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
     // Indexed: the same stone, pressed, and pressed again across its cells (C11: its two halves,
     // one on each sheet).

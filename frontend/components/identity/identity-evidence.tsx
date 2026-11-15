@@ -75,7 +75,7 @@ function Rows({ rows }: { rows: [string, ReactNode][] }) {
       {rows.map(([term, value]) => (
         <div key={term} className="contents">
           <dt className="text-text-dim">{term}</dt>
-          <dd className="min-w-0 [overflow-wrap:anywhere]">{value}</dd>
+          <dd className="min-w-0 [overflow-wrap:anywhere]">{unitNode(value)}</dd>
         </div>
       ))}
     </dl>

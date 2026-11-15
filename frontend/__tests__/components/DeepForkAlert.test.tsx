@@ -5,6 +5,7 @@ import { DeepForkAlert } from '@/components/deep-fork-alert';
 import { DeepForkStatus } from '@/lib/api';
 import { color, inkOnFill, type PaletteKey } from '@/lib/palette';
 import { resetThemeForTests } from '@/lib/theme';
+import { fullText } from '@/__tests__/utils/full-text';
 
 describe('DeepForkAlert', () => {
   const activeDeepFork: DeepForkStatus = {
@@ -34,7 +35,7 @@ describe('DeepForkAlert', () => {
     render(<DeepForkAlert status={activeDeepFork} />);
 
     expect(screen.getByText('Chain Fork Detected - Sync Paused')).toBeInTheDocument();
-    expect(screen.getByText('50 blocks')).toBeInTheDocument();
+    expect(screen.getByText(fullText('50 blocks'))).toBeInTheDocument();
     expect(screen.getByText('#1,000')).toBeInTheDocument();
     expect(screen.getByText('#1,050')).toBeInTheDocument();
     expect(screen.getByText('#950')).toBeInTheDocument();

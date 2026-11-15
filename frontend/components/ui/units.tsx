@@ -12,7 +12,10 @@ import { ELLIPSIS } from '@/lib/shorten';
  *   UTC+8`), `formatUtc8Time` (`12:03:29 UTC+8`), and two of them joined by ` → `;
  * - a shortened id: `lib/shorten.ts`'s forms, a hex id or an address cut at the one ellipsis
  *   (`0x5cb3…b4fa`, `ckb1qzda0cr0…5svwd5rt`), an out point's `:index` with it;
- * - a count: `formatCount`'s number and noun, joined by its no-break space (`78,675,029 cells`).
+ * - a count: `formatCount`'s number and its whole noun, joined by its no-break spaces
+ *   (`78,675,029 cells`, `795,441 live cells`: formatCount joins a noun's words too, so the unit
+ *   holds what formatCount was given, never a guess at where a noun ends). A size written the same
+ *   way (`85 B`) is a count by the same rule, on purpose: a number and its unit.
  */
 const DAY = String.raw`(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?`;
 const CLOCK = String.raw`\d{2}:\d{2}(?::\d{2})?`;
@@ -21,19 +24,34 @@ const AT = String.raw`(?:${DAY}(?: ${CLOCK}${ZONE})?|${CLOCK} UTC\+8)`;
 const TIME = String.raw`${AT}(?: → ${AT})?`;
 const SHORT_ID = String.raw`(?:0x[0-9a-fA-F]+|ck[bt]1[0-9a-z]+)${ELLIPSIS}[0-9a-zA-Z]+(?::\d+)?`;
 // a count with its sign where it has one ("+3 participants"): the sign is the number's
-const COUNT = String.raw`[+−]?\d[\d,]*(?:\.\d+)?\u00a0[^\s\u00a0]+`;
+const COUNT = String.raw`[+−]?\d[\d,]*(?:\.\d+)?(?:\u00a0[^\s\u00a0]+)+`;
 const UNIT = new RegExp(`(${TIME})|(${SHORT_ID})|(${COUNT})`, 'g');
 
 /**
  * A count as a unit of its line: `78,675,029 cells` stays one piece where the line holds it (an
  * inline block moves to the next line whole), and only where it is wider than a whole line does it
- * break, between the number and the noun (the space inside it), never inside either: a word is never
- * cut (`overflow-wrap: normal`, whatever its container allows). The copy is the plain text.
+ * break, between the number and the noun, never inside either: the noun is one piece (its words
+ * nowrap) and a word is never cut (`overflow-wrap: normal`, whatever its container allows). The copy
+ * is the plain text, the no-break spaces plain spaces.
+ *
+ * An inline block is drawn no decoration from its ancestors (CSS Text Decoration: it does not
+ * propagate into atomic inlines), so the unit takes its parent's: `text-decoration: inherit` copies
+ * the parent's line, style, colour and thickness, a hover's too (A4 round 3: "Show all 6,396
+ * observations" was underlined on "Show all" only). A decoration set on a farther element, with an
+ * element between, is not its parent's and is not drawn through it; the unit gate refuses that
+ * nesting where the file shows it.
+ *
+ * `data-count-unit` names it (the filter chips' number carries `data-count`).
  */
 function CountUnit({ text }: { text: string }) {
+  const [number, ...noun] = text.split('\u00a0');
   return (
-    <span data-count="" className="inline-block max-w-full [overflow-wrap:normal]">
-      {text.replace('\u00a0', ' ')}
+    <span
+      data-count-unit=""
+      className="inline-block max-w-full [overflow-wrap:normal] [text-decoration:inherit]"
+    >
+      {`${number} `}
+      <span className="whitespace-nowrap">{noun.join(' ')}</span>
     </span>
   );
 }
