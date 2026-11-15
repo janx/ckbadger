@@ -24,7 +24,6 @@ import { COMPOSITION_BADGES, GENE_COLORS } from '@/lib/design-tokens';
 import type { PaletteKey } from '@/lib/palette';
 import {
   alleleLanes,
-  droppedGenesCaption,
   geneLabel,
   geneOrder,
   genotypePoints,
@@ -47,6 +46,7 @@ import {
 } from '@/lib/dob-pattern';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
+import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 
@@ -297,10 +297,12 @@ export function ObjectGeneticsView({
                 Collection variant frequencies await complete decoding.
               </p>
             )}
-            {ruled && ruled.dropped.length > 0 && (
-              <p data-role="caption" className="text-text-dim text-small max-w-[640px]">
-                {droppedGenesCaption(ruled.dropped, collection.genetics.eligibleItems)}
-              </p>
+            {ruled && (
+              <DroppedGenesCaption
+                dropped={ruled.dropped}
+                objects={collection.genetics.eligibleItems}
+                className="max-w-[640px]"
+              />
             )}
           </GelPlate>
         </section>
@@ -505,7 +507,11 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 150,
               header: <span className="text-meta">this object</span>,
               render: (g) => (
-                <span className="text-text block truncate leading-[18px]">
+                // a cut value carries the whole of it in its title (the lead's finding)
+                <span
+                  className="text-text block truncate leading-[18px]"
+                  title={g.value ?? `0x${g.raw}`}
+                >
                   {g.value ?? `0x${g.raw}`}
                 </span>
               ),

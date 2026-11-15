@@ -23,7 +23,6 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { rowTagClass } from '@/components/ui/row-tag';
 import {
   alleleLanes,
-  droppedGenesCaption,
   geneLabel,
   geneOrder,
   geneUrlKey,
@@ -40,6 +39,7 @@ import { ALLELE_GEL } from '@/lib/allele-gel-layout';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUtc8DateTime } from '@/lib/utils';
+import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
 import { LockKind } from '@/components/ui/lock-kind';
 import { formatCount } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
@@ -254,10 +254,12 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               {genetics.eligibleItems.toLocaleString('en-US')} decoded.
             </p>
           )}
-          {ruled && ruled.dropped.length > 0 && (
-            <p data-role="caption" className="text-text-dim text-small max-w-[400px]">
-              {droppedGenesCaption(ruled.dropped, total)}
-            </p>
+          {ruled && (
+            <DroppedGenesCaption
+              dropped={ruled.dropped}
+              objects={total}
+              className="max-w-[400px]"
+            />
           )}
         </div>
         <div className="min-w-0 space-y-1.5">
@@ -277,8 +279,10 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                     key={name}
                     type="button"
                     aria-label={`Clear ${name} = ${value}`}
+                    // a trait value anyone can mint: the chip clips it, the whole of it its title
+                    title={`${geneLabel(name)} ${traitDisplay(value)}`}
                     onClick={() => filter(name, null)}
-                    className="border-jade bg-base-surface text-text-bright text-meta h-[22px] border px-2"
+                    className="border-jade bg-base-surface text-text-bright text-meta h-[22px] max-w-full truncate border px-2"
                   >
                     {geneLabel(name)} {traitDisplay(value)} ×
                   </button>
@@ -385,6 +389,8 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                 {/* Words may be cut; a number and the share never are. */}
                                 <span
                                   data-role="gene-value"
+                                  // a cut value carries the whole of it (the lead's finding)
+                                  title={geneCellText(own.value)}
                                   className={cn(
                                     'text-text',
                                     NUMERIC.test(geneCellText(own.value))
