@@ -333,9 +333,12 @@ describe('SequencingGel at the measured width (V3)', () => {
       'inscription a94617…79e0i0',
     ])
       expect(bg).toHaveTextContent(part);
-    expect(within(bg).getByText('inscription a94617…79e0i0')).toHaveClass(
-      '[overflow-wrap:anywhere]'
-    );
+    // the value wraps anywhere as third-party text does, its shortened id one unit inside it (B3
+    // round 2, re-pinned on purpose: the id is a NoBreak of its own, so the value is two nodes)
+    const id = within(bg).getByText('a94617…79e0i0', { selector: '[data-nobreak]' });
+    const value = id.parentElement as HTMLElement;
+    expect(value).toHaveTextContent(/^inscription a94617…79e0i0$/);
+    expect(value).toHaveClass('[overflow-wrap:anywhere]');
     expect(rows[3]).toHaveTextContent('Color');
     expect(rows[3]).toHaveTextContent('byte 32');
     expect(rows[3]).toHaveTextContent('03');

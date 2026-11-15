@@ -47,6 +47,7 @@ import {
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
 import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
+import { TraitText } from '@/components/asset/trait-text';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 
@@ -716,15 +717,22 @@ function PatternReading({
         <PhoneRow
           lines={[
             { key: 'gene', tone: 'head', left: row.label, right: row.span },
-            { key: 'rule', tone: 'body', left: row.rule },
+            { key: 'rule', tone: 'body', left: <TraitText text={row.rule} /> },
             // what the objects show can be long: it wraps on its own line, never a right part
-            { key: 'found', tone: 'quiet', left: found(row) ?? '—' },
+            { key: 'found', tone: 'quiet', left: <TraitText text={found(row) ?? '—'} /> },
           ]}
         />
       )}
     />
   );
   const folded = rows.length < genes.length;
+  // the folded table's rows, one a gene
+  const everyGene: GeneRow[] = genes.map((g) => ({
+    label: g.gene.name,
+    genes: [g],
+    span: geneSpan(g.gene),
+    rule: ruleWords(g.gene),
+  }));
   const sampleTraits = sample?.traits ?? [];
   const valueOf = (row: GeneRow) => {
     const values = row.genes.map((g) =>
@@ -886,9 +894,9 @@ function PatternReading({
             pinned={readout.showingPin}
             idle={`${formatCount(extent, 'byte')} of DNA · ${formatCount(genes.length, 'gene')}`}
           >
-            {readout.active === null
-              ? null
-              : (() => {
+            {readout.active === null ? null : (
+              <TraitText
+                text={(() => {
                   const g = byKey.get(readout.active)!;
                   const row = rows.find((r) => r.genes.includes(g))!;
                   return (
@@ -902,6 +910,8 @@ function PatternReading({
                       .join(' · ') + (row.genes.length > 1 ? ` (in ${row.label})` : '')
                   );
                 })()}
+              />
+            )}
           </ReadoutRow>
         </div>
       ) : (
@@ -923,17 +933,7 @@ function PatternReading({
           <summary className="text-text-dim text-small cursor-pointer">
             All {formatCount(genes.length, 'gene')}, one row each
           </summary>
-          <div className="mt-2">
-            {geneTable(
-              genes.map((g) => ({
-                label: g.gene.name,
-                genes: [g],
-                span: geneSpan(g.gene),
-                rule: ruleWords(g.gene),
-              })),
-              'DOB blueprint, every gene'
-            )}
-          </div>
+          <div className="mt-2">{geneTable(everyGene, 'DOB blueprint, every gene')}</div>
         </details>
       )}
       {sample && (
@@ -966,7 +966,9 @@ function PatternReading({
                   >
                     {row.label}
                   </dt>
-                  <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">{valueOf(row)}</dd>
+                  <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
+                    <TraitText text={valueOf(row)} />
+                  </dd>
                 </Fragment>
               ))}
             </dl>
@@ -974,7 +976,9 @@ function PatternReading({
           {outside.length > 0 && (
             <p className="text-text-dim text-meta mt-2 [overflow-wrap:anywhere]">
               Also from the decoder, outside the pattern:{' '}
-              {outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}
+              <TraitText
+                text={outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}
+              />
             </p>
           )}
         </div>

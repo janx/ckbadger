@@ -31,6 +31,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { TraitText } from '@/components/asset/trait-text';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
 import { clipLabel } from '@/lib/shorten';
@@ -448,9 +449,11 @@ function Gel({
           pinned={readout.showingPin}
           idle={idle ?? tapOrHover('a band.', { capital: true })}
         >
-          {readLane && readBand
-            ? `${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}`
-            : null}
+          {readLane && readBand ? (
+            <TraitText
+              text={`${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}`}
+            />
+          ) : null}
         </ReadoutRow>
       </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
@@ -569,10 +572,10 @@ function GeneList({
                               selected[lane.gene] === b.value ? 'text-text-bright' : 'text-aqua'
                             )}
                           >
-                            {b.label} · {of(b.count)}
+                            <TraitText text={b.label} /> · {of(b.count)}
                           </button>
                         ) : (
-                          `${b.label} · ${of(b.count)}`
+                          <TraitText text={`${b.label} · ${of(b.count)}`} />
                         )}
                       </li>
                     ))}
