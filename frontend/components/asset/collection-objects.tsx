@@ -40,6 +40,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUtc8DateTime } from '@/lib/utils';
 import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
+import { TraitText } from '@/components/asset/trait-text';
 import { LockKind } from '@/components/ui/lock-kind';
 import { formatCount } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
@@ -284,7 +285,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                     onClick={() => filter(name, null)}
                     className="border-jade bg-base-surface text-text-bright text-meta h-[22px] max-w-full truncate border px-2"
                   >
-                    {geneLabel(name)} {traitDisplay(value)} ×
+                    {geneLabel(name)} <TraitText text={traitDisplay(value)} /> ×
                   </button>
                 ))}
               </span>
@@ -398,7 +399,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                       : 'min-w-0 truncate'
                                   )}
                                 >
-                                  {geneCellText(own.value)}
+                                  <TraitText text={geneCellText(own.value)} />
                                 </span>
                                 {band && (
                                   <span

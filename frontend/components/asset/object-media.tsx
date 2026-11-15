@@ -9,6 +9,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
+import { NoBreak } from '@/components/ui/no-break';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
@@ -54,20 +55,24 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
       <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
     );
   const href = bitcoinTxHref(inscription.txid, network);
-  // the media box's reading: the txid at the row size (U-09; it was 4…4)
+  // the media box's reading: the txid at the row size (U-09; it was 4…4), in words that break
+  // between them, never inside one (B3 round 3: break-all set "inscript / ion i0"); its two units
+  // hold, "Bitcoin tx" with its id and "inscription i<n>"
   const label = (
     <>
-      Bitcoin tx <ShortId value={inscription.txid} kind="hash" size="row" /> · inscription i
-      {inscription.index}
+      <NoBreak>
+        Bitcoin tx <ShortId value={inscription.txid} kind="hash" size="row" />
+      </NoBreak>{' '}
+      · <NoBreak>inscription i{inscription.index}</NoBreak>
     </>
   );
   return href ? (
-    <a href={href} className="text-copper break-all" target="_blank" rel="noopener noreferrer">
+    <a href={href} className="text-copper" target="_blank" rel="noopener noreferrer">
       {label} ↗
     </a>
   ) : (
     <p className="space-y-1">
-      <span className="text-copper block break-all">{label}</span>
+      <span className="text-copper block">{label}</span>
       <span className="text-text-dim text-meta block">
         The Bitcoin network of testnet inscriptions is not established, so no explorer link is
         given.
@@ -138,11 +143,12 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
           </summary>
           <ul className="mt-3 space-y-3">
             {profile.sources.map((s, i) => (
-              <li key={`${s.uri}:${i}`} className="break-all">
+              <li key={`${s.uri}:${i}`}>
                 <span className="text-text-dim">
                   {s.scheme} · {s.sourceLocation} · {s.dependencyTier}
                 </span>
-                <div>{s.uri}</div>
+                {/* only the raw URI breaks anywhere; the words around it break between them */}
+                <div className="break-all">{s.uri}</div>
                 {/* A further Bitcoin reference is read here, where the box no longer does. */}
                 {s.scheme === 'btcfs' && s !== firstReference && (
                   <div className="mt-1">

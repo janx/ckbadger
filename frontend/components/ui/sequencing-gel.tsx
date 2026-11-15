@@ -13,6 +13,7 @@ import type { SequencingGene, SequencingLayout } from '@/lib/dob-genes';
 import { GEL_COLORS } from '@/lib/design-tokens';
 import { clipLabel, shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
+import { TraitText } from '@/components/asset/trait-text';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedTargetProps } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
@@ -119,9 +120,11 @@ export function SequencingGel({ layout, subject, active, onActive, idle }: Seque
         pinned={lit !== null && lit === readout.pinned}
         idle={idle ?? tapOrHover('a gene.', { capital: true })}
       >
-        {gene
-          ? `${gene.name} · ${bytesOf(gene)} · ${gene.rule} · ${shortenHash(gene.raw, 'tight')} → ${valueOf(gene)}`
-          : null}
+        {gene ? (
+          <TraitText
+            text={`${gene.name} · ${bytesOf(gene)} · ${gene.rule} · ${shortenHash(gene.raw, 'tight')} → ${valueOf(gene)}`}
+          />
+        ) : null}
       </ReadoutRow>
     </div>
   );
@@ -507,7 +510,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
                   quiet(g) ? 'text-text-dim' : 'text-text-bright'
                 )}
               >
-                {valueOf(g)}
+                <TraitText text={valueOf(g)} />
               </span>
             </span>
           );

@@ -2,7 +2,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { render } from '@testing-library/react';
 import { droppedGenesCaption, traitDisplay, type DroppedGene } from '@/lib/dob-genes';
+import { TraitText } from '@/components/asset/trait-text';
 
 /**
  * The lead's Chrome finding (B3, 2026-11-15): the cluster and object pages of the "秦晖" collection
@@ -106,18 +108,32 @@ function unwrappedPrinters(path: string): string[] {
       PRINTERS.test(node.expression.getText(source)) &&
       !/^function /.test(node.parent.getText(source))
     ) {
-      // up to the JSX child that prints it; a call in an attribute (a title, an aria label) or one
-      // whose result a function body keeps for later (a row's title) prints nothing here
+      // up to the element that prints it: the JSX element it is a child of, or the one TraitText
+      // stands in when it is TraitText's text; a call in another attribute (a title, an aria label)
+      // or one whose result a function body keeps for later (a row's title) prints nothing here
       let up: ts.Node = node;
       let printed = true;
-      while (up && !(ts.isJsxExpression(up) && ts.isJsxElement(up.parent))) {
-        if (ts.isJsxAttribute(up) || ts.isVariableDeclaration(up) || ts.isBlock(up))
+      let host: ts.JsxElement | null = null;
+      while (up && !ts.isSourceFile(up)) {
+        if (ts.isJsxAttribute(up)) {
+          const el = up.parent.parent;
+          if (up.name.getText(source) === 'text' && tagName(el, source) === 'TraitText')
+            host = ts.isJsxElement(el.parent) ? el.parent : null;
+          else printed = false;
+          break;
+        }
+        if (ts.isVariableDeclaration(up) || ts.isBlock(up)) {
           printed = false;
+          break;
+        }
+        if (ts.isJsxExpression(up) && ts.isJsxElement(up.parent)) {
+          host = up.parent;
+          break;
+        }
         up = up.parent;
       }
-      if (up) up = up.parent;
-      if (up && printed) {
-        const { className, title } = attrs((up as ts.JsxElement).openingElement, source);
+      if (host && printed) {
+        const { className, title } = attrs(host.openingElement, source);
         const wraps = className.includes('[overflow-wrap:anywhere]');
         const clips = /\btruncate\b/.test(className) && title;
         if (!wraps && !clips) {
@@ -144,5 +160,228 @@ describe('third-party text never overflows', () => {
 
   it('prints every trait value where it breaks anywhere, or clips it with its title', () => {
     expect(sources.flatMap(unwrappedPrinters)).toEqual([]);
+  });
+});
+
+/**
+ * The lead's second Chrome pass (B3 round 2, 2026-11-15): on the cluster page at 390 and 360 the
+ * dd of "How an object is read" set "inscription 020172…cb69i0" as "inscription 020172…" /
+ * "cb69i0": after the ellipsis UAX #14 allows a line break. A shortened id inside a trait value is
+ * one unit, made at render (NoBreak), with no character added to the text; the value still wraps
+ * between its words and third-party text still breaks anywhere.
+ */
+describe('a shortened id inside a trait value is one unit', () => {
+  const units = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('[data-nobreak]')).map((el) => el.textContent);
+
+  it('holds an inscription id together and adds nothing to the text', () => {
+    const value = traitDisplay(`btcfs://020172${'89'.repeat(27)}cb69i0`);
+    expect(value).toBe('inscription 020172…cb69i0');
+    const { container } = render(
+      <dd>
+        <TraitText text={value} />
+      </dd>
+    );
+    expect(units(container)).toEqual(['020172…cb69i0']);
+    expect(container.textContent).toBe(value);
+  });
+
+  it('holds every id of a sentence, the words between them free to wrap', () => {
+    const one = traitDisplay(`btcfs://a94617${'95'.repeat(27)}79e0i0`);
+    const text = `${one} for 3 · inscription 020172…cb69i12 for 2`;
+    const { container } = render(
+      <p>
+        <TraitText text={text} />
+      </p>
+    );
+    expect(units(container)).toEqual(['a94617…79e0i0', '020172…cb69i12']);
+    expect(container.textContent).toBe(text);
+  });
+
+  it('leaves third-party text and counts as plain text', () => {
+    const long = `btcfs://${'x'.repeat(292)}`;
+    const mimic = `deadbeef…${'c'.repeat(200)}`;
+    for (const text of [long, '5 inscriptions', mimic, 'wait…what', 'GOLD']) {
+      const { container, unmount } = render(
+        <p>
+          <TraitText text={text} />
+        </p>
+      );
+      expect(units(container)).toEqual([]);
+      expect(container.textContent).toBe(text);
+      unmount();
+    }
+  });
+});
+
+/**
+ * Every place that prints trait text (a trait value or a sentence built from one) prints it
+ * through TraitText, the one rendering point that makes a shortened id inside it a unit; a bare
+ * call printed as a JSX child or in a phone row's lines is refused.
+ */
+const TRAIT_TEXT =
+  /^(traitDisplay|geneCellText|droppedGenesCaption|inscriptionText|foundAcross|ruleWords|valueOf)$/;
+function tagName(el: ts.Node, source: ts.SourceFile): string | null {
+  return ts.isJsxOpeningElement(el) || ts.isJsxSelfClosingElement(el)
+    ? el.tagName.getText(source)
+    : null;
+}
+function bareTraitText(path: string): string[] {
+  const code = readFileSync(path, 'utf8');
+  const source = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && TRAIT_TEXT.test(node.expression.getText(source))) {
+      let up: ts.Node = node.parent;
+      let bare = false;
+      while (up && !ts.isSourceFile(up)) {
+        if (ts.isJsxAttribute(up)) {
+          const name = up.name.getText(source);
+          const el = up.parent.parent;
+          if (name === 'text' && tagName(el, source) === 'TraitText') break;
+          // a phone row's lines print their parts; any other attribute (a title) prints nothing
+          bare = name === 'lines';
+          break;
+        }
+        if (ts.isVariableDeclaration(up) || ts.isBlock(up) || ts.isFunctionDeclaration(up)) break;
+        if (ts.isJsxExpression(up) && (ts.isJsxElement(up.parent) || ts.isJsxFragment(up.parent))) {
+          // SVG text never wraps (its labels are cut to their budgets) and a <title> is a tooltip
+          const tag = ts.isJsxElement(up.parent) ? tagName(up.parent.openingElement, source) : null;
+          bare = !['text', 'tspan', 'title'].includes(tag ?? '');
+          break;
+        }
+        up = up.parent;
+      }
+      if (bare) {
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+        out.push(`${relative(ROOT, path)}:${line} ${node.expression.getText(source)}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+describe('trait text has one rendering point', () => {
+  const sources = [...files(join(ROOT, 'components')), ...files(join(ROOT, 'app'))];
+
+  it('prints every trait value and every sentence built from one through TraitText', () => {
+    expect(sources.flatMap(bareTraitText)).toEqual([]);
+  });
+});
+
+/**
+ * B3 round 3 (the lead's sweep for plain words cut in the middle): `break-all` breaks inside any
+ * word, so it belongs only to an element that prints raw text (a URI, a hex dump). An element that
+ * takes it while holding words, its own or a descendant's in the same JSX (literal text of two or
+ * more words, or text beside a ShortId / NoBreak unit), is refused: the media box's reading
+ * ("inscript / ion i0") and a list item whose break-all reached its notice. What it cannot read:
+ * words built in an expression (a template, a call) and words a child component prints in its own
+ * file, which inherit the class all the same.
+ */
+const BREAK_ALL = /(^|[\s'"`])break-all($|[\s'"`])/;
+function breakAllOnWords(path: string): string[] {
+  const code = readFileSync(path, 'utf8');
+  const source = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // the same file's JSX consts (`const label = <>…</>`) and components (`function Reading()`),
+  // followed where an element prints them
+  const consts = new Map<string, ts.Node>();
+  const components = new Map<string, ts.Node>();
+  const index = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && n.initializer && ts.isIdentifier(n.name)) {
+      const init = ts.isParenthesizedExpression(n.initializer)
+        ? n.initializer.expression
+        : n.initializer;
+      if (ts.isJsxElement(init) || ts.isJsxFragment(init) || ts.isJsxSelfClosingElement(init))
+        consts.set(n.name.text, init);
+    }
+    if (ts.isFunctionDeclaration(n) && n.name && /^[A-Z]/.test(n.name.text) && n.body)
+      components.set(n.name.text, n.body);
+    ts.forEachChild(n, index);
+  };
+  index(source);
+  const out: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxElement(node) && BREAK_ALL.test(attrs(node.openingElement, source).className)) {
+      let words = false;
+      let unit = false;
+      let text = false;
+      const seen = new Set<ts.Node>();
+      const scan = (n: ts.Node) => {
+        if (seen.has(n)) return;
+        seen.add(n);
+        if (ts.isJsxText(n)) {
+          const t = n.getText(source).trim();
+          if (t) text = true;
+          if (t.split(/\s+/).filter(Boolean).length >= 2) words = true;
+        }
+        if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
+          const tag = n.tagName.getText(source);
+          if (tag === 'ShortId' || tag === 'NoBreak') unit = true;
+          const body = components.get(tag);
+          if (body) scan(body);
+        }
+        if (ts.isJsxExpression(n) && n.expression && ts.isIdentifier(n.expression)) {
+          const init = consts.get(n.expression.text);
+          if (init) scan(init);
+        }
+        ts.forEachChild(n, scan);
+      };
+      node.children.forEach(scan);
+      if (words || (unit && text)) {
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+        out.push(`${relative(ROOT, path)}:${line}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+describe('break-all only on raw text', () => {
+  const sources = [...files(join(ROOT, 'components')), ...files(join(ROOT, 'app'))];
+
+  it('finds the class where it stands', () => {
+    expect(
+      sources.filter((f) => readFileSync(f, 'utf8').includes('break-all')).length
+    ).toBeGreaterThan(5);
+  });
+
+  /**
+   * Sites outside lane B3's files that the gate finds, reported to the lead in B3 round 3 and not
+   * edited here (other lanes own them): path → how many. A new site in one of them fails, and so
+   * does a listed one that is gone (drop it from the list).
+   */
+  const REPORTED: Record<string, number> = {
+    'components/asset/genetics.tsx': 1,
+    'components/asset/identity-document.tsx': 1,
+    'components/cell/cell-transactions.tsx': 1,
+    'components/cell/code-cell-board.tsx': 3,
+    'components/fiber/fiber-channel-board.tsx': 1,
+    'components/fiber/fiber-channel-step.tsx': 3,
+    'components/scripts/script-code-evidence.tsx': 3,
+    'app/forks/[height]/[orphan]/client-page.tsx': 1,
+    'app/network/nodes-table.tsx': 1,
+    'app/scripts/[name]/client-page.tsx': 1,
+    'app/tx/[hash]/client-page.tsx': 1,
+  };
+
+  it('never puts break-all on an element that holds words', () => {
+    const found = sources.flatMap(breakAllOnWords);
+    const byPath = new Map<string, string[]>();
+    for (const site of found) {
+      const path = site.replace(/:\d+$/, '');
+      byPath.set(path, [...(byPath.get(path) ?? []), site]);
+    }
+    const unreported = [...byPath].flatMap(([path, sites]) =>
+      sites.length > (REPORTED[path] ?? 0) ? sites : []
+    );
+    expect(unreported).toEqual([]);
+    const gone = Object.entries(REPORTED).filter(
+      ([path, n]) => (byPath.get(path)?.length ?? 0) < n
+    );
+    expect(gone).toEqual([]);
   });
 });
