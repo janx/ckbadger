@@ -44,7 +44,9 @@ describe.each([1248, 326])('a token history at %i px (U-19, DY-05)', (width) => 
     );
     const plots = screen.getAllByRole('img');
     expect(plots).toHaveLength(3);
-    const units = ['CKB', 'USDC', 'transactions'];
+    // Re-pinned with the plot-name fit (lane A5, Chrome at 360): the supply plot's name is the
+    // fixed 'supply in tokens', the symbol having no length bound.
+    const units = ['CKB', 'tokens', 'transactions'];
     plots.forEach((plot, i) => {
       const labels = expectTicksInGutter(plot, units[i]);
       // Re-pinned with the lane A5 follow-up: bare values, the unit once in the plot's name.

@@ -48,7 +48,9 @@ describe('a token history at 358 px', () => {
       usdc([0, 7, 14, 21].map((d, k) => ({ weekStart: date(d), count: [420, 1510, 380, 90][k] })))
     );
     const plots = screen.getAllByRole('img');
-    const units = ['CKB', 'USDC', 'transactions'];
+    // Re-pinned with the plot-name fit (lane A5, Chrome at 360): the supply plot's name is the
+    // fixed 'supply in tokens', the symbol having no length bound.
+    const units = ['CKB', 'tokens', 'transactions'];
     plots.forEach((plot, i) => {
       for (const t of yTickLabels(plot)) expect(t.textContent, units[i]).toMatch(BARE);
       expect(plot.querySelector('[data-role="chart-name"]')?.textContent).toContain(units[i]);

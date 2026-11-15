@@ -27,7 +27,9 @@ describe('Asset history', () => {
       // scientific, and the plot's name says the unit once.
       expect(plot).toHaveTextContent(/\de-255/);
       expect(plot).not.toHaveTextContent(/e-255 T/);
-      expect(plot.querySelector('[data-role="chart-name"]')).toHaveTextContent('supply in T');
+      // Re-pinned with the plot-name fit: the fixed 'supply in tokens' (a symbol has no length
+      // bound and SVG text does not wrap).
+      expect(plot.querySelector('[data-role="chart-name"]')).toHaveTextContent('supply in tokens');
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       const readout = screen.getByLabelText('History readout');
       expect(readout).toHaveTextContent(`0.${'0'.repeat(254)}2`);
