@@ -235,8 +235,9 @@ export type Orientation = 'row' | 'column';
  * number at `nameX`); a well's pool total ending at `countX`; proposal dots from `chipX` (5 per
  * row, two rows `chipRowP` apart, then "+N"); the tx line from `lineX` — the cellbase first, then
  * squares at 17 px per cell, each centred vertically and set in its cut — ending at the row's
- * right padding, its "+N" and then its uncles (each its word, then its dots or its "+N") at its
- * end, `endGap` apart. A row is two cells and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
+ * right padding, its "+N" and then its uncles (each its word, then its dots or its "+N"), `endGap`
+ * apart — or, when they do not all fit after what the line keeps, the uncles on a line of their
+ * own under it, from `lineX`, the row growing by `uncleGap` and the word's line. A row is two cells and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
  * A link is two bands of ticks running down the gap between two rows, at `linkX`; the pool's flow
  * one band at `flowX`.
  */
@@ -266,11 +267,13 @@ export const COL = {
   padR: 8,
   /** Between the tx line and what ends it: its "+N", an uncle, its dots, the next uncle. */
   endGap: 4,
+  /** Between the tx line's marks and the uncles' own line under it, when they have one. */
+  uncleGap: 4,
   /** The tip and three older blocks. */
   blocks: 4,
   /**
-   * An uncle at the end of a block's tx line, no box: "uncle", then up to four of its dots with
-   * "+N" for the rest in their slots, or, when the dots do not fit, "+N" for all its proposals.
+   * An uncle, no box: "uncle", then up to four of its dots with "+N" for the rest in their slots,
+   * or, when those slots cannot hold that "+N", "+N" for all its proposals after the word.
    */
   uncle: { labelW: 30, chips: 4 },
   /** The left edges of a link's two bands, and of the pool's flow band. */
@@ -281,10 +284,9 @@ export const COL = {
   /** The chain's tail below the last row. */
   tail: 30,
   /**
-   * The narrowest column (a 320 px viewport): a line still holds the cellbase and its "+N", and an
-   * uncle's word with its dots or its "+N" (a 4×4 square too in a block without an uncle), at the
-   * widest labels ("+2999" txs, "+1500" proposals). Two uncles fit only while the line's "+N" and
-   * theirs take 59 px or less.
+   * The narrowest column (a 320 px viewport): a line still holds the cellbase, a 4×4 square and
+   * the widest "+N" ("+2999"), and two uncles of the widest kind ("+1500") fit a line of their own
+   * under it.
    */
   minViewW: 288,
 } as const;
@@ -302,22 +304,21 @@ interface ColumnUncle {
 }
 
 /**
- * A column uncle with `proposals`: its word, then (`dots`) its four dot slots with "+N" for the
- * rest in their place; without `dots`, or when the slots cannot hold that "+N" (more than "+999"),
- * its word, `endGap` and "+N" for all of them. Never its word alone while it has proposals: what
- * is not drawn is counted.
+ * A column uncle with `proposals`: its word, then its four dot slots with "+N" for the rest in
+ * their place; or, when the slots cannot hold that "+N" (past "+999"), its word, `endGap` and "+N"
+ * for all of them. Never its word alone while it has proposals: what is not drawn is counted.
  */
-function columnUncle(proposals: number, dots: boolean): ColumnUncle {
+function columnUncle(proposals: number): ColumnUncle {
   const u = COL.uncle;
   if (!proposals) return { w: u.labelW, shown: 0, overflow: 0 };
-  const slots = dots ? slotsFor(proposals, u.chips) : null;
+  const slots = slotsFor(proposals, u.chips);
   if (slots) return { w: u.labelW + COL.endGap + dotsW(u.chips), ...slots };
   return { w: u.labelW + COL.endGap + labelWidth(`+${proposals}`), shown: 0, overflow: proposals };
 }
 
-/** Width of a column uncle with `proposals`, with its dots if they fit (`dots`) or its "+N". */
-export function columnUncleW(proposals: number, dots: boolean): number {
-  return columnUncle(proposals, dots).w;
+/** Width of a column uncle with `proposals`: its word and its dots, or its word and "+N". */
+export function columnUncleW(proposals: number): number {
+  return columnUncle(proposals).w;
 }
 
 /** `n` dots side by side, in px: n pitches less the space after the last. */
@@ -1055,12 +1056,19 @@ export interface SceneChip {
 }
 
 /**
+ * Where an uncle is drawn: at the end of the tx line (`tx`, a column), or on a line of its own
+ * (`own`: under the tx line in a column, its own row after the dot rows on a plate).
+ */
+export type UncleLine = 'tx' | 'own';
+
+/**
  * An uncle carried by a block: its extent, local to the card. Nothing is drawn for it but its word
  * at `x`, its dots (the card's chips of its index) and its "+N"; no box.
  */
 export interface SceneUncle {
   index: number;
   ref: PipelineBlockRef;
+  line: UncleLine;
   x: number;
   y: number;
   w: number;
@@ -1314,6 +1322,7 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     uncles.push({
       index: ui,
       ref: b.uncles[ui],
+      line: 'own',
       x: G.padX,
       y: top,
       w: G.cardW - 2 * G.padX,
@@ -1574,9 +1583,27 @@ function columnDots(total: number, h: number) {
   };
 }
 
+/** A column row as its helpers read it: its height and where its uncles are. */
+interface ColumnRowShape {
+  w: number;
+  h: number;
+  uncles: readonly { x: number; line: UncleLine }[];
+}
+
+/**
+ * Height of a column row's tx line: the whole row, less the uncles' own line under it when they
+ * have one. The head (stone, number, dots) and the tx line are centred on it.
+ */
+export function columnLineH(row: Pick<ColumnRowShape, 'h' | 'uncles'>): number {
+  return row.uncles.some((u) => u.line === 'own') ? row.h - COL.uncleGap - UNC.head : row.h;
+}
+
 /** Where a column row's proposal "+N" is drawn (end-anchored, local): after the second dot row. */
-export function columnChipCountAt(h: number): { x: number; y: number } {
-  const top = h / 2 - (G.chip + COL.chipRowP) / 2;
+export function columnChipCountAt(row: Pick<ColumnRowShape, 'h' | 'uncles'>): {
+  x: number;
+  y: number;
+} {
+  const top = columnLineH(row) / 2 - (G.chip + COL.chipRowP) / 2;
   return {
     x: COL.chipX - COL.x0 + dotsW(COL.chipsPerRow),
     y: top + COL.chipRowP + G.chip / 2 + 3.5,
@@ -1585,15 +1612,13 @@ export function columnChipCountAt(h: number): { x: number; y: number } {
 
 /**
  * Where a column row's tx "+N" is drawn (end-anchored, local): at the end of its tx line, before
- * its uncles.
+ * its uncles when they follow it.
  */
-export function columnCountAt(card: { w: number; h: number; uncles: readonly { x: number }[] }): {
-  x: number;
-  y: number;
-} {
+export function columnCountAt(card: ColumnRowShape): { x: number; y: number } {
+  const first = card.uncles[0];
   return {
-    x: card.uncles.length ? card.uncles[0].x - COL.endGap : card.w - COL.padR,
-    y: card.h / 2 + 3.5,
+    x: first && first.line === 'tx' ? first.x - COL.endGap : card.w - COL.padR,
+    y: columnLineH(card) / 2 + 3.5,
   };
 }
 
@@ -1607,33 +1632,36 @@ const squareTop = (h: number, s: number) => Math.floor((h - s) / 2);
 const tallest = (pos: readonly LinePos[]) => Math.max(1, ...pos.map((p) => p.n));
 
 /**
- * The least a block's tx line keeps: the cellbase, and the "+N" of every tx of the block after it
- * (the widest "+N" the line can need). Its uncles take their room first; the squares take what is
- * left.
+ * What a block's tx line always keeps, whatever uncles it carries: the cellbase, room for the
+ * largest square (a 4×4) and the widest "+N" the block can need (`+(txCount − 1)`). It depends on
+ * the block's count alone, never on which txs are listed, so an uncle's place does not jump as
+ * they change.
  */
-const lineMin = (b: PipelineBlock) =>
-  side(1) + (b.txCount > 1 ? COL.endGap + labelWidth(`+${b.txCount - 1}`) : 0);
+const lineKeeps = (b: PipelineBlock) =>
+  side(1 + 4) + (b.txCount > 1 ? COL.endGap + labelWidth(`+${b.txCount - 1}`) : 0);
 
 /**
  * A block as a column row: its own proposal dots, then its tx line — the cellbase and the txs that
- * fit — and at the end of the line its uncles. The uncles and the line's "+N" are reserved first:
- * each uncle is its word and its dots ("+N" for the rest in their slots), or, when the dots leave
- * the line less than `lineMin`, its word and "+N" for all its proposals; the squares take what is
- * left, and a square that does not fit is counted in the line's "+N".
+ * fit, then its "+N" — and its uncles. The uncles follow the tx line, `endGap` apart, when all of
+ * them fit in what is left after `lineKeeps`; otherwise all of them take a line of their own under
+ * the tx line, from `lineX`, and the row grows by `uncleGap` and the word's line. Nothing is left
+ * uncounted: a square that does not fit is in the line's "+N", an uncle's proposals are its dots
+ * and its "+N".
  */
 function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCard {
   const b = f.block;
   const u = COL.uncle;
   const lineX = COL.lineX - COL.x0;
   const lineEnd = w - COL.padR;
-  const txEndOf = (list: readonly ColumnUncle[]) =>
-    lineEnd - list.reduce((sum, un) => sum + un.w + COL.endGap, 0);
-  const withDots = f.byUncle.map((list) => columnUncle(list.length, true));
-  const drawn =
-    txEndOf(withDots) - lineX >= lineMin(b)
-      ? withDots
-      : f.byUncle.map((list) => columnUncle(list.length, false));
-  const txEnd = txEndOf(drawn);
+  const forms = f.byUncle.map((list) => columnUncle(list.length));
+  const unclesW = forms.reduce((sum, un) => sum + COL.endGap + un.w, 0);
+  const line: UncleLine = lineEnd - lineX - lineKeeps(b) >= unclesW ? 'tx' : 'own';
+  if (line === 'own' && unclesW - COL.endGap > lineEnd - lineX) {
+    throw new Error(
+      `pipeline: the ${forms.length} uncles of block #${b.number} need ${unclesW - COL.endGap} px, more than a ${lineEnd - lineX} px line of their own`
+    );
+  }
+  const txEnd = line === 'tx' ? lineEnd - unclesW : lineEnd;
   const fit = fitLine(
     f.order.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
     txEnd - lineX,
@@ -1641,8 +1669,11 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
     b.omittedTxs,
     `block #${b.number}`
   );
-  const h = columnRowH(tallest(fit.pos));
-  const mid = h / 2;
+  const lineH = columnRowH(tallest(fit.pos));
+  const wrapped = line === 'own' && forms.length > 0;
+  const h = lineH + (wrapped ? COL.uncleGap + UNC.head : 0);
+  // An uncle's word line: centred on the tx line, or under it.
+  const uncleY = wrapped ? lineH - COL.pad + COL.uncleGap : lineH / 2 - UNC.head / 2;
   const txByHash = new Map(b.txs.map((t) => [t.hash, t]));
   const squares: SceneSquare[] = [
     square(
@@ -1650,7 +1681,7 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
       'cellbase',
       txLook({ stage: 'cellbase', cycles: null, tooEarly: false }),
       lineX,
-      squareTop(h, side(1)),
+      squareTop(lineH, side(1)),
       side(1),
       b.hash
     ),
@@ -1661,27 +1692,28 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
         'tx',
         txLook({ stage: 'committed', cycles: t.cycles, tooEarly: false }),
         lineX + q.c * U,
-        squareTop(h, side(q.n)),
+        squareTop(lineH, side(q.n)),
         side(q.n),
         b.hash
       );
     }),
   ];
-  const own = columnDots(f.own.length, h);
+  const own = columnDots(f.own.length, lineH);
   const chips: SceneChip[] = f.own.slice(0, own.shown).map((p, i) => ({
     key: `${p.shortId}|`,
     proposal: p,
     ...own.pos[i],
   }));
   const uncles: SceneUncle[] = [];
-  let x = txEnd + COL.endGap;
+  let x = line === 'tx' ? txEnd + COL.endGap : lineX;
   f.byUncle.forEach((list, ui) => {
-    const un = drawn[ui];
+    const un = forms[ui];
     uncles.push({
       index: ui,
       ref: b.uncles[ui],
+      line,
       x,
-      y: mid - UNC.head / 2,
+      y: uncleY,
       w: un.w,
       h: UNC.head,
       label: 'uncle',
@@ -1692,7 +1724,7 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
         key: `${p.shortId}|${ui}`,
         proposal: p,
         x: x + u.labelW + COL.endGap + i * G.chipP,
-        y: mid - G.chip / 2,
+        y: uncleY + (UNC.head - G.chip) / 2,
       });
     });
     x += un.w + COL.endGap;

@@ -90,7 +90,7 @@ export function ColumnBlock({
   age,
 }: ColumnBlockProps) {
   const { block } = card;
-  const chipCount = columnChipCountAt(card.h);
+  const chipCount = columnChipCountAt(card);
   const count = columnCountAt(card);
   return (
     <g
@@ -184,7 +184,7 @@ export function ColumnBlock({
 
 /** The predicted next block as a row: dashed, because none of it is real yet. */
 export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
-  const chipCount = columnChipCountAt(next.h);
+  const chipCount = columnChipCountAt({ h: next.h, uncles: [] });
   const count = columnCountAt({ w: next.w, h: next.h, uncles: [] });
   return (
     <g data-next transform={`translate(${next.x},${next.y})`} className="cursor-pointer">

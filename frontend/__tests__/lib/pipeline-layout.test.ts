@@ -36,6 +36,7 @@ import {
   columnChipCountAt,
   columnCountAt,
   columnFlowPaths,
+  columnLineH,
   columnRewardLink,
   columnRowH,
   columnRulerPath,
@@ -481,6 +482,7 @@ describe('a plate is cut only where a transaction is', () => {
       'h',
       'index',
       'label',
+      'line',
       'overflow',
       'ref',
       'w',
@@ -583,7 +585,8 @@ describe('uncle row: an uncle travels in the block that carries it, taken out of
     );
     const card = cardOf(buildScene({ ...s, blocks }, 1600, 'settled'), T - 1);
     expect(card.w).toBe(CARD_W);
-    expect(card.uncles.map((u) => u.label)).toEqual(['uncle']);
+    // on a plate an uncle is a row of its own, after the dot rows
+    expect(card.uncles.map((u) => [u.label, u.line])).toEqual([['uncle', 'own']]);
     const chips = card.chips.filter((k) => k.proposal.uncleIndex === 0);
     // One row is drawn; the rest is its "+N", which ends at the uncle's right end.
     expect(chips).toHaveLength(UNCLE_CHIPS_PER_ROW);
@@ -1339,7 +1342,7 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
     expect(COL.chipRowP).toBe(9);
     expect(new Set(card.chips.map((k) => k.y))).toEqual(new Set([14, 23]));
     expect(card.chips.slice(0, 5).map((k) => card.x + k.x)).toEqual([74, 83, 92, 101, 110]);
-    const at = columnChipCountAt(card.h);
+    const at = columnChipCountAt(card);
     expect(card.x + at.x).toBe(117);
     expect(at.y).toBe(23 + G.chip / 2 + 3.5);
     // The label's three glyphs fit the freed slots, never over a dot.
@@ -1351,17 +1354,15 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
     // T−1 carries the uncle T−2 and two of its proposals.
     const host = cardOf(scene, T - 1);
     expect(COL.uncle).toEqual({ labelW: 30, chips: 4 });
-    // The word, 4 px, then four dot slots (34 px); or the word, 4 px and "+N" for all of them.
-    expect(columnUncleW(2, true)).toBe(30 + 4 + 34);
-    expect(columnUncleW(0, true)).toBe(30);
-    expect(columnUncleW(2, false)).toBe(30 + 4 + labelWidth('+2'));
-    // Four slots hold up to "+999" in their place; "+1500" needs five, so it follows the word.
-    expect(columnUncleW(999, true)).toBe(30 + 4 + 34);
-    expect(columnUncleW(1500, true)).toBe(30 + 4 + labelWidth('+1500'));
+    // The word, 4 px, then four dot slots (34 px).
+    expect(columnUncleW(2)).toBe(30 + 4 + 34);
+    // Room is left after the line's reservation (224 − (83 + 4 + 12) = 125 ≥ 4 + 68): it follows
+    // the tx line, as on the phone board.
     expect(host.uncles).toEqual([
       expect.objectContaining({
         index: 0,
         label: 'uncle',
+        line: 'tx',
         x: 282,
         y: 16,
         w: 68,
@@ -1411,6 +1412,11 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
         : b
     ),
   });
+  /**
+   * The widest block the chain allows on T−1: 3,000 txs (the backend lists a 4×4 and 38 more, its
+   * "+N" at most "+2999") and two uncles of 1,500 proposals each ("+1500").
+   */
+  const widest = withSecondUncle(hostWith(bigAnd(T - 1, 38), 2960, 1498), 1500);
   /** Each uncle's proposals: drawn as dots and counted as "+N", against what the block carries. */
   const uncleTally = (sc: Scene) =>
     sc.cards.flatMap((c) =>
@@ -1421,54 +1427,181 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
       }))
     );
 
-  it('reserves an uncle (its word and its dots) and the line’s "+N" first: the squares take what is left', () => {
-    // T−1: a 4×4, 30 more txs, and its uncle with 12 proposals.
+  it('keeps the cellbase, a 4 × 4’s room and the widest "+N" on the line; the uncles follow it only if all fit', () => {
+    // T−1: a 4×4, 30 more txs (its "+N" at most "+31") and its uncle with 12 proposals. The line
+    // keeps side(5) + 4 + 18 = 105 px before any uncle.
     const busy = hostWith(bigAnd(T - 1, 30), 0, 10);
-    // At 288 the uncle keeps its dots (one dot, "+11" in the freed slots); the 82 px left hold the
-    // cellbase, two txs and "+29": the 4 × 4 is counted, not drawn.
-    const narrow = cardOf(buildScene(busy, COL.minViewW, 'settled'), T - 1);
-    expect(narrow.uncles).toEqual([expect.objectContaining({ x: 212, w: 68, overflow: 11 })]);
-    expect(narrow.chips.filter((k) => k.proposal.uncleIndex === 0)).toHaveLength(1);
-    expect(narrow.squares.map((q) => q.s)).toEqual([15, 15, 15]);
-    expect(narrow.hidden).toBe(29);
-    const count = columnCountAt(narrow);
-    expect(count.x).toBe(212 - COL.endGap);
-    const end = Math.max(...narrow.squares.map((q) => q.x + q.s));
-    expect(end + COL.endGap).toBeLessThanOrEqual(count.x - labelWidth(`+${narrow.hidden}`));
-    // At 358 the same uncle, and the 4 × 4 is back on the line.
+    // At 358 the line has 224 px: 119 are left after the reservation, room for the uncle (4 + 68),
+    // which follows the line as on the phone board; the row stays the 4×4's 78 px.
     const wide = cardOf(buildScene(busy, PHONE_W, 'settled'), T - 1);
-    expect(wide.uncles).toEqual([expect.objectContaining({ x: 282, w: 68, overflow: 11 })]);
+    expect(wide.uncles).toEqual([
+      expect.objectContaining({ line: 'tx', x: 282, y: 39 - 6, w: 68, h: 12, overflow: 11 }),
+    ]);
+    expect(wide.h).toBe(78);
     expect(wide.squares.map((q) => q.s)).toEqual([15, 66, 15, 15]);
     expect(wide.hidden).toBe(28);
+    expect(columnCountAt(wide).x).toBe(282 - COL.endGap);
+    // At 288 only 49 px are left: the uncle moves under the line, from x 126, and the row grows by
+    // its 12 px line and a 4 px gap. The line keeps its 4 × 4.
+    expect(COL.uncleGap).toBe(4);
+    const narrow = cardOf(buildScene(busy, COL.minViewW, 'settled'), T - 1);
+    expect(narrow.uncles).toEqual([
+      expect.objectContaining({ line: 'own', x: 126, y: 6 + 66 + 4, w: 68, h: 12, overflow: 11 }),
+    ]);
+    expect(narrow.h).toBe(78 + 4 + 12);
+    expect(columnLineH(narrow)).toBe(78);
+    expect(narrow.squares.map((q) => q.s)).toEqual([15, 66, 15, 15]);
+    expect(narrow.hidden).toBe(28);
+    // its dot sits on its own line, centred on the word's
+    expect(narrow.chips.filter((k) => k.proposal.uncleIndex === 0)).toEqual([
+      expect.objectContaining({ x: 126 + 34, y: 76 + (12 - G.chip) / 2 }),
+    ]);
+    // the line, its "+N", the head and the block's own dots keep the line's middle (39)
+    expect(columnCountAt(narrow)).toEqual({ x: COL.minViewW - COL.padR, y: 39 + 3.5 });
+    for (const k of narrow.chips.filter((c) => c.proposal.uncleIndex === null))
+      expect(k.y + G.chip / 2).toBe(39);
+    expect(columnChipCountAt(narrow).y).toBe(columnChipCountAt({ h: 78, uncles: [] }).y);
+    for (const q of narrow.squares) expect(q.y + q.s / 2).toBeLessThanOrEqual(39 + 0.5);
   });
 
-  it('follows an uncle’s word with "+N" for all its proposals when its dots do not fit, never with nothing', () => {
-    // T−1 carries two uncles: 12 proposals and 3.
-    const two = withSecondUncle(hostWith(smallTxs(T - 1, 2), 0, 10), 3);
-    // At 288 both uncles with their dots would leave the line 10 px, short of the cellbase, 4 px
-    // and "+2": each is its word and "+N" for all of it, and no dot of an uncle is drawn.
-    const narrow = cardOf(buildScene(two, COL.minViewW, 'settled'), T - 1);
-    expect(narrow.uncles).toEqual([
-      expect.objectContaining({ index: 0, x: 178, w: 30 + 4 + 18, overflow: 12 }),
-      expect.objectContaining({ index: 1, x: 234, w: 30 + 4 + 12, overflow: 3 }),
-    ]);
-    expect(narrow.uncles[1].x + narrow.uncles[1].w).toBe(COL.minViewW - COL.padR);
-    expect(narrow.chips.filter((k) => k.proposal.uncleIndex !== null)).toEqual([]);
-    expect(narrow.squares).toHaveLength(2);
-    expect(narrow.hidden).toBe(1);
-    // At 358 both keep their dots.
-    const wide = cardOf(buildScene(two, PHONE_W, 'settled'), T - 1);
-    expect(wide.uncles).toEqual([
-      expect.objectContaining({ index: 0, x: 210, w: 68, overflow: 11 }),
-      expect.objectContaining({ index: 1, x: 282, w: 68, overflow: 0 }),
-    ]);
-    // An uncle whose four slots cannot hold its "+N" follows its word with it at any width.
+  it('keeps an uncle’s place whatever txs are listed: the reservation depends on the width and the count', () => {
+    // Two listings of one 32-tx block: with a 4×4, and without one.
+    const withBig = hostWith(bigAnd(T - 1, 30), 0, 10);
+    const smallOnly = hostWith(smallTxs(T - 1, 31), 0, 10);
+    for (const W of [COL.minViewW, PHONE_W]) {
+      const a = cardOf(buildScene(withBig, W, 'settled'), T - 1).uncles[0];
+      const b = cardOf(buildScene(smallOnly, W, 'settled'), T - 1).uncles[0];
+      expect([b.line, b.x, b.w]).toEqual([a.line, a.x, a.w]);
+    }
+    // At 288 the uncle is under the line in both, though the second lists no 4 × 4.
+    const lone = cardOf(buildScene(smallOnly, COL.minViewW, 'settled'), T - 1);
+    expect(lone.uncles[0]).toMatchObject({ line: 'own', x: 126, y: 6 + 32 + 4 });
+    expect(lone.h).toBe(44 + 16);
+  });
+
+  it('draws an uncle as its word and its dots, or its word and "+N" when four slots cannot hold the label', () => {
+    // The word, 4 px, then four dot slots (34 px); "+999" still fits the slots, "+1500" needs five,
+    // so it follows the word, 4 px after it. Never the word alone while it has proposals.
+    expect(columnUncleW(2)).toBe(30 + 4 + 34);
+    expect(columnUncleW(0)).toBe(30);
+    expect(columnUncleW(999)).toBe(30 + 4 + 34);
+    expect(columnUncleW(1500)).toBe(30 + 4 + labelWidth('+1500'));
     const crowd = cardOf(
       buildScene(hostWith(smallTxs(T - 1, 2), 0, 1498), PHONE_W, 'settled'),
       T - 1
     );
-    expect(crowd.uncles).toEqual([expect.objectContaining({ x: 286, w: 64, overflow: 1500 })]);
+    expect(crowd.uncles).toEqual([
+      expect.objectContaining({ line: 'tx', x: 286, w: 64, overflow: 1500 }),
+    ]);
     expect(crowd.chips.filter((k) => k.proposal.uncleIndex === 0)).toEqual([]);
+  });
+
+  it('puts two uncles on a line of their own under the tx line, and the row grows by 16 px', () => {
+    // T−1 carries two uncles: 12 proposals and 3. Two uncles with dots need 2 · (4 + 68) = 144 px
+    // after the line's 99: more than a phone has, so they go under the line at 288 and at 358.
+    const two = withSecondUncle(hostWith(smallTxs(T - 1, 2), 0, 10), 3);
+    for (const W of [COL.minViewW, PHONE_W]) {
+      const sc = buildScene(two, W, 'settled');
+      const card = cardOf(sc, T - 1);
+      expect(card.uncles).toEqual([
+        expect.objectContaining({
+          index: 0,
+          line: 'own',
+          x: 126,
+          y: 42,
+          w: 68,
+          h: 12,
+          overflow: 11,
+        }),
+        expect.objectContaining({
+          index: 1,
+          line: 'own',
+          x: 198,
+          y: 42,
+          w: 68,
+          h: 12,
+          overflow: 0,
+        }),
+      ]);
+      expect(card.h).toBe(60);
+      // the tx line holds everything it held without uncles
+      expect(card.squares.map((q) => q.s)).toEqual([15, 15, 15]);
+      expect(card.hidden).toBe(0);
+      expect(card.chips.filter((k) => k.proposal.uncleIndex === 1).map((k) => k.x)).toEqual([
+        232, 241, 250,
+      ]);
+      // the rows below step down by the 16 px
+      expect(sc.cards.map((c) => c.y)).toEqual([198, 260, 338, 400]);
+      expect(sc.H).toBe(400 + 44 + 34);
+    }
+    // A wrapped row is the line's height and 16 px: 60, 77 or 78 + 16 = 94.
+    const tall = (size: number) =>
+      cardOf(
+        buildScene(
+          withSecondUncle(hostWith([{ ...smallTxs(T - 1, 1)[0], size }], 0, 10), 3),
+          COL.minViewW,
+          'settled'
+        ),
+        T - 1
+      ).h;
+    expect([tall(330), tall(5400), tall(9600)]).toEqual([60, 77, 94]);
+  });
+
+  it('holds at 288 px with the widest block: the cellbase, a 4 × 4 and "+N" on the line, two uncles under it', () => {
+    // "+2999" and "+1500" are 30 px; an uncle of 1,500 proposals is its word and "+1500": 64 px.
+    expect(COL.minViewW).toBe(288);
+    expect([labelWidth('+2999'), labelWidth('+1500'), columnUncleW(1500)]).toEqual([30, 30, 64]);
+    const card = cardOf(buildScene(widest, COL.minViewW, 'settled'), T - 1);
+    expect(card.squares[0].kind).toBe('cellbase');
+    expect(card.squares.map((q) => q.s)).toEqual([15, 66, 15, 15]);
+    expect(card.hidden).toBe(2996);
+    expect(card.squares.length + card.hidden).toBe(card.block.txCount);
+    // The line ends in its "+N", which never touches a square.
+    const count = columnCountAt(card);
+    expect(count.x).toBe(COL.minViewW - COL.padR);
+    const end = Math.max(...card.squares.map((q) => q.x + q.s));
+    expect(end + COL.endGap).toBeLessThanOrEqual(count.x - labelWidth(`+${card.hidden}`));
+    // Both uncles, word and "+1500", on their own line: 126 … 190, 194 … 258, inside 280.
+    expect(card.uncles).toEqual([
+      expect.objectContaining({ line: 'own', x: 126, w: 64, overflow: 1500 }),
+      expect.objectContaining({ line: 'own', x: 194, w: 64, overflow: 1500 }),
+    ]);
+    expect(card.uncles[1].x + card.uncles[1].w).toBeLessThanOrEqual(COL.minViewW - COL.padR);
+    expect(card.h).toBe(78 + 16);
+    for (const u of card.uncles) expect(u.y + u.h).toBe(card.h - COL.pad);
+    // With their dots (two uncles of 999 proposals) they fit the same line: 126 … 266.
+    const dotted = cardOf(
+      buildScene(
+        withSecondUncle(hostWith(bigAnd(T - 1, 38), 2960, 997), 999),
+        COL.minViewW,
+        'settled'
+      ),
+      T - 1
+    );
+    expect(dotted.uncles.map((u) => [u.line, u.x, u.w])).toEqual([
+      ['own', 126, 68],
+      ['own', 198, 68],
+    ]);
+  });
+
+  it('never refuses a valid block from 288 px up: every row whole, every uncle inside it', () => {
+    const snaps = [widest, hostWith(bigAnd(T - 1, 38), 2960, 1498), buildPipelineSnapshot(), quiet];
+    for (const snap of snaps)
+      for (let W = COL.minViewW; W < G.minViewW; W++) {
+        const sc = buildScene(snap, W, 'settled');
+        for (const c of sc.cards) {
+          for (const u of c.uncles) {
+            expect(u.x).toBeGreaterThanOrEqual(COL.lineX - COL.x0);
+            expect(u.x + u.w).toBeLessThanOrEqual(c.w - COL.padR);
+            expect(u.y).toBeGreaterThanOrEqual(COL.pad);
+            expect(u.y + u.h).toBeLessThanOrEqual(c.h - COL.pad);
+            if (u.line === 'tx')
+              for (const q of c.squares) expect(q.x + q.s).toBeLessThanOrEqual(u.x - COL.endGap);
+            else
+              for (const q of c.squares) expect(q.y + q.s).toBeLessThanOrEqual(u.y - COL.uncleGap);
+          }
+        }
+      }
   });
 
   it('draws or counts every proposal of every uncle: drawn + counted = total, in a row and a column', () => {
@@ -1478,6 +1611,7 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
       hostWith(bigAnd(T - 1, 30), 0, 40),
       hostWith(smallTxs(T - 1, 2), 0, 1498),
       withSecondUncle(hostWith(smallTxs(T - 1, 2), 0, 10), 3),
+      widest,
     ];
     for (const snap of snaps)
       for (const W of [COL.minViewW, 300, PHONE_W, G.minViewW - 1, 1600]) {
@@ -1489,57 +1623,6 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
           if (t.total) expect(t.drawn > 0 || t.counted > 0).toBe(true);
         }
       }
-  });
-
-  it('holds at 288 px, with the widest labels: the cellbase, its "+N" and an uncle’s word with its "+N"; a 4 × 4 too without an uncle', () => {
-    // A block of 3,000 txs: the backend lists 39 (a 4×4 and 38 more) and omits the rest; its "+N"
-    // is at most "+2999" (30 px). An uncle carries at most 1,500 proposals: "+1500" (30 px).
-    expect(COL.minViewW).toBe(288);
-    expect(labelWidth('+2999')).toBe(30);
-    expect(labelWidth('+1500')).toBe(30);
-    const n = T - 2;
-    const lone = cardOf(
-      buildScene(withTxs(quiet, n, bigAnd(n, 38), 2960), COL.minViewW, 'settled'),
-      n
-    );
-    expect(lone.uncles).toEqual([]);
-    expect(lone.squares.map((q) => q.s)).toEqual([15, 66, 15, 15]);
-    expect(lone.hidden).toBe(2996);
-    expect(lone.squares.length + lone.hidden).toBe(lone.block.txCount);
-    // With one uncle of 1,500 proposals: the line keeps the cellbase and "+2997", the uncle its
-    // word and "+1500"; the 4 × 4 is counted.
-    const host = cardOf(
-      buildScene(hostWith(bigAnd(T - 1, 38), 2960, 1498), COL.minViewW, 'settled'),
-      T - 1
-    );
-    expect(host.squares[0].kind).toBe('cellbase');
-    expect(host.squares.map((q) => q.s)).toEqual([15, 15, 15]);
-    expect(host.hidden).toBe(2997);
-    expect(host.uncles).toEqual([expect.objectContaining({ x: 216, w: 64, overflow: 1500 })]);
-    expect(host.uncles[0].x + host.uncles[0].w).toBe(COL.minViewW - COL.padR);
-    const count = columnCountAt(host);
-    const end = Math.max(...host.squares.map((q) => q.x + q.s));
-    expect(end + COL.endGap).toBeLessThanOrEqual(count.x - labelWidth(`+${host.hidden}`));
-  });
-
-  // The limit of the rule: at 288 px two uncles leave the line 154 − 2 · (4 + 30 + 4) = 78 px for
-  // the cellbase (15), 4 px and three labels, the line's "+N" and each uncle's. They fit while the
-  // three take 59 px or less; a block past that is refused with its number (fail fast).
-  it('fits two uncles at 288 px only while the line’s "+N" and theirs take 59 px or less', () => {
-    const twoUncles = (count: number, omitted: number) =>
-      withSecondUncle(hostWith(smallTxs(T - 1, 2), omitted, count - 2), count);
-    // "+99", "+99" and "+99": 54 px. The line is the cellbase and its "+N".
-    const fits = cardOf(buildScene(twoUncles(99, 97), COL.minViewW, 'settled'), T - 1);
-    expect(fits.uncles.map((u) => [u.w, u.overflow])).toEqual([
-      [52, 99],
-      [52, 99],
-    ]);
-    expect(fits.squares).toHaveLength(1);
-    expect(fits.hidden).toBe(99);
-    // "+100", "+10" and "+10": 60 px.
-    expect(() => buildScene(twoUncles(10, 98), COL.minViewW, 'settled')).toThrow(
-      new RegExp(`block #${T - 1} has no room for its tx line in 42 px`)
-    );
   });
 
   it('counts what a block line cannot hold as +N at its end, never over a square', () => {
