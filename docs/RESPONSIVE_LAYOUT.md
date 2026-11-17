@@ -33,11 +33,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
    is one row on a desktop becomes a few designed rows on a phone, grouped by meaning — not an
    organically wrapped bag of items, and not a row to pan sideways.
 3. **Fixed-geometry visualizations re-flow; they never scale.** A canvas drawn on a pixel grid
-   (the transaction pipeline: 10 px cells, 89 px cards) keeps its units at full size. In less width
-   it shows fewer whole units; when the row form cannot hold its first unit the canvas changes
-   orientation or arrangement (the pipeline stands on end as a vertical timeline on a phone),
-   keeping its materials and encodings. Scaling the canvas makes its text unreadable; a half-cut
-   unit shows a broken object; folding a row into two rows breaks the flow it depicts.
+   (the transaction pipeline: a 15 px cell on a 17 px pitch, 99 px plates) keeps its units at full
+   size. In less width it shows fewer whole units; when the row form cannot hold its first unit the
+   canvas changes orientation or arrangement (the pipeline stands on end as a vertical timeline on
+   a phone), keeping its materials and encodings. Scaling the canvas makes its text unreadable; a
+   half-cut unit shows a broken object; folding a row into two rows breaks the flow it depicts.
 4. **The measured width decides, not the breakpoint.** A component that lays itself out from
    numbers (the pipeline, the charts, a table with column minimum widths) measures its container
    and picks the arrangement from what fits. CSS breakpoints are for CSS-only layouts (the strip,
@@ -78,9 +78,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
   ends instead on a line of its own with the release and the clock's zone, as in
   `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 360
   the links take two lines, 256.0 and 263.2 of 328 px, and this one 216.0).
-- **Transaction pipeline** (homepage): one row down to a 589 px canvas (two whole blocks); below
-  that a vertical timeline (mempool, proposed, NEXT, the tip, older blocks as rows; one vertical
-  chain line in the gaps). Never scaled, never folded, cards never smaller than 89 px.
+- **Transaction pipeline** (homepage): a block is a plate 99 px wide; one row down to a 589 px
+  canvas (two whole plates); below that a vertical timeline (the mempool and proposed wells, the
+  dashed next block and the plates as rows 44 px tall, taller only for a 3×3 or 4×4 square or a
+  line of uncles; two bands of ticks join them in the gaps). Never scaled, never folded, a plate
+  never narrower than 99 px.
 - **Lists and tables**: a table is shown when the measured container holds every column's minimum
   width; otherwise each row is a designed phone row of two or three lines that keeps every column
   (no generic label/value dump). Twenty rows per page below `md`.
